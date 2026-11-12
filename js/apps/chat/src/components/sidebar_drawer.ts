@@ -672,7 +672,7 @@ export class LitertSidebar extends LitElement {
       /* Compact Runtime Status Footer */
       .sidebar-status-footer {
         flex-shrink: 0;
-        padding: 10px 14px 12px 14px;
+        padding: 10px 14px calc(12px + env(safe-area-inset-bottom, 0px)) 14px;
       }
 
       .status-card {
@@ -952,6 +952,86 @@ export class LitertSidebar extends LitElement {
         .status-card {
           padding: 7px 11px;
           gap: 3px;
+        }
+      }
+
+      @media (min-width: 769px) and (max-width: 960px) {
+        .conversations-section {
+          padding-left: 11px;
+          padding-right: 11px;
+        }
+
+        .settings-disclosure-btn {
+          padding: 0 11px 0 9px;
+          font-size: 0.72rem;
+        }
+
+        .tuning-pill {
+          font-size: 0.63rem;
+        }
+
+        .tuning-body {
+          padding-left: 11px;
+          padding-right: 11px;
+        }
+
+        .exp-col-headers,
+        .exp-row {
+          grid-template-columns: 50px minmax(0, 0.78fr) minmax(0, 1.22fr);
+          gap: 5px;
+        }
+
+        .exp-row select {
+          font-size: 0.68rem;
+          padding-right: 18px;
+          background-position: right 6px center;
+        }
+
+        .experimental-note {
+          height: 42px;
+          min-height: 42px;
+          max-height: 42px;
+          font-size: 0.61rem;
+          line-height: 1.2;
+        }
+
+        .sidebar-status-footer {
+          padding-left: 11px;
+          padding-right: 11px;
+        }
+
+        .status-card {
+          padding-left: 9px;
+          padding-right: 9px;
+        }
+
+        .status-header,
+        .status-header-left {
+          gap: 5px;
+        }
+
+        .runtime-backend-badge {
+          padding: 0 5px;
+          font-size: 0.59rem;
+        }
+
+        .load-time-prefix {
+          display: none;
+        }
+
+        .status-text {
+          font-size: 0.68rem;
+        }
+      }
+
+      @media (max-height: 620px) {
+        .conversations-section {
+          flex-basis: 86px;
+          min-height: 86px;
+        }
+
+        .settings-tray {
+          max-height: calc(100% - 86px);
         }
       }
 

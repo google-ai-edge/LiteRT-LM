@@ -204,6 +204,12 @@ export const chatWindowStyles = css`
     background-color: var(--bg-chat, #0d1017);
   }
 
+  .chat-messages:focus-visible {
+    outline: 2px solid var(--teal, #14d4aa);
+    outline-offset: -2px;
+    border-radius: 8px;
+  }
+
   .chat-messages > :first-child {
     margin-top: 20px;
   }
@@ -314,13 +320,6 @@ export const chatWindowStyles = css`
     margin-top: 8px;
   }
 
-  @container (max-width: 620px) {
-    .starters-container {
-      grid-template-columns: 1fr;
-      gap: 8px;
-    }
-  }
-
   .btn-starter {
     background-color: var(--bg-card, #171c26);
     border: 1px solid var(--border, #262f40);
@@ -413,7 +412,7 @@ export const chatWindowStyles = css`
   .chat-input-container {
     position: relative;
     z-index: 30;
-    padding: 8px 20px 18px 20px;
+    padding: 8px 20px calc(18px + env(safe-area-inset-bottom, 0px)) 20px;
     background-color: var(--bg-chat, #0d1017);
     display: flex;
     flex-direction: column;
@@ -515,6 +514,68 @@ export const chatWindowStyles = css`
   .btn-composer-cancel:hover {
     background-color: var(--danger-subtle, rgba(248, 113, 113, 0.12));
     border-color: var(--danger, #f87171);
+  }
+
+  .composer-offline-hint {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 2px 2px 8px 2px;
+    border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+    font-size: 0.75rem;
+    color: var(--text-secondary, #cbd5e1);
+  }
+
+  .composer-offline-left {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .composer-offline-icon {
+    color: var(--warning-text, #fbbf24);
+    flex-shrink: 0;
+  }
+
+  .offline-hint-full,
+  .offline-hint-compact {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .offline-hint-full strong {
+    color: var(--text, #f1f5f9);
+    font-weight: 600;
+  }
+
+  .offline-hint-compact {
+    display: none;
+  }
+
+  .btn-offline-choose {
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border-strong, #364156);
+    background-color: var(--bg-card, #171c26);
+    color: var(--text, #f1f5f9);
+    font-size: 0.71rem;
+    font-weight: 600;
+    font-family: inherit;
+    white-space: nowrap;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: background-color 0.14s ease, border-color 0.14s ease;
+  }
+
+  .btn-offline-choose:hover {
+    background-color: var(--bg-elevated, #1e2432);
+    border-color: var(--teal, #14d4aa);
   }
 
   .input-wrapper {
@@ -1003,42 +1064,7 @@ export const chatWindowStyles = css`
       display: none;
     }
 
-    .composer-loading-speed-inline {
-      display: none;
-    }
-
-    .composer-loading-sub {
-      display: block;
-    }
-
-    .composer-toolbar {
-      flex-wrap: nowrap;
-      gap: 6px;
-    }
-
-    .composer-tools-left {
-      flex: 1 1 0;
-      min-width: 0;
-    }
-
-    .btn-composer-model {
-      max-width: 100%;
-      min-width: 0;
-    }
-
-    .model-pill-state.state-full {
-      display: none;
-    }
-
-    .model-pill-state.state-compact {
-      display: inline;
-    }
-
-    .composer-media-tools.is-recording #btn-add-media,
-    .composer-media-tools.is-recording #btn-camera {
-      display: none;
-    }
-
+    /* See also @container (max-width: 600px) below. */
     #btn-send {
       width: 34px;
       min-width: 34px;
@@ -1103,6 +1129,177 @@ export const chatWindowStyles = css`
       width: 32px;
       min-width: 32px;
       height: 32px;
+    }
+  }
+
+  @container (max-width: 620px) {
+    .starters-container {
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+  }
+
+  @container (max-width: 600px) {
+    .offline-hint-full {
+      display: none;
+    }
+
+    .offline-hint-compact {
+      display: inline;
+    }
+
+    .composer-loading-speed-inline {
+      display: none;
+    }
+
+    .composer-loading-sub {
+      display: block;
+    }
+
+    .composer-toolbar {
+      flex-wrap: nowrap;
+      gap: 6px;
+    }
+
+    .composer-tools-left {
+      flex: 1 1 0;
+      min-width: 0;
+    }
+
+    .btn-composer-model {
+      max-width: 100%;
+      min-width: 0;
+      height: 32px;
+      padding: 0 9px;
+      gap: 5px;
+      font-size: 0.74rem;
+    }
+
+    .model-pill-state:not(.active-state),
+    .model-pill-state.state-full {
+      display: none;
+    }
+
+    .model-pill-state.state-compact {
+      display: inline;
+    }
+
+    .composer-media-tools {
+      gap: 1px;
+      margin-right: 2px;
+    }
+
+    .composer-media-tools .btn-icon:not(.recording) {
+      width: 30px;
+      height: 30px;
+    }
+
+    .composer-media-tools.is-recording #btn-add-media,
+    .composer-media-tools.is-recording #btn-camera {
+      display: none;
+    }
+
+    .btn-input {
+      height: 32px;
+      padding: 0 11px;
+      font-size: 0.75rem;
+      gap: 5px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+  }
+
+  @container (max-width: 470px) {
+    #btn-send {
+      width: 34px;
+      min-width: 34px;
+      height: 34px;
+      padding: 0;
+      border-radius: 999px;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    #btn-send .send-btn-label {
+      display: none;
+    }
+
+    #btn-send.needs-download .send-icon-up {
+      display: none;
+    }
+
+    #btn-send.needs-download .send-icon-download {
+      display: block;
+    }
+  }
+
+  @media (max-height: 660px) {
+    .chat-messages {
+      padding: 0 16px 14px 16px;
+      gap: 14px;
+    }
+
+    .chat-messages > :first-child {
+      margin-top: 12px;
+    }
+
+    .chat-messages > .empty-hero:first-child {
+      margin-top: auto;
+    }
+
+    .empty-hero {
+      padding: 10px 8px;
+      gap: 10px;
+    }
+
+    .hero-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+    }
+
+    .hero-mark img {
+      width: 24px;
+      height: 24px;
+    }
+
+    .hero-heading {
+      font-size: 1.28rem;
+    }
+
+    .hero-subtitle {
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+
+    .starters-container {
+      margin-top: 4px;
+      gap: 8px;
+    }
+
+    .btn-starter {
+      padding: 9px 12px;
+    }
+
+    .starter-subtitle {
+      -webkit-line-clamp: 1;
+    }
+
+    .chat-input-container {
+      padding: 6px 16px calc(12px + env(safe-area-inset-bottom, 0px)) 16px;
+    }
+
+    .input-wrapper {
+      padding: 8px 10px 8px 12px;
+      gap: 4px;
+      border-radius: 18px;
+    }
+
+    .editor {
+      min-height: 36px;
+      max-height: 128px;
+      padding: 4px;
+      font-size: 0.88rem;
     }
   }
 `;

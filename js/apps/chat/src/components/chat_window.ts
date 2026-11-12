@@ -89,6 +89,9 @@ export class LitertChatWindow extends LitElement {
   @property({type: String})
   theme: 'dark'|'light' = 'dark';
 
+  @property({type: Boolean})
+  isOffline = false;
+
   @state()
   private shouldAutoScroll = true;
 
@@ -107,8 +110,17 @@ export class LitertChatWindow extends LitElement {
   private readonly compactMediaQuery = typeof window !== 'undefined' ?
       window.matchMedia('(max-width: 600px)') :
       null;
-  private readonly handleCompactMediaChange = (e: MediaQueryListEvent) => {
-    this.isCompactViewport = e.matches;
+  private containerResizeObserver: ResizeObserver|null = null;
+  private readonly syncCompactContainerState = () => {
+    const width = this.clientWidth;
+    if (width > 0) {
+      this.isCompactViewport = width <= 600;
+    } else if (typeof window !== 'undefined') {
+      this.isCompactViewport = window.innerWidth <= 600;
+    }
+  };
+  private readonly handleCompactMediaChange = () => {
+    this.syncCompactContainerState();
   };
 
   private readonly audioRecorder = new AudioRecorder();
@@ -170,10 +182,15 @@ export class LitertChatWindow extends LitElement {
     super.connectedCallback();
     // Register this chat window as a host of our centralized state
     this.state.addHost(this);
-    this.isCompactViewport = this.compactMediaQuery?.matches ??
-        (typeof window !== 'undefined' && window.innerWidth <= 600);
+    this.syncCompactContainerState();
     this.compactMediaQuery?.addEventListener(
         'change', this.handleCompactMediaChange);
+    if (typeof ResizeObserver !== 'undefined') {
+      this.containerResizeObserver = new ResizeObserver(() => {
+        this.syncCompactContainerState();
+      });
+      this.containerResizeObserver.observe(this);
+    }
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this.handleGlobalScrollKeyDown);
     }
@@ -184,6 +201,8 @@ export class LitertChatWindow extends LitElement {
     if (typeof window !== 'undefined') {
       window.removeEventListener('keydown', this.handleGlobalScrollKeyDown);
     }
+    this.containerResizeObserver?.disconnect();
+    this.containerResizeObserver = null;
     this.compactMediaQuery?.removeEventListener(
         'change', this.handleCompactMediaChange);
     this.cancelRecording();
@@ -789,8 +808,32 @@ export class LitertChatWindow extends LitElement {
     }
   }
 
+  /** Whether the selected model's weights can load without a download. */
+  private getSelectedModelWeights() {
+    const selectedPath = this.state.settings.selectedModelPath || '';
+    const isCached = Boolean(
+        this.state.modelLoader.cachedModels?.has(getModelKey(selectedPath)));
+    const isLocalDir = selectedPath.startsWith('local-dir://');
+    const isLocalUploaded = selectedPath.startsWith('https://local-model/');
+    const isCurrentlyLoaded = Boolean(
+        this.state.modelLoader.engine &&
+        !this.state.modelLoader.needsModelReload?.(
+            this.state.settings.modelSettings));
+    const isReady = isCurrentlyLoaded || isCached || isLocalUploaded;
+    return {isLocalDir, isReady, isAvailable: isReady || isLocalDir};
+  }
+
+  private isSelectedModelOfflineUncached(): boolean {
+    return this.isOffline && !this.state.modelLoader.isModelLoading &&
+        !this.getSelectedModelWeights().isAvailable;
+  }
+
   private triggerSendMessage() {
-    if (!this.chatInput || this.state.chatSession.isGenerating) return;
+    if (!this.chatInput || this.state.chatSession.isGenerating ||
+        this.state.modelLoader.isModelLoading ||
+        this.isSelectedModelOfflineUncached()) {
+      return;
+    }
     const parts = this.serializeEditor();
     if (!promptHasContent(parts)) return;
 
@@ -1004,7 +1047,8 @@ export class LitertChatWindow extends LitElement {
 
   private useStarter(text: string) {
     if (this.state.modelLoader.isModelLoading ||
-        this.state.chatSession.isGenerating) {
+        this.state.chatSession.isGenerating ||
+        this.isSelectedModelOfflineUncached()) {
       return;
     }
     this.setEditorParts([{type: 'text', text}]);
@@ -1023,27 +1067,24 @@ export class LitertChatWindow extends LitElement {
     const isMessagesEmpty = this.state.chatSession.messages.length === 0;
     const selectedPath = this.state.settings.selectedModelPath || '';
     const activeModelKey = getModelKey(selectedPath);
-    const isCached = Boolean(
-        this.state.modelLoader.cachedModels?.has(activeModelKey));
-    const isLocalDir = selectedPath.startsWith('local-dir://');
-    const isLocalUploaded = selectedPath.startsWith('https://local-model/');
+    const {isLocalDir, isReady, isAvailable} = this.getSelectedModelWeights();
     const isLoading = this.state.modelLoader.isModelLoading;
     const isGenerating = this.state.chatSession.isGenerating;
     const downloadProgress =
         this.state.modelLoader.downloadProgresses?.get(activeModelKey);
     const downloadSpeed =
         this.state.modelLoader.downloadSpeeds?.get(activeModelKey);
-    const hasWeightsAvailable = Boolean(
-        this.state.modelLoader.engine || isCached || isLocalUploaded ||
-        isLocalDir);
-    const needsWeightDownload = !isLoading && !hasWeightsAvailable;
+    const isOfflineUncached = this.isOffline && !isLoading && !isAvailable;
+    const needsWeightDownload = !isLoading && !isAvailable && !isOfflineUncached;
     const sendLabel = isLoading ?
         (downloadProgress !== undefined ? `Loading ${downloadProgress}%…` :
                                           'Loading…') :
-        (Boolean(this.state.modelLoader.engine) || isCached ||
-         isLocalUploaded) ? 'Send' :
+        isOfflineUncached ? 'Offline · Not cached' :
+        isReady           ? 'Send' :
         isLocalDir        ? 'Load & Send' :
                             'Download & Send';
+    const offlineSendTitle =
+        'Offline — connect to download weights, or choose a cached or local model';
     const modelSummary = getActiveModelSummary(this.state);
     const cleanModelName = modelSummary.name;
     const isAddModelDisabled = this.isLookingUpModel || isLoading;
@@ -1067,7 +1108,7 @@ export class LitertChatWindow extends LitElement {
                     id="btn-retry-error"
                     type="button"
                     class="btn-alert-action primary"
-                    ?disabled=${isLoading || isGenerating}
+                    ?disabled=${isLoading || isGenerating || isOfflineUncached}
                     @click=${this.handleRetryFromAlert}
                   >Try again</button>
                   <button
@@ -1098,6 +1139,9 @@ export class LitertChatWindow extends LitElement {
       <div
         id="chat-messages"
         class="chat-messages"
+        role="region"
+        aria-label="Chat messages"
+        tabindex="0"
         @wheel=${this.handleMessagesWheel}
         @touchstart=${this.handleMessagesTouchStart}
         @touchmove=${this.handleMessagesTouchMove}
@@ -1141,7 +1185,8 @@ export class LitertChatWindow extends LitElement {
                 <button
                   type="button"
                   class="btn-starter"
-                  ?disabled=${isLoading || isGenerating}
+                  title=${isOfflineUncached ? offlineSendTitle : nothing}
+                  ?disabled=${isLoading || isGenerating || isOfflineUncached}
                   @click=${() => this.useStarter(prompt)}
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg>
@@ -1242,6 +1287,28 @@ export class LitertChatWindow extends LitElement {
                 <div class="composer-loading-sub">${downloadSpeed}</div>
               ` : nothing}
             </div>
+          ` : isOfflineUncached ? html`
+            <div id="composer-offline-hint" class="composer-offline-hint" role="status" aria-live="polite">
+              <div class="composer-offline-left">
+                <svg class="composer-offline-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="1" y1="1" x2="23" y2="23"></line>
+                  <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path>
+                  <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path>
+                  <path d="M10.71 5.05A16 16 0 0 1 22.58 9"></path>
+                  <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path>
+                  <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                  <line x1="12" y1="20" x2="12.01" y2="20"></line>
+                </svg>
+                <span class="offline-hint-full">Offline · <strong>${cleanModelName}</strong> isn't cached — choose a cached or local model.</span>
+                <span class="offline-hint-compact">Offline · model not cached</span>
+              </div>
+              <button
+                id="btn-offline-choose-model"
+                type="button"
+                class="btn-offline-choose"
+                @click=${this.handleChooseModelFromAlert}
+              >Choose model</button>
+            </div>
           ` : nothing}
 
           <!--
@@ -1305,9 +1372,12 @@ export class LitertChatWindow extends LitElement {
                             modelSummary.name.replace(/^Gemma 4\s+/i, '') :
                             modelSummary.name}</span>
                     ${modelSummary.isActiveState ? html`
-                      <span class="model-pill-state active-state state-full">${modelSummary.stateLabel}</span>
+                      <span class="model-pill-state active-state ${
+                        modelSummary.compactStateLabel ? 'state-full' : ''}">${
+                        modelSummary.stateLabel}</span>
                       ${modelSummary.compactStateLabel ? html`
-                        <span class="model-pill-state active-state state-compact">${modelSummary.compactStateLabel}</span>
+                        <span class="model-pill-state active-state state-compact">${
+                          modelSummary.compactStateLabel}</span>
                       ` : nothing}
                     ` : html`
                       <span class="model-pill-state">${modelSummary.stateLabel}</span>
@@ -1442,10 +1512,10 @@ export class LitertChatWindow extends LitElement {
                   class="btn btn-primary btn-input ${
                       needsWeightDownload ? 'needs-download' : ''}"
                   aria-label=${sendLabel}
-                  title=${sendLabel}
-                  ?disabled=${isLoading || !this.hasPromptContent}
+                  title=${isOfflineUncached ? offlineSendTitle : sendLabel}
+                  ?disabled=${isLoading || !this.hasPromptContent || isOfflineUncached}
                   @click=${this.triggerSendMessage}
-                >${isLoading ? html`<span class="btn-spinner" aria-hidden="true"></span>` : html`<svg class="send-icon-up" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>${needsWeightDownload ? html`<svg class="send-icon-download" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>` : nothing}`}<span class="send-btn-label">${sendLabel}</span></button>
+                >${isLoading ? html`<span class="btn-spinner" aria-hidden="true"></span>` : isOfflineUncached ? html`<svg class="send-icon-offline" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path><path d="M10.71 5.05A16 16 0 0 1 22.58 9"></path><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path><path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path><line x1="12" y1="20" x2="12.01" y2="20"></line></svg>` : html`<svg class="send-icon-up" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>${needsWeightDownload ? html`<svg class="send-icon-download" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>` : nothing}`}<span class="send-btn-label">${sendLabel}</span></button>
               `}
             </div>
           </div>

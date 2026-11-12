@@ -422,7 +422,7 @@ export async function selectModelWithLargeModelCheck(
     const modelWithSize =
         matched?.size ? `${modelName} (${matched.size})` : modelName;
     const warningMsg =
-        `${modelWithSize} needs significant video memory (VRAM). Running it may cause your browser tab to crash or your system to become unresponsive if you do not have enough VRAM.`;
+        `${modelWithSize} needs significant video memory (VRAM). Running it may cause the app or browser tab to crash or your system to become unresponsive if you do not have enough VRAM.`;
     const proceed = await state.requestConfirm({
       title: `Load ${modelWithSize}?`,
       message: `${warningMsg} Do you want to proceed?`,

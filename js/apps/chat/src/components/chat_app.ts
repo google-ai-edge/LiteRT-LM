@@ -37,6 +37,15 @@ export const THEME_STORAGE_KEY = 'litertlm-theme-mode';
 /** Supported theme preference modes. */
 export type ThemeMode = 'system'|'light'|'dark';
 
+/** Supported PWA / browser window display modes. */
+export type AppDisplayMode =
+    'browser'|'standalone'|'window-controls-overlay';
+
+interface WindowControlsOverlayLike extends EventTarget {
+  readonly visible: boolean;
+  getTitlebarAreaRect(): DOMRect;
+}
+
 interface ActiveConfirmModal extends ConfirmDialogOptions {
   resolve: (confirmed: boolean) => void;
   returnFocusEl: HTMLElement|null;
@@ -58,12 +67,21 @@ export class LitertLmChatApp extends LitElement {
 
   @property({type: String}) theme: 'dark'|'light' = 'dark';
   @state() private themeMode: ThemeMode = 'system';
+  @state() displayMode: AppDisplayMode = 'browser';
+  @state() private swUpdateAvailable = false;
+  @state()
+  private isOffline =
+      typeof navigator !== 'undefined' ? navigator.onLine === false : false;
 
   @state() private activeConfirm: ActiveConfirmModal|null = null;
   @state() private isCameraOpen = false;
   @state()
   private isMobileViewport =
       typeof window !== 'undefined' ? window.innerWidth <= 768 : false;
+  private waitingSw: ServiceWorker|null = null;
+  private pendingSwReload = false;
+  private observedSwContainer: EventTarget|null = null;
+  private observedWco: WindowControlsOverlayLike|null = null;
   private previewReturnFocusEl: HTMLElement|null = null;
   private learnMoreReturnFocusEl: HTMLElement|null = null;
   private mobileSidebarReturnFocusEl: HTMLElement|null = null;
@@ -78,6 +96,12 @@ export class LitertLmChatApp extends LitElement {
       null;
   private readonly colorSchemeMediaQuery = typeof window !== 'undefined' ?
       window.matchMedia('(prefers-color-scheme: light)') :
+      null;
+  private readonly standaloneMediaQuery = typeof window !== 'undefined' ?
+      window.matchMedia('(display-mode: standalone)') :
+      null;
+  private readonly wcoMediaQuery = typeof window !== 'undefined' ?
+      window.matchMedia('(display-mode: window-controls-overlay)') :
       null;
 
   static override styles = [
@@ -135,6 +159,7 @@ export class LitertLmChatApp extends LitElement {
         align-items: center;
         gap: 12px;
         flex-shrink: 0;
+        user-select: none;
         z-index: 40;
       }
 
@@ -243,6 +268,89 @@ export class LitertLmChatApp extends LitElement {
       .btn-toggle-learn-more:hover {
         border-color: var(--border-strong, #364156);
         background-color: var(--bg-elevated, #1e2432);
+      }
+
+      .offline-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        height: 26px;
+        padding: 0 9px;
+        border-radius: 999px;
+        background-color: var(--bg-card, #171c26);
+        border: 1px solid color-mix(in srgb, var(--warning, #fbbf24) 42%, var(--border, #262f40));
+        color: var(--warning-text, #fbbf24);
+        font-size: 0.7rem;
+        font-weight: 600;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+
+      .offline-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background-color: currentColor;
+        flex-shrink: 0;
+      }
+
+      .sw-update-group {
+        display: inline-flex;
+        align-items: center;
+        height: 28px;
+        border-radius: 999px;
+        border: 1px solid var(--teal, #14d4aa);
+        background-color: var(--bg-input, #10141c);
+        overflow: hidden;
+        flex-shrink: 0;
+      }
+
+      .btn-sw-update {
+        height: 100%;
+        padding: 0 10px;
+        border: none;
+        background: transparent;
+        color: var(--teal, #14d4aa);
+        font-family: inherit;
+        font-size: 0.72rem;
+        font-weight: 700;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        white-space: nowrap;
+        transition: background-color 0.14s ease, color 0.14s ease;
+      }
+
+      .btn-sw-update:hover:not(:disabled) {
+        background-color: var(--teal-btn-bg, #14d4aa);
+        color: var(--teal-btn-text, #041f18);
+      }
+
+      .btn-sw-update:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .btn-dismiss-sw-update {
+        width: 24px;
+        height: 100%;
+        border: none;
+        border-left: 1px solid var(--border, #262f40);
+        background: transparent;
+        color: var(--text-muted, #94a3b8);
+        font-size: 0.68rem;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        transition: background-color 0.14s ease, color 0.14s ease;
+      }
+
+      .btn-dismiss-sw-update:hover {
+        background-color: var(--bg-elevated, #1e2432);
+        color: var(--text, #f1f5f9);
       }
 
       /* Layout wrapper */
@@ -369,6 +477,20 @@ export class LitertLmChatApp extends LitElement {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+
+      .preview-label-short {
+        display: none;
+      }
+
+      @media (max-width: 480px) {
+        .preview-label-full {
+          display: none;
+        }
+
+        .preview-label-short {
+          display: inline;
+        }
       }
 
       .preview-sandbox-icon {
@@ -505,7 +627,7 @@ export class LitertLmChatApp extends LitElement {
 
         .undo-toast.sidebar-open {
           position: fixed;
-          top: 102px;
+          top: 162px;
           left: calc(min(86vw, 310px) / 2);
           width: calc(min(86vw, 310px) - 24px);
           max-width: calc(min(86vw, 310px) - 24px);
@@ -623,6 +745,16 @@ export class LitertLmChatApp extends LitElement {
         pointer-events: auto;
       }
 
+      @media (min-width: 769px) and (max-width: 960px) {
+        .sidebar {
+          width: 248px;
+        }
+
+        .undo-toast.sidebar-open {
+          left: calc(50% + 124px);
+        }
+      }
+
       /* Mobile Screen Configurations */
       @media (max-width: 768px) {
         header {
@@ -724,9 +856,46 @@ export class LitertLmChatApp extends LitElement {
         }
       }
 
-      @media (max-width: 480px) {
-        .brand-suffix {
+      @media (max-width: 600px) {
+        .brand-suffix,
+        .sw-update-sub {
           display: none;
+        }
+
+        .offline-pill {
+          height: 24px;
+          padding: 0 7px;
+          font-size: 0.66rem;
+          gap: 4px;
+        }
+
+        .sw-update-group {
+          height: 24px;
+        }
+
+        .btn-sw-update {
+          height: 24px;
+          padding: 0 8px;
+          font-size: 0.67rem;
+        }
+
+        .btn-dismiss-sw-update {
+          width: 22px;
+          height: 24px;
+        }
+      }
+
+      @media (max-width: 420px) {
+        header:has(.offline-pill):has(.sw-update-group) h1 {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          white-space: nowrap;
+          border: 0;
         }
       }
 
@@ -734,6 +903,177 @@ export class LitertLmChatApp extends LitElement {
         .sidebar-right {
           max-width: 100% !important;
           border-left: none !important;
+        }
+      }
+
+      /* Installed PWA (standalone or Window Controls Overlay): compact header. */
+      :host([data-display-mode="standalone"]) .brand-logo,
+      :host([data-display-mode="window-controls-overlay"]) .brand-logo {
+        width: 24px;
+        height: 24px;
+      }
+
+      :host([data-display-mode="standalone"]) .btn-icon-header,
+      :host([data-display-mode="standalone"]) .btn-toggle-sidebar,
+      :host([data-display-mode="window-controls-overlay"]) .btn-icon-header,
+      :host([data-display-mode="window-controls-overlay"]) .btn-toggle-sidebar {
+        width: 30px;
+        height: 30px;
+        border-radius: 7px;
+      }
+
+      :host([data-display-mode="standalone"]) .btn-toggle-learn-more,
+      :host([data-display-mode="window-controls-overlay"]) .btn-toggle-learn-more {
+        height: 30px;
+        padding: 0 10px;
+        font-size: 0.75rem;
+        border-radius: 7px;
+      }
+
+      @media (max-width: 560px) {
+        :host([data-display-mode="standalone"]) header h1,
+        :host([data-display-mode="window-controls-overlay"]) header h1 {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          clip-path: inset(50%);
+          white-space: nowrap;
+          border: 0;
+        }
+      }
+
+      /* Standalone: the OS renders a native titlebar above the header. */
+      :host([data-display-mode="standalone"]) header {
+        height: 40px;
+        padding: 0 12px;
+      }
+
+      :host([data-display-mode="standalone"]) header h1 {
+        font-size: 0.88rem;
+        font-weight: 600;
+      }
+
+      :host([data-display-mode="standalone"]) .skip-to-composer {
+        top: 6px;
+      }
+
+      /* Window Controls Overlay: the header is merged into the OS titlebar. */
+      :host([data-display-mode="window-controls-overlay"]) {
+        --titlebar-h: max(44px, var(--wco-height, env(titlebar-area-height, 44px)));
+        --titlebar-left: var(--wco-left, env(titlebar-area-x, 0px));
+        --titlebar-right: var(
+          --wco-right,
+          calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))
+        );
+      }
+
+      :host([data-display-mode="window-controls-overlay"]) header,
+      :host([data-display-mode="window-controls-overlay"]) .preview-toolbar {
+        height: var(--titlebar-h);
+        -webkit-app-region: drag;
+        app-region: drag;
+      }
+
+      :host([data-display-mode="window-controls-overlay"]) header {
+        padding-left: calc(var(--titlebar-left) + 10px);
+        padding-right: calc(var(--titlebar-right) + 10px);
+      }
+
+      :host([data-display-mode="window-controls-overlay"]) .preview-toolbar {
+        padding-left: calc(var(--titlebar-left) + 12px);
+        padding-right: calc(var(--titlebar-right) + 12px);
+        user-select: none;
+      }
+
+      :host([data-display-mode="window-controls-overlay"]) header button,
+      :host([data-display-mode="window-controls-overlay"]) header a,
+      :host([data-display-mode="window-controls-overlay"]) .header-actions,
+      :host([data-display-mode="window-controls-overlay"]) .preview-toolbar button,
+      :host([data-display-mode="window-controls-overlay"]) .preview-sandbox-icon,
+      :host([data-display-mode="window-controls-overlay"]) .skip-to-composer {
+        -webkit-app-region: no-drag;
+        app-region: no-drag;
+      }
+
+      :host([data-display-mode="window-controls-overlay"]) header h1 {
+        font-size: 0.9rem;
+      }
+
+      :host([data-display-mode="window-controls-overlay"]) .sidebar-right,
+      :host([data-display-mode="window-controls-overlay"]) .sidebar-right-overlay {
+        top: var(--titlebar-h);
+        height: calc(100dvh - var(--titlebar-h));
+      }
+
+      :host([data-display-mode="window-controls-overlay"]) .confirm-backdrop {
+        top: var(--titlebar-h);
+      }
+
+      :host([data-display-mode="window-controls-overlay"]) header [inert] {
+        opacity: 0.45;
+      }
+
+      :host([data-display-mode="window-controls-overlay"]) .skip-to-composer {
+        top: 7px;
+      }
+
+      @media (max-width: 768px) {
+        :host([data-display-mode="window-controls-overlay"]) .sidebar,
+        :host([data-display-mode="window-controls-overlay"]) .sidebar-overlay {
+          top: var(--titlebar-h);
+          height: calc(100dvh - var(--titlebar-h));
+        }
+
+        :host([data-display-mode="window-controls-overlay"]) .undo-toast.sidebar-open {
+          top: calc(162px + var(--titlebar-h));
+        }
+
+        :host([data-display-mode="window-controls-overlay"]) .btn-toggle-learn-more {
+          padding: 0 7px;
+        }
+      }
+
+      @media (max-width: 680px) {
+        :host([data-display-mode="window-controls-overlay"]) .brand-suffix,
+        :host([data-display-mode="window-controls-overlay"]) .sw-update-sub {
+          display: none;
+        }
+      }
+
+      @media (max-width: 620px) {
+        :host([data-display-mode="window-controls-overlay"]) header:has(.offline-pill):has(.sw-update-group) h1 {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          clip-path: inset(50%);
+          white-space: nowrap;
+          border: 0;
+        }
+
+        :host([data-display-mode="window-controls-overlay"]) .preview-label-full {
+          display: none;
+        }
+
+        :host([data-display-mode="window-controls-overlay"]) .preview-label-short {
+          display: inline;
+        }
+      }
+
+      @media (max-width: 560px) {
+        :host([data-display-mode="window-controls-overlay"]) header {
+          gap: 6px;
+        }
+
+        :host([data-display-mode="window-controls-overlay"]) .header-actions {
+          gap: 4px;
         }
       }
     `
@@ -744,6 +1084,22 @@ export class LitertLmChatApp extends LitElement {
     this.isSidebarOpen = !e.matches;
     if (!this.isSidebarOpen) {
       this.mobileSidebarReturnFocusEl = null;
+    }
+  };
+
+  private readonly handleDisplayModeChange = () => {
+    this.syncDisplayMode();
+  };
+
+  private readonly handleOnlineStatusChange = () => {
+    this.isOffline =
+        typeof navigator !== 'undefined' ? navigator.onLine === false : false;
+  };
+
+  private readonly handleSwControllerChange = () => {
+    if (this.pendingSwReload) {
+      this.pendingSwReload = false;
+      this.reloadPageForUpdate();
     }
   };
 
@@ -849,6 +1205,8 @@ export class LitertLmChatApp extends LitElement {
     super.connectedCallback();
     this.state.addHost?.(this);
     this.initTheme();
+    this.syncDisplayMode();
+    this.handleOnlineStatusChange();
     this.isMobileViewport =
         typeof window !== 'undefined' ? window.innerWidth <= 768 : false;
     this.state.confirmHandler = (options: ConfirmDialogOptions) =>
@@ -856,6 +1214,15 @@ export class LitertLmChatApp extends LitElement {
     this.mobileMediaQuery?.addEventListener('change', this.handleMediaChange);
     this.colorSchemeMediaQuery?.addEventListener(
         'change', this.handleColorSchemeChange);
+    this.standaloneMediaQuery?.addEventListener(
+        'change', this.handleDisplayModeChange);
+    this.wcoMediaQuery?.addEventListener(
+        'change', this.handleDisplayModeChange);
+    this.observedWco = this.getWindowControlsOverlay();
+    this.observedWco?.addEventListener(
+        'geometrychange', this.handleDisplayModeChange);
+    window.addEventListener('online', this.handleOnlineStatusChange);
+    window.addEventListener('offline', this.handleOnlineStatusChange);
     this.addEventListener('click', this.captureTriggerClick, true);
     window.addEventListener('keydown', this.handleWindowKeyDown);
   }
@@ -871,6 +1238,20 @@ export class LitertLmChatApp extends LitElement {
     this.mobileMediaQuery?.removeEventListener('change', this.handleMediaChange);
     this.colorSchemeMediaQuery?.removeEventListener(
         'change', this.handleColorSchemeChange);
+    this.standaloneMediaQuery?.removeEventListener(
+        'change', this.handleDisplayModeChange);
+    this.wcoMediaQuery?.removeEventListener(
+        'change', this.handleDisplayModeChange);
+    this.observedWco?.removeEventListener(
+        'geometrychange', this.handleDisplayModeChange);
+    this.observedWco = null;
+    this.observedSwContainer?.removeEventListener(
+        'controllerchange', this.handleSwControllerChange);
+    this.observedSwContainer = null;
+    document.documentElement.removeAttribute('data-display-mode');
+    this.clearWcoVars();
+    window.removeEventListener('online', this.handleOnlineStatusChange);
+    window.removeEventListener('offline', this.handleOnlineStatusChange);
     this.removeEventListener('click', this.captureTriggerClick, true);
     window.removeEventListener('keydown', this.handleWindowKeyDown);
     super.disconnectedCallback();
@@ -995,11 +1376,65 @@ export class LitertLmChatApp extends LitElement {
     this.theme = resolved;
     document.documentElement.setAttribute('data-theme', resolved);
     this.setAttribute('data-theme', resolved);
-    const metaTheme = document.querySelector('meta[name="theme-color"]');
-    if (metaTheme) {
-      metaTheme.setAttribute(
-          'content', resolved === 'light' ? '#f8fafc' : '#0d1017');
+    const themeColor = resolved === 'light' ? '#f8fafc' : '#131720';
+    let metaThemes =
+        Array.from(document.querySelectorAll('meta[name="theme-color"]'));
+    if (metaThemes.length === 0 && document.head) {
+      const created = document.createElement('meta');
+      created.setAttribute('name', 'theme-color');
+      document.head.appendChild(created);
+      metaThemes = [created];
     }
+    for (const meta of metaThemes) {
+      meta.setAttribute('content', themeColor);
+    }
+  }
+
+  private getWindowControlsOverlay(): WindowControlsOverlayLike|null {
+    if (typeof navigator === 'undefined') return null;
+    return (navigator as Navigator & {
+             windowControlsOverlay?: WindowControlsOverlayLike;
+           }).windowControlsOverlay ??
+        null;
+  }
+
+  private clearWcoVars() {
+    this.style.removeProperty('--wco-left');
+    this.style.removeProperty('--wco-right');
+    this.style.removeProperty('--wco-height');
+  }
+
+  /** Synchronizes installed PWA display mode and titlebar overlay geometry. */
+  syncDisplayMode() {
+    if (typeof window === 'undefined') return;
+    const wco = this.getWindowControlsOverlay();
+    let nextMode: AppDisplayMode = 'browser';
+
+    if (wco?.visible) {
+      nextMode = 'window-controls-overlay';
+      const rect = wco.getTitlebarAreaRect();
+      const leftInset = Math.max(0, Math.round(rect.x));
+      const rightInset =
+          Math.max(0, Math.round(window.innerWidth - (rect.x + rect.width)));
+      const height = Math.max(40, Math.round(rect.height));
+      this.style.setProperty('--wco-left', `${leftInset}px`);
+      this.style.setProperty('--wco-right', `${rightInset}px`);
+      this.style.setProperty('--wco-height', `${height}px`);
+    } else if (this.wcoMediaQuery?.matches) {
+      nextMode = 'window-controls-overlay';
+      this.clearWcoVars();
+    } else if (
+        this.standaloneMediaQuery?.matches ||
+        (navigator as Navigator & {standalone?: boolean}).standalone === true) {
+      nextMode = 'standalone';
+      this.clearWcoVars();
+    } else {
+      this.clearWcoVars();
+    }
+
+    this.displayMode = nextMode;
+    this.setAttribute('data-display-mode', nextMode);
+    document.documentElement.setAttribute('data-display-mode', nextMode);
   }
 
   private setThemeMode(mode: ThemeMode, persist = true) {
@@ -1054,15 +1489,104 @@ export class LitertLmChatApp extends LitElement {
     }
   }
 
+  /** Reloads the document after an explicit service worker update. */
+  protected reloadPageForUpdate() {
+    window.location.reload();
+  }
+
+  /** Tracks waiting and incoming service worker updates without auto-reload. */
+  observeServiceWorkerRegistration(
+      reg: ServiceWorkerRegistration,
+      swContainer: (EventTarget&{controller?: ServiceWorker | null})|null =
+          (typeof navigator !== 'undefined' && 'serviceWorker' in navigator ?
+               navigator.serviceWorker :
+               null)) {
+    this.observedSwContainer?.removeEventListener(
+        'controllerchange', this.handleSwControllerChange);
+    this.observedSwContainer = swContainer;
+    this.observedSwContainer?.addEventListener(
+        'controllerchange', this.handleSwControllerChange);
+
+    const watchInstalling = (installing: ServiceWorker) => {
+      installing.addEventListener('statechange', () => {
+        if (installing.state === 'installed' && swContainer?.controller) {
+          this.waitingSw = reg.waiting ?? installing;
+          this.swUpdateAvailable = true;
+        } else if (installing.state === 'activated' && reg.active) {
+          this.warmServiceWorkerShellCache(reg.active);
+        }
+      });
+    };
+    if (reg.active) {
+      this.warmServiceWorkerShellCache(reg.active);
+    } else if (reg.installing) {
+      watchInstalling(reg.installing);
+    }
+    if (reg.waiting) {
+      this.waitingSw = reg.waiting;
+      this.swUpdateAvailable = true;
+    }
+    reg.addEventListener('updatefound', () => {
+      if (reg.installing) watchInstalling(reg.installing);
+    });
+  }
+
+  private warmServiceWorkerShellCache(
+      worker: Pick<ServiceWorker, 'postMessage'>) {
+    if (typeof window === 'undefined' ||
+        typeof worker?.postMessage !== 'function' ||
+        typeof performance?.getEntriesByType !== 'function') {
+      return;
+    }
+    const origin = window.location.origin;
+    const urls = new Set<string>();
+    for (const entry of performance.getEntriesByType('resource')) {
+      if (!entry.name) continue;
+      try {
+        const parsed = new URL(entry.name, origin);
+        if (parsed.origin === origin &&
+            !parsed.pathname.endsWith('.litertlm') &&
+            !parsed.pathname.includes('/models/')) {
+          urls.add(parsed.href);
+        }
+      } catch {
+        // Ignore non-URL resource entries.
+      }
+    }
+    if (urls.size > 0) {
+      worker.postMessage({type: 'CACHE_URLS', urls: Array.from(urls)});
+    }
+  }
+
+  private applyServiceWorkerUpdate() {
+    if (this.state.chatSession.isGenerating ||
+        this.state.modelLoader.isModelLoading) {
+      return;
+    }
+    this.swUpdateAvailable = false;
+    if (this.waitingSw) {
+      this.pendingSwReload = true;
+      this.waitingSw.postMessage({type: 'SKIP_WAITING'});
+    } else {
+      this.reloadPageForUpdate();
+    }
+  }
+
+  private dismissServiceWorkerUpdate() {
+    this.swUpdateAvailable = false;
+  }
+
   override firstUpdated() {
     // Register PWA Service Worker only on secure origins (HTTPS / localhost).
     if (window.isSecureContext && 'serviceWorker' in navigator &&
         navigator.serviceWorker) {
       registerAppServiceWorker(navigator.serviceWorker)
-          .then(
-              reg => console.log(
-                  '[PWA] Service Worker registered successfully on scope:',
-                  reg.scope))
+          .then(reg => {
+            console.log(
+                '[PWA] Service Worker registered successfully on scope:',
+                reg.scope);
+            this.observeServiceWorkerRegistration(reg);
+          })
           .catch(
               err => console.warn(
                   '[PWA] Service Worker registration skipped:', err));
@@ -1247,8 +1771,20 @@ export class LitertLmChatApp extends LitElement {
   }
 
   override render() {
+    const isWco = this.displayMode === 'window-controls-overlay';
+    const isBlockingDialogOpen = Boolean(this.activeConfirm) || this.isCameraOpen;
     const isAppModalOpen = Boolean(this.activeConfirm || this.isPreviewOpen);
     const isMobileSidebarModal = this.isMobileViewport && this.isSidebarOpen;
+    const isHeaderFullyInert = this.isPreviewOpen ||
+        (!isWco &&
+         (isBlockingDialogOpen || this.isLearnMoreOpen ||
+          isMobileSidebarModal));
+    const isWcoSidebarToggleInert =
+        isWco && (isBlockingDialogOpen || this.isLearnMoreOpen);
+    const isWcoSecondaryActionsInert = isWco &&
+        (isBlockingDialogOpen || this.isLearnMoreOpen || isMobileSidebarModal);
+    const isWcoLearnMoreToggleInert =
+        isWco && (isBlockingDialogOpen || isMobileSidebarModal);
     const deletedConv = this.state.chatSession.deletedConversation;
     const nextThemeMode = this.getNextThemeMode();
     const nextThemeLabel = nextThemeMode === 'system' ?
@@ -1278,7 +1814,7 @@ export class LitertLmChatApp extends LitElement {
       >Skip to composer</button>
 
       <!-- Top Header Bar -->
-      <header ?inert=${isAppModalOpen || this.isCameraOpen || this.isLearnMoreOpen || isMobileSidebarModal}>
+      <header ?inert=${isHeaderFullyInert}>
         <div class="header-brand">
           <button
             id="btn-toggle-sidebar"
@@ -1286,6 +1822,7 @@ export class LitertLmChatApp extends LitElement {
             title="Toggle sidebar"
             aria-label="Toggle sidebar"
             aria-expanded=${this.isSidebarOpen ? 'true' : 'false'}
+            ?inert=${isWcoSidebarToggleInert}
             @click=${this.toggleSidebar}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1305,11 +1842,49 @@ export class LitertLmChatApp extends LitElement {
         </div>
 
         <div class="header-actions">
+          ${this.isOffline ? html`
+            <span
+              id="offline-status-pill"
+              class="offline-pill"
+              role="status"
+              aria-live="polite"
+              ?inert=${isWcoSecondaryActionsInert}
+              title="Offline — cached models and app shell remain available"
+            ><span class="offline-dot" aria-hidden="true"></span>Offline</span>
+          ` : nothing}
+
+          ${this.swUpdateAvailable ? html`
+            <div
+              class="sw-update-group"
+              role="status"
+              aria-live="polite"
+              ?inert=${isWcoSecondaryActionsInert}
+            >
+              <button
+                id="btn-sw-update"
+                type="button"
+                class="btn-sw-update"
+                ?disabled=${this.state.chatSession.isGenerating || this.state.modelLoader.isModelLoading}
+                title=${this.state.chatSession.isGenerating || this.state.modelLoader.isModelLoading ? 'Finish current task before reloading' : 'Reload to apply app update'}
+                @click=${this.applyServiceWorkerUpdate}
+              >Update<span class="sw-update-sub"> · Reload</span></button>
+              <button
+                id="btn-dismiss-sw-update"
+                type="button"
+                class="btn-dismiss-sw-update"
+                aria-label="Dismiss update notification"
+                title="Later"
+                @click=${this.dismissServiceWorkerUpdate}
+              >✕</button>
+            </div>
+          ` : nothing}
+
           <button
             id="btn-toggle-theme"
             class="btn-icon-header"
             title=${themeTooltip}
             aria-label=${themeTooltip}
+            ?inert=${isWcoSecondaryActionsInert}
             @click=${this.toggleTheme}
           >
             ${this.themeMode === 'system' ? html`
@@ -1335,6 +1910,7 @@ export class LitertLmChatApp extends LitElement {
             class="btn-toggle-learn-more"
             aria-label="Toggle Learn More"
             aria-expanded=${this.isLearnMoreOpen ? 'true' : 'false'}
+            ?inert=${isWcoLearnMoreToggleInert}
             @click=${this.toggleLearnMore}
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1369,6 +1945,7 @@ export class LitertLmChatApp extends LitElement {
           <litert-chat-window
             .state=${this.state}
             .theme=${this.theme}
+            .isOffline=${this.isOffline}
             @preview-html=${this.handlePreviewHtml}
             @choose-model=${this.openComposerModelSelector}
             @camera-open-change=${(e: CustomEvent<{open: boolean}>) => {
@@ -1429,7 +2006,7 @@ export class LitertLmChatApp extends LitElement {
               <polyline points="16 18 22 12 16 6"></polyline>
               <polyline points="8 6 2 12 8 18"></polyline>
             </svg>
-            <span class="preview-toolbar-label">HTML Sandbox Preview</span>
+            <span class="preview-toolbar-label"><span class="preview-label-full">HTML Sandbox Preview</span><span class="preview-label-short" aria-hidden="true">HTML Preview</span></span>
             <span
               class="preview-sandbox-icon"
               role="img"

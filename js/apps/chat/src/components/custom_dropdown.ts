@@ -108,7 +108,7 @@ export class CustomDropdown extends LitElement {
       // Fit the menu in the space above the trigger.
       const rect = this.getBoundingClientRect();
       if (rect.top > 0) {
-        const availableAbove = Math.max(180, Math.floor(rect.top - 68));
+        const availableAbove = Math.max(120, Math.floor(rect.top - 60));
         this.style.setProperty('--dropdown-up-max-h', `${availableAbove}px`);
       }
       const enabled = this.getEnabledItems();

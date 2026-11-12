@@ -68,7 +68,8 @@ export class LitertCameraCapture extends LitElement {
 
       .modal-backdrop {
         position: fixed;
-        inset: 0;
+        /* --titlebar-h is inherited from the app shell in WCO mode. */
+        inset: var(--titlebar-h, 0px) 0 0;
         background-color: var(--overlay-backdrop, rgba(4, 7, 13, 0.72));
         backdrop-filter: blur(6px);
         display: flex;

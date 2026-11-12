@@ -17,17 +17,19 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>LiteRT-LM.js Chat</title>
-  
+  <meta name="description" content="Private, on-device WebGPU chat powered by LiteRT-LM.">
+
   <!-- PWA Assets & Mobile Headers -->
   <link rel="icon" type="image/svg+xml" href="./assets/LiteRT_App_1024x1024px_Symbol-only_1.svg">
   <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
-  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="./icons/icon-192.png">
   <link rel="manifest" href="./manifest.json" crossorigin="use-credentials">
-  <meta name="theme-color" content="#0d1017">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131720">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f8fafc">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <style>
     /* Colors follow the OS theme until the app sets data-theme. */
     :root {

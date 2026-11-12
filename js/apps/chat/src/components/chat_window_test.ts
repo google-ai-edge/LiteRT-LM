@@ -21,7 +21,7 @@ import {Engine} from '@litert-lm/core';
 import {LlmChatStateController} from '../state_controller.js';
 import {ChatSessionStore, PromptMedia, PromptPart} from '../stores/chat_session_store.js';
 import {LocalDirectoryService} from '../stores/local_directory_service.js';
-import {ModelLoaderService} from '../stores/model_loader_service.js';
+import {getModelKey, ModelLoaderService} from '../stores/model_loader_service.js';
 import {MODELS, SettingsStore} from '../stores/settings_store.js';
 import {LitertChatWindow} from './chat_window.js';
 import {CustomDropdown} from './custom_dropdown.js';
@@ -897,5 +897,96 @@ describe('litert-chat-window', () => {
          expect(element.shadowRoot!.querySelector('.starters-container'))
              .toBeTruthy();
        });
+
+    describe('offline weight availability guard', () => {
+      it('disables Send, Enter-to-send, and starter cards with an inline hint when offline and uncached',
+         async () => {
+           element.isOffline = true;
+           await element.updateComplete;
+
+           const starters = Array.from(
+               element.shadowRoot!.querySelectorAll<HTMLButtonElement>(
+                   '.btn-starter'));
+           expect(starters.length).toBe(3);
+           expect(starters.every(btn => btn.disabled)).toBeTrue();
+
+           const hint = element.shadowRoot!.querySelector(
+               '#composer-offline-hint');
+           expect(hint).toBeTruthy();
+           expect(hint!.textContent).toContain('choose a cached or local model');
+
+           const editor = getEditor();
+           editor.textContent = 'Can I send offline?';
+           editor.dispatchEvent(new Event('input'));
+           await element.updateComplete;
+
+           const sendBtn = element.shadowRoot!.querySelector<HTMLButtonElement>(
+               '#btn-send')!;
+           expect(sendBtn.disabled).toBeTrue();
+           expect(sendBtn.textContent?.trim()).toBe('Offline · Not cached');
+
+           editor.dispatchEvent(new KeyboardEvent(
+               'keydown', {key: 'Enter', bubbles: true, cancelable: true}));
+           await element.updateComplete;
+           expect(mockChatSession.sendMessage).not.toHaveBeenCalled();
+           expect(editor.textContent).toBe('Can I send offline?');
+
+           const dropdown = element.shadowRoot!.querySelector(
+               '#composer-model-dropdown') as CustomDropdown;
+           const openSpy = spyOn(dropdown, 'open');
+           const chooseBtn =
+               element.shadowRoot!.querySelector<HTMLButtonElement>(
+                   '#btn-offline-choose-model')!;
+           chooseBtn.click();
+           expect(openSpy).toHaveBeenCalled();
+         });
+
+      it('keeps Send and starters enabled when offline with cached, local-dir, or loaded weights',
+         async () => {
+           element.isOffline = true;
+           cachedModelsMap.set(
+               getModelKey(mockSettings.selectedModelPath), 1024);
+           element.requestUpdate();
+           await element.updateComplete;
+
+           expect(element.shadowRoot!.querySelector('#composer-offline-hint'))
+               .toBeNull();
+           const starters = Array.from(
+               element.shadowRoot!.querySelectorAll<HTMLButtonElement>(
+                   '.btn-starter'));
+           expect(starters.every(btn => !btn.disabled)).toBeTrue();
+
+           const editor = getEditor();
+           editor.textContent = 'Cached prompt';
+           editor.dispatchEvent(new Event('input'));
+           await element.updateComplete;
+
+           const sendBtn = element.shadowRoot!.querySelector<HTMLButtonElement>(
+               '#btn-send')!;
+           expect(sendBtn.disabled).toBeFalse();
+           expect(sendBtn.textContent?.trim()).toBe('Send');
+
+           // Local directory model while offline
+           cachedModelsMap.clear();
+           mockSettings.selectedModelPath = 'local-dir://Gemma4.litertlm';
+           element.requestUpdate();
+           await element.updateComplete;
+           expect(element.shadowRoot!.querySelector('#composer-offline-hint'))
+               .toBeNull();
+           expect(sendBtn.disabled).toBeFalse();
+           expect(sendBtn.textContent?.trim()).toBe('Load & Send');
+
+           // Already-loaded engine while offline
+           mockSettings.selectedModelPath =
+               'https://example.com/path/to/model_file.litertlm';
+           mockModelLoader.engine = {} as Engine;
+           element.requestUpdate();
+           await element.updateComplete;
+           expect(element.shadowRoot!.querySelector('#composer-offline-hint'))
+               .toBeNull();
+           expect(sendBtn.disabled).toBeFalse();
+           expect(sendBtn.textContent?.trim()).toBe('Send');
+         });
+    });
   });
 });

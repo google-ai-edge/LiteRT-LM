@@ -542,4 +542,209 @@ describe('litert-lm-chat-app', () => {
        expect(heroLogo.getAttribute('src'))
            .toBe('./assets/LiteRT_Logo_Symbol-only_RGB_Color_Blue.svg');
      });
+
+  it('synchronizes all meta[name="theme-color"] tags live with header surface colors across light and dark themes',
+     async () => {
+       document.querySelectorAll('meta[name="theme-color"]')
+           .forEach(el => el.remove());
+       const darkMeta = document.createElement('meta');
+       darkMeta.setAttribute('name', 'theme-color');
+       darkMeta.setAttribute('media', '(prefers-color-scheme: dark)');
+       darkMeta.setAttribute('content', '#131720');
+       const lightMeta = document.createElement('meta');
+       lightMeta.setAttribute('name', 'theme-color');
+       lightMeta.setAttribute('media', '(prefers-color-scheme: light)');
+       lightMeta.setAttribute('content', '#f8fafc');
+       document.head.append(darkMeta, lightMeta);
+
+       window.localStorage.setItem('litertlm-theme-mode', 'light');
+       element.remove();
+       element = document.createElement('litert-lm-chat-app');
+       ((element as unknown) as TestableChatApp).state = mockState;
+       document.body.appendChild(element);
+       await element.updateComplete;
+
+       expect(darkMeta.getAttribute('content')).toBe('#f8fafc');
+       expect(lightMeta.getAttribute('content')).toBe('#f8fafc');
+
+       const themeBtn = element.shadowRoot!.querySelector(
+                            '#btn-toggle-theme') as HTMLButtonElement;
+       // Light -> System (which resolves to light on a light OS) -> Dark.
+       for (let i = 0; i < 2 && element.theme === 'light'; i++) {
+         themeBtn.click();
+         await element.updateComplete;
+       }
+       expect(element.theme).toBe('dark');
+       expect(darkMeta.getAttribute('content')).toBe('#131720');
+       expect(lightMeta.getAttribute('content')).toBe('#131720');
+       window.localStorage.removeItem('litertlm-theme-mode');
+     });
+
+  it('tracks Window Controls Overlay geometry and standalone display mode while preserving accessible h1',
+     async () => {
+       const navWithWco = navigator as Navigator & {
+         windowControlsOverlay?: EventTarget & {
+           visible: boolean;
+           getTitlebarAreaRect: () => DOMRect;
+         };
+       };
+       const originalDesc =
+           Object.getOwnPropertyDescriptor(navigator, 'windowControlsOverlay');
+       const wcoTarget = new EventTarget() as EventTarget & {
+         visible: boolean;
+         getTitlebarAreaRect: () => DOMRect;
+       };
+       let currentRect = new DOMRect(72, 0, window.innerWidth - 168, 44);
+       wcoTarget.visible = true;
+       wcoTarget.getTitlebarAreaRect = () => currentRect;
+
+       Object.defineProperty(navigator, 'windowControlsOverlay', {
+         configurable: true,
+         value: wcoTarget,
+       });
+
+       try {
+         element.remove();
+         element = document.createElement('litert-lm-chat-app');
+         ((element as unknown) as TestableChatApp).state = mockState;
+         document.body.appendChild(element);
+         await element.updateComplete;
+
+         expect(element.displayMode).toBe('window-controls-overlay');
+         expect(element.getAttribute('data-display-mode'))
+             .toBe('window-controls-overlay');
+         expect(element.style.getPropertyValue('--wco-left')).toBe('72px');
+         expect(element.style.getPropertyValue('--wco-right')).toBe('96px');
+         expect(element.style.getPropertyValue('--wco-height')).toBe('44px');
+
+         currentRect = new DOMRect(0, 0, window.innerWidth - 138, 46);
+         wcoTarget.dispatchEvent(new Event('geometrychange'));
+         await element.updateComplete;
+         expect(element.style.getPropertyValue('--wco-left')).toBe('0px');
+         expect(element.style.getPropertyValue('--wco-right')).toBe('138px');
+         expect(element.style.getPropertyValue('--wco-height')).toBe('46px');
+
+         // In WCO mode, uncovered #btn-toggle-learn-more stays interactive to
+         // close the open drawer while unrelated header buttons become inert.
+         const header = element.shadowRoot!.querySelector('header')!;
+         const learnMoreBtn = element.shadowRoot!.querySelector(
+                                  '#btn-toggle-learn-more') as HTMLButtonElement;
+         const themeBtn = element.shadowRoot!.querySelector(
+                              '#btn-toggle-theme') as HTMLButtonElement;
+         learnMoreBtn.click();
+         await element.updateComplete;
+         expect(element.isLearnMoreOpen).toBeTrue();
+         expect(header.hasAttribute('inert')).toBeFalse();
+         expect(learnMoreBtn.hasAttribute('inert')).toBeFalse();
+         expect(themeBtn.hasAttribute('inert')).toBeTrue();
+         learnMoreBtn.click();
+         await element.updateComplete;
+         expect(element.isLearnMoreOpen).toBeFalse();
+
+         // In WCO mode, confirmation backdrop offsets below the titlebar height.
+         const confirmPromise = mockState.confirmHandler!({
+           title: 'Test WCO Modal',
+           message: 'Keep titlebar draggable.',
+         });
+         await element.updateComplete;
+         const backdrop = element.shadowRoot!.querySelector(
+                              '.confirm-backdrop') as HTMLElement;
+         expect(backdrop.getBoundingClientRect().top).toBe(46);
+         expect(header.hasAttribute('inert')).toBeFalse();
+         expect(learnMoreBtn.hasAttribute('inert')).toBeTrue();
+         (element.shadowRoot!.querySelector(
+              '#btn-confirm-cancel') as HTMLButtonElement)
+             .click();
+         await confirmPromise;
+         await element.updateComplete;
+
+         wcoTarget.visible = false;
+         element.setAttribute('data-display-mode', 'standalone');
+         await element.updateComplete;
+         expect(header.getBoundingClientRect().height).toBe(40);
+         const h1 = header.querySelector('h1')!;
+         expect(h1.textContent!.trim()).toBe('LiteRT-LM.js Chat');
+         if (window.innerWidth > 560) {
+           expect(h1.getBoundingClientRect().width).toBeGreaterThan(20);
+         }
+       } finally {
+         if (originalDesc) {
+           Object.defineProperty(
+               navigator, 'windowControlsOverlay', originalDesc);
+         } else {
+           delete navWithWco.windowControlsOverlay;
+         }
+         document.documentElement.removeAttribute('data-display-mode');
+       }
+     });
+
+  it('surfaces non-disruptive Service Worker update and offline pills cleanly',
+     async () => {
+       const reloadSpy = spyOn(
+           element as unknown as {reloadPageForUpdate: () => void},
+           'reloadPageForUpdate');
+       const waitingWorker = {
+         postMessage: jasmine.createSpy('waitingPostMessage'),
+       } as unknown as ServiceWorker;
+       const activeWorker = {
+         postMessage: jasmine.createSpy('activePostMessage'),
+       } as unknown as ServiceWorker;
+       const fakeReg = Object.assign(new EventTarget(), {
+         waiting: waitingWorker,
+         installing: null,
+         active: activeWorker,
+         scope: './',
+       }) as unknown as ServiceWorkerRegistration;
+
+       const fakeSwContainer = Object.assign(
+           new EventTarget(), {controller: {} as ServiceWorker});
+       mockChatSession.isGenerating = true;
+       element.observeServiceWorkerRegistration(fakeReg, fakeSwContainer);
+       element.requestUpdate();
+       await element.updateComplete;
+
+       const updateBtn = element.shadowRoot!.querySelector(
+                             '#btn-sw-update') as HTMLButtonElement;
+       expect(updateBtn).toBeTruthy();
+       expect(updateBtn.disabled).toBeTrue();
+
+       mockChatSession.isGenerating = false;
+       element.requestUpdate();
+       await element.updateComplete;
+       expect(updateBtn.disabled).toBeFalse();
+
+       updateBtn.click();
+       await element.updateComplete;
+       expect(waitingWorker.postMessage)
+           .toHaveBeenCalledOnceWith({type: 'SKIP_WAITING'});
+       expect(element.shadowRoot!.querySelector('#btn-sw-update')).toBeNull();
+
+       fakeSwContainer.dispatchEvent(new Event('controllerchange'));
+       expect(reloadSpy).toHaveBeenCalledTimes(1);
+
+       const origOnLine = Object.getOwnPropertyDescriptor(
+           Object.getPrototypeOf(navigator), 'onLine');
+       Object.defineProperty(navigator, 'onLine', {
+         configurable: true,
+         get: () => false,
+       });
+       try {
+         window.dispatchEvent(new Event('offline'));
+         await element.updateComplete;
+         const offlinePill =
+             element.shadowRoot!.querySelector('#offline-status-pill');
+         expect(offlinePill).toBeTruthy();
+         expect(offlinePill!.textContent!.trim()).toBe('Offline');
+       } finally {
+         if (origOnLine) {
+           Object.defineProperty(navigator, 'onLine', origOnLine);
+         } else {
+           delete (navigator as unknown as {onLine?: boolean}).onLine;
+         }
+         window.dispatchEvent(new Event('online'));
+         await element.updateComplete;
+         expect(element.shadowRoot!.querySelector('#offline-status-pill'))
+             .toBeNull();
+       }
+     });
 });
