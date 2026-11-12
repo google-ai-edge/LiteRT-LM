@@ -14,6 +14,7 @@
 
 """Run subcommand for LiteRT-LM CLI."""
 
+import contextlib
 import json
 import os
 import sys
@@ -43,6 +44,8 @@ try:
   _HAS_ADB = True
 except ImportError:
   _HAS_ADB = False
+
+_RESET_COMMANDS = frozenset({"/clear", "/reset"})
 
 
 class SessionState:
@@ -321,14 +324,12 @@ def run_interactive(
       )
 
     with engine_cm as engine:
-      if no_template:
-        runner_cm = engine.create_session(
-            apply_prompt_template=False, sampler_config=sampler_config
-        )
-      else:
-        tools = None
-        messages = None
-        extra_context = None
+      tools = None
+      messages = None
+      extra_context = None
+      handler = None
+      thinking_config = None
+      if not no_template:
         if preset:
           tools, messages, extra_context = model.load_preset(preset)
           if tools is None and messages is None and extra_context is None:
@@ -336,9 +337,7 @@ def run_interactive(
 
         handler = LoggingToolEventHandler(state) if tools else None
 
-        if thinking is None and thinking_budget is None:
-          thinking_config = None
-        else:
+        if thinking is not None or thinking_budget is not None:
           if thinking is None:
             thinking = thinking_budget != 0
           if thinking_budget is None:
@@ -349,7 +348,12 @@ def run_interactive(
               thinking_token_budget=thinking_budget,
           )
 
-        runner_cm = engine.create_conversation(
+      def _open_runner():
+        if no_template:
+          return engine.create_session(
+              apply_prompt_template=False, sampler_config=sampler_config
+          )
+        return engine.create_conversation(
             tools=tools,
             messages=messages,
             tool_event_handler=handler,
@@ -360,7 +364,8 @@ def run_interactive(
             chat_template=chat_template,
         )
 
-      with runner_cm as runner:
+      with contextlib.ExitStack() as runner_stack:
+        runner = runner_stack.enter_context(_open_runner())
         if prompt:
           if isinstance(runner, litert_lm.AbstractSession):
             _execute_raw_prompt(runner, prompt)
@@ -370,7 +375,8 @@ def run_interactive(
 
         click.echo(
             click.style(
-                "[enter] submit | [ctrl+j] newline | [ctrl+c] clear/exit",
+                "[enter] submit | [ctrl+j] newline | [/clear] reset context |"
+                " [ctrl+c] clear input/exit",
                 fg="cyan",
             )
         )
@@ -396,9 +402,23 @@ def run_interactive(
                     ""
                 ),
             )
-            if not user_prompt:
-              continue
+          except EOFError:
+            break
+          except KeyboardInterrupt:
+            click.echo()
+            continue
 
+          if not user_prompt:
+            continue
+
+          if user_prompt.strip() in _RESET_COMMANDS:
+            state.active_channel = None
+            runner_stack.close()
+            runner = runner_stack.enter_context(_open_runner())
+            click.echo(click.style("[Conversation reset]", dim=True))
+            continue
+
+          try:
             if isinstance(runner, litert_lm.AbstractSession):
               _execute_raw_prompt(
                   runner,
@@ -412,12 +432,6 @@ def run_interactive(
                 is_first_prompt = False
               else:
                 _execute_prompt(state, runner, user_prompt)
-
-          except EOFError:
-            break
-          except KeyboardInterrupt:
-            click.echo()
-            continue
           except Exception:  # pylint: disable=broad-exception-caught
             click.echo(click.style("Error during inference", fg="red"))
             traceback.print_exc()
