@@ -259,6 +259,7 @@ cc_library(
     hdrs = ["resource_manager.h"],
     defines = ["LITERT_LM_EXCLUDE_LEGACY_EXECUTORS=1"],
     deps = RESOURCE_MANAGER_DEPS + [
+        "@com_google_absl//absl/status:status_macros",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_environment_options",
         "@litert//litert/cc:litert_macros",
@@ -279,7 +280,7 @@ cc_library(
         "@litert//litert/cc:litert_environment_options",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
-        "//support/tokenizer:huggingface_tokenizer_noop",
+        "//support/tokenizer:huggingface_tokenizer_noop",  # buildcleaner: keep
     ],
 )
 

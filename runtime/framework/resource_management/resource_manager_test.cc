@@ -326,5 +326,22 @@ TEST(ResourceManagerTest,
   EXPECT_EQ(counts.cloned_contexts, 0);
 }
 
+TEST(ResourceManagerTest, HandlesNonArtisanExecutorConfiguredAsGpuArtisan) {
+  auto executor = std::make_unique<FakeLlmExecutor>(
+      /*vocab_size=*/16, /*prefill_tokens_set=*/std::vector<std::vector<int>>{},
+      /*decode_tokens_set=*/std::vector<std::vector<int>>{});
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          ModelAssets::Create("dummy").value(),
+                                          Backend::GPU_ARTISAN));
+  ASSERT_OK(executor->UpdateExecutorSettings(settings));
+  ASSERT_OK_AND_ASSIGN(
+      auto resource_manager,
+      ResourceManager::Create(/*model_resources=*/nullptr, std::move(executor),
+                              /*vision_executor_settings=*/nullptr,
+                              /*audio_executor_settings=*/nullptr,
+                              /*litert_env=*/nullptr));
+  ASSERT_NE(resource_manager, nullptr);
+}
+
 }  // namespace
 }  // namespace litert::lm
