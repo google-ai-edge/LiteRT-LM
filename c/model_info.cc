@@ -101,16 +101,18 @@ const SupportedBackends* GetSupportedBackends(
 
 // Returns an InvalidArgument error unless `modality` is a known
 // LiteRtLmModality.
-absl::Status ValidateModality(LiteRtLmModality modality) {
-  switch (modality) {
+absl::Status ValidateModality(const LiteRtLmModality& modality) {
+  const int raw_modality = litert::lm::c::RawEnumValue(modality);
+  switch (raw_modality) {
     case kLiteRtLmModalityText:
     case kLiteRtLmModalityVision:
     case kLiteRtLmModalityAudio:
     case kLiteRtLmModalityVideo:
       return absl::OkStatus();
+    default:
+      return absl::InvalidArgumentError(
+          absl::StrFormat("Unknown LiteRtLmModality: %d.", raw_modality));
   }
-  return absl::InvalidArgumentError(absl::StrFormat(
-      "Unknown LiteRtLmModality: %d.", static_cast<int>(modality)));
 }
 
 // Returns an InvalidArgument error if `max_size` is negative.

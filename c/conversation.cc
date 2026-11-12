@@ -15,7 +15,6 @@
 #include "c/conversation.h"
 
 #include <cstddef>
-#include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
@@ -26,7 +25,9 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "c/c_api_internal.h"
 #include "c/conversation_internal.h"
 #include "c/engine.h"
 #include "c/engine_internal.h"  // IWYU pragma: keep
@@ -41,37 +42,46 @@
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine_settings.h"
+#include "runtime/engine/io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 
 namespace {
+
+using ::litert::lm::c::EmitStreamChunk;
+using ::litert::lm::c::EnableConfiguredModalities;
+using ::litert::lm::c::IsValidConversation;
+using ::litert::lm::c::IsValidEngine;
+using ::litert::lm::c::IsValidSessionConfig;
+using ::litert::lm::c::RawEnumValue;
 
 absl::AnyInvocable<void(absl::StatusOr<litert::lm::Message>)>
 CreateConversationCallback(LiteRtLmStreamCallback callback, void* user_data) {
   return [callback, user_data](absl::StatusOr<litert::lm::Message> message) {
     if (!message.ok()) {
       std::string error_str = message.status().ToString();
-      LiteRtLmStreamChunk chunk;
-      chunk.text = nullptr;
-      chunk.is_final = true;
-      chunk.error_msg = error_str.c_str();
-      callback(user_data, &chunk);
+      EmitStreamChunk(callback, user_data, /*text=*/nullptr, /*is_final=*/true,
+                      error_str.c_str());
       return;
     }
     if (message->empty()) {  // End of stream marker
-      LiteRtLmStreamChunk chunk;
-      chunk.text = nullptr;
-      chunk.is_final = true;
-      chunk.error_msg = nullptr;
-      callback(user_data, &chunk);
+      EmitStreamChunk(callback, user_data, /*text=*/nullptr, /*is_final=*/true,
+                      /*error_msg=*/nullptr);
     } else {
       std::string json_str = message->dump();
-      LiteRtLmStreamChunk chunk;
-      chunk.text = json_str.c_str();
-      chunk.is_final = false;
-      chunk.error_msg = nullptr;
-      callback(user_data, &chunk);
+      EmitStreamChunk(callback, user_data, json_str.c_str(), /*is_final=*/false,
+                      /*error_msg=*/nullptr);
     }
   };
+}
+
+absl::StatusOr<nlohmann::json> ParseMessageJson(
+    absl::string_view message_json) {
+  nlohmann::json json_message = nlohmann::json::parse(
+      message_json, /*cb=*/nullptr, /*allow_exceptions=*/false);
+  if (json_message.is_discarded()) {
+    return absl::InvalidArgumentError("Failed to parse message JSON.");
+  }
+  return json_message;
 }
 
 std::optional<litert::lm::DataProcessorArguments> GetDataProcessorArguments(
@@ -231,25 +241,25 @@ absl::StatusOr<litert::lm::ToolChoice> ParseToolChoice(
                 nlohmann::ordered_json::error_handler_t::replace)));
 }
 
-bool IsValidConstraintType(LiteRtLmConstraintType type) {
-  switch (type) {
+bool IsValidConstraintType(const LiteRtLmConstraintType& type) {
+  switch (RawEnumValue(type)) {
     case kLiteRtLmConstraintTypeNone:
     case kLiteRtLmConstraintTypeRegex:
     case kLiteRtLmConstraintTypeJsonSchema:
       return true;
+    default:
+      return false;
   }
-  return false;
 }
 
-// C callers can pass any int as `type`. Reads its raw value instead of loading
-// it as the enum: loading a value outside the enum's range is undefined
-// behavior in C++, and builds that check enum loads trap on it.
 bool IsValidConstraintProviderType(const LiteRtLmConstraintProviderType& type) {
-  static_assert(sizeof(type) == sizeof(int));
-  int value;
-  std::memcpy(&value, &type, sizeof(value));
-  return value == kLiteRtLmConstraintProviderTypeNone ||
-         value == kLiteRtLmConstraintProviderTypeLlGuidance;
+  switch (RawEnumValue(type)) {
+    case kLiteRtLmConstraintProviderTypeNone:
+    case kLiteRtLmConstraintProviderTypeLlGuidance:
+      return true;
+    default:
+      return false;
+  }
 }
 
 }  // namespace
@@ -272,9 +282,8 @@ LiteRtLmStatusCode litert_lm_conversation_config_set_session_config(
     LiteRtLmConversationConfig* config,
     const LiteRtLmSessionConfig* session_config) {
   LITERT_LM_C_RETURN_IF_NULL(config);
-  if (!session_config || !session_config->config) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session config.");
+  if (!IsValidSessionConfig(session_config)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   config->session_config = *session_config->config;
   return kLiteRtLmStatusOk;
@@ -538,12 +547,11 @@ LiteRtLmStatusCode litert_lm_conversation_create(
     LiteRtLmConversation** out_conversation) {
   LITERT_LM_C_RETURN_IF_NULL(out_conversation);
   *out_conversation = nullptr;
-  if (!engine || !engine->engine) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid engine.");
+  if (!IsValidEngine(engine)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
 
-  absl::StatusOr<std::unique_ptr<Conversation>> conversation;
+  std::unique_ptr<Conversation> conversation;
   if (c_config) {
     litert::lm::JsonPreface json_preface;
     if (!c_config->system_message_json.empty()) {
@@ -604,16 +612,8 @@ LiteRtLmStatusCode litert_lm_conversation_create(
     SessionConfig session_config = c_config->session_config
                                        ? *c_config->session_config
                                        : SessionConfig::CreateDefault();
-    if (engine->engine->GetEngineSettings()
-            .GetAudioExecutorSettings()
-            .has_value()) {
-      session_config.SetAudioModalityEnabled(true);
-    }
-    if (engine->engine->GetEngineSettings()
-            .GetVisionExecutorSettings()
-            .has_value()) {
-      session_config.SetVisionModalityEnabled(true);
-    }
+    EnableConfiguredModalities(engine->engine->GetEngineSettings(),
+                               session_config);
     builder.SetSessionConfig(session_config);
 
     builder.SetPreface(json_preface);
@@ -649,33 +649,21 @@ LiteRtLmStatusCode litert_lm_conversation_create(
         gpu_artisan_config->use_autosized_ringbuffers) {
       builder.SetEnableRewinding(false);
     }
-    auto config = builder.Build(*engine->engine);
-
-    if (!config.ok()) {
-      ABSL_LOG(ERROR) << "Failed to create conversation config: "
-                      << config.status();
-      return litert::lm::c::ToCStatus(config.status());
-    }
-    conversation = Conversation::Create(*engine->engine, *config);
+    LITERT_LM_C_ASSIGN_OR_RETURN(ConversationConfig config,
+                                 builder.Build(*engine->engine));
+    LITERT_LM_C_ASSIGN_OR_RETURN(conversation,
+                                 Conversation::Create(*engine->engine, config));
   } else {
-    auto default_conversation_config =
-        ConversationConfig::CreateDefault(*engine->engine);
-    if (!default_conversation_config.ok()) {
-      ABSL_LOG(ERROR) << "Failed to create default conversation config: "
-                      << default_conversation_config.status();
-      return litert::lm::c::ToCStatus(default_conversation_config.status());
-    }
-    conversation =
-        Conversation::Create(*engine->engine, *default_conversation_config);
+    LITERT_LM_C_ASSIGN_OR_RETURN(
+        ConversationConfig default_conversation_config,
+        ConversationConfig::CreateDefault(*engine->engine));
+    LITERT_LM_C_ASSIGN_OR_RETURN(
+        conversation,
+        Conversation::Create(*engine->engine, default_conversation_config));
   }
 
-  if (!conversation.ok()) {
-    ABSL_LOG(ERROR) << "Failed to create conversation: "
-                    << conversation.status();
-    return litert::lm::c::ToCStatus(conversation.status());
-  }
   auto c_conversation = std::make_unique<LiteRtLmConversation>();
-  c_conversation->conversation = *std::move(conversation);
+  c_conversation->conversation = std::move(conversation);
   *out_conversation = c_conversation.release();
   return kLiteRtLmStatusOk;
 }
@@ -689,17 +677,13 @@ LiteRtLmStatusCode litert_lm_conversation_clone(
     LiteRtLmConversation** out_conversation) {
   LITERT_LM_C_RETURN_IF_NULL(out_conversation);
   *out_conversation = nullptr;
-  if (!conversation || !conversation->conversation) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid conversation.");
+  if (!IsValidConversation(conversation)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  auto cloned = conversation->conversation->Clone();
-  if (!cloned.ok()) {
-    ABSL_LOG(ERROR) << "Failed to clone conversation: " << cloned.status();
-    return litert::lm::c::ToCStatus(cloned.status());
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(std::unique_ptr<Conversation> cloned,
+                               conversation->conversation->Clone());
   auto c_conversation = std::make_unique<LiteRtLmConversation>();
-  c_conversation->conversation = std::move(*cloned);
+  c_conversation->conversation = std::move(cloned);
   *out_conversation = c_conversation.release();
   return kLiteRtLmStatusOk;
 }
@@ -711,31 +695,22 @@ LiteRtLmStatusCode litert_lm_conversation_send_message(
     LiteRtLmJsonResponse** out_response) {
   LITERT_LM_C_RETURN_IF_NULL(out_response);
   *out_response = nullptr;
-  if (!conversation || !conversation->conversation) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid conversation.");
+  if (!IsValidConversation(conversation)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   LITERT_LM_C_RETURN_IF_NULL(message_json);
-  nlohmann::json json_message =
-      nlohmann::json::parse(message_json, /*cb=*/nullptr,
-                            /*allow_exceptions=*/false);
-  if (json_message.is_discarded()) {
-    ABSL_LOG(ERROR) << "Failed to parse message JSON.";
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Failed to parse message JSON.");
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(nlohmann::json json_message,
+                               ParseMessageJson(message_json));
 
   OptionalArgs litert_lm_optional_args = CreateOptionalArgs(
       conversation->conversation.get(), extra_context, optional_args);
 
-  auto response = conversation->conversation->SendMessage(
-      json_message, std::move(litert_lm_optional_args));
-  if (!response.ok()) {
-    ABSL_LOG(ERROR) << "Failed to send message: " << response.status();
-    return litert::lm::c::ToCStatus(response.status());
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      litert::lm::Message response,
+      conversation->conversation->SendMessage(
+          json_message, std::move(litert_lm_optional_args)));
   auto c_response = std::make_unique<LiteRtLmJsonResponse>();
-  c_response->json_string = response->dump();
+  c_response->json_string = response.dump();
   *out_response = c_response.release();
   return kLiteRtLmStatusOk;
 }
@@ -758,32 +733,20 @@ LiteRtLmStatusCode litert_lm_conversation_send_message_stream(
     const char* extra_context,
     const LiteRtLmConversationOptionalArgs* optional_args,
     LiteRtLmStreamCallback callback, void* callback_data) {
-  if (!conversation || !conversation->conversation) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid conversation.");
+  if (!IsValidConversation(conversation)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   LITERT_LM_C_RETURN_IF_NULL(message_json);
   LITERT_LM_C_RETURN_IF_NULL(callback);
-  nlohmann::json json_message =
-      nlohmann::json::parse(message_json, /*cb=*/nullptr,
-                            /*allow_exceptions=*/false);
-  if (json_message.is_discarded()) {
-    ABSL_LOG(ERROR) << "Failed to parse message JSON.";
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Failed to parse message JSON.");
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(nlohmann::json json_message,
+                               ParseMessageJson(message_json));
 
   litert::lm::OptionalArgs litert_lm_optional_args = CreateOptionalArgs(
       conversation->conversation.get(), extra_context, optional_args);
 
-  absl::Status status = conversation->conversation->SendMessageAsync(
+  LITERT_LM_C_RETURN_IF_ERROR(conversation->conversation->SendMessageAsync(
       json_message, CreateConversationCallback(callback, callback_data),
-      std::move(litert_lm_optional_args));
-
-  if (!status.ok()) {
-    ABSL_LOG(ERROR) << "Failed to start message stream: " << status;
-    return litert::lm::c::ToCStatus(status);
-  }
+      std::move(litert_lm_optional_args)));
   return kLiteRtLmStatusOk;
 }
 
@@ -792,27 +755,17 @@ LiteRtLmStatusCode litert_lm_conversation_render_message_to_string(
     const char** out_text) {
   LITERT_LM_C_RETURN_IF_NULL(out_text);
   *out_text = nullptr;
-  if (!conversation || !conversation->conversation) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid conversation.");
+  if (!IsValidConversation(conversation)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   LITERT_LM_C_RETURN_IF_NULL(message_json);
-  nlohmann::json json_message =
-      nlohmann::json::parse(message_json, /*cb=*/nullptr,
-                            /*allow_exceptions=*/false);
-  if (json_message.is_discarded()) {
-    ABSL_LOG(ERROR) << "Failed to parse message JSON.";
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Failed to parse message JSON.");
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(nlohmann::json json_message,
+                               ParseMessageJson(message_json));
 
-  auto rendered = conversation->conversation->RenderMessageIntoString(
-      json_message, litert::lm::OptionalArgs());
-  if (!rendered.ok()) {
-    ABSL_LOG(ERROR) << "Failed to render message: " << rendered.status();
-    return litert::lm::c::ToCStatus(rendered.status());
-  }
-  conversation->last_rendered_message = std::move(*rendered);
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::string rendered, conversation->conversation->RenderMessageIntoString(
+                                json_message, litert::lm::OptionalArgs()));
+  conversation->last_rendered_message = std::move(rendered);
   *out_text = conversation->last_rendered_message.c_str();
   return kLiteRtLmStatusOk;
 }
@@ -821,26 +774,21 @@ LiteRtLmStatusCode litert_lm_conversation_render_preface_to_string(
     LiteRtLmConversation* conversation, const char** out_text) {
   LITERT_LM_C_RETURN_IF_NULL(out_text);
   *out_text = nullptr;
-  if (!conversation || !conversation->conversation) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid conversation.");
+  if (!IsValidConversation(conversation)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  auto rendered = conversation->conversation->RenderPrefaceIntoString(
-      litert::lm::OptionalArgs());
-  if (!rendered.ok()) {
-    ABSL_LOG(ERROR) << "Failed to render preface: " << rendered.status();
-    return litert::lm::c::ToCStatus(rendered.status());
-  }
-  conversation->last_rendered_preface = std::move(*rendered);
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::string rendered, conversation->conversation->RenderPrefaceIntoString(
+                                litert::lm::OptionalArgs()));
+  conversation->last_rendered_preface = std::move(rendered);
   *out_text = conversation->last_rendered_preface.c_str();
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_conversation_cancel_process(
     LiteRtLmConversation* conversation) {
-  if (!conversation || !conversation->conversation) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid conversation.");
+  if (!IsValidConversation(conversation)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   conversation->conversation->CancelProcess();
   return kLiteRtLmStatusOk;
@@ -848,15 +796,10 @@ LiteRtLmStatusCode litert_lm_conversation_cancel_process(
 
 LiteRtLmStatusCode litert_lm_conversation_wait_until_done(
     LiteRtLmConversation* conversation) {
-  if (!conversation || !conversation->conversation) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid conversation.");
+  if (!IsValidConversation(conversation)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  absl::Status status = conversation->conversation->WaitUntilDone();
-  if (!status.ok()) {
-    ABSL_LOG(ERROR) << "Failed to wait until done: " << status;
-    return litert::lm::c::ToCStatus(status);
-  }
+  LITERT_LM_C_RETURN_IF_ERROR(conversation->conversation->WaitUntilDone());
   return kLiteRtLmStatusOk;
 }
 
@@ -865,38 +808,29 @@ LiteRtLmStatusCode litert_lm_conversation_get_benchmark_info(
     LiteRtLmBenchmarkInfo** out_benchmark_info) {
   LITERT_LM_C_RETURN_IF_NULL(out_benchmark_info);
   *out_benchmark_info = nullptr;
-  if (!conversation || !conversation->conversation) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid conversation.");
+  if (!IsValidConversation(conversation)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  auto benchmark_info = conversation->conversation->GetBenchmarkInfo();
-  if (!benchmark_info.ok()) {
-    ABSL_LOG(ERROR) << "Failed to get benchmark info: "
-                    << benchmark_info.status();
-    return litert::lm::c::ToCStatus(benchmark_info.status());
-  }
-  *out_benchmark_info = new LiteRtLmBenchmarkInfo{std::move(*benchmark_info)};
+  LITERT_LM_C_ASSIGN_OR_RETURN(litert::lm::BenchmarkInfo benchmark_info,
+                               conversation->conversation->GetBenchmarkInfo());
+  *out_benchmark_info = new LiteRtLmBenchmarkInfo{std::move(benchmark_info)};
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_conversation_get_token_count(
     LiteRtLmConversation* conversation, size_t* out_count) {
   LITERT_LM_C_RETURN_IF_NULL(out_count);
-  if (!conversation || !conversation->conversation) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid conversation.");
+  if (!IsValidConversation(conversation)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  absl::StatusOr<int> token_count = conversation->conversation->GetTokenCount();
-  if (!token_count.ok()) {
-    ABSL_LOG(ERROR) << "Failed to get token count: " << token_count.status();
-    return litert::lm::c::ToCStatus(token_count.status());
-  }
-  if (*token_count < 0) {
+  LITERT_LM_C_ASSIGN_OR_RETURN(int token_count,
+                               conversation->conversation->GetTokenCount());
+  if (token_count < 0) {
     return litert::lm::c::ReturnError(
         absl::StatusCode::kInternal,
-        absl::StrFormat("Negative token count: %d.", *token_count));
+        absl::StrFormat("Negative token count: %d.", token_count));
   }
-  *out_count = static_cast<size_t>(*token_count);
+  *out_count = static_cast<size_t>(token_count);
   return kLiteRtLmStatusOk;
 }
 

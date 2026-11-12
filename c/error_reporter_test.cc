@@ -14,6 +14,7 @@
 
 #include "c/error_reporter.h"
 
+#include <cstring>
 #include <string>
 #include <thread>  // NOLINT
 #include <utility>
@@ -185,6 +186,20 @@ TEST(ErrorReporterTest, AssignOrReturnMacro) {
             kLiteRtLmStatusDataLoss);
   EXPECT_TRUE(out.empty());
   EXPECT_THAT(litert_lm_get_last_error_message(), HasSubstr("corrupt"));
+}
+
+TEST(ErrorReporterTest, RawEnumValueReadsDeclaredAndArbitraryBitPatterns) {
+  EXPECT_EQ(litert::lm::c::RawEnumValue(kLiteRtLmActivationDataTypeFloat32), 0);
+  EXPECT_EQ(litert::lm::c::RawEnumValue(kLiteRtLmActivationDataTypeInt8), 3);
+
+  for (const int raw : {-1, 4, 99, 1024}) {
+    alignas(LiteRtLmActivationDataType) char
+        storage[sizeof(LiteRtLmActivationDataType)];
+    std::memcpy(storage, &raw, sizeof(raw));
+    const auto* enum_ptr =
+        reinterpret_cast<const LiteRtLmActivationDataType*>(storage);
+    EXPECT_EQ(litert::lm::c::RawEnumValue(*enum_ptr), raw);
+  }
 }
 
 }  // namespace

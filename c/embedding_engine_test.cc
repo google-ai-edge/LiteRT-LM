@@ -24,6 +24,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "c/c_abi_enum_test_helper.h"
 #include "c/engine.h"
 #include "c/error_reporter.h"
 
@@ -997,6 +998,31 @@ TEST(EmbeddingEngineCStatusTest, NullHandleReturnsInvalidArgument) {
             &responses),
         kLiteRtLmStatusInvalidArgument);
     EXPECT_EQ(responses, nullptr);
+  }
+}
+
+TEST(EmbeddingEngineCStatusTest,
+     OutOfRangeEnumsAcrossCAbiReturnInvalidArgument) {
+  SettingsPtr settings = CreateSettings();
+  ASSERT_NE(settings, nullptr);
+  OptionsPtr options = CreateOptions();
+  ASSERT_NE(options, nullptr);
+
+  for (const int bad : {-1, 4, 99, 1024}) {
+    SCOPED_TRACE(bad);
+    litert_lm_clear_last_error();
+    EXPECT_EQ(c_abi_test_embedding_engine_settings_set_activation_data_type(
+                  settings.get(), bad),
+              kLiteRtLmStatusInvalidArgument);
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                HasSubstr("Unknown LiteRtLmActivationDataType"));
+
+    litert_lm_clear_last_error();
+    EXPECT_EQ(c_abi_test_embedding_options_set_input_overflow_strategy(
+                  options.get(), bad),
+              kLiteRtLmStatusInvalidArgument);
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                HasSubstr("Unknown LiteRtLmInputOverflowStrategy"));
   }
 }
 

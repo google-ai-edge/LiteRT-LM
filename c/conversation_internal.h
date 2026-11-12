@@ -19,7 +19,9 @@
 #include <optional>
 #include <string>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "c/conversation.h"
+#include "c/error_reporter_internal.h"
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
@@ -75,5 +77,17 @@ struct LiteRtLmConversationConfig {
   std::optional<litert::lm::ThinkingConfig> thinking_config;
   std::optional<LiteRtLmConstraintProviderType> constraint_provider_type;
 };
+
+namespace litert::lm::c {
+
+inline bool IsValidConversation(const LiteRtLmConversation* conversation) {
+  if (conversation != nullptr && conversation->conversation != nullptr) {
+    return true;
+  }
+  SetLastError(absl::StatusCode::kInvalidArgument, "Invalid conversation.");
+  return false;
+}
+
+}  // namespace litert::lm::c
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_C_CONVERSATION_INTERNAL_H_

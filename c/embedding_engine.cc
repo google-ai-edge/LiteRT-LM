@@ -17,15 +17,14 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
-#include <string>
 #include <utility>
 #include <vector>
 
-#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "c/c_api_internal.h"
 #include "c/embedding_engine_internal.h"  // IWYU pragma: keep
 #include "c/engine.h"
 #include "c/engine_internal.h"  // IWYU pragma: keep
@@ -43,28 +42,11 @@
 
 namespace {
 
-absl::StatusOr<std::vector<litert::lm::InputData>> ToEngineInputData(
-    const LiteRtLmInputData* const* inputs, size_t num_inputs) {
-  if (inputs == nullptr && num_inputs > 0) {
-    return absl::InvalidArgumentError(
-        "inputs must not be NULL when num_inputs is non-zero.");
-  }
-  std::vector<litert::lm::InputData> engine_inputs;
-  if (inputs == nullptr || num_inputs == 0) {
-    return engine_inputs;
-  }
-  engine_inputs.reserve(num_inputs);
-  for (size_t i = 0; i < num_inputs; ++i) {
-    if (inputs[i] != nullptr) {
-      auto copy_status = litert::lm::CreateInputDataCopy(inputs[i]->data);
-      if (!copy_status.ok()) {
-        return copy_status.status();
-      }
-      engine_inputs.push_back(std::move(*copy_status));
-    }
-  }
-  return engine_inputs;
-}
+using ::litert::lm::c::IsValidActivationDataType;
+using ::litert::lm::c::ParseOptionalBackend;
+using ::litert::lm::c::RawEnumValue;
+using ::litert::lm::c::SetExecutorCacheDirs;
+using ::litert::lm::c::ToEngineInputData;
 
 // Returns true if `settings` is a usable embedding engine settings handle.
 // Otherwise records a kInvalidArgument last error and returns false.
@@ -78,25 +60,25 @@ bool IsValidEmbeddingEngineSettings(
   return false;
 }
 
-bool IsValidActivationDataType(LiteRtLmActivationDataType type) {
-  switch (type) {
-    case kLiteRtLmActivationDataTypeFloat32:
-    case kLiteRtLmActivationDataTypeFloat16:
-    case kLiteRtLmActivationDataTypeInt16:
-    case kLiteRtLmActivationDataTypeInt8:
-      return true;
+bool IsValidEmbeddingEngine(const LiteRtLmEmbeddingEngine* engine) {
+  if (engine != nullptr && engine->engine != nullptr) {
+    return true;
   }
+  litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
+                              "Invalid embedding engine.");
   return false;
 }
 
-bool IsValidInputOverflowStrategy(LiteRtLmInputOverflowStrategy strategy) {
-  switch (strategy) {
+bool IsValidInputOverflowStrategy(
+    const LiteRtLmInputOverflowStrategy& strategy) {
+  switch (RawEnumValue(strategy)) {
     case kLiteRtLmInputOverflowStrategyChunkAndAverage:
     case kLiteRtLmInputOverflowStrategyTruncate:
     case kLiteRtLmInputOverflowStrategyError:
       return true;
+    default:
+      return false;
   }
-  return false;
 }
 
 }  // namespace
@@ -107,58 +89,30 @@ LiteRtLmStatusCode litert_lm_embedding_engine_settings_create(
     LiteRtLmEmbeddingEngineSettings** out_settings) {
   LITERT_LM_C_RETURN_IF_NULL(out_settings);
   *out_settings = nullptr;
-  if (model_path == nullptr || backend_str == nullptr) {
-    ABSL_LOG(ERROR) << "model_path and backend_str must not be null.";
-    return litert::lm::c::ReturnError(
-        absl::StatusCode::kInvalidArgument,
-        "model_path and backend_str must not be null.");
-  }
+  LITERT_LM_C_RETURN_IF_NULL(model_path);
+  LITERT_LM_C_RETURN_IF_NULL(backend_str);
 
-  auto model_assets = litert::lm::ModelAssets::Create(model_path);
-  if (!model_assets.ok()) {
-    ABSL_LOG(ERROR) << "Failed to create model assets: "
-                    << model_assets.status();
-    return litert::lm::c::ToCStatus(model_assets.status());
-  }
-
-  auto backend = litert::lm::GetBackendFromString(backend_str);
-  if (!backend.ok()) {
-    ABSL_LOG(ERROR) << "Failed to parse backend: " << backend.status();
-    return litert::lm::c::ToCStatus(backend.status());
-  }
-
-  std::optional<litert::lm::Backend> vision_backend = std::nullopt;
-  if (vision_backend_str != nullptr && vision_backend_str[0] != '\0') {
-    auto v_backend = litert::lm::GetBackendFromString(vision_backend_str);
-    if (!v_backend.ok()) {
-      ABSL_LOG(ERROR) << "Failed to parse vision backend: "
-                      << v_backend.status();
-      return litert::lm::c::ToCStatus(v_backend.status());
-    }
-    vision_backend = *v_backend;
-  }
-
-  std::optional<litert::lm::Backend> audio_backend = std::nullopt;
-  if (audio_backend_str != nullptr && audio_backend_str[0] != '\0') {
-    auto a_backend = litert::lm::GetBackendFromString(audio_backend_str);
-    if (!a_backend.ok()) {
-      ABSL_LOG(ERROR) << "Failed to parse audio backend: "
-                      << a_backend.status();
-      return litert::lm::c::ToCStatus(a_backend.status());
-    }
-    audio_backend = *a_backend;
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(litert::lm::ModelAssets model_assets,
+                               litert::lm::ModelAssets::Create(model_path));
+  LITERT_LM_C_ASSIGN_OR_RETURN(litert::lm::Backend backend,
+                               litert::lm::GetBackendFromString(backend_str));
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::optional<litert::lm::Backend> vision_backend,
+      ParseOptionalBackend(absl::NullSafeStringView(vision_backend_str)));
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::optional<litert::lm::Backend> audio_backend,
+      ParseOptionalBackend(absl::NullSafeStringView(audio_backend_str)));
 
   if (!vision_backend.has_value() || !audio_backend.has_value()) {
     auto resources = litert::lm::BuildLiteRtCompiledModelResources(
-        *model_assets, /*enable_file_backed_model_loading=*/false);
+        model_assets, /*enable_file_backed_model_loading=*/false);
     if (resources.ok() && *resources != nullptr) {
       if (!vision_backend.has_value() &&
           (*resources)
               ->GetTFLiteModel(
                   litert::lm::proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER)
               .ok()) {
-        vision_backend = *backend;
+        vision_backend = backend;
       }
       if (!audio_backend.has_value() &&
           ((*resources)
@@ -169,22 +123,19 @@ LiteRtLmStatusCode litert_lm_embedding_engine_settings_create(
                ->GetTFLiteModel(
                    litert::lm::proto::EmbeddingMetadata::TF_LITE_AUDIO_FRONTEND)
                .ok())) {
-        audio_backend = *backend;
+        audio_backend = backend;
       }
     }
   }
 
-  auto settings = litert::lm::EmbeddingEngineSettings::CreateDefault(
-      std::move(*model_assets), *backend, vision_backend, audio_backend);
-  if (!settings.ok()) {
-    ABSL_LOG(ERROR) << "Failed to create embedding engine settings: "
-                    << settings.status();
-    return litert::lm::c::ToCStatus(settings.status());
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      litert::lm::EmbeddingEngineSettings settings,
+      litert::lm::EmbeddingEngineSettings::CreateDefault(
+          std::move(model_assets), backend, vision_backend, audio_backend));
 
   *out_settings = new LiteRtLmEmbeddingEngineSettings{
       std::make_unique<litert::lm::EmbeddingEngineSettings>(
-          std::move(*settings))};
+          std::move(settings))};
   return kLiteRtLmStatusOk;
 }
 
@@ -226,15 +177,10 @@ LiteRtLmStatusCode litert_lm_embedding_engine_settings_set_cache_dir(
     return kLiteRtLmStatusInvalidArgument;
   }
   LITERT_LM_C_RETURN_IF_NULL(cache_dir);
-  settings->settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir);
-  if (settings->settings->GetVisionExecutorSettings().has_value()) {
-    settings->settings->GetMutableVisionExecutorSettings()->SetCacheDir(
-        cache_dir);
-  }
-  if (settings->settings->GetAudioExecutorSettings().has_value()) {
-    settings->settings->GetMutableAudioExecutorSettings()->SetCacheDir(
-        cache_dir);
-  }
+  SetExecutorCacheDirs(settings->settings->GetMutableMainExecutorSettings(),
+                       settings->settings->GetMutableVisionExecutorSettings(),
+                       settings->settings->GetMutableAudioExecutorSettings(),
+                       cache_dir);
   return kLiteRtLmStatusOk;
 }
 
@@ -509,19 +455,15 @@ LiteRtLmStatusCode litert_lm_embedding_engine_create(
     LiteRtLmEmbeddingEngine** out_engine) {
   LITERT_LM_C_RETURN_IF_NULL(out_engine);
   *out_engine = nullptr;
-  if (settings == nullptr || settings->settings == nullptr) {
-    ABSL_LOG(ERROR) << "Settings must not be null.";
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Settings must not be null.");
+  if (!IsValidEmbeddingEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
 
-  auto engine = litert::lm::EmbeddingEngineImpl::Create(*settings->settings);
-  if (!engine.ok()) {
-    ABSL_LOG(ERROR) << "Failed to create EmbeddingEngine: " << engine.status();
-    return litert::lm::c::ToCStatus(engine.status());
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::unique_ptr<litert::lm::EmbeddingEngine> engine,
+      litert::lm::EmbeddingEngineImpl::Create(*settings->settings));
 
-  *out_engine = new LiteRtLmEmbeddingEngine{std::move(*engine)};
+  *out_engine = new LiteRtLmEmbeddingEngine{std::move(engine)};
   return kLiteRtLmStatusOk;
 }
 
@@ -535,29 +477,21 @@ LiteRtLmStatusCode litert_lm_embedding_engine_compute_embedding(
     LiteRtLmEmbeddingResponse** out_response) {
   LITERT_LM_C_RETURN_IF_NULL(out_response);
   *out_response = nullptr;
-  if (!engine || !engine->engine) {
-    ABSL_LOG(ERROR) << "EmbeddingEngine is null.";
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "EmbeddingEngine is null.");
+  if (!IsValidEmbeddingEngine(engine)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
 
-  auto engine_inputs = ToEngineInputData(inputs, num_inputs);
-  if (!engine_inputs.ok()) {
-    ABSL_LOG(ERROR) << "Failed to convert input data: "
-                    << engine_inputs.status();
-    return litert::lm::c::ToCStatus(engine_inputs.status());
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(std::vector<litert::lm::InputData> engine_inputs,
+                               ToEngineInputData(inputs, num_inputs));
 
   litert::lm::EmbeddingOptions opts =
       options ? options->options : litert::lm::EmbeddingOptions{};
 
-  auto response = engine->engine->ComputeEmbedding(*engine_inputs, opts);
-  if (!response.ok()) {
-    ABSL_LOG(ERROR) << "ComputeEmbedding failed: " << response.status();
-    return litert::lm::c::ToCStatus(response.status());
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      litert::lm::EmbeddingResponse response,
+      engine->engine->ComputeEmbedding(engine_inputs, opts));
 
-  *out_response = new LiteRtLmEmbeddingResponse{std::move(*response)};
+  *out_response = new LiteRtLmEmbeddingResponse{std::move(response)};
   return kLiteRtLmStatusOk;
 }
 
@@ -569,10 +503,8 @@ LiteRtLmStatusCode litert_lm_embedding_engine_compute_embedding_batch(
     LiteRtLmEmbeddingResponses** out_responses) {
   LITERT_LM_C_RETURN_IF_NULL(out_responses);
   *out_responses = nullptr;
-  if (!engine || !engine->engine) {
-    ABSL_LOG(ERROR) << "EmbeddingEngine is null.";
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "EmbeddingEngine is null.");
+  if (!IsValidEmbeddingEngine(engine)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
 
   if (batch_size > 0 &&
@@ -587,25 +519,19 @@ LiteRtLmStatusCode litert_lm_embedding_engine_compute_embedding_batch(
   contents_batch.reserve(batch_size);
 
   for (size_t i = 0; i < batch_size; ++i) {
-    auto engine_inputs =
-        ToEngineInputData(inputs_batch[i], num_inputs_per_batch[i]);
-    if (!engine_inputs.ok()) {
-      ABSL_LOG(ERROR) << "Failed to convert input data for batch index " << i
-                      << ": " << engine_inputs.status();
-      return litert::lm::c::ToCStatus(engine_inputs.status());
-    }
-    contents_batch.push_back(std::move(*engine_inputs));
+    LITERT_LM_C_ASSIGN_OR_RETURN(
+        std::vector<litert::lm::InputData> engine_inputs,
+        ToEngineInputData(inputs_batch[i], num_inputs_per_batch[i]));
+    contents_batch.push_back(std::move(engine_inputs));
   }
 
   litert::lm::EmbeddingOptions opts =
       options ? options->options : litert::lm::EmbeddingOptions{};
 
-  auto responses = engine->engine->ComputeEmbeddingBatch(contents_batch, opts);
-  if (!responses.ok()) {
-    ABSL_LOG(ERROR) << "ComputeEmbeddingBatch failed: " << responses.status();
-    return litert::lm::c::ToCStatus(responses.status());
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::vector<litert::lm::EmbeddingResponse> responses,
+      engine->engine->ComputeEmbeddingBatch(contents_batch, opts));
 
-  *out_responses = new LiteRtLmEmbeddingResponses{std::move(*responses)};
+  *out_responses = new LiteRtLmEmbeddingResponses{std::move(responses)};
   return kLiteRtLmStatusOk;
 }

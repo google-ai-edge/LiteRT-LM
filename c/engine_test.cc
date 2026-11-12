@@ -37,6 +37,7 @@
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "c/c_abi_enum_test_helper.h"
 #include "c/conversation.h"
 #include "c/conversation_internal.h"
 #include "c/engine_internal.h"
@@ -5189,6 +5190,157 @@ TEST(EngineCStatusTest, ConversationResultProducers) {
   EXPECT_GT(status, kLiteRtLmStatusOk);
   EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
   EXPECT_EQ(benchmark_info, nullptr);
+
+  // Malformed message JSON is also rejected by send_message_stream.
+  litert_lm_clear_last_error();
+  auto noop_callback = +[](void*, const LiteRtLmStreamChunk*) {};
+  EXPECT_EQ(litert_lm_conversation_send_message_stream(
+                conversation.get(), bad_json, nullptr, nullptr, noop_callback,
+                nullptr),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("Failed to parse message JSON"));
+}
+
+TEST(EngineCStatusTest, InputDataCreateAllowsNullDataWithZeroSize) {
+  for (const LiteRtLmInputDataType type :
+       {kLiteRtLmInputDataTypeText, kLiteRtLmInputDataTypeImage,
+        kLiteRtLmInputDataTypeImageEnd, kLiteRtLmInputDataTypeAudio,
+        kLiteRtLmInputDataTypeAudioEnd}) {
+    LiteRtLmInputData* raw = nullptr;
+    ASSERT_EQ(
+        litert_lm_input_data_create(type, /*data=*/nullptr, /*size=*/0, &raw),
+        kLiteRtLmStatusOk);
+    InputDataPtr guard(raw, &litert_lm_input_data_delete);
+    EXPECT_NE(guard, nullptr);
+  }
+
+  litert_lm_clear_last_error();
+  LiteRtLmInputData* out = reinterpret_cast<LiteRtLmInputData*>(0x1);
+  EXPECT_EQ(litert_lm_input_data_create(kLiteRtLmInputDataTypeText,
+                                        /*data=*/nullptr, /*size=*/1, &out),
+            kLiteRtLmStatusInvalidArgument);
+  EXPECT_EQ(out, nullptr);
+  EXPECT_THAT(litert_lm_get_last_error_message(),
+              HasSubstr("data must not be NULL when size is non-zero"));
+}
+
+TEST(EngineCStatusTest, BackendConfigMutatorsIgnoreMismatchedBackend) {
+  EngineSettingsPtr gpu_settings(
+      CreateEngineSettings("dummy_model_path", "gpu", nullptr, nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(gpu_settings, nullptr);
+  EXPECT_EQ(litert_lm_engine_settings_set_num_threads(gpu_settings.get(), 4),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(
+      litert_lm_engine_settings_set_prefill_chunk_size(gpu_settings.get(), 64),
+      kLiteRtLmStatusOk);
+  EXPECT_EQ(
+      litert_lm_engine_settings_set_enable_ynnpack(gpu_settings.get(), true),
+      kLiteRtLmStatusOk);
+
+  EngineSettingsPtr cpu_settings(
+      CreateEngineSettings("dummy_model_path", "cpu", nullptr, nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(cpu_settings, nullptr);
+  EXPECT_EQ(litert_lm_engine_settings_set_gpu_decode_steps_per_sync(
+                cpu_settings.get(), 2),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_engine_settings_set_gpu_wait_for_weight_uploads(
+                cpu_settings.get(), true),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_engine_settings_set_use_ringbuffers_local_attention(
+                cpu_settings.get(), true),
+            kLiteRtLmStatusOk);
+}
+
+TEST(EngineCStatusTest, OutOfRangeEnumsAcrossCAbiReturnInvalidArgument) {
+  EngineSettingsPtr settings(
+      CreateEngineSettings("dummy_model_path", "cpu", nullptr, nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  LiteRtLmSpeculativeDecodingConfig* raw_spec_config = nullptr;
+  ASSERT_EQ(litert_lm_speculative_decoding_config_create(&raw_spec_config),
+            kLiteRtLmStatusOk);
+  std::unique_ptr<LiteRtLmSpeculativeDecodingConfig,
+                  decltype(&litert_lm_speculative_decoding_config_delete)>
+      spec_config(raw_spec_config,
+                  &litert_lm_speculative_decoding_config_delete);
+
+  LiteRtLmConversationOptionalArgs* raw_opt_args = nullptr;
+  ASSERT_EQ(litert_lm_conversation_optional_args_create(&raw_opt_args),
+            kLiteRtLmStatusOk);
+  std::unique_ptr<LiteRtLmConversationOptionalArgs,
+                  decltype(&litert_lm_conversation_optional_args_delete)>
+      opt_args(raw_opt_args, &litert_lm_conversation_optional_args_delete);
+
+  LiteRtLmConversationConfig* raw_conv_config = nullptr;
+  ASSERT_EQ(litert_lm_conversation_config_create(&raw_conv_config),
+            kLiteRtLmStatusOk);
+  std::unique_ptr<LiteRtLmConversationConfig,
+                  decltype(&litert_lm_conversation_config_delete)>
+      conv_config(raw_conv_config, &litert_lm_conversation_config_delete);
+
+  for (const int bad : {-1, 6, 99, 1024}) {
+    SCOPED_TRACE(bad);
+    litert_lm_clear_last_error();
+    EXPECT_EQ(c_abi_test_set_min_log_level(bad),
+              kLiteRtLmStatusInvalidArgument);
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                HasSubstr("Unknown LiteRtLmLogSeverity"));
+  }
+
+  for (const int bad : {-1, 5, 99, 1024}) {
+    SCOPED_TRACE(bad);
+    litert_lm_clear_last_error();
+    LiteRtLmInputData* out = reinterpret_cast<LiteRtLmInputData*>(0x1);
+    EXPECT_EQ(c_abi_test_input_data_create(bad, "x", 1, &out),
+              kLiteRtLmStatusInvalidArgument);
+    EXPECT_EQ(out, nullptr);
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                HasSubstr("Unknown LiteRtLmInputDataType"));
+  }
+
+  for (const int bad : {-1, 4, 99, 1024}) {
+    SCOPED_TRACE(bad);
+    litert_lm_clear_last_error();
+    LiteRtLmSamplerParams* out_params =
+        reinterpret_cast<LiteRtLmSamplerParams*>(0x1);
+    EXPECT_EQ(c_abi_test_sampler_params_create(bad, &out_params),
+              kLiteRtLmStatusInvalidArgument);
+    EXPECT_EQ(out_params, nullptr);
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                HasSubstr("Unknown LiteRtLmSamplerType"));
+
+    litert_lm_clear_last_error();
+    EXPECT_EQ(
+        c_abi_test_speculative_decoding_config_set_mode(spec_config.get(), bad),
+        kLiteRtLmStatusInvalidArgument);
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                HasSubstr("Invalid speculative decoding mode"));
+
+    litert_lm_clear_last_error();
+    EXPECT_EQ(c_abi_test_engine_settings_set_activation_data_type(
+                  settings.get(), bad),
+              kLiteRtLmStatusInvalidArgument);
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                HasSubstr("Unknown LiteRtLmActivationDataType"));
+
+    litert_lm_clear_last_error();
+    EXPECT_EQ(c_abi_test_conversation_optional_args_set_constraint(
+                  opt_args.get(), bad, ".*"),
+              kLiteRtLmStatusInvalidArgument);
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                HasSubstr("Unknown LiteRtLmConstraintType"));
+
+    litert_lm_clear_last_error();
+    EXPECT_EQ(c_abi_test_conversation_config_set_constraint_provider(
+                  conv_config.get(), bad),
+              kLiteRtLmStatusInvalidArgument);
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                HasSubstr("Unknown LiteRtLmConstraintProviderType"));
+  }
 }
 
 }  // namespace

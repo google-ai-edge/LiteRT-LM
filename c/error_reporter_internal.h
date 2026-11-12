@@ -15,6 +15,8 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_C_ERROR_REPORTER_INTERNAL_H_
 #define THIRD_PARTY_ODML_LITERT_LM_C_ERROR_REPORTER_INTERNAL_H_
 
+#include <cstring>
+#include <type_traits>
 #include <utility>  // IWYU pragma: keep, used by LITERT_LM_C_ASSIGN_OR_RETURN
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -22,6 +24,19 @@
 #include "c/error_reporter.h"
 
 namespace litert::lm::c {
+
+// Reads the raw integer representation of a C API enum argument without loading
+// it as `EnumT`. C callers can pass any `int` across the ABI, and loading an
+// out-of-range value as a C++ enum without a fixed underlying type is undefined
+// behavior (and traps under `-fsanitize=enum`).
+template <typename EnumT>
+int RawEnumValue(const EnumT& value) {
+  static_assert(std::is_enum_v<EnumT>);
+  static_assert(sizeof(EnumT) == sizeof(int));
+  int raw = 0;
+  std::memcpy(&raw, &value, sizeof(raw));
+  return raw;
+}
 
 // Maps a canonical `absl::StatusCode` to the corresponding
 // `LiteRtLmStatusCode`. Any value outside the canonical range is mapped to

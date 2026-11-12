@@ -36,6 +36,7 @@
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "c/c_api_internal.h"
 #include "c/engine_internal.h"
 #include "c/error_reporter.h"
 #include "c/error_reporter_internal.h"
@@ -58,94 +59,49 @@
 
 namespace {
 
+using ::litert::lm::c::EmitStreamChunk;
+using ::litert::lm::c::EnableConfiguredModalities;
+using ::litert::lm::c::IsValidActivationDataType;
+using ::litert::lm::c::IsValidEngine;
+using ::litert::lm::c::IsValidEngineSettings;
+using ::litert::lm::c::IsValidSession;
+using ::litert::lm::c::IsValidSessionConfig;
+using ::litert::lm::c::ParseOptionalBackend;
+using ::litert::lm::c::RawEnumValue;
+using ::litert::lm::c::SetExecutorCacheDirs;
+using ::litert::lm::c::ToEngineInputData;
+
 absl::AnyInvocable<void(absl::StatusOr<litert::lm::Responses>)> CreateCallback(
     LiteRtLmStreamCallback callback, void* callback_data) {
   return [callback,
           callback_data](absl::StatusOr<litert::lm::Responses> responses) {
     if (!responses.ok()) {
-      LiteRtLmStreamChunk chunk;
-      chunk.text = nullptr;
-      chunk.is_final = true;
       std::string error_str = responses.status().ToString();
-      chunk.error_msg = error_str.c_str();
-      callback(callback_data, &chunk);
+      EmitStreamChunk(callback, callback_data, /*text=*/nullptr,
+                      /*is_final=*/true, error_str.c_str());
       return;
     }
     if (responses->GetTaskState() == litert::lm::TaskState::kDone) {
-      LiteRtLmStreamChunk chunk;
-      chunk.text = nullptr;
-      chunk.is_final = true;
-      chunk.error_msg = nullptr;
-      callback(callback_data, &chunk);
+      EmitStreamChunk(callback, callback_data, /*text=*/nullptr,
+                      /*is_final=*/true, /*error_msg=*/nullptr);
     } else if (responses->GetTaskState() ==
                litert::lm::TaskState::kMaxNumTokensReached) {
-      LiteRtLmStreamChunk chunk;
-      chunk.text = nullptr;
-      chunk.is_final = true;
-      chunk.error_msg = "Max number of tokens reached.";
-      callback(callback_data, &chunk);
+      EmitStreamChunk(callback, callback_data, /*text=*/nullptr,
+                      /*is_final=*/true, "Max number of tokens reached.");
     } else if (responses->GetTaskState() == litert::lm::TaskState::kCancelled) {
-      LiteRtLmStreamChunk chunk;
-      chunk.text = nullptr;
-      chunk.is_final = true;
-      chunk.error_msg = "CANCELLED.";
-      callback(callback_data, &chunk);
+      EmitStreamChunk(callback, callback_data, /*text=*/nullptr,
+                      /*is_final=*/true, "CANCELLED.");
     } else {
-      for (const auto& text : responses->GetTexts()) {
-        LiteRtLmStreamChunk chunk;
-        chunk.text = text.data();
-        chunk.is_final = false;
-        chunk.error_msg = nullptr;
-        callback(callback_data, &chunk);
+      for (const std::string& text : responses->GetTexts()) {
+        EmitStreamChunk(callback, callback_data, text.c_str(),
+                        /*is_final=*/false, /*error_msg=*/nullptr);
       }
     }
   };
 }
 
-absl::StatusOr<std::vector<litert::lm::InputData>> ToEngineInputData(
-    const LiteRtLmInputData* const* inputs, size_t num_inputs) {
-  if (inputs == nullptr && num_inputs > 0) {
-    return absl::InvalidArgumentError(
-        "inputs must not be NULL when num_inputs is non-zero.");
-  }
-  std::vector<litert::lm::InputData> engine_inputs;
-  engine_inputs.reserve(num_inputs);
-  for (size_t i = 0; i < num_inputs; ++i) {
-    if (inputs[i] != nullptr) {
-      auto copy_status = litert::lm::CreateInputDataCopy(inputs[i]->data);
-      if (!copy_status.ok()) {
-        return copy_status.status();
-      }
-      engine_inputs.push_back(std::move(*copy_status));
-    }
-  }
-  return engine_inputs;
-}
-
-// Returns true if `settings` is a usable engine settings handle. Otherwise
-// records a kInvalidArgument last error and returns false.
-bool IsValidEngineSettings(const LiteRtLmEngineSettings* settings) {
-  if (settings != nullptr && settings->settings != nullptr) {
-    return true;
-  }
-  litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                              "Invalid engine settings.");
-  return false;
-}
-
-// Returns true if `config` is a usable session config handle. Otherwise
-// records a kInvalidArgument last error and returns false.
-bool IsValidSessionConfig(const LiteRtLmSessionConfig* config) {
-  if (config != nullptr && config->config != nullptr) {
-    return true;
-  }
-  litert::lm::c::SetLastError(absl::StatusCode::kInvalidArgument,
-                              "Invalid session config.");
-  return false;
-}
-
-bool IsValidLogSeverity(LiteRtLmLogSeverity level) {
-  switch (level) {
+bool IsValidLogSeverity(const LiteRtLmLogSeverity& level) {
+  switch (RawEnumValue(level)) {
     case kLiteRtLmLogSeverityVerbose:
     case kLiteRtLmLogSeverityDebug:
     case kLiteRtLmLogSeverityInfo:
@@ -154,30 +110,21 @@ bool IsValidLogSeverity(LiteRtLmLogSeverity level) {
     case kLiteRtLmLogSeverityFatal:
     case kLiteRtLmLogSeveritySilent:
       return true;
+    default:
+      return false;
   }
-  return false;
 }
 
-bool IsValidSamplerType(LiteRtLmSamplerType type) {
-  switch (type) {
+bool IsValidSamplerType(const LiteRtLmSamplerType& type) {
+  switch (RawEnumValue(type)) {
     case kLiteRtLmSamplerTypeUnspecified:
     case kLiteRtLmSamplerTypeTopK:
     case kLiteRtLmSamplerTypeTopP:
     case kLiteRtLmSamplerTypeGreedy:
       return true;
+    default:
+      return false;
   }
-  return false;
-}
-
-bool IsValidActivationDataType(LiteRtLmActivationDataType type) {
-  switch (type) {
-    case kLiteRtLmActivationDataTypeFloat32:
-    case kLiteRtLmActivationDataTypeFloat16:
-    case kLiteRtLmActivationDataTypeInt16:
-    case kLiteRtLmActivationDataTypeInt8:
-      return true;
-  }
-  return false;
 }
 
 // Returns the number of candidates in `responses`: the number of texts or, if
@@ -232,6 +179,55 @@ absl::StatusOr<int> ToTurnIndex(size_t index) {
   return static_cast<int>(index);
 }
 
+template <typename ConfigT, typename Fn>
+LiteRtLmStatusCode UpdateMainBackendConfig(LiteRtLmEngineSettings* settings,
+                                           absl::string_view setting_name,
+                                           Fn&& mutate) {
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
+  absl::StatusOr<ConfigT> config =
+      main_settings.MutableBackendConfig<ConfigT>();
+  if (!config.ok()) {
+    ABSL_LOG(WARNING) << "Failed to get backend config for " << setting_name
+                      << ": " << config.status();
+    return kLiteRtLmStatusOk;
+  }
+  mutate(*config);
+  main_settings.SetBackendConfig(*config);
+  return kLiteRtLmStatusOk;
+}
+
+absl::StatusOr<std::shared_ptr<litert::lm::ScopedFile>> OpenScopedLoraFile(
+    const char* path, absl::string_view label) {
+  if (path == nullptr) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("%s path must not be NULL.", label));
+  }
+  absl::string_view path_view(path);
+  if (path_view.empty()) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("%s path is empty.", label));
+  }
+  absl::StatusOr<litert::lm::ScopedFile> lora_file =
+      litert::lm::ScopedFile::Open(path_view);
+  if (!lora_file.ok()) {
+    return lora_file.status();
+  }
+  return std::make_shared<litert::lm::ScopedFile>(std::move(*lora_file));
+}
+
+std::vector<uint32_t> ToLoraRanksVector(const int* lora_ranks,
+                                        size_t num_ranks) {
+  std::vector<uint32_t> ranks;
+  ranks.reserve(num_ranks);
+  for (size_t i = 0; i < num_ranks; ++i) {
+    ranks.push_back(static_cast<uint32_t>(lora_ranks[i]));
+  }
+  return ranks;
+}
+
 }  // namespace
 
 using ::litert::lm::Engine;
@@ -252,23 +248,27 @@ LiteRtLmStatusCode litert_lm_input_data_create(
         absl::StatusCode::kInvalidArgument,
         "data must not be NULL when size is non-zero.");
   }
+  auto copy_bytes = [data, size]() {
+    return size == 0 ? std::string()
+                     : std::string(static_cast<const char*>(data), size);
+  };
   std::unique_ptr<LiteRtLmInputData> input_data;
-  switch (type) {
+  switch (RawEnumValue(type)) {
     case kLiteRtLmInputDataTypeText:
-      input_data = std::make_unique<LiteRtLmInputData>(litert::lm::InputText(
-          std::string(static_cast<const char*>(data), size)));
+      input_data = std::make_unique<LiteRtLmInputData>(
+          litert::lm::InputText(copy_bytes()));
       break;
     case kLiteRtLmInputDataTypeImage:
-      input_data = std::make_unique<LiteRtLmInputData>(litert::lm::InputImage(
-          std::string(static_cast<const char*>(data), size)));
+      input_data = std::make_unique<LiteRtLmInputData>(
+          litert::lm::InputImage(copy_bytes()));
       break;
     case kLiteRtLmInputDataTypeImageEnd:
       input_data =
           std::make_unique<LiteRtLmInputData>(litert::lm::InputImageEnd());
       break;
     case kLiteRtLmInputDataTypeAudio:
-      input_data = std::make_unique<LiteRtLmInputData>(litert::lm::InputAudio(
-          std::string(static_cast<const char*>(data), size)));
+      input_data = std::make_unique<LiteRtLmInputData>(
+          litert::lm::InputAudio(copy_bytes()));
       break;
     case kLiteRtLmInputDataTypeAudioEnd:
       input_data =
@@ -291,37 +291,25 @@ CreateEngineSettingsHelper(ModelAssets model_assets,
                            absl::string_view backend_str,
                            absl::string_view vision_backend_str,
                            absl::string_view audio_backend_str) {
-  auto backend = litert::lm::GetBackendFromString(backend_str);
+  absl::StatusOr<litert::lm::Backend> backend =
+      litert::lm::GetBackendFromString(backend_str);
   if (!backend.ok()) {
-    ABSL_LOG(ERROR) << "Failed to parse backend: " << backend.status();
     return backend.status();
   }
-
-  std::optional<litert::lm::Backend> vision_backend;
-  if (!vision_backend_str.empty()) {
-    auto backend = litert::lm::GetBackendFromString(vision_backend_str);
-    if (!backend.ok()) {
-      ABSL_LOG(ERROR) << "Failed to parse vision backend: " << backend.status();
-      return backend.status();
-    }
-    vision_backend = *backend;
+  absl::StatusOr<std::optional<litert::lm::Backend>> vision_backend =
+      ParseOptionalBackend(vision_backend_str);
+  if (!vision_backend.ok()) {
+    return vision_backend.status();
   }
-
-  std::optional<litert::lm::Backend> audio_backend;
-  if (!audio_backend_str.empty()) {
-    auto backend = litert::lm::GetBackendFromString(audio_backend_str);
-    if (!backend.ok()) {
-      ABSL_LOG(ERROR) << "Failed to parse audio backend: " << backend.status();
-      return backend.status();
-    }
-    audio_backend = *backend;
+  absl::StatusOr<std::optional<litert::lm::Backend>> audio_backend =
+      ParseOptionalBackend(audio_backend_str);
+  if (!audio_backend.ok()) {
+    return audio_backend.status();
   }
-
-  auto engine_settings = EngineSettings::CreateDefault(
-      std::move(model_assets), *backend, vision_backend, audio_backend);
+  absl::StatusOr<EngineSettings> engine_settings =
+      EngineSettings::CreateDefault(std::move(model_assets), *backend,
+                                    *vision_backend, *audio_backend);
   if (!engine_settings.ok()) {
-    ABSL_LOG(ERROR) << "Failed to create engine settings: "
-                    << engine_settings.status();
     return engine_settings.status();
   }
 
@@ -480,7 +468,7 @@ LiteRtLmStatusCode litert_lm_speculative_decoding_config_set_mode(
     LiteRtLmSpeculativeDecodingConfig* config,
     LiteRtLmSpeculativeDecodingMode mode) {
   LITERT_LM_C_RETURN_IF_NULL(config);
-  switch (mode) {
+  switch (RawEnumValue(mode)) {
     case kLiteRtLmSpeculativeDecodingModeOff:
       config->config.mode = litert::lm::SpeculativeDecodingMode::kOff;
       return kLiteRtLmStatusOk;
@@ -490,10 +478,12 @@ LiteRtLmStatusCode litert_lm_speculative_decoding_config_set_mode(
     case kLiteRtLmSpeculativeDecodingModeAdaptive:
       config->config.mode = litert::lm::SpeculativeDecodingMode::kAdaptive;
       return kLiteRtLmStatusOk;
+    default:
+      return litert::lm::c::ReturnError(
+          absl::StatusCode::kInvalidArgument,
+          absl::StrFormat("Invalid speculative decoding mode: %d",
+                          RawEnumValue(mode)));
   }
-  litert::lm::c::SetLastError(absl::InvalidArgumentError(absl::StrFormat(
-      "Invalid speculative decoding mode: %d", static_cast<int>(mode))));
-  return kLiteRtLmStatusInvalidArgument;
 }
 
 LiteRtLmStatusCode litert_lm_speculative_decoding_config_set_lenience(
@@ -548,44 +538,24 @@ void litert_lm_session_config_delete(LiteRtLmSessionConfig* config) {
 
 LiteRtLmStatusCode litert_lm_session_config_set_lora_path(
     LiteRtLmSessionConfig* config, const char* lora_path) {
-  if (!config || !config->config || !lora_path) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session config or LoRA path.");
+  if (!IsValidSessionConfig(config)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  absl::string_view path_view(lora_path);
-  if (path_view.empty()) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "LoRA path is empty.");
-  }
-  auto lora_file = ScopedFile::Open(lora_path);
-  if (!lora_file.ok()) {
-    ABSL_LOG(ERROR) << "Failed to open LoRA file: " << lora_file.status();
-    return litert::lm::c::ToCStatus(lora_file.status());
-  }
-  config->config->SetScopedLoraFile(
-      std::make_shared<litert::lm::ScopedFile>(std::move(*lora_file)));
+  LITERT_LM_C_ASSIGN_OR_RETURN(std::shared_ptr<ScopedFile> lora_file,
+                               OpenScopedLoraFile(lora_path, "LoRA"));
+  config->config->SetScopedLoraFile(std::move(lora_file));
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_session_config_set_audio_lora_path(
     LiteRtLmSessionConfig* config, const char* audio_lora_path) {
-  if (!config || !config->config || !audio_lora_path) {
-    return litert::lm::c::ReturnError(
-        absl::StatusCode::kInvalidArgument,
-        "Invalid session config or Audio LoRA path.");
+  if (!IsValidSessionConfig(config)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  absl::string_view path_view(audio_lora_path);
-  if (path_view.empty()) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Audio LoRA path is empty.");
-  }
-  auto lora_file = ScopedFile::Open(path_view);
-  if (!lora_file.ok()) {
-    ABSL_LOG(ERROR) << "Failed to open Audio LoRA file: " << lora_file.status();
-    return litert::lm::c::ToCStatus(lora_file.status());
-  }
-  config->config->SetAudioScopedLoraFile(
-      std::make_shared<litert::lm::ScopedFile>(std::move(*lora_file)));
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::shared_ptr<ScopedFile> lora_file,
+      OpenScopedLoraFile(audio_lora_path, "Audio LoRA"));
+  config->config->SetAudioScopedLoraFile(std::move(lora_file));
   return kLiteRtLmStatusOk;
 }
 
@@ -717,15 +687,11 @@ LiteRtLmStatusCode litert_lm_engine_settings_create(
   LITERT_LM_C_RETURN_IF_NULL(out_settings);
   *out_settings = nullptr;
   LITERT_LM_C_RETURN_IF_NULL(model_path);
-  auto model_assets = ModelAssets::Create(model_path);
-  if (!model_assets.ok()) {
-    ABSL_LOG(ERROR) << "Failed to create model assets: "
-                    << model_assets.status();
-    return litert::lm::c::ToCStatus(model_assets.status());
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(ModelAssets model_assets,
+                               ModelAssets::Create(model_path));
   LITERT_LM_C_ASSIGN_OR_RETURN(
       std::unique_ptr<LiteRtLmEngineSettings> settings,
-      CreateEngineSettingsHelper(std::move(*model_assets),
+      CreateEngineSettingsHelper(std::move(model_assets),
                                  absl::NullSafeStringView(backend_str),
                                  absl::NullSafeStringView(vision_backend_str),
                                  absl::NullSafeStringView(audio_backend_str)));
@@ -739,29 +705,26 @@ LiteRtLmStatusCode litert_lm_engine_settings_create_from_raw_file_descriptor(
   LITERT_LM_C_RETURN_IF_NULL(out_settings);
   *out_settings = nullptr;
   if (fd < 0) {
-    ABSL_LOG(ERROR) << "Invalid file descriptor: " << fd;
     return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
                                       "Invalid file descriptor.");
   }
-  auto model_assets = ModelAssets::Create(
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      ModelAssets model_assets,
+      ModelAssets::Create(
 #if defined(_WIN32)
-      std::make_shared<litert::lm::ScopedFile>(litert::lm::ScopedFile(
-          reinterpret_cast<litert::lm::ScopedFile::PlatformFile>(
-              _get_osfhandle(fd)))));
+          std::make_shared<litert::lm::ScopedFile>(litert::lm::ScopedFile(
+              reinterpret_cast<litert::lm::ScopedFile::PlatformFile>(
+                  _get_osfhandle(fd))))));
 #else
-      std::make_shared<litert::lm::ScopedFile>(litert::lm::ScopedFile(fd)));
+          std::make_shared<litert::lm::ScopedFile>(
+              litert::lm::ScopedFile(fd))));
 #endif
-  if (!model_assets.ok()) {
-    ABSL_LOG(ERROR) << "Failed to create model assets from raw FD: "
-                    << model_assets.status();
-    return litert::lm::c::ToCStatus(model_assets.status());
-  }
   ABSL_VLOG(1) << "LiteRT-LM successfully created EngineSettings directly "
                   "from raw File Descriptor: "
                << fd;
   LITERT_LM_C_ASSIGN_OR_RETURN(
       std::unique_ptr<LiteRtLmEngineSettings> settings,
-      CreateEngineSettingsHelper(std::move(*model_assets),
+      CreateEngineSettingsHelper(std::move(model_assets),
                                  absl::NullSafeStringView(backend_str),
                                  absl::NullSafeStringView(vision_backend_str),
                                  absl::NullSafeStringView(audio_backend_str)));
@@ -785,20 +748,10 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_max_num_tokens(
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_num_threads(
     LiteRtLmEngineSettings* settings, int num_threads) {
-  if (!IsValidEngineSettings(settings)) {
-    return kLiteRtLmStatusInvalidArgument;
-  }
-  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
-  auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
-  if (config.ok()) {
-    litert::lm::CpuConfig cpu_config = *config;
-    cpu_config.number_of_threads = num_threads;
-    main_settings.SetBackendConfig(cpu_config);
-  } else {
-    ABSL_LOG(WARNING) << "Failed to get CpuConfig to set num threads: "
-                      << config.status();
-  }
-  return kLiteRtLmStatusOk;
+  return UpdateMainBackendConfig<litert::lm::CpuConfig>(
+      settings, "num_threads", [num_threads](litert::lm::CpuConfig& config) {
+        config.number_of_threads = num_threads;
+      });
 }
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_audio_num_threads(
@@ -857,17 +810,10 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_cache_dir(
     return kLiteRtLmStatusInvalidArgument;
   }
   LITERT_LM_C_RETURN_IF_NULL(cache_dir);
-  settings->settings->GetMutableMainExecutorSettings().SetCacheDir(cache_dir);
-
-  if (settings->settings->GetVisionExecutorSettings().has_value()) {
-    settings->settings->GetMutableVisionExecutorSettings()->SetCacheDir(
-        cache_dir);
-  }
-
-  if (settings->settings->GetAudioExecutorSettings().has_value()) {
-    settings->settings->GetMutableAudioExecutorSettings()->SetCacheDir(
-        cache_dir);
-  }
+  SetExecutorCacheDirs(settings->settings->GetMutableMainExecutorSettings(),
+                       settings->settings->GetMutableVisionExecutorSettings(),
+                       settings->settings->GetMutableAudioExecutorSettings(),
+                       cache_dir);
   return kLiteRtLmStatusOk;
 }
 
@@ -961,62 +907,34 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_speculative_decoding_config(
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_gpu_decode_steps_per_sync(
     LiteRtLmEngineSettings* settings, int num_decode_steps_per_sync) {
-  if (!IsValidEngineSettings(settings)) {
-    return kLiteRtLmStatusInvalidArgument;
-  }
   // Note: This setting is currently only supported for the Artisan GPU
   // backend.
-  auto backend_config =
-      settings->settings->GetMutableMainExecutorSettings()
-          .MutableBackendConfig<litert::lm::GpuArtisanConfig>();
-  if (backend_config.ok()) {
-    auto config = backend_config.value();
-    config.num_decode_steps_per_sync = num_decode_steps_per_sync;
-    settings->settings->GetMutableMainExecutorSettings().SetBackendConfig(
-        config);
-  }
-  return kLiteRtLmStatusOk;
+  return UpdateMainBackendConfig<litert::lm::GpuArtisanConfig>(
+      settings, "num_decode_steps_per_sync",
+      [num_decode_steps_per_sync](litert::lm::GpuArtisanConfig& config) {
+        config.num_decode_steps_per_sync = num_decode_steps_per_sync;
+      });
 }
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_gpu_wait_for_weight_uploads(
     LiteRtLmEngineSettings* settings, bool wait_for_weight_uploads) {
-  if (!IsValidEngineSettings(settings)) {
-    return kLiteRtLmStatusInvalidArgument;
-  }
   // Note: This setting is currently only supported for the Artisan GPU
   // backend.
-  auto backend_config =
-      settings->settings->GetMutableMainExecutorSettings()
-          .MutableBackendConfig<litert::lm::GpuArtisanConfig>();
-  if (backend_config.ok()) {
-    auto config = backend_config.value();
-    config.wait_for_weight_uploads = wait_for_weight_uploads;
-    settings->settings->GetMutableMainExecutorSettings().SetBackendConfig(
-        config);
-  }
-  return kLiteRtLmStatusOk;
+  return UpdateMainBackendConfig<litert::lm::GpuArtisanConfig>(
+      settings, "wait_for_weight_uploads",
+      [wait_for_weight_uploads](litert::lm::GpuArtisanConfig& config) {
+        config.wait_for_weight_uploads = wait_for_weight_uploads;
+      });
 }
 
 LiteRtLmStatusCode
 litert_lm_engine_settings_set_use_ringbuffers_local_attention(
     LiteRtLmEngineSettings* settings, bool use_ringbuffers_local_attention) {
-  if (!IsValidEngineSettings(settings)) {
-    return kLiteRtLmStatusInvalidArgument;
-  }
-  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
-  auto config =
-      main_settings.MutableBackendConfig<litert::lm::GpuArtisanConfig>();
-  if (config.ok()) {
-    litert::lm::GpuArtisanConfig gpu_artisan_config = *config;
-    gpu_artisan_config.use_autosized_ringbuffers =
-        use_ringbuffers_local_attention;
-    main_settings.SetBackendConfig(gpu_artisan_config);
-  } else {
-    ABSL_LOG(INFO) << "Failed to get GpuArtisanConfig to set "
-                      "use_ringbuffers_local_attention: "
-                   << config.status();
-  }
-  return kLiteRtLmStatusOk;
+  return UpdateMainBackendConfig<litert::lm::GpuArtisanConfig>(
+      settings, "use_ringbuffers_local_attention",
+      [use_ringbuffers_local_attention](litert::lm::GpuArtisanConfig& config) {
+        config.use_autosized_ringbuffers = use_ringbuffers_local_attention;
+      });
 }
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_lora_rank(
@@ -1034,14 +952,9 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_supported_lora_ranks(
     return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
                                       "Invalid engine settings or LoRA ranks.");
   }
-  std::vector<uint32_t> ranks;
-  ranks.reserve(num_ranks);
-  for (size_t i = 0; i < num_ranks; ++i) {
-    ranks.push_back(static_cast<uint32_t>(lora_ranks[i]));
-  }
   return litert::lm::c::ToCStatus(
       settings->settings->GetMutableMainExecutorSettings()
-          .SetSupportedLoraRanks(ranks));
+          .SetSupportedLoraRanks(ToLoraRanksVector(lora_ranks, num_ranks)));
 }
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_audio_lora_rank(
@@ -1069,14 +982,9 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_supported_audio_lora_ranks(
         absl::StatusCode::kFailedPrecondition,
         "Audio executor settings not configured in engine settings.");
   }
-  std::vector<uint32_t> ranks;
-  ranks.reserve(num_ranks);
-  for (size_t i = 0; i < num_ranks; ++i) {
-    ranks.push_back(static_cast<uint32_t>(lora_ranks[i]));
-  }
   return litert::lm::c::ToCStatus(
       settings->settings->GetMutableAudioExecutorSettings()
-          ->SetSupportedLoraRanks(ranks));
+          ->SetSupportedLoraRanks(ToLoraRanksVector(lora_ranks, num_ranks)));
 }
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_activation_data_type(
@@ -1096,36 +1004,20 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_activation_data_type(
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_prefill_chunk_size(
     LiteRtLmEngineSettings* settings, int prefill_chunk_size) {
-  if (!IsValidEngineSettings(settings)) {
-    return kLiteRtLmStatusInvalidArgument;
-  }
-  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
-  auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
-  if (!config.ok()) {
-    ABSL_LOG(WARNING) << "Failed to get CpuConfig to set prefill chunk size: "
-                      << config.status();
-    return kLiteRtLmStatusOk;
-  }
-  config->prefill_chunk_size = prefill_chunk_size;
-  main_settings.SetBackendConfig(*config);
-  return kLiteRtLmStatusOk;
+  return UpdateMainBackendConfig<litert::lm::CpuConfig>(
+      settings, "prefill_chunk_size",
+      [prefill_chunk_size](litert::lm::CpuConfig& config) {
+        config.prefill_chunk_size = prefill_chunk_size;
+      });
 }
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_enable_ynnpack(
     LiteRtLmEngineSettings* settings, bool enable_ynnpack) {
-  if (!IsValidEngineSettings(settings)) {
-    return kLiteRtLmStatusInvalidArgument;
-  }
-  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
-  auto config = main_settings.MutableBackendConfig<litert::lm::CpuConfig>();
-  if (!config.ok()) {
-    ABSL_LOG(WARNING) << "Failed to get CpuConfig to set enable ynnpack: "
-                      << config.status();
-    return kLiteRtLmStatusOk;
-  }
-  config->enable_ynnpack = enable_ynnpack;
-  main_settings.SetBackendConfig(*config);
-  return kLiteRtLmStatusOk;
+  return UpdateMainBackendConfig<litert::lm::CpuConfig>(
+      settings, "enable_ynnpack",
+      [enable_ynnpack](litert::lm::CpuConfig& config) {
+        config.enable_ynnpack = enable_ynnpack;
+      });
 }
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
@@ -1146,21 +1038,14 @@ LiteRtLmStatusCode litert_lm_engine_create(
     const LiteRtLmEngineSettings* settings, LiteRtLmEngine** out_engine) {
   LITERT_LM_C_RETURN_IF_NULL(out_engine);
   *out_engine = nullptr;
-  if (!settings || !settings->settings) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid engine settings.");
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-
-  absl::StatusOr<std::unique_ptr<Engine>> engine =
-      EngineFactory::CreateDefault(*settings->settings);
-
-  if (!engine.ok()) {
-    ABSL_LOG(ERROR) << "Failed to create engine: " << engine.status();
-    return litert::lm::c::ToCStatus(engine.status());
-  }
-
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::unique_ptr<Engine> engine,
+      EngineFactory::CreateDefault(*settings->settings));
   auto c_engine = std::make_unique<LiteRtLmEngine>();
-  c_engine->engine = *std::move(engine);
+  c_engine->engine = std::move(engine);
   *out_engine = c_engine.release();
   return kLiteRtLmStatusOk;
 }
@@ -1172,34 +1057,20 @@ LiteRtLmStatusCode litert_lm_engine_create_session(
     LiteRtLmSession** out_session) {
   LITERT_LM_C_RETURN_IF_NULL(out_session);
   *out_session = nullptr;
-  if (!engine || !engine->engine) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid engine.");
+  if (!IsValidEngine(engine)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
 
   SessionConfig session_config = config && config->config
                                      ? *config->config
                                      : SessionConfig::CreateDefault();
-  if (engine->engine->GetEngineSettings()
-          .GetAudioExecutorSettings()
-          .has_value()) {
-    session_config.SetAudioModalityEnabled(true);
-  }
-  if (engine->engine->GetEngineSettings()
-          .GetVisionExecutorSettings()
-          .has_value()) {
-    session_config.SetVisionModalityEnabled(true);
-  }
+  EnableConfiguredModalities(engine->engine->GetEngineSettings(),
+                             session_config);
 
-  absl::StatusOr<std::unique_ptr<Engine::Session>> session =
-      engine->engine->CreateSession(session_config);
-  if (!session.ok()) {
-    ABSL_LOG(ERROR) << "Failed to create session: " << session.status();
-    return litert::lm::c::ToCStatus(session.status());
-  }
-
+  LITERT_LM_C_ASSIGN_OR_RETURN(std::unique_ptr<Engine::Session> session,
+                               engine->engine->CreateSession(session_config));
   auto c_session = std::make_unique<LiteRtLmSession>();
-  c_session->session = *std::move(session);
+  c_session->session = std::move(session);
   *out_session = c_session.release();
   return kLiteRtLmStatusOk;
 }
@@ -1210,9 +1081,8 @@ LiteRtLmStatusCode litert_lm_session_clone(LiteRtLmSession* session,
                                            LiteRtLmSession** out_session) {
   LITERT_LM_C_RETURN_IF_NULL(out_session);
   *out_session = nullptr;
-  if (!session || !session->session) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session.");
+  if (!IsValidSession(session)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   LITERT_LM_C_ASSIGN_OR_RETURN(
       std::unique_ptr<litert::lm::Engine::Session> cloned_session,
@@ -1224,9 +1094,8 @@ LiteRtLmStatusCode litert_lm_session_clone(LiteRtLmSession* session,
 }
 
 LiteRtLmStatusCode litert_lm_session_cancel_process(LiteRtLmSession* session) {
-  if (!session || !session->session) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session.");
+  if (!IsValidSession(session)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   session->session->CancelProcess();
   return kLiteRtLmStatusOk;
@@ -1234,44 +1103,30 @@ LiteRtLmStatusCode litert_lm_session_cancel_process(LiteRtLmSession* session) {
 
 LiteRtLmStatusCode litert_lm_session_save_checkpoint(LiteRtLmSession* session,
                                                      const char* label) {
-  if (!session || !session->session || !label) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session or checkpoint label.");
+  if (!IsValidSession(session)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  auto status = session->session->SaveCheckpoint(label);
-  if (!status.ok()) {
-    ABSL_LOG(ERROR) << "Failed to save checkpoint " << label << ": " << status;
-    return litert::lm::c::ToCStatus(status);
-  }
+  LITERT_LM_C_RETURN_IF_NULL(label);
+  LITERT_LM_C_RETURN_IF_ERROR(session->session->SaveCheckpoint(label));
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_session_rewind_to_checkpoint(
     LiteRtLmSession* session, const char* label) {
-  if (!session || !session->session || !label) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session or checkpoint label.");
+  if (!IsValidSession(session)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  auto status = session->session->RewindToCheckpoint(label);
-  if (!status.ok()) {
-    ABSL_LOG(ERROR) << "Failed to rewind to checkpoint " << label << ": "
-                    << status;
-    return litert::lm::c::ToCStatus(status);
-  }
+  LITERT_LM_C_RETURN_IF_NULL(label);
+  LITERT_LM_C_RETURN_IF_ERROR(session->session->RewindToCheckpoint(label));
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_session_rewind_to_step(LiteRtLmSession* session,
                                                     int step) {
-  if (!session || !session->session) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session.");
+  if (!IsValidSession(session)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  auto status = session->session->RewindToStep(step);
-  if (!status.ok()) {
-    ABSL_LOG(ERROR) << "Failed to rewind to step " << step << ": " << status;
-    return litert::lm::c::ToCStatus(status);
-  }
+  LITERT_LM_C_RETURN_IF_ERROR(session->session->RewindToStep(step));
   return kLiteRtLmStatusOk;
 }
 
@@ -1280,7 +1135,7 @@ LiteRtLmStatusCode litert_lm_session_run_text_scoring(
     bool store_token_lengths, LiteRtLmResponses** out_responses) {
   LITERT_LM_C_RETURN_IF_NULL(out_responses);
   *out_responses = nullptr;
-  if (!session || !session->session || !target_text || num_targets <= 0) {
+  if (!IsValidSession(session) || !target_text || num_targets <= 0) {
     return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
                                       "Invalid session or target texts.");
   }
@@ -1294,13 +1149,10 @@ LiteRtLmStatusCode litert_lm_session_run_text_scoring(
     }
     target_text_views.push_back(target_text[i]);
   }
-  auto responses =
-      session->session->RunTextScoring(target_text_views, store_token_lengths);
-  if (!responses.ok()) {
-    ABSL_LOG(ERROR) << "Failed to run text scoring: " << responses.status();
-    return litert::lm::c::ToCStatus(responses.status());
-  }
-  auto c_responses = std::make_unique<LiteRtLmResponses>(std::move(*responses));
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      litert::lm::Responses responses,
+      session->session->RunTextScoring(target_text_views, store_token_lengths));
+  auto c_responses = std::make_unique<LiteRtLmResponses>(std::move(responses));
   if (c_responses->responses.GetTexts().empty()) {
     auto& mutable_texts = c_responses->responses.GetMutableTexts();
     mutable_texts.reserve(num_targets);
@@ -1315,20 +1167,13 @@ LiteRtLmStatusCode litert_lm_session_run_text_scoring(
 LiteRtLmStatusCode litert_lm_session_run_prefill(
     LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
     size_t num_inputs) {
-  if (!session || !session->session || !inputs || num_inputs <= 0) {
+  if (!IsValidSession(session) || !inputs || num_inputs <= 0) {
     return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
                                       "Invalid session or inputs.");
   }
-  auto engine_inputs = ToEngineInputData(inputs, num_inputs);
-  if (!engine_inputs.ok()) {
-    ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
-    return litert::lm::c::ToCStatus(engine_inputs.status());
-  }
-  auto status = session->session->RunPrefill(*engine_inputs);
-  if (!status.ok()) {
-    ABSL_LOG(ERROR) << "Failed to run prefill: " << status;
-    return litert::lm::c::ToCStatus(status);
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(std::vector<litert::lm::InputData> engine_inputs,
+                               ToEngineInputData(inputs, num_inputs));
+  LITERT_LM_C_RETURN_IF_ERROR(session->session->RunPrefill(engine_inputs));
   return kLiteRtLmStatusOk;
 }
 
@@ -1336,33 +1181,26 @@ LiteRtLmStatusCode litert_lm_session_run_decode(
     LiteRtLmSession* session, LiteRtLmResponses** out_responses) {
   LITERT_LM_C_RETURN_IF_NULL(out_responses);
   *out_responses = nullptr;
-  if (!session || !session->session) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session.");
+  if (!IsValidSession(session)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  auto responses = session->session->RunDecode();
-  if (!responses.ok()) {
-    ABSL_LOG(ERROR) << "Failed to run decode: " << responses.status();
-    return litert::lm::c::ToCStatus(responses.status());
-  }
-  *out_responses = new LiteRtLmResponses{std::move(*responses)};
+  LITERT_LM_C_ASSIGN_OR_RETURN(litert::lm::Responses responses,
+                               session->session->RunDecode());
+  *out_responses = new LiteRtLmResponses{std::move(responses)};
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_session_run_decode_async(
     LiteRtLmSession* session, LiteRtLmStreamCallback callback,
     void* callback_data) {
-  if (!session || !session->session) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session.");
+  if (!IsValidSession(session)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   LITERT_LM_C_RETURN_IF_NULL(callback);
-  auto status =
-      session->session->RunDecodeAsync(CreateCallback(callback, callback_data));
-  if (!status.ok()) {
-    ABSL_LOG(ERROR) << "Failed to start decode stream: " << status.status();
-    return litert::lm::c::ToCStatus(status.status());
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(auto task_controller,
+                               session->session->RunDecodeAsync(
+                                   CreateCallback(callback, callback_data)));
+  (void)task_controller;
   return kLiteRtLmStatusOk;
 }
 
@@ -1371,47 +1209,30 @@ LiteRtLmStatusCode litert_lm_session_generate_content(
     size_t num_inputs, LiteRtLmResponses** out_responses) {
   LITERT_LM_C_RETURN_IF_NULL(out_responses);
   *out_responses = nullptr;
-  if (!session || !session->session) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session.");
+  if (!IsValidSession(session)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  auto engine_inputs = ToEngineInputData(inputs, num_inputs);
-  if (!engine_inputs.ok()) {
-    ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
-    return litert::lm::c::ToCStatus(engine_inputs.status());
-  }
-  auto responses = session->session->GenerateContent(std::move(*engine_inputs));
-  if (!responses.ok()) {
-    ABSL_LOG(ERROR) << "Failed to generate content: " << responses.status();
-    return litert::lm::c::ToCStatus(responses.status());
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(std::vector<litert::lm::InputData> engine_inputs,
+                               ToEngineInputData(inputs, num_inputs));
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      litert::lm::Responses responses,
+      session->session->GenerateContent(std::move(engine_inputs)));
 
-  *out_responses = new LiteRtLmResponses{std::move(*responses)};
+  *out_responses = new LiteRtLmResponses{std::move(responses)};
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_session_generate_content_stream(
     LiteRtLmSession* session, const LiteRtLmInputData* const* inputs,
     size_t num_inputs, LiteRtLmStreamCallback callback, void* callback_data) {
-  if (!session || !session->session) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session.");
+  if (!IsValidSession(session)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   LITERT_LM_C_RETURN_IF_NULL(callback);
-  auto engine_inputs = ToEngineInputData(inputs, num_inputs);
-  if (!engine_inputs.ok()) {
-    ABSL_LOG(ERROR) << "Failed to copy inputs: " << engine_inputs.status();
-    return litert::lm::c::ToCStatus(engine_inputs.status());
-  }
-
-  absl::Status status = session->session->GenerateContentStream(
-      std::move(*engine_inputs), CreateCallback(callback, callback_data));
-
-  if (!status.ok()) {
-    ABSL_LOG(ERROR) << "Failed to start content stream: " << status;
-    // No need to delete callbacks, unique_ptr handles it if not moved.
-    return litert::lm::c::ToCStatus(status);
-  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(std::vector<litert::lm::InputData> engine_inputs,
+                               ToEngineInputData(inputs, num_inputs));
+  LITERT_LM_C_RETURN_IF_ERROR(session->session->GenerateContentStream(
+      std::move(engine_inputs), CreateCallback(callback, callback_data)));
   // The call is non-blocking and returns immediately.
   return kLiteRtLmStatusOk;
 }
@@ -1536,17 +1357,12 @@ LiteRtLmStatusCode litert_lm_session_get_benchmark_info(
     LiteRtLmSession* session, LiteRtLmBenchmarkInfo** out_benchmark_info) {
   LITERT_LM_C_RETURN_IF_NULL(out_benchmark_info);
   *out_benchmark_info = nullptr;
-  if (!session || !session->session) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session.");
+  if (!IsValidSession(session)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  auto benchmark_info = session->session->GetBenchmarkInfo();
-  if (!benchmark_info.ok()) {
-    ABSL_LOG(ERROR) << "Failed to get benchmark info: "
-                    << benchmark_info.status();
-    return litert::lm::c::ToCStatus(benchmark_info.status());
-  }
-  *out_benchmark_info = new LiteRtLmBenchmarkInfo{std::move(*benchmark_info)};
+  LITERT_LM_C_ASSIGN_OR_RETURN(litert::lm::BenchmarkInfo benchmark_info,
+                               session->session->GetBenchmarkInfo());
+  *out_benchmark_info = new LiteRtLmBenchmarkInfo{std::move(benchmark_info)};
   return kLiteRtLmStatusOk;
 }
 
@@ -1656,18 +1472,15 @@ LiteRtLmStatusCode litert_lm_engine_tokenize(
     LiteRtLmTokenizeResult** out_result) {
   LITERT_LM_C_RETURN_IF_NULL(out_result);
   *out_result = nullptr;
-  if (!engine || !engine->engine || !text) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid engine or text.");
+  if (!IsValidEngine(engine)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  LITERT_LM_C_RETURN_IF_NULL(text);
   const auto& tokenizer = engine->engine->GetTokenizer();
-  auto token_ids =
-      const_cast<litert::support::Tokenizer&>(tokenizer).TextToTokenIds(text);
-  if (!token_ids.ok()) {
-    ABSL_LOG(ERROR) << "Failed to tokenize: " << token_ids.status();
-    return litert::lm::c::ToCStatus(token_ids.status());
-  }
-  *out_result = new LiteRtLmTokenizeResult{std::move(*token_ids)};
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::vector<int> token_ids,
+      const_cast<litert::support::Tokenizer&>(tokenizer).TextToTokenIds(text));
+  *out_result = new LiteRtLmTokenizeResult{std::move(token_ids)};
   return kLiteRtLmStatusOk;
 }
 
@@ -1697,19 +1510,17 @@ LiteRtLmStatusCode litert_lm_engine_detokenize(
     LiteRtLmDetokenizeResult** out_result) {
   LITERT_LM_C_RETURN_IF_NULL(out_result);
   *out_result = nullptr;
-  if (!engine || !engine->engine || !tokens) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid engine or tokens.");
+  if (!IsValidEngine(engine)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
+  LITERT_LM_C_RETURN_IF_NULL(tokens);
   const auto& tokenizer = engine->engine->GetTokenizer();
   std::vector<int> token_ids(tokens, tokens + num_tokens);
-  auto text = const_cast<litert::support::Tokenizer&>(tokenizer).TokenIdsToText(
-      token_ids);
-  if (!text.ok()) {
-    ABSL_LOG(ERROR) << "Failed to detokenize: " << text.status();
-    return litert::lm::c::ToCStatus(text.status());
-  }
-  *out_result = new LiteRtLmDetokenizeResult{std::move(*text)};
+  LITERT_LM_C_ASSIGN_OR_RETURN(
+      std::string text,
+      const_cast<litert::support::Tokenizer&>(tokenizer).TokenIdsToText(
+          token_ids));
+  *out_result = new LiteRtLmDetokenizeResult{std::move(text)};
   return kLiteRtLmStatusOk;
 }
 
@@ -1800,9 +1611,8 @@ LiteRtLmStatusCode litert_lm_engine_get_start_token(
     LiteRtLmEngine* engine, LiteRtLmTokenUnion** out_token) {
   LITERT_LM_C_RETURN_IF_NULL(out_token);
   *out_token = nullptr;
-  if (!engine || !engine->engine) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid engine.");
+  if (!IsValidEngine(engine)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   const auto& metadata = engine->engine->GetEngineSettings().GetLlmMetadata();
   if (!metadata.has_value() || !metadata->has_start_token()) {
@@ -1817,9 +1627,8 @@ LiteRtLmStatusCode litert_lm_engine_get_stop_tokens(
     LiteRtLmEngine* engine, LiteRtLmTokenUnions** out_tokens) {
   LITERT_LM_C_RETURN_IF_NULL(out_tokens);
   *out_tokens = nullptr;
-  if (!engine || !engine->engine) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid engine.");
+  if (!IsValidEngine(engine)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   const auto& metadata = engine->engine->GetEngineSettings().GetLlmMetadata();
   if (!metadata.has_value() || metadata->stop_tokens_size() == 0) {

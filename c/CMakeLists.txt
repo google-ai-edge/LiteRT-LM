@@ -31,6 +31,27 @@ target_link_libraries(c_error_reporter
 )
 
 # ==============================================================================
+# C API Internal
+# ==============================================================================
+add_litertlm_library(c_api_internal STATIC
+  c_api_internal.cc
+)
+add_library(LiteRTLM::C::Internal ALIAS c_api_internal)
+
+target_include_directories(c_api_internal
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(c_api_internal
+  PUBLIC
+    LITERTLM_DEPS
+    LiteRTLM::C::ErrorReporter
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Executor
+)
+
+# ==============================================================================
 # Conversation
 # ==============================================================================
 add_litertlm_library(c_conversation STATIC
@@ -47,6 +68,7 @@ target_link_libraries(c_conversation
   PUBLIC
     LITERTLM_DEPS
     LiteRTLM::C::ErrorReporter
+    LiteRTLM::C::Internal
     LiteRTLM::Runtime::Conversation
     LiteRTLM::Runtime::Core
     LiteRTLM::Runtime::Components
@@ -74,6 +96,7 @@ target_link_libraries(c_engine
     LiteRTLM::C::EmbeddingEngine
     LiteRTLM::C::Conversation
     LiteRTLM::C::ErrorReporter
+    LiteRTLM::C::Internal
     LiteRTLM::Runtime::Conversation
     LiteRTLM::Runtime::Core
     LiteRTLM::Runtime::Components
@@ -100,6 +123,7 @@ target_link_libraries(c_embedding_engine
     LITERTLM_DEPS
     LiteRTLM::C::Conversation
     LiteRTLM::C::ErrorReporter
+    LiteRTLM::C::Internal
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Engine
     LiteRTLM::Runtime::Executor
@@ -133,6 +157,7 @@ add_library(LiteRTLM::C ALIAS c_libs)
 
 target_link_libraries(c_libs INTERFACE
   LiteRTLM::C::ErrorReporter
+  LiteRTLM::C::Internal
   LiteRTLM::C::ModelInfo
   LiteRTLM::C::Conversation
   LiteRTLM::C::Engine

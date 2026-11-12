@@ -43,6 +43,7 @@ exports_files([
 ])
 
 ENGINE_LITE_COMMON_DEPS = [
+    ":c_api_internal",
     ":engine_internal",
     ":error_reporter_headers",
     ":error_reporter_internal",
@@ -242,6 +243,26 @@ cc_test(
 )
 
 cc_library(
+    name = "c_api_internal",
+    srcs = ["c_api_internal.cc"],
+    hdrs = ["c_api_internal.h"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":engine_headers",
+        ":engine_internal",
+        ":error_reporter_internal",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "//runtime/engine:engine_settings",
+        "//runtime/engine:io_types",
+        "//runtime/executor:audio_executor_settings",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/executor:vision_executor_settings",
+    ],
+)
+
+cc_library(
     name = "engine_internal",
     hdrs = ["engine_internal.h"],
     visibility = ["//visibility:public"],
@@ -264,6 +285,8 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":conversation_headers",
+        ":error_reporter_internal",
+        "@com_google_absl//absl/status",
         "//runtime/components/constrained_decoding:no_repeat_ngram_config",
         "//runtime/components/constrained_decoding:repetition_penalty_config",
         "//runtime/components/constrained_decoding:suppress_tokens_config",
@@ -417,6 +440,31 @@ cc_library(
     alwayslink = True,
 )
 
+cc_library(
+    name = "c_abi_enum_test_helper",
+    testonly = True,
+    srcs = ["c_abi_enum_test_helper.c"],
+    hdrs = ["c_abi_enum_test_helper.h"],
+    copts = select({
+        "@platforms//os:windows": [],
+        "//conditions:default": [
+            "-std=c99",
+            "-pedantic-errors",
+            "-Wstrict-prototypes",
+            "-Werror",
+        ],
+    }),
+    visibility = ["//visibility:private"],
+    deps = [
+        ":conversation_headers",
+        ":embedding_engine_headers",
+        ":engine",
+        ":engine_headers",
+        ":error_reporter_headers",
+        ":model_info_headers",
+    ],
+)
+
 cc_test(
     name = "model_info_test",
     srcs = ["model_info_test.cc"],
@@ -432,6 +480,7 @@ cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":c_abi_enum_test_helper",
         ":engine",
         ":model_info_headers",
         "@com_google_googletest//:gtest_main",
@@ -457,6 +506,7 @@ cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":c_abi_enum_test_helper",
         ":conversation_headers",
         ":conversation_internal",
         ":engine",
@@ -499,6 +549,7 @@ cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":c_abi_enum_test_helper",
         ":embedding_engine_headers",
         ":engine",
         ":engine_headers",

@@ -30,6 +30,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "c/c_abi_enum_test_helper.h"
 
 namespace {
 
@@ -541,6 +542,42 @@ TEST(ModelInfoCTest, InspectEmbeddingCapabilities) {
             kLiteRtLmStatusOk);
   EXPECT_EQ(sig_count, 1u);
   EXPECT_EQ(lengths[0], 128);
+}
+
+TEST(ModelInfoCTest, OutOfRangeModalityAcrossCAbiReturnsInvalidArgument) {
+  LoadedFilePtr file = LoadTestFile("test_lm.litertlm");
+  ASSERT_NE(file, nullptr);
+
+  for (const int bad : {-1, 4, 99, 1024}) {
+    SCOPED_TRACE(bad);
+    bool supported = true;
+    litert_lm_clear_last_error();
+    ExpectError(c_abi_test_loaded_file_supports_input_modality(file.get(), bad,
+                                                               &supported),
+                kLiteRtLmStatusInvalidArgument, "Unknown LiteRtLmModality");
+    EXPECT_TRUE(supported);
+
+    size_t count = 77;
+    litert_lm_clear_last_error();
+    ExpectError(c_abi_test_loaded_file_modality_supported_backends(
+                    file.get(), bad, nullptr, 0, &count),
+                kLiteRtLmStatusInvalidArgument, "Unknown LiteRtLmModality");
+    EXPECT_EQ(count, 77u);
+
+    LiteRtLmNpuBrand brand = kLiteRtLmNpuBrandQualcomm;
+    litert_lm_clear_last_error();
+    ExpectError(
+        c_abi_test_loaded_file_modality_npu_brand(file.get(), bad, &brand),
+        kLiteRtLmStatusInvalidArgument, "Unknown LiteRtLmModality");
+    EXPECT_EQ(brand, kLiteRtLmNpuBrandQualcomm);
+
+    const char* soc_name = "sentinel";
+    litert_lm_clear_last_error();
+    ExpectError(
+        c_abi_test_loaded_file_modality_soc_name(file.get(), bad, &soc_name),
+        kLiteRtLmStatusInvalidArgument, "Unknown LiteRtLmModality");
+    EXPECT_EQ(soc_name, nullptr);
+  }
 }
 
 }  // namespace

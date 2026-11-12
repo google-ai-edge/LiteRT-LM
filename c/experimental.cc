@@ -16,8 +16,7 @@
 
 #include <utility>
 
-#include "absl/log/absl_log.h"  // from @com_google_absl
-#include "absl/status/status.h"  // from @com_google_absl
+#include "c/c_api_internal.h"
 #include "c/conversation.h"
 #include "c/conversation_internal.h"  // IWYU pragma: keep
 #include "c/engine.h"
@@ -28,31 +27,32 @@
 #include "runtime/conversation/conversation.h"
 #include "runtime/engine/engine.h"
 
+namespace {
+
+using ::litert::lm::c::IsValidConversation;
+using ::litert::lm::c::IsValidEngine;
+using ::litert::lm::c::IsValidEngineSettings;
+using ::litert::lm::c::IsValidSession;
+
+}  // namespace
+
 extern "C" {
 
 LiteRtLmStatusCode
 litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
     LiteRtLmEngine* engine, bool enable_metal_residency_set) {
-  if (engine == nullptr || engine->engine == nullptr) {
-    ABSL_LOG(ERROR) << "Engine is null.";
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Engine is null.");
+  if (!IsValidEngine(engine)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
-  auto status = engine->engine->UpdateGpuEnableMetalResidencySet(
-      enable_metal_residency_set);
-  if (!status.ok()) {
-    ABSL_LOG(ERROR) << "Failed to update GPU enable metal residency set: "
-                    << status;
-    return litert::lm::c::ToCStatus(status);
-  }
+  LITERT_LM_C_RETURN_IF_ERROR(engine->engine->UpdateGpuEnableMetalResidencySet(
+      enable_metal_residency_set));
   return kLiteRtLmStatusOk;
 }
 
 LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_enable_debugger(
     LiteRtLmEngineSettings* settings, bool enable_debugger) {
-  if (settings == nullptr || settings->settings == nullptr) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid engine settings.");
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   settings->settings->SetEnableDebugger(enable_debugger);
   return kLiteRtLmStatusOk;
@@ -62,9 +62,8 @@ LiteRtLmStatusCode litert_lm_experimental_session_get_debug_info(
     LiteRtLmSession* session, LiteRtLmSessionDebugInfo** out_debug_info) {
   LITERT_LM_C_RETURN_IF_NULL(out_debug_info);
   *out_debug_info = nullptr;
-  if (!session || !session->session) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid session.");
+  if (!IsValidSession(session)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   auto debug_info = session->session->GetSessionDebugInfo();
   if (debug_info.has_value()) {
@@ -78,9 +77,8 @@ LiteRtLmStatusCode litert_lm_experimental_conversation_get_session_debug_info(
     LiteRtLmSessionDebugInfo** out_debug_info) {
   LITERT_LM_C_RETURN_IF_NULL(out_debug_info);
   *out_debug_info = nullptr;
-  if (!conversation || !conversation->conversation) {
-    return litert::lm::c::ReturnError(absl::StatusCode::kInvalidArgument,
-                                      "Invalid conversation.");
+  if (!IsValidConversation(conversation)) {
+    return kLiteRtLmStatusInvalidArgument;
   }
   auto debug_info = conversation->conversation->GetSessionDebugInfo();
   if (debug_info.has_value()) {
