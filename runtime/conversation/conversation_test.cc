@@ -56,6 +56,7 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "support/tokenizer/sentencepiece_tokenizer.h"
@@ -439,6 +440,80 @@ TEST(ConversationConfigTest, OverwritePromptTemplate) {
 
   EXPECT_EQ(config.GetPromptTemplate().GetTemplateSource(),
             "overwrite template");
+}
+
+TEST(ConversationConfigTest, DefaultEnableRewindingByBackend) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.SetStartTokenId(0);
+  session_config.GetMutableStopTokenIds().push_back({1});
+  *session_config.GetMutableLlmModelType().mutable_gemma3() = {};
+
+  auto build_for_settings = [&](const EngineSettings& settings,
+                                std::optional<bool> explicit_rewinding =
+                                    std::nullopt) {
+    MockEngine mock_engine;
+    EXPECT_CALL(mock_engine, GetEngineSettings())
+        .WillRepeatedly(testing::ReturnRef(settings));
+    auto builder = ConversationConfig::Builder()
+                       .SetSessionConfig(session_config)
+                       .SetOverwritePromptTemplate(
+                           PromptTemplate(kTestJinjaPromptTemplate));
+    if (explicit_rewinding.has_value()) {
+      builder.SetEnableRewinding(*explicit_rewinding);
+    }
+    return builder.Build(mock_engine);
+  };
+
+  // CPU and GPU (LiteRT compiled model backends) default to
+  // enable_rewinding = false (SaveContext / RestoreContext), while respecting
+  // an explicit SetEnableRewinding(true) override.
+  for (Backend backend : {Backend::CPU, Backend::GPU}) {
+    ASSERT_OK_AND_ASSIGN(auto settings,
+                         EngineSettings::CreateDefault(model_assets, backend));
+    ASSERT_OK_AND_ASSIGN(auto default_config, build_for_settings(settings));
+    EXPECT_FALSE(default_config.enable_rewinding());
+    ASSERT_OK_AND_ASSIGN(auto overridden_config,
+                         build_for_settings(settings, true));
+    EXPECT_TRUE(overridden_config.enable_rewinding());
+  }
+
+  // GPU_ARTISAN defaults to enable_rewinding = true unless
+  // use_autosized_ringbuffers is enabled.
+  {
+    ASSERT_OK_AND_ASSIGN(
+        auto artisan_settings,
+        EngineSettings::CreateDefault(model_assets, Backend::GPU_ARTISAN));
+    ASSERT_OK_AND_ASSIGN(auto default_artisan_config,
+                         build_for_settings(artisan_settings));
+    EXPECT_TRUE(default_artisan_config.enable_rewinding());
+
+    ASSERT_OK_AND_ASSIGN(
+        GpuArtisanConfig gpu_artisan_config,
+        artisan_settings.GetMutableMainExecutorSettings()
+            .MutableBackendConfig<GpuArtisanConfig>());
+    gpu_artisan_config.use_autosized_ringbuffers = true;
+    artisan_settings.GetMutableMainExecutorSettings().SetBackendConfig(
+        gpu_artisan_config);
+    ASSERT_OK_AND_ASSIGN(auto ringbuffer_artisan_config,
+                         build_for_settings(artisan_settings));
+    EXPECT_FALSE(ringbuffer_artisan_config.enable_rewinding());
+  }
+
+  // NPU defaults to enable_rewinding = true, while respecting an explicit
+  // SetEnableRewinding(false) override.
+  {
+    ASSERT_OK_AND_ASSIGN(
+        auto npu_settings,
+        EngineSettings::CreateDefault(model_assets, Backend::NPU));
+    ASSERT_OK_AND_ASSIGN(auto default_npu_config,
+                         build_for_settings(npu_settings));
+    EXPECT_TRUE(default_npu_config.enable_rewinding());
+    ASSERT_OK_AND_ASSIGN(auto overridden_npu_config,
+                         build_for_settings(npu_settings, false));
+    EXPECT_FALSE(overridden_npu_config.enable_rewinding());
+  }
 }
 
 struct ConversationTestParams {
@@ -2125,6 +2200,7 @@ TEST_P(ConversationTest, SendMessageWithChannelContentFiltering) {
           .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
           .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
           .SetFilterChannelContentFromKvCache(true)
+          .SetEnableRewinding(true)
           .SetChannels({litert::lm::Channel{
               .channel_name = "thought",
               .start = "<|channel>thought\n",
@@ -2256,6 +2332,7 @@ TEST_P(ConversationTest,
               PromptTemplate(kPromptTemplateWithGenerationPrompt))
           .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
           .SetFilterChannelContentFromKvCache(true)
+          .SetEnableRewinding(true)
           .SetChannels({litert::lm::Channel{
               .channel_name = "thought",
               .start = "<|channel>thought\n",
@@ -2393,6 +2470,7 @@ TEST_P(ConversationTest,
               PromptTemplate(kPromptTemplateWithOpenChannel))
           .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
           .SetFilterChannelContentFromKvCache(true)
+          .SetEnableRewinding(true)
           .SetChannels({litert::lm::Channel{
               .channel_name = "thought",
               .start = "<|channel>thought\n",
@@ -2494,13 +2572,13 @@ TEST_P(ConversationTest, SendMessageWithChannelContentFilteringRewindToStart) {
               PromptTemplate(kPromptTemplateWithGenerationPrompt))
           .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
           .SetFilterChannelContentFromKvCache(true)
-          .SetEnableRewinding(false)
           .SetChannels({litert::lm::Channel{
               .channel_name = "thought",
               .start = "<|channel>thought\n",
               .end = "<channel|>",
           }})
           .Build(*mock_engine));
+  EXPECT_FALSE(conversation_config.enable_rewinding());
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*mock_engine, conversation_config));
 
@@ -3147,6 +3225,7 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
           .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
           .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
           .SetFilterChannelContentFromKvCache(true)
+          .SetEnableRewinding(true)
           .SetChannels({litert::lm::Channel{
               .channel_name = "thought",
               .start = "<|channel>thought\n",
@@ -3309,6 +3388,7 @@ TEST_P(ConversationTest,
           .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
           .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
           .SetFilterChannelContentFromKvCache(true)
+          .SetEnableRewinding(true)
           .SetChannels({litert::lm::Channel{
               .channel_name = "thought",
               .start = "<|channel>thought\n",

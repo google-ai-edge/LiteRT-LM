@@ -259,7 +259,11 @@ class ConversationConfig {
       return *this;
     }
 
-    // Sets whether to enable rewinding.
+    // Sets whether to enable rewinding (`SaveCheckpoint` /
+    // `RewindToCheckpoint`) instead of context saving/restoring (`SaveContext`
+    // / `RestoreContext`). If not explicitly set, defaults to `false` on
+    // `Backend::CPU`, `Backend::GPU`, and `Backend::GPU_ARTISAN` when
+    // `use_autosized_ringbuffers` is enabled, and `true` otherwise.
     Builder& SetEnableRewinding(bool enable_rewinding) {
       enable_rewinding_ = enable_rewinding;
       return *this;
@@ -298,7 +302,7 @@ class ConversationConfig {
     std::optional<ThinkingConfig> thinking_config_ = std::nullopt;
     bool stream_tool_calls_ = false;
     std::string stream_tool_calls_channel_name_ = "tool_call";
-    bool enable_rewinding_ = true;
+    std::optional<bool> enable_rewinding_ = std::nullopt;
   };
 
   // Returns the constrained decoding config.
@@ -350,7 +354,7 @@ class ConversationConfig {
       std::optional<ThinkingConfig> thinking_config = std::nullopt,
       bool stream_tool_calls = false,
       const std::string& stream_tool_calls_channel_name = "tool_call",
-      bool enable_rewinding = true);
+      std::optional<bool> enable_rewinding = std::nullopt);
 
   explicit ConversationConfig(
       SessionConfig session_config, Preface preface,

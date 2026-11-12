@@ -43,7 +43,6 @@
 #include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
-#include "runtime/executor/llm_executor_settings.h"
 
 namespace {
 
@@ -637,17 +636,6 @@ LiteRtLmStatusCode litert_lm_conversation_create(
     }
     if (c_config->thinking_config.has_value()) {
       builder.SetThinkingConfig(*c_config->thinking_config);
-    }
-    // For disabling rewinding, we don't use a config, but instead force the
-    // option if and only if GPU artisan ringbuffers are being used in the
-    // engine.
-    auto& main_settings =
-        engine->engine->GetEngineSettings().GetMainExecutorSettings();
-    auto gpu_artisan_config =
-        main_settings.GetBackendConfig<litert::lm::GpuArtisanConfig>();
-    if (gpu_artisan_config.ok() &&
-        gpu_artisan_config->use_autosized_ringbuffers) {
-      builder.SetEnableRewinding(false);
     }
     LITERT_LM_C_ASSIGN_OR_RETURN(ConversationConfig config,
                                  builder.Build(*engine->engine));
