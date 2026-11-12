@@ -764,6 +764,25 @@ class Conversation(
   }
 
   /**
+   * Scores candidate target texts against the current conversation history without mutating the
+   * conversation's KV cache or history.
+   *
+   * Pass one target text (arbitrary token length), or several target texts that are each a single
+   * token. Prompt templates are not applied to [targetText].
+   *
+   * @param targetText Candidate continuation strings to score.
+   * @return [Responses] containing log-likelihood [Responses.scores], [Responses.tokenLengths], and
+   *   per-token [Responses.tokenScores].
+   * @throws IllegalStateException if the conversation is not alive.
+   * @throws LiteRtLmJniException if the native scoring call fails.
+   */
+  fun runTextScoring(targetText: List<String>): Responses {
+    checkIsAlive()
+    return LiteRtLmJni.nativeConversationRunTextScoring(handle, targetText.toTypedArray())
+      .toResponses()
+  }
+
+  /**
    * Renders the message into a string for testing and logging.
    *
    * This function does not need to be called for actual message sending, as the `SendMessage` and

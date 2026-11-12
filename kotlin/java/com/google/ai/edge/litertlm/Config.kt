@@ -347,6 +347,9 @@ data class LoraConfig(val loraPath: String? = null, val audioLoraPath: String? =
  * @property speculativeDecodingConfig The speculative decoding configuration for this session,
  *   which overrides [EngineConfig.speculativeDecodingConfig]. Fields left `null` inherit the
  *   engine's values. Its mode takes precedence over the deprecated [enableSpeculativeDecoding].
+ * @property applyPromptTemplate Whether [Session] applies the model's prompt templates to inputs.
+ *   When `null` (default), uses the native engine default. Set to `false` when managing raw turn
+ *   markers manually (for example with [Session.runPrefill] and [Session.runTextScoring]).
  */
 data class SessionConfig
 @JvmOverloads
@@ -356,6 +359,7 @@ constructor(
   @Deprecated("Use speculativeDecodingConfig (mode ON or OFF) instead.")
   val enableSpeculativeDecoding: Boolean? = null,
   val speculativeDecodingConfig: SpeculativeDecodingConfig? = null,
+  val applyPromptTemplate: Boolean? = null,
 )
 
 /**
