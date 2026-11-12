@@ -34,6 +34,7 @@ bazel build //sync:model_sync_cli
 ## CLI Flags Reference
 
 <!-- disableFinding(LINE_OVER_80) -->
+
 | Flag | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--remote` | `string` | `""` *(required)* | Path or URL of the upstream remote `.litertlm` file (supports byte-range fetching). |
@@ -43,6 +44,7 @@ bazel build //sync:model_sync_cli
 | `--clean` | `bool` | `false` | Deletes the local model upfront to reclaim disk space before downloading, reducing peak disk overhead from 2× to 1× on storage-constrained devices. |
 | `--threshold` | `double` | `0.80` | Change ratio threshold (0.0 to 1.0). If more than this fraction of bytes changed, automatically falls back to a direct full sequential download. |
 | `--check_disk` | `bool` | `true` | Validates available disk space before starting the download to prevent mid-transfer out-of-disk failures. |
+
 <!-- enableFinding(LINE_OVER_80) -->
 
 ---
@@ -50,12 +52,15 @@ bazel build //sync:model_sync_cli
 ## Examples for Each Flag
 
 ### 1. `--remote` (Upstream Source)
-Specifies the remote model file or URL to synchronize against. *(Required)*
+
+Specifies the remote model file or HTTP/HTTPS URL to synchronize against.
+*(Required)*
 
 ```bash
-# Sync against a remote model file or URL:
-bazel run //sync:model_sync_cli -- \
-  --remote=/tmp/upstream_model.litertlm
+# Sync against a remote Hugging Face model URL:
+bazel run //sync:model_sync_cli -- --diff \
+  --local=/tmp/local_model.litertlm \
+  --remote=https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 ```
 
 ---
@@ -68,7 +73,7 @@ heavy weights) are reused directly from this file:
 # Compare and reuse sections from local_model.litertlm:
 bazel run //sync:model_sync_cli -- \
   --local=/data/models/local_model.litertlm \
-  --remote=/tmp/upstream_model.litertlm
+  --remote=https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 ```
 
 ---
@@ -82,7 +87,7 @@ to a separate path:
 # Write the spliced model to a new file without touching the old one:
 bazel run //sync:model_sync_cli -- \
   --local=/data/models/v1.litertlm \
-  --remote=/tmp/v2.litertlm \
+  --remote=https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm \
   --output=/data/models/v2_synced.litertlm
 ```
 
@@ -97,10 +102,11 @@ any payloads:
 bazel run //sync:model_sync_cli -- \
   --diff \
   --local=/data/models/local_model.litertlm \
-  --remote=/tmp/upstream_model.litertlm
+  --remote=https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 ```
 
 **Example output:**
+
 ```text
 === LiteRT-LM Sync Plan ===
 Status: UPDATE REQUIRED
@@ -110,10 +116,10 @@ Bytes to Reuse:    2578236383 bytes (2458.80 MB)
 Bytes to Download: 4730240 bytes (4.51 MB)
 
 Section Comparison:
-  [0] data_type=5, model_type="", size=12190 bytes (REUSE LOCAL)
-  [1] data_type=4, model_type="", size=4689013 bytes (REUSE LOCAL)
+  [0] data_type=LlmMetadataProto, model_type="", size=12190 bytes (REUSE LOCAL)
+  [1] data_type=SP_Tokenizer, model_type="", size=4689013 bytes (REUSE LOCAL)
   ...
-  [8] data_type=3, model_type="tf_lite_vision_adapter", size=4727112 bytes
+  [8] data_type=TFLiteModel, model_type="tf_lite_vision_adapter", size=4727112 bytes
       Action: DOWNLOAD DIFF (Local: dd590b96..., Remote: ce882453...)
       Range:  [1715716096, 1720443207]
 ```
@@ -131,7 +137,7 @@ or when a full download is required, reducing peak disk overhead from 2× to 1×
 bazel run //sync:model_sync_cli -- \
   --clean \
   --local=/data/models/model.litertlm \
-  --remote=/tmp/upstream_model.litertlm
+  --remote=https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 ```
 
 ---
@@ -146,7 +152,7 @@ The default is `0.80` (80%):
 bazel run //sync:model_sync_cli -- \
   --threshold=0.50 \
   --local=/data/models/model.litertlm \
-  --remote=/tmp/upstream_model.litertlm
+  --remote=https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 ```
 
 ---
@@ -162,7 +168,7 @@ filesystems):
 bazel run //sync:model_sync_cli -- \
   --check_disk=false \
   --local=/data/models/model.litertlm \
-  --remote=/tmp/upstream_model.litertlm
+  --remote=https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 ```
 
 ---
@@ -174,13 +180,14 @@ Applications can integrate `ModelSync` directly:
 ```cpp
 #include "sync/model_sync.h"
 
+using ::litert::lm::sync::CreateHttpRangeFetcher;
 using ::litert::lm::sync::ModelSync;
 using ::litert::lm::sync::SyncOptions;
 
-// 1. Define RangeFetcher callback (HTTP Range request or local file slice)
-auto fetcher = [](uint64_t start_byte, uint64_t end_byte, std::ostream& out) {
-  return FetchHttpRange(model_url, start_byte, end_byte, out);
-};
+// 1. Create an HTTP RangeFetcher (or provide a custom RangeFetcher callback)
+auto fetcher = CreateHttpRangeFetcher(
+    "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/"
+    "resolve/main/gemma-4-E2B-it.litertlm");
 
 // 2. Plan sync: inspect remote header and determine byte ranges
 SyncOptions options;

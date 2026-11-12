@@ -191,6 +191,28 @@ class ModelSync {
                                           const SyncOptions& options = {});
 };
 
+// Returns true if `source` uses an `http://` or `https://` scheme.
+bool IsHttpUrl(absl::string_view source);
+
+// Creates a `RangeFetcher` that fetches inclusive byte ranges `[start_byte,
+// end_byte]` from an `http://` or `https://` URL (following redirects).
+//
+// Supported on desktop hosts (Linux, macOS, and Windows with `curl` /
+// `curl.exe`). Invoking the returned `RangeFetcher` returns
+// `absl::InvalidArgumentError` on malformed URLs and
+// `absl::UnimplementedError` on unsupported platforms (e.g. Android, iOS,
+// WebAssembly).
+RangeFetcher CreateHttpRangeFetcher(absl::string_view url);
+
+namespace internal {
+
+// Creates an HTTP `RangeFetcher` using an explicit `curl` executable path.
+// Exposed for hermetic testing without mutating process-wide `PATH`.
+RangeFetcher CreateHttpRangeFetcherWithExecutable(absl::string_view url,
+                                                  absl::string_view curl_path);
+
+}  // namespace internal
+
 }  // namespace litert::lm::sync
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_SYNC_MODEL_SYNC_H_

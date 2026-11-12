@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -23,6 +24,7 @@
 #include <fstream>
 #include <ios>
 #include <iosfwd>
+#include <limits>
 #include <ostream>
 #include <sstream>
 #include <streambuf>
@@ -30,6 +32,32 @@
 #include <system_error>  // NOLINT: Required for std::error_code.
 #include <utility>
 #include <vector>
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#define LITERT_LM_HAS_POSIX_CURL 0
+#define LITERT_LM_HAS_WIN32_CURL 1
+#elif !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && \
+    (!defined(__APPLE__) || TARGET_OS_OSX)
+#include <fcntl.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#define LITERT_LM_HAS_POSIX_CURL 1
+#define LITERT_LM_HAS_WIN32_CURL 0
+#else
+#define LITERT_LM_HAS_POSIX_CURL 0
+#define LITERT_LM_HAS_WIN32_CURL 0
+#endif
 
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -245,18 +273,16 @@ absl::Status VerifyFileSectionChecksums(
     absl::string_view file_path, const std::vector<SectionInfo>& sections) {
   std::ifstream in(std::string(file_path), std::ios::binary);
   if (!in.is_open()) {
-    return absl::InternalError(
-        absl::StrCat("Failed to open file for checksum verification: ",
-                     file_path));
+    return absl::InternalError(absl::StrCat(
+        "Failed to open file for checksum verification: ", file_path));
   }
   std::vector<char> buffer(kChunkSize);
   for (const auto& sec : sections) {
     if (sec.size() == 0 || !IsValidSha256Hex(sec.sha256)) continue;
     in.seekg(sec.begin_offset);
     if (!in) {
-      return absl::DataLossError(
-          absl::StrCat("Failed to seek to section at offset ",
-                       sec.begin_offset));
+      return absl::DataLossError(absl::StrCat(
+          "Failed to seek to section at offset ", sec.begin_offset));
     }
     uint64_t remaining = sec.size();
     Sha256Hasher hasher;
@@ -382,11 +408,10 @@ absl::StatusOr<std::vector<SectionInfo>> ParseAndVerifyHeader(
   for (const auto& sec : sorted) {
     if (sec.begin_offset < header_bytes.size() ||
         sec.end_offset < sec.begin_offset || sec.begin_offset < prev_end) {
-      return absl::InvalidArgumentError(
-          absl::StrFormat("Malformed or overlapping section offset range: "
-                          "header_size=%d, begin=%d, end=%d, prev_end=%d",
-                          header_bytes.size(), sec.begin_offset,
-                          sec.end_offset, prev_end));
+      return absl::InvalidArgumentError(absl::StrFormat(
+          "Malformed or overlapping section offset range: "
+          "header_size=%d, begin=%d, end=%d, prev_end=%d",
+          header_bytes.size(), sec.begin_offset, sec.end_offset, prev_end));
     }
     prev_end = sec.end_offset;
   }
@@ -479,8 +504,7 @@ absl::StatusOr<ParsedModelHeaders> ParseModelHeadersFromFetchers(
         FetchRemoteHeaderBytes(local_fetcher, initial_header_fetch_bytes);
     if (local_header_res.ok()) {
       parsed.local_header_bytes = std::move(*local_header_res);
-      auto local_sec_res =
-          ParseAndVerifyHeader(parsed.local_header_bytes);
+      auto local_sec_res = ParseAndVerifyHeader(parsed.local_header_bytes);
       if (local_sec_res.ok()) {
         parsed.local_sections = std::move(*local_sec_res);
         parsed.local_exists = true;
@@ -602,12 +626,18 @@ SyncPlan BuildSyncPlan(const ParsedModelHeaders& parsed,
   return plan;
 }
 
+bool IsRangeUnsupportedStatus(const absl::Status& status) {
+  return status.code() == absl::StatusCode::kFailedPrecondition ||
+         status.code() == absl::StatusCode::kUnimplemented ||
+         status.code() == absl::StatusCode::kOutOfRange;
+}
+
 absl::Status DownloadFullModel(
     const RangeFetcher& fetcher, absl::string_view remote_header_bytes,
     uint64_t total_remote_bytes,
     const std::vector<SectionInfo>& sorted_remote_sections,
     absl::string_view temp_output_path, bool verify_checksums,
-    std::ofstream& out) {
+    bool fallback_on_range_error, std::ofstream& out) {
   out.seekp(0);
   out.write(remote_header_bytes.data(), remote_header_bytes.size());
   if (!out) {
@@ -616,6 +646,16 @@ absl::Status DownloadFullModel(
   if (total_remote_bytes > remote_header_bytes.size()) {
     absl::Status fetch_status =
         fetcher(remote_header_bytes.size(), total_remote_bytes - 1, out);
+    if (!fetch_status.ok() && fallback_on_range_error &&
+        IsRangeUnsupportedStatus(fetch_status)) {
+      out.clear();
+      out.seekp(0);
+      if (!out) {
+        return absl::InternalError(
+            "Failed to rewind output stream for full-file download fallback.");
+      }
+      fetch_status = fetcher(0, total_remote_bytes - 1, out);
+    }
     if (!fetch_status.ok()) {
       return absl::Status(fetch_status.code(),
                           absl::StrCat("Failed to fetch full model payload: ",
@@ -740,12 +780,8 @@ absl::Status AssembleDifferentialModel(
       absl::Status fetch_status =
           fetcher(r_sec.begin_offset, r_sec.end_offset - 1, wrapped_out);
       if (!fetch_status.ok()) {
-        bool is_range_unsupported =
-            options.fallback_on_range_error &&
-            (fetch_status.code() == absl::StatusCode::kFailedPrecondition ||
-             fetch_status.code() == absl::StatusCode::kUnimplemented ||
-             fetch_status.code() == absl::StatusCode::kOutOfRange);
-        if (is_range_unsupported) {
+        if (options.fallback_on_range_error &&
+            IsRangeUnsupportedStatus(fetch_status)) {
           fallback_to_full = true;
           break;
         }
@@ -783,10 +819,10 @@ absl::Status AssembleDifferentialModel(
   }
 
   if (fallback_to_full) {
-    return DownloadFullModel(
-        fetcher, remote_header_bytes, total_remote_bytes,
-        sorted_remote_sections, temp_output_path, options.verify_checksums,
-        out);
+    return DownloadFullModel(fetcher, remote_header_bytes, total_remote_bytes,
+                             sorted_remote_sections, temp_output_path,
+                             options.verify_checksums,
+                             options.fallback_on_range_error, out);
   }
   return absl::OkStatus();
 }
@@ -815,9 +851,23 @@ std::string SyncPlan::Summary() const {
   if (!section_diffs.empty()) {
     absl::StrAppend(&out, "\nSection Comparison:\n");
     for (const auto& diff : section_diffs) {
-      absl::StrAppendFormat(
-          &out, "  [%d] data_type=%d, model_type=\"%s\", size=%d bytes\n",
-          diff.section_index, diff.data_type, diff.model_type, diff.size);
+      std::string data_type_str;
+      if (diff.data_type >= static_cast<int>(schema::AnySectionDataType_MIN) &&
+          diff.data_type <= static_cast<int>(schema::AnySectionDataType_MAX)) {
+        const char* name = schema::EnumNameAnySectionDataType(
+            static_cast<schema::AnySectionDataType>(diff.data_type));
+        if (name != nullptr && name[0] != '\0') {
+          data_type_str = name;
+        }
+      }
+      if (data_type_str.empty()) {
+        data_type_str = absl::StrCat(diff.data_type);
+      }
+      absl::StrAppendFormat(&out,
+                            "  [%d] data_type=%s, model_type=\"%s\", size=%d "
+                            "bytes\n",
+                            diff.section_index, data_type_str, diff.model_type,
+                            diff.size);
       if (diff.action == SectionAction::kReuseLocal) {
         absl::StrAppendFormat(
             &out, "      Action: REUSE LOCAL (SHA-256 matches: %.16s...)\n",
@@ -1004,7 +1054,8 @@ absl::Status ModelSync::Update(absl::string_view local_model_path,
   if (use_full_download) {
     absl::Status full_status = DownloadFullModel(
         fetcher, remote_header_bytes, max_remote_offset, sorted_remote_sections,
-        temp_output_path, options.verify_checksums, out);
+        temp_output_path, options.verify_checksums,
+        options.fallback_on_range_error, out);
     if (!full_status.ok()) {
       return full_status;
     }
@@ -1100,5 +1151,513 @@ absl::StatusOr<std::string> ModelSync::Sync(absl::string_view cache_dir,
 
   return update_status;
 }
+
+namespace {
+
+bool IsValidHttpUrl(absl::string_view url) {
+  if (!IsHttpUrl(url)) return false;
+  for (unsigned char c : url) {
+    if (c <= 0x20 || c == 0x7f || c == '"') return false;
+  }
+  return true;
+}
+
+int ParseLastHttpStatusCode(absl::string_view headers_text) {
+  int last_code = 0;
+  size_t pos = 0;
+  while (pos < headers_text.size()) {
+    size_t line_end = headers_text.find('\n', pos);
+    if (line_end == absl::string_view::npos) {
+      line_end = headers_text.size();
+    }
+    absl::string_view line = headers_text.substr(pos, line_end - pos);
+    pos = line_end + 1;
+    if (!absl::StartsWithIgnoreCase(line, "HTTP/")) continue;
+    size_t sp = line.find(' ');
+    if (sp == absl::string_view::npos) continue;
+    while (sp < line.size() && line[sp] == ' ') ++sp;
+    if (sp + 3 <= line.size() &&
+        std::isdigit(static_cast<unsigned char>(line[sp])) &&
+        std::isdigit(static_cast<unsigned char>(line[sp + 1])) &&
+        std::isdigit(static_cast<unsigned char>(line[sp + 2])) &&
+        (sp + 3 == line.size() ||
+         !std::isdigit(static_cast<unsigned char>(line[sp + 3])))) {
+      last_code = (line[sp] - '0') * 100 + (line[sp + 1] - '0') * 10 +
+                  (line[sp + 2] - '0');
+    }
+  }
+  return last_code;
+}
+
+int ReadHttpStatusFromFile(absl::string_view hdr_path) {
+  if (hdr_path.empty()) return 0;
+  std::ifstream in(std::string(hdr_path), std::ios::binary);
+  if (!in.is_open()) return 0;
+  std::string contents;
+  char buf[4096];
+  constexpr size_t kMaxHeaderFileBytes = 256 * 1024;
+  while (contents.size() < kMaxHeaderFileBytes) {
+    in.read(buf, sizeof(buf));
+    std::streamsize n = in.gcount();
+    if (n <= 0) break;
+    contents.append(buf, static_cast<size_t>(n));
+  }
+  return ParseLastHttpStatusCode(contents);
+}
+
+absl::Status MapHttpErrorCode(int http_status, absl::string_view url_str) {
+  switch (http_status) {
+    case 400:
+      return absl::InvalidArgumentError(
+          absl::StrCat("HTTP 400 Bad Request for ", url_str));
+    case 401:
+      return absl::UnauthenticatedError(
+          absl::StrCat("HTTP 401 Unauthorized for ", url_str));
+    case 403:
+      return absl::PermissionDeniedError(
+          absl::StrCat("HTTP 403 Forbidden for ", url_str));
+    case 404:
+      return absl::NotFoundError(
+          absl::StrCat("HTTP 404 Not Found for ", url_str));
+    case 408:
+      return absl::DeadlineExceededError(
+          absl::StrCat("HTTP 408 Request Timeout for ", url_str));
+    case 416:
+      return absl::OutOfRangeError(
+          absl::StrCat("HTTP 416 Range Not Satisfiable for ", url_str));
+    case 429:
+      return absl::ResourceExhaustedError(
+          absl::StrCat("HTTP 429 Too Many Requests for ", url_str));
+    default:
+      if (http_status >= 400 && http_status < 500) {
+        return absl::FailedPreconditionError(
+            absl::StrCat("HTTP ", http_status, " client error for ", url_str));
+      }
+      return absl::UnavailableError(
+          absl::StrCat("HTTP ", http_status, " server error for ", url_str));
+  }
+}
+
+absl::Status MapCurlOutcome(bool write_failed, bool exceeded_expected,
+                            uint64_t start_byte, int exit_code, int http_status,
+                            absl::string_view url_str) {
+  if (write_failed) {
+    return absl::DataLossError("Failed to write HTTP range bytes to stream.");
+  }
+  if (exceeded_expected) {
+    return absl::UnimplementedError(
+        absl::StrCat("Server ignored Range header for ", url_str));
+  }
+  if (exit_code == 127) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("curl executable not found while fetching ", url_str));
+  }
+  if (exit_code == 28) {
+    return absl::DeadlineExceededError(
+        absl::StrCat("HTTP request timed out: ", url_str));
+  }
+  if (exit_code == 63) {
+    return absl::UnimplementedError(
+        absl::StrCat("Server ignored Range header for ", url_str));
+  }
+  if (exit_code != 0 || http_status >= 400) {
+    if (http_status >= 400) {
+      return MapHttpErrorCode(http_status, url_str);
+    }
+    return absl::UnavailableError(absl::StrCat("curl failed with exit code ",
+                                               exit_code, " for ", url_str));
+  }
+  if (start_byte > 0 && http_status == 200) {
+    return absl::UnimplementedError(absl::StrCat(
+        "Server ignored Range header (returned HTTP 200 OK) for ", url_str));
+  }
+  return absl::OkStatus();
+}
+
+#if LITERT_LM_HAS_POSIX_CURL
+std::string CreateTempHeaderPath() {
+  std::error_code ec;
+  std::filesystem::path tmp_dir = std::filesystem::temp_directory_path(ec);
+  if (ec || tmp_dir.empty()) {
+    return "";
+  }
+  std::string tmpl = (tmp_dir / "litert_lm_http_hdr_XXXXXX").string();
+  int fd = mkstemp(tmpl.data());
+  if (fd < 0) {
+    return "";
+  }
+  close(fd);
+  return tmpl;
+}
+#elif LITERT_LM_HAS_WIN32_CURL
+std::string CreateTempHeaderPath() {
+  char tmp_dir[MAX_PATH] = {};
+  DWORD dir_len = GetTempPathA(MAX_PATH, tmp_dir);
+  if (dir_len == 0 || dir_len >= MAX_PATH) {
+    return "";
+  }
+  char tmp_file[MAX_PATH] = {};
+  if (GetTempFileNameA(tmp_dir, "llm", 0, tmp_file) == 0) {
+    return "";
+  }
+  std::string path(tmp_file);
+  if (path.find('"') != std::string::npos) {
+    DeleteFileA(path.c_str());
+    return "";
+  }
+  return path;
+}
+
+std::string ResolveWindowsCurlPath(absl::string_view explicit_path) {
+  if (!explicit_path.empty()) {
+    std::string path(explicit_path);
+    return path.find('"') == std::string::npos ? path : "";
+  }
+  char sys_dir[MAX_PATH] = {};
+  UINT len = GetSystemDirectoryA(sys_dir, MAX_PATH);
+  if (len > 0 && len < MAX_PATH) {
+    std::string candidate = absl::StrCat(sys_dir, "\\curl.exe");
+    DWORD attrs = GetFileAttributesA(candidate.c_str());
+    if (attrs != INVALID_FILE_ATTRIBUTES &&
+        (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+      return candidate;
+    }
+  }
+  // Scan absolute PATH entries only so CWD / relative directories cannot
+  // hijack.
+  DWORD path_len = GetEnvironmentVariableA("PATH", nullptr, 0);
+  if (path_len > 1) {
+    std::string path_env(path_len, '\0');
+    DWORD actual = GetEnvironmentVariableA("PATH", path_env.data(), path_len);
+    if (actual > 0 && actual < path_len) {
+      path_env.resize(actual);
+      size_t start = 0;
+      while (start <= path_env.size()) {
+        size_t semi = path_env.find(';', start);
+        if (semi == std::string::npos) semi = path_env.size();
+        absl::string_view dir(path_env.data() + start, semi - start);
+        start = semi + 1;
+        bool is_abs_drive = dir.size() >= 3 &&
+                            std::isalpha(static_cast<unsigned char>(dir[0])) &&
+                            dir[1] == ':' && (dir[2] == '\\' || dir[2] == '/');
+        bool is_unc = dir.size() >= 2 && dir[0] == '\\' && dir[1] == '\\';
+        if (!is_abs_drive && !is_unc) continue;
+        std::string candidate = absl::StrCat(dir, "\\curl.exe");
+        if (candidate.find('"') != std::string::npos) continue;
+        DWORD attrs = GetFileAttributesA(candidate.c_str());
+        if (attrs != INVALID_FILE_ATTRIBUTES &&
+            (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+          return candidate;
+        }
+      }
+    }
+  }
+  return "";
+}
+#endif
+
+RangeFetcher CreateHttpRangeFetcherImpl(absl::string_view url,
+                                        absl::string_view curl_path) {
+  return [url_str = std::string(url), curl_exe = std::string(curl_path)](
+             uint64_t start_byte, uint64_t end_byte,
+             std::ostream& out) -> absl::Status {
+    if (!IsValidHttpUrl(url_str)) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Invalid HTTP URL: ", url_str));
+    }
+    if (end_byte < start_byte ||
+        end_byte - start_byte == std::numeric_limits<uint64_t>::max()) {
+      return absl::InvalidArgumentError("Invalid byte range.");
+    }
+    const uint64_t expected_bytes = (end_byte - start_byte) + 1;
+#if LITERT_LM_HAS_POSIX_CURL
+    std::string range_arg = absl::StrCat(start_byte, "-", end_byte);
+    std::string max_size_arg = absl::StrCat(expected_bytes);
+    std::string hdr_path = CreateTempHeaderPath();
+    absl::Cleanup remove_hdr = [&] {
+      if (!hdr_path.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(hdr_path, ec);
+      }
+    };
+
+    const char* exe = curl_exe.empty() ? "curl" : curl_exe.c_str();
+    std::vector<const char*> argv = {
+        exe,
+        "-f",
+        "-s",
+        "-S",
+        "-L",
+        "-g",
+        "--proto",
+        "=http,https",
+        "--proto-redir",
+        "=http,https",
+        "--connect-timeout",
+        "15",
+        "--speed-limit",
+        "1",
+        "--speed-time",
+        "30",
+        "--max-filesize",
+        max_size_arg.c_str(),
+        "--range",
+        range_arg.c_str(),
+    };
+    if (!hdr_path.empty()) {
+      argv.push_back("-D");
+      argv.push_back(hdr_path.c_str());
+    }
+    argv.push_back("--");
+    argv.push_back(url_str.c_str());
+    argv.push_back(nullptr);
+
+    int pipefd[2] = {-1, -1};
+    if (pipe(pipefd) != 0) {
+      return absl::InternalError(
+          absl::StrCat("pipe() failed: ", std::strerror(errno)));
+    }
+    if (fcntl(pipefd[0], F_SETFD, FD_CLOEXEC) != 0 ||
+        fcntl(pipefd[1], F_SETFD, FD_CLOEXEC) != 0) {
+      int err = errno;
+      close(pipefd[0]);
+      close(pipefd[1]);
+      return absl::InternalError(
+          absl::StrCat("fcntl(FD_CLOEXEC) failed: ", std::strerror(err)));
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+      int err = errno;
+      close(pipefd[0]);
+      close(pipefd[1]);
+      return absl::InternalError(
+          absl::StrCat("fork() failed: ", std::strerror(err)));
+    }
+    if (pid == 0) {
+      dup2(pipefd[1], STDOUT_FILENO);
+      close(pipefd[0]);
+      close(pipefd[1]);
+      execvp(exe, const_cast<char* const*>(argv.data()));
+      _exit(127);
+    }
+
+    close(pipefd[1]);
+    uint64_t total_written = 0;
+    bool exceeded_expected = false;
+    bool write_failed = false;
+    std::vector<char> buffer(64 * 1024);
+    while (true) {
+      ssize_t n = read(pipefd[0], buffer.data(), buffer.size());
+      if (n > 0) {
+        if (static_cast<uint64_t>(n) > expected_bytes - total_written) {
+          exceeded_expected = true;
+          break;
+        }
+        out.write(buffer.data(), static_cast<std::streamsize>(n));
+        if (!out) {
+          write_failed = true;
+          break;
+        }
+        total_written += static_cast<uint64_t>(n);
+      } else if (n == 0) {
+        break;
+      } else if (errno != EINTR) {
+        break;
+      }
+    }
+    close(pipefd[0]);
+
+    if (exceeded_expected || write_failed) {
+      kill(pid, SIGKILL);
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    }
+    int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    int http_status = ReadHttpStatusFromFile(hdr_path);
+    return MapCurlOutcome(write_failed, exceeded_expected, start_byte,
+                          exit_code, http_status, url_str);
+#elif LITERT_LM_HAS_WIN32_CURL
+    std::string resolved_curl = ResolveWindowsCurlPath(curl_exe);
+    if (resolved_curl.empty()) {
+      return absl::FailedPreconditionError(
+          "curl.exe not found in System32 or PATH.");
+    }
+    std::string hdr_path = CreateTempHeaderPath();
+    absl::Cleanup remove_hdr = [&] {
+      if (!hdr_path.empty()) {
+        DeleteFileA(hdr_path.c_str());
+      }
+    };
+    std::string cmd_line = absl::StrCat(
+        "\"", resolved_curl,
+        "\" -f -s -S -L -g --proto =http,https --proto-redir =http,https "
+        "--connect-timeout 15 --speed-limit 1 --speed-time 30 --max-filesize ",
+        expected_bytes, " --range ", start_byte, "-", end_byte);
+    if (!hdr_path.empty()) {
+      absl::StrAppend(&cmd_line, " -D \"", hdr_path, "\"");
+    }
+    absl::StrAppend(&cmd_line, " -- ", url_str);
+
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE read_pipe = nullptr;
+    HANDLE write_pipe = nullptr;
+    if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
+      return absl::InternalError(
+          absl::StrCat("CreatePipe() failed: error ", GetLastError()));
+    }
+    auto close_read = absl::MakeCleanup([&] {
+      if (read_pipe != nullptr) CloseHandle(read_pipe);
+    });
+    if (!SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0)) {
+      DWORD err = GetLastError();
+      CloseHandle(write_pipe);
+      return absl::InternalError(
+          absl::StrCat("SetHandleInformation() failed: error ", err));
+    }
+
+    HANDLE handles_to_inherit[2] = {write_pipe, nullptr};
+    DWORD handle_count = 1;
+    HANDLE stderr_handle = GetStdHandle(STD_ERROR_HANDLE);
+    DWORD stderr_flags = 0;
+    bool inherit_stderr = stderr_handle != nullptr &&
+                          stderr_handle != INVALID_HANDLE_VALUE &&
+                          GetHandleInformation(stderr_handle, &stderr_flags) &&
+                          (stderr_flags & HANDLE_FLAG_INHERIT) != 0;
+    if (inherit_stderr) {
+      handles_to_inherit[handle_count++] = stderr_handle;
+    }
+
+    SIZE_T attr_size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_size);
+    if (attr_size == 0) {
+      CloseHandle(write_pipe);
+      return absl::InternalError(absl::StrCat(
+          "InitializeProcThreadAttributeList() size failed: error ",
+          GetLastError()));
+    }
+    std::vector<char> attr_buf(attr_size);
+    auto* attr_list =
+        reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attr_buf.data());
+    if (!InitializeProcThreadAttributeList(attr_list, 1, 0, &attr_size)) {
+      DWORD err = GetLastError();
+      CloseHandle(write_pipe);
+      return absl::InternalError(absl::StrCat(
+          "InitializeProcThreadAttributeList() failed: error ", err));
+    }
+    auto delete_attrs =
+        absl::MakeCleanup([&] { DeleteProcThreadAttributeList(attr_list); });
+    if (!UpdateProcThreadAttribute(
+            attr_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles_to_inherit,
+            handle_count * sizeof(HANDLE), nullptr, nullptr)) {
+      DWORD err = GetLastError();
+      CloseHandle(write_pipe);
+      return absl::InternalError(
+          absl::StrCat("UpdateProcThreadAttribute() failed: error ", err));
+    }
+
+    STARTUPINFOEXA si{};
+    si.StartupInfo.cb = sizeof(si);
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    si.StartupInfo.hStdInput = nullptr;
+    si.StartupInfo.hStdOutput = write_pipe;
+    si.StartupInfo.hStdError = inherit_stderr ? stderr_handle : nullptr;
+    si.lpAttributeList = attr_list;
+    PROCESS_INFORMATION pi{};
+    BOOL started =
+        CreateProcessA(resolved_curl.c_str(), cmd_line.data(), nullptr, nullptr,
+                       /*bInheritHandles=*/TRUE,
+                       CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr,
+                       nullptr, &si.StartupInfo, &pi);
+    DWORD start_err = started ? 0 : GetLastError();
+    CloseHandle(write_pipe);
+    if (!started) {
+      if (start_err == ERROR_FILE_NOT_FOUND ||
+          start_err == ERROR_PATH_NOT_FOUND) {
+        return absl::FailedPreconditionError(absl::StrCat(
+            "curl.exe not found (error ", start_err, ") for ", url_str));
+      }
+      return absl::UnavailableError(absl::StrCat(
+          "Failed to launch curl.exe (error ", start_err, ") for ", url_str));
+    }
+    auto close_proc = absl::MakeCleanup([&] {
+      CloseHandle(pi.hProcess);
+      CloseHandle(pi.hThread);
+    });
+
+    uint64_t total_written = 0;
+    bool exceeded_expected = false;
+    bool write_failed = false;
+    bool read_failed = false;
+    std::vector<char> buffer(64 * 1024);
+    while (true) {
+      DWORD n = 0;
+      if (!ReadFile(read_pipe, buffer.data(), static_cast<DWORD>(buffer.size()),
+                    &n, nullptr)) {
+        if (GetLastError() != ERROR_BROKEN_PIPE) {
+          read_failed = true;
+        }
+        break;
+      }
+      if (n == 0) break;
+      if (static_cast<uint64_t>(n) > expected_bytes - total_written) {
+        exceeded_expected = true;
+        break;
+      }
+      out.write(buffer.data(), static_cast<std::streamsize>(n));
+      if (!out) {
+        write_failed = true;
+        break;
+      }
+      total_written += static_cast<uint64_t>(n);
+    }
+    CloseHandle(read_pipe);
+    read_pipe = nullptr;
+
+    if (exceeded_expected || write_failed || read_failed) {
+      TerminateProcess(pi.hProcess, 1);
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exit_code = 1;
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    if (read_failed) {
+      return absl::UnavailableError(
+          absl::StrCat("Failed reading curl.exe output for ", url_str));
+    }
+    int http_status = ReadHttpStatusFromFile(hdr_path);
+    return MapCurlOutcome(write_failed, exceeded_expected, start_byte,
+                          static_cast<int>(exit_code), http_status, url_str);
+#else
+    (void)expected_bytes;
+    (void)out;
+    (void)curl_exe;
+    return absl::UnimplementedError(
+        "CreateHttpRangeFetcher is only supported on desktop hosts (Linux, "
+        "macOS, Windows).");
+#endif
+  };
+}
+
+}  // namespace
+
+bool IsHttpUrl(absl::string_view source) {
+  return absl::StartsWithIgnoreCase(source, "http://") ||
+         absl::StartsWithIgnoreCase(source, "https://");
+}
+
+RangeFetcher CreateHttpRangeFetcher(absl::string_view url) {
+  return CreateHttpRangeFetcherImpl(url, "");
+}
+
+namespace internal {
+
+RangeFetcher CreateHttpRangeFetcherWithExecutable(absl::string_view url,
+                                                  absl::string_view curl_path) {
+  return CreateHttpRangeFetcherImpl(url, curl_path);
+}
+
+}  // namespace internal
 
 }  // namespace litert::lm::sync

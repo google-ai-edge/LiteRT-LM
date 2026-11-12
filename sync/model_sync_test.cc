@@ -21,10 +21,24 @@
 #include <fstream>
 #include <ios>
 #include <iterator>
+#include <limits>
 #include <ostream>
+#include <sstream>
 #include <string>
 #include <system_error>  // NOLINT: Required for std::error_code.
 #include <vector>
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
+#if !defined(_WIN32) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && \
+    (!defined(__APPLE__) || TARGET_OS_OSX)
+#include <sys/stat.h>
+#define LITERT_LM_HAS_POSIX_CURL_TEST 1
+#else
+#define LITERT_LM_HAS_POSIX_CURL_TEST 0
+#endif
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -142,33 +156,27 @@ RangeFetcher CreateFileRangeFetcher(const std::string& remote_file_path,
 
 TEST(Sha256Test, StandardVectors) {
   // Empty string
-  EXPECT_EQ(
-      ComputeSha256Hex(""),
-      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  EXPECT_EQ(ComputeSha256Hex(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
   // "abc"
-  EXPECT_EQ(
-      ComputeSha256Hex("abc"),
-      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  EXPECT_EQ(ComputeSha256Hex("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
   // 56-byte message (spans across block boundary during padding)
-  EXPECT_EQ(
-      ComputeSha256Hex(
-          "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
-      "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+  EXPECT_EQ(ComputeSha256Hex(
+                "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
   // 55-byte boundary (largest message fitting in single 64-byte block with pad)
   std::string msg55(55, 'A');
-  EXPECT_EQ(
-      ComputeSha256Hex(msg55),
-      "8963cc0afd622cc7574ac2011f93a3059b3d65548a77542a1559e3d202e6ab00");
+  EXPECT_EQ(ComputeSha256Hex(msg55),
+            "8963cc0afd622cc7574ac2011f93a3059b3d65548a77542a1559e3d202e6ab00");
   // 64-byte boundary (exact one block before padding)
   std::string msg64(64, 'B');
-  EXPECT_EQ(
-      ComputeSha256Hex(msg64),
-      "c422e7070cb1cb455b5de9afee0d975e303d0239c72030cd7414ab5c382d3ae8");
+  EXPECT_EQ(ComputeSha256Hex(msg64),
+            "c422e7070cb1cb455b5de9afee0d975e303d0239c72030cd7414ab5c382d3ae8");
   // 1,000,000 'a' characters (NIST CAVP)
   std::string one_million_a(1000000, 'a');
-  EXPECT_EQ(
-      ComputeSha256Hex(one_million_a),
-      "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+  EXPECT_EQ(ComputeSha256Hex(one_million_a),
+            "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
 }
 
 TEST(Sha256Test, IncrementalStreamingMatchesSingleCall) {
@@ -183,13 +191,11 @@ TEST(Sha256Test, IncrementalStreamingMatchesSingleCall) {
 TEST(Sha256Test, FinalResetsStateForReuse) {
   Sha256Hasher hasher;
   hasher.Update("abc", 3);
-  EXPECT_EQ(
-      hasher.FinalHex(),
-      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  EXPECT_EQ(hasher.FinalHex(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
   // Hasher was reset by Final/FinalHex, second call hashes empty string.
-  EXPECT_EQ(
-      hasher.FinalHex(),
-      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+  EXPECT_EQ(hasher.FinalHex(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
 }
 
 TEST(Sha256Test, MultiBlockChunksStreaming) {
@@ -898,8 +904,8 @@ TEST_F(ModelSyncTest, Update_NonWritableDestination_ReturnsPermissionDenied) {
   auto counting_fetcher = CreateFileRangeFetcher(remote_path, &logged_ranges);
 
   SyncOptions options;
-  auto status = ModelSync::Update(local_path, readonly_output, counting_fetcher,
-                                  options);
+  auto status =
+      ModelSync::Update(local_path, readonly_output, counting_fetcher, options);
 
   EXPECT_THAT(status, StatusIs(absl::StatusCode::kPermissionDenied));
   EXPECT_TRUE(std::filesystem::exists(local_path));
@@ -953,8 +959,7 @@ TEST_F(ModelSyncTest,
               StatusIs(absl::StatusCode::kInvalidArgument));
 
   std::string output_path = (test_dir_ / "out_32.litertlm").string();
-  absl::Status update_status =
-      ModelSync::Update("", output_path, fetcher);
+  absl::Status update_status = ModelSync::Update("", output_path, fetcher);
   EXPECT_THAT(update_status, StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
@@ -963,11 +968,10 @@ TEST_F(ModelSyncTest, PlanSync_OverlappingSections_ReturnsInvalidArgument) {
       (test_dir_ / "overlapping_sections.litertlm").string();
   // Section 0: begin=4096, payload size=10 -> end=4106.
   // Section 1: begin=4100 (overlaps with section 0), size=10 -> end=4110.
-  CreateTestModel(
-      overlapping_path,
-      {{schema::AnySectionDataType_SP_Tokenizer, "", "0123456789", 4096},
-       {schema::AnySectionDataType_TFLiteModel, "weights", "0123456789",
-        4100}});
+  CreateTestModel(overlapping_path, {{schema::AnySectionDataType_SP_Tokenizer,
+                                      "", "0123456789", 4096},
+                                     {schema::AnySectionDataType_TFLiteModel,
+                                      "weights", "0123456789", 4100}});
 
   auto fetcher = CreateFileRangeFetcher(overlapping_path, nullptr);
   auto status_or_plan = ModelSync::PlanSync("", fetcher);
@@ -975,8 +979,7 @@ TEST_F(ModelSyncTest, PlanSync_OverlappingSections_ReturnsInvalidArgument) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 
   std::string output_path = (test_dir_ / "out_overlap.litertlm").string();
-  absl::Status update_status =
-      ModelSync::Update("", output_path, fetcher);
+  absl::Status update_status = ModelSync::Update("", output_path, fetcher);
   EXPECT_THAT(update_status, StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
@@ -996,11 +999,331 @@ TEST_F(ModelSyncTest, Sync_OfflineFallback_RejectsCorruptCachedModel) {
 
   SyncOptions options;
   options.allow_offline_fallback = true;
-  auto result = ModelSync::Sync(cache_dir, "corrupt_model", offline_fetcher,
-                                options);
+  auto result =
+      ModelSync::Sync(cache_dir, "corrupt_model", offline_fetcher, options);
   EXPECT_FALSE(result.ok());
   EXPECT_THAT(result.status(), StatusIs(absl::StatusCode::kUnavailable));
 }
+
+TEST(SyncPlanTest, FormatsDataTypeNamesWithUnknownFallback) {
+  SyncPlan plan;
+  plan.section_diffs = {
+      SectionDiff{
+          .section_index = 0,
+          .data_type =
+              static_cast<int>(schema::AnySectionDataType_LlmMetadataProto),
+          .size = 128,
+          .action = SectionAction::kReuseLocal,
+      },
+      SectionDiff{
+          .section_index = 1,
+          .data_type = static_cast<int>(schema::AnySectionDataType_TFLiteModel),
+          .model_type = "tf_lite_embedder",
+          .size = 256,
+          .action = SectionAction::kDownloadDiff,
+      },
+      SectionDiff{
+          .section_index = 2,
+          .data_type = 999,
+          .size = 64,
+          .action = SectionAction::kDownloadDiff,
+      },
+  };
+  std::string summary = plan.Summary();
+  EXPECT_NE(summary.find("data_type=LlmMetadataProto"), std::string::npos);
+  EXPECT_NE(
+      summary.find("data_type=TFLiteModel, model_type=\"tf_lite_embedder\""),
+      std::string::npos);
+  EXPECT_NE(summary.find("data_type=999"), std::string::npos);
+}
+
+TEST(HttpRangeFetcherTest, IsHttpUrl) {
+  EXPECT_TRUE(IsHttpUrl("http://example.com/model.litertlm"));
+  EXPECT_TRUE(IsHttpUrl("https://huggingface.co/model.litertlm"));
+  EXPECT_TRUE(IsHttpUrl("HTTPS://example.com/model.litertlm"));
+  EXPECT_FALSE(IsHttpUrl("/tmp/model.litertlm"));
+  EXPECT_FALSE(IsHttpUrl(""));
+}
+
+TEST(HttpRangeFetcherTest, RejectsInvalidUrlAndRange) {
+  auto bad_url = CreateHttpRangeFetcher("/tmp/not_a_url.litertlm");
+  std::ostringstream out;
+  EXPECT_THAT(bad_url(0, 10, out),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  auto bad_chars = CreateHttpRangeFetcher("https://example.com/bad url");
+  EXPECT_THAT(bad_chars(0, 10, out),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  auto bad_quote = CreateHttpRangeFetcher("https://example.com/bad\"url");
+  EXPECT_THAT(bad_quote(0, 10, out),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  auto fetcher = CreateHttpRangeFetcher("https://example.com/model.litertlm");
+  EXPECT_THAT(fetcher(10, 5, out),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(fetcher(0, std::numeric_limits<uint64_t>::max(), out),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+#if LITERT_LM_HAS_POSIX_CURL_TEST
+
+std::filesystem::path WriteMockCurl(const std::filesystem::path& bin_dir,
+                                    const std::filesystem::path& args_log) {
+  std::filesystem::create_directories(bin_dir);
+  std::filesystem::path script_path = bin_dir / "curl";
+  std::ofstream script(script_path);
+  script << "#!/bin/sh\n"
+         << "printf '%s\\n' \"$*\" > \"" << args_log.string() << "\"\n"
+         << "HDR=\"\"\n"
+         << "URL=\"\"\n"
+         << "PREV=\"\"\n"
+         << "for arg in \"$@\"; do\n"
+         << "  if [ \"$PREV\" = \"-D\" ]; then HDR=\"$arg\"; fi\n"
+         << "  PREV=\"$arg\"\n"
+         << "  URL=\"$arg\"\n"
+         << "done\n"
+         << "write_hdr() {\n"
+         << "  if [ -n \"$HDR\" ]; then printf '%b' \"$1\" > \"$HDR\"; fi\n"
+         << "}\n"
+         << "case \"$URL\" in\n"
+         << "  *ok.litertlm*)\n"
+         << "    write_hdr 'HTTP/1.1 302 Found\\r\\nLocation: /cdn\\r\\n\\r\\n"
+         << "HTTP/2 206 \\r\\n\\r\\n'\n"
+         << "    printf 'ABCDEFGHIJ' ;;\n"
+         << "  *http200.litertlm*)\n"
+         << "    write_hdr 'HTTP/1.1 200 OK\\r\\n\\r\\n'\n"
+         << "    printf 'ABCDEFGHIJ' ;;\n"
+         << "  *http401.litertlm*)\n"
+         << "    write_hdr 'HTTP/1.1 401 Unauthorized\\r\\n\\r\\n'\n"
+         << "    exit 22 ;;\n"
+         << "  *http403.litertlm*)\n"
+         << "    write_hdr 'HTTP/1.1 403 Forbidden\\r\\n\\r\\n'\n"
+         << "    exit 22 ;;\n"
+         << "  *http404.litertlm*)\n"
+         << "    write_hdr 'HTTP/1.1 404 Not Found\\r\\n\\r\\n'\n"
+         << "    exit 22 ;;\n"
+         << "  *http416.litertlm*)\n"
+         << "    write_hdr 'HTTP/1.1 416 Range Not Satisfiable\\r\\n\\r\\n'\n"
+         << "    exit 22 ;;\n"
+         << "  *oversized.litertlm*) printf '0123456789ABCDEFGH' ;;\n"
+         << "  *filesize.litertlm*) exit 63 ;;\n"
+         << "  *timeout.litertlm*) exit 28 ;;\n"
+         << "  *) exit 22 ;;\n"
+         << "esac\n";
+  script.close();
+  chmod(script_path.c_str(), 0755);
+  return script_path;
+}
+
+std::filesystem::path WriteModelServingMockCurl(
+    const std::filesystem::path& script_path,
+    const std::filesystem::path& model_path, bool ignore_nonzero_range,
+    bool truncate_section) {
+  std::filesystem::create_directories(script_path.parent_path());
+  std::ofstream script(script_path);
+  script << "#!/bin/sh\n"
+         << "HDR=\"\"\n"
+         << "RANGE=\"\"\n"
+         << "PREV=\"\"\n"
+         << "for arg in \"$@\"; do\n"
+         << "  if [ \"$PREV\" = \"-D\" ]; then HDR=\"$arg\"; fi\n"
+         << "  if [ \"$PREV\" = \"--range\" ]; then RANGE=\"$arg\"; fi\n"
+         << "  PREV=\"$arg\"\n"
+         << "done\n"
+         << "START=${RANGE%%-*}\n"
+         << "END=${RANGE##*-}\n"
+         << "LEN=$((END - START + 1))\n"
+         << "write_hdr() {\n"
+         << "  if [ -n \"$HDR\" ]; then printf '%b' \"$1\" > \"$HDR\"; fi\n"
+         << "}\n";
+  if (ignore_nonzero_range) {
+    script << "if [ \"$START\" -gt 0 ]; then\n"
+           << "  write_hdr 'HTTP/1.1 200 OK\\r\\n\\r\\n'\n"
+           << "  head -c \"$LEN\" \"" << model_path.string() << "\"\n"
+           << "  exit 0\n"
+           << "fi\n";
+  } else if (truncate_section) {
+    script << "if [ \"$START\" -gt 0 ]; then\n"
+           << "  write_hdr 'HTTP/1.1 206 Partial Content\\r\\n\\r\\n'\n"
+           << "  tail -c +$((START + 1)) \"" << model_path.string()
+           << "\" | head -c 3\n"
+           << "  exit 0\n"
+           << "fi\n";
+  }
+  script << "write_hdr 'HTTP/1.1 206 Partial Content\\r\\n\\r\\n'\n"
+         << "tail -c +$((START + 1)) \"" << model_path.string()
+         << "\" | head -c \"$LEN\"\n";
+  script.close();
+  chmod(script_path.c_str(), 0755);
+  return script_path;
+}
+
+TEST_F(ModelSyncTest, HttpRangeFetcher_FetchesRangeAndMapsErrors) {
+  std::filesystem::path bin_dir = test_dir_ / "mock_bin";
+  std::filesystem::path args_log = test_dir_ / "curl_args.txt";
+  std::filesystem::path mock_curl = WriteMockCurl(bin_dir, args_log);
+
+  auto fetcher = internal::CreateHttpRangeFetcherWithExecutable(
+      "https://example.com/ok.litertlm", mock_curl.string());
+  std::ostringstream out(std::ios::binary);
+  ASSERT_OK(fetcher(10, 19, out));
+  EXPECT_EQ(out.str(), "ABCDEFGHIJ");
+
+  std::ifstream log_in(args_log);
+  std::string recorded_args((std::istreambuf_iterator<char>(log_in)),
+                            std::istreambuf_iterator<char>());
+  EXPECT_NE(recorded_args.find("-g"), std::string::npos);
+  EXPECT_NE(recorded_args.find("--proto =http,https"), std::string::npos);
+  EXPECT_NE(recorded_args.find("--proto-redir =http,https"), std::string::npos);
+  EXPECT_NE(recorded_args.find("--speed-limit 1"), std::string::npos);
+  EXPECT_NE(recorded_args.find("--speed-time 30"), std::string::npos);
+  EXPECT_NE(recorded_args.find("--max-filesize 10"), std::string::npos);
+  EXPECT_NE(recorded_args.find("--range 10-19"), std::string::npos);
+
+  // HTTP 200 OK is valid when start_byte == 0, but rejected when start_byte >
+  // 0 (server ignored Range).
+  std::ostringstream ok_zero(std::ios::binary);
+  ASSERT_OK(internal::CreateHttpRangeFetcherWithExecutable(
+      "https://example.com/http200.litertlm", mock_curl.string())(0, 9,
+                                                                  ok_zero));
+  EXPECT_EQ(ok_zero.str(), "ABCDEFGHIJ");
+
+  std::ostringstream err_out(std::ios::binary);
+  EXPECT_THAT(internal::CreateHttpRangeFetcherWithExecutable(
+                  "https://example.com/http200.litertlm", mock_curl.string())(
+                  10, 19, err_out),
+              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(internal::CreateHttpRangeFetcherWithExecutable(
+                  "https://example.com/oversized.litertlm", mock_curl.string())(
+                  0, 9, err_out),
+              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(internal::CreateHttpRangeFetcherWithExecutable(
+                  "https://example.com/filesize.litertlm", mock_curl.string())(
+                  0, 9, err_out),
+              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(internal::CreateHttpRangeFetcherWithExecutable(
+                  "https://example.com/timeout.litertlm", mock_curl.string())(
+                  0, 9, err_out),
+              StatusIs(absl::StatusCode::kDeadlineExceeded));
+  EXPECT_THAT(internal::CreateHttpRangeFetcherWithExecutable(
+                  "https://example.com/http401.litertlm", mock_curl.string())(
+                  0, 9, err_out),
+              StatusIs(absl::StatusCode::kUnauthenticated));
+  EXPECT_THAT(internal::CreateHttpRangeFetcherWithExecutable(
+                  "https://example.com/http403.litertlm", mock_curl.string())(
+                  0, 9, err_out),
+              StatusIs(absl::StatusCode::kPermissionDenied));
+  EXPECT_THAT(internal::CreateHttpRangeFetcherWithExecutable(
+                  "https://example.com/http404.litertlm", mock_curl.string())(
+                  0, 9, err_out),
+              StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(internal::CreateHttpRangeFetcherWithExecutable(
+                  "https://example.com/http416.litertlm", mock_curl.string())(
+                  0, 9, err_out),
+              StatusIs(absl::StatusCode::kOutOfRange));
+  EXPECT_THAT(internal::CreateHttpRangeFetcherWithExecutable(
+                  "https://example.com/missing.litertlm", mock_curl.string())(
+                  0, 9, err_out),
+              StatusIs(absl::StatusCode::kUnavailable));
+  EXPECT_THAT(internal::CreateHttpRangeFetcherWithExecutable(
+                  "https://example.com/ok.litertlm",
+                  (test_dir_ / "nonexistent_curl").string())(0, 9, err_out),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST_F(ModelSyncTest, HttpSync_Http404AndMissingCurlSkipOfflineFallback) {
+  std::filesystem::path cache_dir = test_dir_ / "sync_cache";
+  std::filesystem::create_directories(cache_dir);
+  std::string cached_path = (cache_dir / "my_model.litertlm").string();
+  CreateTestModel(cached_path, {{schema::AnySectionDataType_TFLiteModel,
+                                 "weights", "cached_weights", 4096}});
+
+  std::filesystem::path mock_curl =
+      WriteMockCurl(test_dir_ / "mock_bin_sync", test_dir_ / "sync_args.txt");
+
+  SyncOptions options;
+  options.allow_offline_fallback = true;
+
+  auto not_found_res = ModelSync::Sync(
+      cache_dir.string(), "my_model",
+      internal::CreateHttpRangeFetcherWithExecutable(
+          "https://example.com/http404.litertlm", mock_curl.string()),
+      options);
+  EXPECT_THAT(not_found_res.status(), StatusIs(absl::StatusCode::kNotFound));
+
+  auto missing_curl_res =
+      ModelSync::Sync(cache_dir.string(), "my_model",
+                      internal::CreateHttpRangeFetcherWithExecutable(
+                          "https://example.com/ok.litertlm",
+                          (test_dir_ / "nonexistent_curl").string()),
+                      options);
+  EXPECT_THAT(missing_curl_res.status(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST_F(ModelSyncTest, HttpUpdate_RangeIgnoredFallsBackToFullDownload) {
+  std::string local_path = (test_dir_ / "http_local_v1.litertlm").string();
+  CreateTestModel(local_path, {{schema::AnySectionDataType_LlmMetadataProto, "",
+                                "meta_v1", 4096},
+                               {schema::AnySectionDataType_TFLiteModel,
+                                "weights", "shared_weights_payload", 8192}});
+
+  std::string remote_path = (test_dir_ / "http_remote_v2.litertlm").string();
+  CreateTestModel(remote_path, {{schema::AnySectionDataType_LlmMetadataProto,
+                                 "", "meta_v2_updated", 4096},
+                                {schema::AnySectionDataType_TFLiteModel,
+                                 "weights", "shared_weights_payload", 8192}});
+
+  std::filesystem::path mock_curl = WriteModelServingMockCurl(
+      test_dir_ / "mock_bin_fallback" / "curl", remote_path,
+      /*ignore_nonzero_range=*/true, /*truncate_section=*/false);
+  std::string output_path = (test_dir_ / "http_fallback_out.litertlm").string();
+
+  SyncOptions options;
+  options.fallback_on_range_error = true;
+  ASSERT_OK(ModelSync::Update(
+      local_path, output_path,
+      internal::CreateHttpRangeFetcherWithExecutable(
+          "https://example.com/v2.litertlm", mock_curl.string()),
+      options));
+
+  std::ifstream expected_in(remote_path, std::ios::binary);
+  std::ifstream actual_in(output_path, std::ios::binary);
+  std::string expected_bytes((std::istreambuf_iterator<char>(expected_in)),
+                             std::istreambuf_iterator<char>());
+  std::string actual_bytes((std::istreambuf_iterator<char>(actual_in)),
+                           std::istreambuf_iterator<char>());
+  EXPECT_EQ(actual_bytes, expected_bytes);
+}
+
+TEST_F(ModelSyncTest, HttpUpdate_TruncatedResponseFailsWithDataLoss) {
+  std::string local_path = (test_dir_ / "http_trunc_v1.litertlm").string();
+  CreateTestModel(local_path, {{schema::AnySectionDataType_SP_Tokenizer, "",
+                                "tokenizer_v1", 4096},
+                               {schema::AnySectionDataType_TFLiteModel,
+                                "weights", "shared_weights_payload", 8192}});
+
+  std::string remote_path = (test_dir_ / "http_trunc_v2.litertlm").string();
+  CreateTestModel(remote_path, {{schema::AnySectionDataType_SP_Tokenizer, "",
+                                 "tokenizer_v2_much_longer", 4096},
+                                {schema::AnySectionDataType_TFLiteModel,
+                                 "weights", "shared_weights_payload", 8192}});
+
+  std::filesystem::path mock_curl = WriteModelServingMockCurl(
+      test_dir_ / "mock_bin_trunc" / "curl", remote_path,
+      /*ignore_nonzero_range=*/false, /*truncate_section=*/true);
+  std::string output_path = (test_dir_ / "http_trunc_out.litertlm").string();
+
+  EXPECT_THAT(ModelSync::Update(
+                  local_path, output_path,
+                  internal::CreateHttpRangeFetcherWithExecutable(
+                      "https://example.com/v2.litertlm", mock_curl.string())),
+              StatusIs(absl::StatusCode::kDataLoss));
+  EXPECT_FALSE(std::filesystem::exists(output_path));
+}
+
+#endif  // LITERT_LM_HAS_POSIX_CURL_TEST
 
 }  // namespace
 }  // namespace litert::lm::sync

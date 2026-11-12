@@ -16,27 +16,31 @@
 // (`.litertlm`) model files.
 //
 // The tool compares the per-section SHA-256 hashes of an existing local model
-// (--local) with an upstream model file (--remote). It then writes an updated
-// model that reuses unchanged sections from the local file and reads only the
-// changed sections from the upstream file, or the whole file when the changed
-// fraction reaches or exceeds --threshold. By default, --local is updated in
-// place; pass --output to write the result to a separate file instead. See
-// README.md in this directory for the full list of flags.
+// (--local) with an upstream model file or HTTP/HTTPS URL (--remote). It then
+// writes an updated model that reuses unchanged sections from the local file
+// and fetches only changed sections from the upstream source, or downloads the
+// whole file when the changed fraction reaches or exceeds --threshold. By
+// default, --local is updated in place; pass --output to write the result to a
+// separate file instead. See README.md in this directory for the full list of
+// flags.
 //
 // Build and run with:
 //   bazel run //sync:model_sync_cli -- <flags>
 //
 // Examples:
-//   # Print which sections changed, without writing any files:
-//   model_sync_cli --diff --local=v1.litertlm --remote=v2.litertlm
+//   # Print which sections changed against Hugging Face, without writing files:
+//   model_sync_cli --diff --local=v1.litertlm \
+//     --remote=https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 //
-//   # Update v1.litertlm in place so that it matches v2.litertlm:
-//   model_sync_cli --local=v1.litertlm --remote=v2.litertlm
+//   # Update v1.litertlm in place from a remote model:
+//   model_sync_cli --local=v1.litertlm \
+//     --remote=https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <ios>
 #include <iostream>
 #include <ostream>
 #include <string>
@@ -46,18 +50,20 @@
 #include "absl/flags/parse.h"  // from @com_google_absl
 #include "absl/flags/usage.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "sync/model_sync.h"
 
 // Remote upstream model file or URL:
 ABSL_FLAG(std::string, remote, "",
-          "Path or URL of the upstream remote .litertlm file.");
+          "Path or HTTP/HTTPS URL of the upstream remote .litertlm file.");
 
 // Existing local model file on disk:
 ABSL_FLAG(std::string, local, "",
           "Path to the existing local .litertlm file on disk to reuse "
-          "unchanged sections from.");
+          "unchanged sections from (with --diff, may also be an http(s):// "
+          "URL).");
 
 // Output destination:
 ABSL_FLAG(std::string, output, "",
@@ -113,14 +119,20 @@ litert::lm::sync::RangeFetcher CreateLocalFileRangeFetcher(
   };
 }
 
+litert::lm::sync::RangeFetcher MakeRangeFetcher(absl::string_view source) {
+  return litert::lm::sync::IsHttpUrl(source)
+             ? litert::lm::sync::CreateHttpRangeFetcher(source)
+             : CreateLocalFileRangeFetcher(source);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   absl::SetProgramUsageMessage(
       "LiteRT-LM differential model synchronization utility.\n\n"
       "Usage:\n"
-      "  model_sync_cli --remote=<upstream_model> [--local=<local_model>] "
-      "[--output=<output_model>] [--diff] [--clean]");
+      "  model_sync_cli --remote=<upstream_model_or_url> "
+      "[--local=<local_model>] [--output=<output_model>] [--diff] [--clean]");
   absl::ParseCommandLine(argc, argv);
 
   std::string remote_path = absl::GetFlag(FLAGS_remote);
@@ -137,7 +149,23 @@ int main(int argc, char** argv) {
     output_path = local_path;  // In-place sync by default
   }
 
-  auto fetcher = CreateLocalFileRangeFetcher(remote_path);
+  if (!diff_only) {
+    if (!local_path.empty() && litert::lm::sync::IsHttpUrl(local_path)) {
+      std::cerr << "Error: --local must be a local file path when updating "
+                   "without --diff.\n";
+      return 1;
+    }
+    if (output_path.empty()) {
+      std::cerr << "Error: --output is required when --local is empty.\n";
+      return 1;
+    }
+    if (litert::lm::sync::IsHttpUrl(output_path)) {
+      std::cerr << "Error: --output must be a local file path.\n";
+      return 1;
+    }
+  }
+
+  auto remote_fetcher = MakeRangeFetcher(remote_path);
 
   litert::lm::sync::SyncOptions options;
   options.clean = absl::GetFlag(FLAGS_clean);
@@ -145,8 +173,12 @@ int main(int argc, char** argv) {
   options.check_disk_space = absl::GetFlag(FLAGS_check_disk);
 
   // 1. Inspect and show what changed between local and remote models.
-  auto plan_or =
-      litert::lm::sync::ModelSync::PlanSync(local_path, fetcher, options);
+  absl::StatusOr<litert::lm::sync::SyncPlan> plan_or =
+      (!local_path.empty() && litert::lm::sync::IsHttpUrl(local_path))
+          ? litert::lm::sync::ModelSync::PlanSync(MakeRangeFetcher(local_path),
+                                                  remote_fetcher, options)
+          : litert::lm::sync::ModelSync::PlanSync(local_path, remote_fetcher,
+                                                  options);
   if (!plan_or.ok()) {
     std::cerr << "Failed to plan sync: " << plan_or.status().message() << "\n";
     return 1;
@@ -164,15 +196,10 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  if (output_path.empty()) {
-    std::cerr << "Error: --output is required when --local is empty.\n";
-    return 1;
-  }
-
   // 2. Perform differential sync.
   std::cout << "Applying differential sync to " << output_path << "...\n";
   absl::Status status = litert::lm::sync::ModelSync::Update(
-      local_path, output_path, fetcher, options);
+      local_path, output_path, remote_fetcher, options);
   if (!status.ok()) {
     std::cerr << "Sync failed: " << status.message() << "\n";
     return 1;
