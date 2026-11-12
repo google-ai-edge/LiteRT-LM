@@ -862,9 +862,10 @@ TEST_F(NpuKVCacheTest,
 
 TEST_F(NpuKVCacheTest, NpuKVCacheCommitVerifiedKVCacheSetsPosition) {
   InferenceContext ctx;
-  ctx.verify_input_buffers[CacheUpdateSignatures::kInputPos] =
+  ctx.verify_input_buffers.insert_or_assign(
+      CacheUpdateSignatures::kInputPos,
       CreateTensorBufferWithDims(std::vector<int32_t>{0, 0, 0},
-                                 ElementType::Int32, {3});
+                                 ElementType::Int32, {3}));
 
   NpuGraphLayout layout;
   LITERT_ASSERT_OK_AND_ASSIGN(
@@ -1951,34 +1952,44 @@ TEST_P(SlidingWindowModelKVCacheTest, PrefillAndDecodeWrapAroundRingBuffer) {
                            CreateF16Buffer(Dims(tensor, chunk)));
     decode_slices.emplace(tensor.slice_name, CreateF16Buffer(Dims(tensor, 1)));
     TensorBuffer& kv_cache = kv_caches_.at(tensor.cache_name);
+    LITERT_ASSERT_OK_AND_ASSIGN(auto prefill_in_cache, kv_cache.Duplicate());
+    context.prefill_input_buffers.insert_or_assign(tensor.cache_name,
+                                                   std::move(prefill_in_cache));
+    LITERT_ASSERT_OK_AND_ASSIGN(auto prefill_out_cache, kv_cache.Duplicate());
+    context.prefill_output_buffers.insert_or_assign(
+        tensor.cache_name, std::move(prefill_out_cache));
+    LITERT_ASSERT_OK_AND_ASSIGN(auto decode_in_cache, kv_cache.Duplicate());
+    context.decode_input_buffers.insert_or_assign(tensor.cache_name,
+                                                  std::move(decode_in_cache));
+    LITERT_ASSERT_OK_AND_ASSIGN(auto decode_out_cache, kv_cache.Duplicate());
+    context.decode_output_buffers.insert_or_assign(tensor.cache_name,
+                                                   std::move(decode_out_cache));
     LITERT_ASSERT_OK_AND_ASSIGN(
-        context.prefill_input_buffers[tensor.cache_name], kv_cache.Duplicate());
-    LITERT_ASSERT_OK_AND_ASSIGN(
-        context.prefill_output_buffers[tensor.cache_name],
-        kv_cache.Duplicate());
-    LITERT_ASSERT_OK_AND_ASSIGN(context.decode_input_buffers[tensor.cache_name],
-                                kv_cache.Duplicate());
-    LITERT_ASSERT_OK_AND_ASSIGN(
-        context.decode_output_buffers[tensor.cache_name], kv_cache.Duplicate());
-    LITERT_ASSERT_OK_AND_ASSIGN(
-        context.prefill_input_buffers[tensor.slice_name],
+        auto prefill_slice_dup,
         prefill_slices.at(tensor.slice_name).Duplicate());
+    context.prefill_input_buffers.insert_or_assign(
+        tensor.slice_name, std::move(prefill_slice_dup));
     LITERT_ASSERT_OK_AND_ASSIGN(
-        context.decode_input_buffers[tensor.slice_name],
-        decode_slices.at(tensor.slice_name).Duplicate());
+        auto decode_slice_dup, decode_slices.at(tensor.slice_name).Duplicate());
+    context.decode_input_buffers.insert_or_assign(tensor.slice_name,
+                                                  std::move(decode_slice_dup));
   }
-  context.prefill_input_buffers[CacheUpdateSignatures::kInputPos] =
+  context.prefill_input_buffers.insert_or_assign(
+      CacheUpdateSignatures::kInputPos,
       CreateTensorBufferWithDims(std::vector<int32_t>(chunk, 0),
-                                 ElementType::Int32, {chunk});
-  context.prefill_input_buffers[CacheUpdateSignatures::kInputValidMask] =
+                                 ElementType::Int32, {chunk}));
+  context.prefill_input_buffers.insert_or_assign(
+      CacheUpdateSignatures::kInputValidMask,
       CreateTensorBufferWithDims(std::vector<uint8_t>(chunk, 0),
-                                 ElementType::Bool, {1, chunk});
-  context.decode_input_buffers[CacheUpdateSignatures::kInputPos] =
+                                 ElementType::Bool, {1, chunk}));
+  context.decode_input_buffers.insert_or_assign(
+      CacheUpdateSignatures::kInputPos,
       CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
-                                 {1});
-  context.decode_input_buffers[CacheUpdateSignatures::kInputValidMask] =
+                                 {1}));
+  context.decode_input_buffers.insert_or_assign(
+      CacheUpdateSignatures::kInputValidMask,
       CreateTensorBufferWithDims(std::vector<uint8_t>{0}, ElementType::Bool,
-                                 {1, 1});
+                                 {1, 1}));
   LITERT_ASSERT_OK_AND_ASSIGN(
       NpuKVCache kv_cache_update,
       NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH,

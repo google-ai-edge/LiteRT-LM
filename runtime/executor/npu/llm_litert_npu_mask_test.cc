@@ -110,26 +110,32 @@ TEST_F(NpuMaskTest, NpuMaskCreateSucceedsForHwMethodWithoutCompiledModel) {
 
 TEST_F(NpuMaskTest, NpuMaskSettersAndAccessors) {
   InferenceContext ctx;
-  ctx.decode_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+  ctx.decode_input_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputTimeStep,
       CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
-                                 {1});
-  ctx.decode_input_buffers[MaskSignatures::kMaskInputTokens] =
+                                 {1}));
+  ctx.decode_input_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputTokens,
       CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
-                                 {1});
-  ctx.decode_input_buffers[MaskSignatures::kMaskInputValidMask] =
+                                 {1}));
+  ctx.decode_input_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputValidMask,
       CreateTensorBufferWithDims(std::vector<uint8_t>{0}, ElementType::Bool,
-                                 {1});
+                                 {1}));
 
-  ctx.verify_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+  ctx.verify_input_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputTimeStep,
       CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
-                                 {1});
-  ctx.verify_input_buffers[MaskSignatures::kMaskInputTokens] =
+                                 {1}));
+  ctx.verify_input_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputTokens,
       CreateTensorBufferWithDims(std::vector<int32_t>{0, 0, 0},
-                                 ElementType::Int32, {1, 3});
+                                 ElementType::Int32, {1, 3}));
 
-  ctx.prefill_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+  ctx.prefill_input_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputTimeStep,
       CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
-                                 {1});
+                                 {1}));
 
   NpuGraphLayout layout;
   LITERT_ASSERT_OK_AND_ASSIGN(
@@ -173,10 +179,12 @@ TEST_F(NpuMaskTest, NpuMaskSettersAndAccessors) {
 TEST_F(NpuMaskTest, NpuMaskCreateForDrafter) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> in_bufs;
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_bufs;
-  in_bufs[MaskSignatures::kMaskInputTimeStep] = CreateTensorBufferWithDims(
-      std::vector<int32_t>{0}, ElementType::Int32, {1});
-  in_bufs[MaskSignatures::kMaskInputTokens] = CreateTensorBufferWithDims(
-      std::vector<int32_t>{0}, ElementType::Int32, {1});
+  in_bufs.insert_or_assign(MaskSignatures::kMaskInputTimeStep,
+                           CreateTensorBufferWithDims(std::vector<int32_t>{0},
+                                                      ElementType::Int32, {1}));
+  in_bufs.insert_or_assign(MaskSignatures::kMaskInputTokens,
+                           CreateTensorBufferWithDims(std::vector<int32_t>{0},
+                                                      ElementType::Int32, {1}));
 
   NpuGraphLayout layout;
   LITERT_ASSERT_OK_AND_ASSIGN(
@@ -201,15 +209,18 @@ TEST_F(NpuMaskTest, NpuMaskCreateForDrafter) {
 
 TEST_F(NpuMaskTest, NpuMaskSetPrefillInput) {
   InferenceContext ctx;
-  ctx.prefill_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+  ctx.prefill_input_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputTimeStep,
       CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
-                                 {1});
-  ctx.prefill_input_buffers[MaskSignatures::kMaskInputTokens] =
+                                 {1}));
+  ctx.prefill_input_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputTokens,
       CreateTensorBufferWithDims(std::vector<int32_t>{0, 0, 0, 0, 0},
-                                 ElementType::Int32, {1, 5});
-  ctx.prefill_input_buffers[MaskSignatures::kMaskInputValidMask] =
+                                 ElementType::Int32, {1, 5}));
+  ctx.prefill_input_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputValidMask,
       CreateTensorBufferWithDims(std::vector<uint8_t>{0, 0, 0, 0, 0},
-                                 ElementType::Bool, {1, 5});
+                                 ElementType::Bool, {1, 5}));
 
   NpuGraphLayout layout;
   LITERT_ASSERT_OK_AND_ASSIGN(
@@ -1765,15 +1776,18 @@ class NpuMaskSplitImageWarningTest : public NpuVisionMaskTest {
  protected:
   absl::StatusOr<NpuMask> CreateMask(int chunk_len) {
     InferenceContext ctx;
-    ctx.prefill_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+    ctx.prefill_input_buffers.insert_or_assign(
+        MaskSignatures::kMaskInputTimeStep,
         CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
-                                   {1});
-    ctx.prefill_input_buffers[MaskSignatures::kMaskInputTokens] =
+                                   {1}));
+    ctx.prefill_input_buffers.insert_or_assign(
+        MaskSignatures::kMaskInputTokens,
         CreateTensorBufferWithDims(std::vector<int32_t>(chunk_len, 0),
-                                   ElementType::Int32, {1, chunk_len});
-    ctx.decode_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+                                   ElementType::Int32, {1, chunk_len}));
+    ctx.decode_input_buffers.insert_or_assign(
+        MaskSignatures::kMaskInputTimeStep,
         CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
-                                   {1});
+                                   {1}));
     return NpuMask::CreateForTest(MaskUpdateMethod::kWH, nullptr,
                                   std::move(ctx), &layout_);
   }
@@ -1826,15 +1840,18 @@ TEST_F(NpuVisionMaskTest, NpuMaskRunPrefillUsesUnclampedTokenIds) {
   constexpr int kChunk = 8;
   constexpr int kRing = 8;
   InferenceContext ctx;
-  ctx.prefill_input_buffers[MaskSignatures::kMaskInputTimeStep] =
+  ctx.prefill_input_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputTimeStep,
       CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
-                                 {1});
-  ctx.prefill_input_buffers[MaskSignatures::kMaskInputTokens] =
+                                 {1}));
+  ctx.prefill_input_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputTokens,
       CreateTensorBufferWithDims(std::vector<int32_t>(kChunk, 0),
-                                 ElementType::Int32, {1, kChunk});
-  ctx.prefill_input_buffers[MaskSignatures::kMaskInputValidMask] =
+                                 ElementType::Int32, {1, kChunk}));
+  ctx.prefill_input_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputValidMask,
       CreateTensorBufferWithDims(std::vector<uint8_t>(kChunk, 0),
-                                 ElementType::Bool, {1, kChunk});
+                                 ElementType::Bool, {1, kChunk}));
   ctx.prefill_output_buffers.emplace(
       "mask_local", CreateTensorBufferWithDims(
                         std::vector<float>(kChunk * (kRing + kChunk)),

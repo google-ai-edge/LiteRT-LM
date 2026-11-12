@@ -763,27 +763,36 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
       verify_output_buffers;
 
+  // Insert with insert_or_assign: operator[] default-constructs
+  // TensorBuffer(), which creates LiteRT's default Environment.
   for (const auto& [key, value] : input_kv_cache_buffers) {
-    LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
-    LITERT_ASSIGN_OR_RETURN(prefill_output_buffers[key], value.Duplicate());
-    LITERT_ASSIGN_OR_RETURN(decode_input_buffers[key], value.Duplicate());
-    LITERT_ASSIGN_OR_RETURN(decode_output_buffers[key], value.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(auto prefill_in, value.Duplicate());
+    prefill_input_buffers.insert_or_assign(key, std::move(prefill_in));
+    LITERT_ASSIGN_OR_RETURN(auto prefill_out, value.Duplicate());
+    prefill_output_buffers.insert_or_assign(key, std::move(prefill_out));
+    LITERT_ASSIGN_OR_RETURN(auto decode_in, value.Duplicate());
+    decode_input_buffers.insert_or_assign(key, std::move(decode_in));
+    LITERT_ASSIGN_OR_RETURN(auto decode_out, value.Duplicate());
+    decode_output_buffers.insert_or_assign(key, std::move(decode_out));
   }
 
   for (const auto& [key, value] : prefill_output_kv_cache_slice_buffers) {
-    LITERT_ASSIGN_OR_RETURN(prefill_input_buffers[key], value.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(auto dup, value.Duplicate());
+    prefill_input_buffers.insert_or_assign(key, std::move(dup));
   }
   for (const auto& [key, value] : decode_output_kv_cache_slice_buffers) {
-    LITERT_ASSIGN_OR_RETURN(decode_input_buffers[key], value.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(auto dup, value.Duplicate());
+    decode_input_buffers.insert_or_assign(key, std::move(dup));
   }
 
   if (!prefill_signature.empty() &&
       npu_auxiliary_compiled_model->FindSignature(prefill_signature)) {
     LITERT_ASSIGN_OR_RETURN(
-        prefill_input_buffers[CacheUpdateSignatures::kInputPos],
-        npu_auxiliary_compiled_model->CreateInputBuffer(
-            prefill_signature, CacheUpdateSignatures::kInputPos));
-    prefill_input_buffers[CacheUpdateSignatures::kInputPos].Clear();
+        auto pos_buf, npu_auxiliary_compiled_model->CreateInputBuffer(
+                          prefill_signature, CacheUpdateSignatures::kInputPos));
+    pos_buf.Clear();
+    prefill_input_buffers.insert_or_assign(CacheUpdateSignatures::kInputPos,
+                                           std::move(pos_buf));
 
     LITERT_ASSIGN_OR_RETURN(
         auto prefill_cache_input_names,
@@ -793,20 +802,23 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
                      CacheUpdateSignatures::kInputValidMask) !=
         prefill_cache_input_names.end()) {
       LITERT_ASSIGN_OR_RETURN(
-          prefill_input_buffers[CacheUpdateSignatures::kInputValidMask],
+          auto valid_mask_buf,
           npu_auxiliary_compiled_model->CreateInputBuffer(
               prefill_signature, CacheUpdateSignatures::kInputValidMask));
-      prefill_input_buffers[CacheUpdateSignatures::kInputValidMask].Clear();
+      valid_mask_buf.Clear();
+      prefill_input_buffers.insert_or_assign(
+          CacheUpdateSignatures::kInputValidMask, std::move(valid_mask_buf));
     }
   }
 
   if (!decode_signature.empty() &&
       npu_auxiliary_compiled_model->FindSignature(decode_signature)) {
     LITERT_ASSIGN_OR_RETURN(
-        decode_input_buffers[CacheUpdateSignatures::kInputPos],
-        npu_auxiliary_compiled_model->CreateInputBuffer(
-            decode_signature, CacheUpdateSignatures::kInputPos));
-    decode_input_buffers[CacheUpdateSignatures::kInputPos].Clear();
+        auto pos_buf, npu_auxiliary_compiled_model->CreateInputBuffer(
+                          decode_signature, CacheUpdateSignatures::kInputPos));
+    pos_buf.Clear();
+    decode_input_buffers.insert_or_assign(CacheUpdateSignatures::kInputPos,
+                                          std::move(pos_buf));
 
     LITERT_ASSIGN_OR_RETURN(
         auto decode_cache_input_names,
@@ -815,27 +827,33 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
                      CacheUpdateSignatures::kInputValidMask) !=
         decode_cache_input_names.end()) {
       LITERT_ASSIGN_OR_RETURN(
-          decode_input_buffers[CacheUpdateSignatures::kInputValidMask],
+          auto valid_mask_buf,
           npu_auxiliary_compiled_model->CreateInputBuffer(
               decode_signature, CacheUpdateSignatures::kInputValidMask));
-      decode_input_buffers[CacheUpdateSignatures::kInputValidMask].Clear();
+      valid_mask_buf.Clear();
+      decode_input_buffers.insert_or_assign(
+          CacheUpdateSignatures::kInputValidMask, std::move(valid_mask_buf));
     }
   }
 
   if (!verify_signature.empty() &&
       npu_auxiliary_compiled_model->FindSignature(verify_signature)) {
     for (const auto& [key, value] : input_kv_cache_buffers) {
-      LITERT_ASSIGN_OR_RETURN(verify_input_buffers[key], value.Duplicate());
-      LITERT_ASSIGN_OR_RETURN(verify_output_buffers[key], value.Duplicate());
+      LITERT_ASSIGN_OR_RETURN(auto verify_in, value.Duplicate());
+      verify_input_buffers.insert_or_assign(key, std::move(verify_in));
+      LITERT_ASSIGN_OR_RETURN(auto verify_out, value.Duplicate());
+      verify_output_buffers.insert_or_assign(key, std::move(verify_out));
     }
     for (const auto& [key, value] : verify_output_kv_cache_slice_buffers) {
-      LITERT_ASSIGN_OR_RETURN(verify_input_buffers[key], value.Duplicate());
+      LITERT_ASSIGN_OR_RETURN(auto dup, value.Duplicate());
+      verify_input_buffers.insert_or_assign(key, std::move(dup));
     }
     LITERT_ASSIGN_OR_RETURN(
-        verify_input_buffers[CacheUpdateSignatures::kInputPos],
-        npu_auxiliary_compiled_model->CreateInputBuffer(
-            verify_signature, CacheUpdateSignatures::kInputPos));
-    verify_input_buffers[CacheUpdateSignatures::kInputPos].Clear();
+        auto pos_buf, npu_auxiliary_compiled_model->CreateInputBuffer(
+                          verify_signature, CacheUpdateSignatures::kInputPos));
+    pos_buf.Clear();
+    verify_input_buffers.insert_or_assign(CacheUpdateSignatures::kInputPos,
+                                          std::move(pos_buf));
 
     LITERT_ASSIGN_OR_RETURN(
         auto verify_cache_input_names,
@@ -844,10 +862,12 @@ absl::StatusOr<NpuKVCache> NpuKVCache::Create(
                      CacheUpdateSignatures::kInputValidMask) !=
         verify_cache_input_names.end()) {
       LITERT_ASSIGN_OR_RETURN(
-          verify_input_buffers[CacheUpdateSignatures::kInputValidMask],
+          auto valid_mask_buf,
           npu_auxiliary_compiled_model->CreateInputBuffer(
               verify_signature, CacheUpdateSignatures::kInputValidMask));
-      verify_input_buffers[CacheUpdateSignatures::kInputValidMask].Clear();
+      valid_mask_buf.Clear();
+      verify_input_buffers.insert_or_assign(
+          CacheUpdateSignatures::kInputValidMask, std::move(valid_mask_buf));
     }
   }
 

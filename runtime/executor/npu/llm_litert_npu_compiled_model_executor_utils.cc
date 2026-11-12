@@ -771,8 +771,8 @@ absl::StatusOr<DrafterContext> DrafterContext::Create(
         LITERT_ASSIGN_OR_RETURN(auto shared_type,
                                 shared_it->second.TensorType());
         if (shared_type == input_type) {
-          LITERT_ASSIGN_OR_RETURN(binding.input_buffers[input_name],
-                                  shared_it->second.Duplicate());
+          LITERT_ASSIGN_OR_RETURN(auto dup, shared_it->second.Duplicate());
+          binding.input_buffers.insert_or_assign(input_name, std::move(dup));
           continue;
         }
       }
@@ -781,10 +781,11 @@ absl::StatusOr<DrafterContext> DrafterContext::Create(
           mtp_compiled_model.CreateInputBuffer(binding.signature, input_name));
       input_buffer.Clear();
       if (shared_it == shared_input_buffers.end()) {
-        LITERT_ASSIGN_OR_RETURN(shared_input_buffers[input_name],
-                                input_buffer.Duplicate());
+        LITERT_ASSIGN_OR_RETURN(auto dup, input_buffer.Duplicate());
+        shared_input_buffers.insert_or_assign(input_name, std::move(dup));
       }
-      binding.input_buffers[input_name] = std::move(input_buffer);
+      binding.input_buffers.insert_or_assign(input_name,
+                                             std::move(input_buffer));
     }
     context_bindings.push_back(std::move(binding));
   }
@@ -798,9 +799,9 @@ absl::StatusOr<DrafterContext> DrafterContext::Create(
       auto output_names,
       mtp_compiled_model.GetSignatureOutputNames(first_signature));
   for (absl::string_view output_name : output_names) {
-    LITERT_ASSIGN_OR_RETURN(
-        mtp_output_buffers[output_name],
-        mtp_compiled_model.CreateOutputBuffer(first_signature, output_name));
+    LITERT_ASSIGN_OR_RETURN(auto out_buf, mtp_compiled_model.CreateOutputBuffer(
+                                              first_signature, output_name));
+    mtp_output_buffers.insert_or_assign(output_name, std::move(out_buf));
   }
 
   DrafterContext drafter_context(std::move(mtp_compiled_model),
@@ -836,7 +837,8 @@ absl::Status DrafterContext::BindContextGroup(
   // the map from scratch only drops references.
   mtp_input_buffers.clear();
   for (const auto& [name, buffer] : binding.input_buffers) {
-    LITERT_ASSIGN_OR_RETURN(mtp_input_buffers[name], buffer.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(auto dup, buffer.Duplicate());
+    mtp_input_buffers.insert_or_assign(name, std::move(dup));
   }
   // KV cache inputs alias the text decoder's KV cache buffers of the group.
   LITERT_ASSIGN_OR_RETURN(auto compiled_signature,
@@ -849,8 +851,8 @@ absl::Status DrafterContext::BindContextGroup(
     RET_CHECK(kv_it != context_group.input_kv_cache_buffers.end())
         << "Text decoder context group has no KV cache buffer \"" << input_name
         << "\" for the drafter.";
-    LITERT_ASSIGN_OR_RETURN(mtp_input_buffers[input_name],
-                            kv_it->second.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(auto dup, kv_it->second.Duplicate());
+    mtp_input_buffers.insert_or_assign(input_name, std::move(dup));
   }
   return absl::OkStatus();
 }

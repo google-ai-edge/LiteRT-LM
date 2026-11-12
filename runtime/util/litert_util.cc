@@ -26,6 +26,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl  // IWYU pragma: keep
+#include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -54,6 +55,49 @@ bool UsesNpu(Backend backend,
            vision_settings->GetBackend() == Backend::NPU) ||
           (audio_settings.has_value() &&
            audio_settings->GetBackend() == Backend::NPU));
+}
+
+// GPU_ARTISAN (and the internal TENSOR_LLM) run their decoders outside LiteRT
+// but count as GPU, so their engines keep the LiteRT GPU accelerator that the
+// default auto-registration gave them.
+bool UsesGpu(Backend backend, Backend sampler_backend,
+             const std::optional<VisionExecutorSettings>& vision_settings,
+             const std::optional<AudioExecutorSettings>& audio_settings) {
+  return (backend == Backend::GPU || backend == Backend::GPU_ARTISAN ||
+          sampler_backend == Backend::GPU ||
+          (vision_settings.has_value() &&
+           (vision_settings->GetBackend() == Backend::GPU ||
+            vision_settings->GetBackend() == Backend::GPU_ARTISAN)) ||
+          (audio_settings.has_value() &&
+           (audio_settings->GetBackend() == Backend::GPU ||
+            audio_settings->GetBackend() == Backend::GPU_ARTISAN)));
+}
+
+// Restricts LiteRT automatic accelerator registration to the accelerators
+// configured by the engine so NPU-only and CPU-only runs do not load unused
+// accelerator libraries (such as libLiteRtGpuAccelerator.so on low-RAM SoCs).
+void PopulateAutoRegisterAccelerators(
+    Backend backend, Backend sampler_backend,
+    const std::optional<VisionExecutorSettings>& vision_settings,
+    const std::optional<AudioExecutorSettings>& audio_settings,
+    std::vector<EnvironmentOptions::Option>& env_options) {
+  ::litert::HwAcceleratorSet accelerators(::litert::HwAccelerators::kCpu);
+#if defined(__EMSCRIPTEN__)
+  accelerators |= ::litert::HwAccelerators::kWebNn;
+#endif
+  // Custom backends may run on the GPU, so they keep the GPU accelerator.
+  if (UsesGpu(backend, sampler_backend, vision_settings, audio_settings) ||
+      IsCustomBackend(backend)) {
+    accelerators |= ::litert::HwAccelerators::kGpu;
+  }
+#if !defined(LITERT_DISABLE_NPU)
+  if (UsesNpu(backend, vision_settings, audio_settings)) {
+    accelerators |= ::litert::HwAccelerators::kNpu;
+  }
+#endif
+  env_options.push_back(::litert::EnvironmentOptions::Option{
+      ::litert::EnvironmentOptions::Tag::kAutoRegisterAccelerators,
+      static_cast<int64_t>(accelerators.value)});
 }
 
 struct LibDirResult {
@@ -162,6 +206,10 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
   PopulateNpuOptions(backend, engine_settings.GetVisionExecutorSettings(),
                      engine_settings.GetAudioExecutorSettings(),
                      main_executor_settings, env_options);
+  PopulateAutoRegisterAccelerators(
+      backend, main_executor_settings.GetSamplerBackend(),
+      engine_settings.GetVisionExecutorSettings(),
+      engine_settings.GetAudioExecutorSettings(), env_options);
 
   if (auto severity = GetMinLogSeverity()) {
     env_options.push_back(::litert::EnvironmentOptions::Option{
@@ -186,6 +234,10 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
   PopulateNpuOptions(backend, engine_settings.GetVisionExecutorSettings(),
                      engine_settings.GetAudioExecutorSettings(),
                      main_executor_settings, env_options);
+  PopulateAutoRegisterAccelerators(
+      backend, /*sampler_backend=*/Backend::UNSPECIFIED,
+      engine_settings.GetVisionExecutorSettings(),
+      engine_settings.GetAudioExecutorSettings(), env_options);
 
   if (auto severity = GetMinLogSeverity()) {
     env_options.push_back(::litert::EnvironmentOptions::Option{

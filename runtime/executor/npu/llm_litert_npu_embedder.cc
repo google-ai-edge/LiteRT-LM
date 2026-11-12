@@ -244,37 +244,61 @@ absl::StatusOr<ContextT> CreateEmbedderContextHelper(
       verify_output_buffers;
 
   LITERT_ASSIGN_OR_RETURN(
-      prefill_input_buffers[input_name],
+      auto prefill_in_buf,
       embedder_compiled_model.CreateInputBuffer(prefill_signature, input_name));
-  prefill_input_buffers[input_name].Clear();
+  prefill_in_buf.Clear();
+  prefill_input_buffers.insert_or_assign(input_name, std::move(prefill_in_buf));
+
+  auto prefill_decoder_it =
+      text_decoder_prefill_input_buffers.find(decoder_output_name);
+  if (prefill_decoder_it == text_decoder_prefill_input_buffers.end()) {
+    return absl::NotFoundError(
+        absl::StrCat("Text decoder prefill signature has no input \"",
+                     decoder_output_name, "\" for the embedder output."));
+  }
+  LITERT_ASSIGN_OR_RETURN(auto prefill_out_buf,
+                          prefill_decoder_it->second.Duplicate());
+  prefill_output_buffers.insert_or_assign(output_name,
+                                          std::move(prefill_out_buf));
 
   LITERT_ASSIGN_OR_RETURN(
-      prefill_output_buffers[output_name],
-      text_decoder_prefill_input_buffers[decoder_output_name].Duplicate());
-
-  LITERT_ASSIGN_OR_RETURN(
-      decode_input_buffers[input_name],
+      auto decode_in_buf,
       embedder_compiled_model.CreateInputBuffer(decode_signature, input_name));
-  decode_input_buffers[input_name].Clear();
+  decode_in_buf.Clear();
+  decode_input_buffers.insert_or_assign(input_name, std::move(decode_in_buf));
 
-  LITERT_ASSIGN_OR_RETURN(
-      decode_output_buffers[output_name],
-      text_decoder_decode_input_buffers[decoder_output_name].Duplicate());
+  auto decode_decoder_it =
+      text_decoder_decode_input_buffers.find(decoder_output_name);
+  if (decode_decoder_it == text_decoder_decode_input_buffers.end()) {
+    return absl::NotFoundError(
+        absl::StrCat("Text decoder decode signature has no input \"",
+                     decoder_output_name, "\" for the embedder output."));
+  }
+  LITERT_ASSIGN_OR_RETURN(auto decode_out_buf,
+                          decode_decoder_it->second.Duplicate());
+  decode_output_buffers.insert_or_assign(output_name,
+                                         std::move(decode_out_buf));
 
   if (embedder_compiled_model.FindSignature(verify_signature)) {
-    LITERT_ASSIGN_OR_RETURN(verify_input_buffers[input_name],
+    LITERT_ASSIGN_OR_RETURN(auto verify_in_buf,
                             embedder_compiled_model.CreateInputBuffer(
                                 verify_signature, input_name));
-    verify_input_buffers[input_name].Clear();
+    verify_in_buf.Clear();
+    verify_input_buffers.insert_or_assign(input_name, std::move(verify_in_buf));
 
-    if (text_decoder_verify_input_buffers.contains(decoder_output_name)) {
-      LITERT_ASSIGN_OR_RETURN(
-          verify_output_buffers[output_name],
-          text_decoder_verify_input_buffers[decoder_output_name].Duplicate());
+    auto verify_decoder_it =
+        text_decoder_verify_input_buffers.find(decoder_output_name);
+    if (verify_decoder_it != text_decoder_verify_input_buffers.end()) {
+      LITERT_ASSIGN_OR_RETURN(auto verify_out_buf,
+                              verify_decoder_it->second.Duplicate());
+      verify_output_buffers.insert_or_assign(output_name,
+                                             std::move(verify_out_buf));
     } else {
-      LITERT_ASSIGN_OR_RETURN(verify_output_buffers[output_name],
+      LITERT_ASSIGN_OR_RETURN(auto verify_out_buf,
                               embedder_compiled_model.CreateOutputBuffer(
                                   verify_signature, output_name));
+      verify_output_buffers.insert_or_assign(output_name,
+                                             std::move(verify_out_buf));
     }
   }
 
@@ -1126,93 +1150,80 @@ absl::Status NpuEmbedder::UpdateOutputBuffers(
         text_decoder_decode_input_buffers,
     const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         text_decoder_verify_input_buffers) {
+  // Insert with insert_or_assign: operator[] default-constructs
+  // TensorBuffer(), which creates LiteRT's default Environment.
   if (text_decoder_prefill_input_buffers.contains(
           TextDecoderSignatures::kInputEmbeddings)) {
-    LITERT_ASSIGN_OR_RETURN(prefill_embeddings_buffer_,
-                            text_decoder_prefill_input_buffers
-                                .at(TextDecoderSignatures::kInputEmbeddings)
-                                .Duplicate());
+    const auto& src = text_decoder_prefill_input_buffers.at(
+        TextDecoderSignatures::kInputEmbeddings);
+    LITERT_ASSIGN_OR_RETURN(prefill_embeddings_buffer_, src.Duplicate());
     if (embedder_context_.has_value()) {
-      LITERT_ASSIGN_OR_RETURN(
-          embedder_context_->inference_context
-              .prefill_output_buffers[EmbedderSignatures::kEmbedderOutput],
-          text_decoder_prefill_input_buffers
-              .at(TextDecoderSignatures::kInputEmbeddings)
-              .Duplicate());
+      LITERT_ASSIGN_OR_RETURN(auto dup, src.Duplicate());
+      embedder_context_->inference_context.prefill_output_buffers
+          .insert_or_assign(EmbedderSignatures::kEmbedderOutput,
+                            std::move(dup));
     }
   }
 
   if (text_decoder_decode_input_buffers.contains(
           TextDecoderSignatures::kInputEmbeddings)) {
-    LITERT_ASSIGN_OR_RETURN(decode_embeddings_buffer_,
-                            text_decoder_decode_input_buffers
-                                .at(TextDecoderSignatures::kInputEmbeddings)
-                                .Duplicate());
+    const auto& src = text_decoder_decode_input_buffers.at(
+        TextDecoderSignatures::kInputEmbeddings);
+    LITERT_ASSIGN_OR_RETURN(decode_embeddings_buffer_, src.Duplicate());
     if (embedder_context_.has_value()) {
-      LITERT_ASSIGN_OR_RETURN(
-          embedder_context_->inference_context
-              .decode_output_buffers[EmbedderSignatures::kEmbedderOutput],
-          text_decoder_decode_input_buffers
-              .at(TextDecoderSignatures::kInputEmbeddings)
-              .Duplicate());
+      LITERT_ASSIGN_OR_RETURN(auto dup, src.Duplicate());
+      embedder_context_->inference_context.decode_output_buffers
+          .insert_or_assign(EmbedderSignatures::kEmbedderOutput,
+                            std::move(dup));
     }
   }
 
   if (text_decoder_verify_input_buffers.contains(
           TextDecoderSignatures::kInputEmbeddings)) {
-    LITERT_ASSIGN_OR_RETURN(verify_embeddings_buffer_,
-                            text_decoder_verify_input_buffers
-                                .at(TextDecoderSignatures::kInputEmbeddings)
-                                .Duplicate());
+    const auto& src = text_decoder_verify_input_buffers.at(
+        TextDecoderSignatures::kInputEmbeddings);
+    LITERT_ASSIGN_OR_RETURN(verify_embeddings_buffer_, src.Duplicate());
     if (embedder_context_.has_value()) {
-      LITERT_ASSIGN_OR_RETURN(
-          embedder_context_->inference_context
-              .verify_output_buffers[EmbedderSignatures::kEmbedderOutput],
-          text_decoder_verify_input_buffers
-              .at(TextDecoderSignatures::kInputEmbeddings)
-              .Duplicate());
+      LITERT_ASSIGN_OR_RETURN(auto dup, src.Duplicate());
+      embedder_context_->inference_context.verify_output_buffers
+          .insert_or_assign(EmbedderSignatures::kEmbedderOutput,
+                            std::move(dup));
     }
   }
 
   if (text_decoder_prefill_input_buffers.contains(kPerLayerEmbedderTensor)) {
-    LITERT_ASSIGN_OR_RETURN(
-        prefill_ple_buffer_,
-        text_decoder_prefill_input_buffers.at(kPerLayerEmbedderTensor)
-            .Duplicate());
+    const auto& src =
+        text_decoder_prefill_input_buffers.at(kPerLayerEmbedderTensor);
+    LITERT_ASSIGN_OR_RETURN(prefill_ple_buffer_, src.Duplicate());
     if (embedder_per_layer_context_.has_value()) {
-      LITERT_ASSIGN_OR_RETURN(
-          embedder_per_layer_context_->inference_context.prefill_output_buffers
-              [EmbedderPerLayerSignatures::kEmbedderOutput],
-          text_decoder_prefill_input_buffers.at(kPerLayerEmbedderTensor)
-              .Duplicate());
+      LITERT_ASSIGN_OR_RETURN(auto dup, src.Duplicate());
+      embedder_per_layer_context_->inference_context.prefill_output_buffers
+          .insert_or_assign(EmbedderPerLayerSignatures::kEmbedderOutput,
+                            std::move(dup));
     }
   }
 
   if (text_decoder_decode_input_buffers.contains(kPerLayerEmbedderTensor)) {
-    LITERT_ASSIGN_OR_RETURN(
-        decode_ple_buffer_,
-        text_decoder_decode_input_buffers.at(kPerLayerEmbedderTensor)
-            .Duplicate());
+    const auto& src =
+        text_decoder_decode_input_buffers.at(kPerLayerEmbedderTensor);
+    LITERT_ASSIGN_OR_RETURN(decode_ple_buffer_, src.Duplicate());
     if (embedder_per_layer_context_.has_value()) {
-      LITERT_ASSIGN_OR_RETURN(
-          embedder_per_layer_context_->inference_context.decode_output_buffers
-              [EmbedderPerLayerSignatures::kEmbedderOutput],
-          text_decoder_decode_input_buffers.at(kPerLayerEmbedderTensor)
-              .Duplicate());
+      LITERT_ASSIGN_OR_RETURN(auto dup, src.Duplicate());
+      embedder_per_layer_context_->inference_context.decode_output_buffers
+          .insert_or_assign(EmbedderPerLayerSignatures::kEmbedderOutput,
+                            std::move(dup));
     }
   }
 
   if (text_decoder_verify_input_buffers.contains(kPerLayerEmbedderTensor)) {
-    LITERT_ASSIGN_OR_RETURN(
-        verify_ple_buffer_,
-        text_decoder_verify_input_buffers.at(kPerLayerEmbedderTensor)
-            .Duplicate());
+    const auto& src =
+        text_decoder_verify_input_buffers.at(kPerLayerEmbedderTensor);
+    LITERT_ASSIGN_OR_RETURN(verify_ple_buffer_, src.Duplicate());
     if (embedder_per_layer_context_.has_value()) {
-      LITERT_ASSIGN_OR_RETURN(
-          embedder_per_layer_context_->inference_context.verify_output_buffers
-              [EmbedderPerLayerSignatures::kEmbedderOutput],
-          text_decoder_verify_input_buffers.at(kPerLayerEmbedderTensor)
-              .Duplicate());
+      LITERT_ASSIGN_OR_RETURN(auto dup, src.Duplicate());
+      embedder_per_layer_context_->inference_context.verify_output_buffers
+          .insert_or_assign(EmbedderPerLayerSignatures::kEmbedderOutput,
+                            std::move(dup));
     }
   }
 

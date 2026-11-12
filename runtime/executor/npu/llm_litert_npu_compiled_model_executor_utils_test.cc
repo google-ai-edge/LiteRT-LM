@@ -54,7 +54,10 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_npu_compiled_model_executor.h"
+#include "runtime/executor/npu/llm_litert_npu_embedder.h"
+#include "runtime/executor/npu/llm_litert_npu_kv_cache.h"
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
+#include "runtime/executor/npu/llm_litert_npu_rope.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "tflite/schema/schema_generated.h"  // from @litert
@@ -1170,16 +1173,21 @@ TEST_F(DrafterContextTest,
   absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
   absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
   LITERT_ASSERT_OK_AND_ASSIGN(
-      in_buffers[MaskSignatures::kMaskInputTimeStep],
+      TensorBuffer time_step_buf,
       compiled_model.CreateInputBuffer("mask_cache_640",
                                        MaskSignatures::kMaskInputTimeStep));
+  in_buffers.insert_or_assign(MaskSignatures::kMaskInputTimeStep,
+                              std::move(time_step_buf));
   LITERT_ASSERT_OK_AND_ASSIGN(
-      in_buffers[MaskSignatures::kMaskInputTokens],
+      TensorBuffer tokens_buf,
       compiled_model.CreateInputBuffer("mask_cache_640",
                                        MaskSignatures::kMaskInputTokens));
+  in_buffers.insert_or_assign(MaskSignatures::kMaskInputTokens,
+                              std::move(tokens_buf));
   LITERT_ASSERT_OK_AND_ASSIGN(
-      out_buffers["mask_local"],
+      TensorBuffer mask_out_buf,
       compiled_model.CreateOutputBuffer("mask_cache_640", "mask_local"));
+  out_buffers.insert_or_assign("mask_local", std::move(mask_out_buf));
 
   NpuGraphLayout layout;
   layout.global_cache_length = 640;
@@ -1464,25 +1472,33 @@ TEST_F(LlmLiteRtNpuWarmupTest, WarmupInferenceOnlyRunsFirstContextGroup) {
 
   InferenceContext& context = groups[0].text_decoder_inference_context;
   for (absl::string_view name : {"activations", "input_pos", "mask_local"}) {
-    LITERT_ASSERT_OK_AND_ASSIGN(context.prefill_input_buffers[name],
+    LITERT_ASSERT_OK_AND_ASSIGN(TensorBuffer prefill_in,
                                 decoder.CreateInputBuffer("prefill_640", name));
-    LITERT_ASSERT_OK_AND_ASSIGN(context.decode_input_buffers[name],
+    context.prefill_input_buffers.insert_or_assign(name, std::move(prefill_in));
+    LITERT_ASSERT_OK_AND_ASSIGN(TensorBuffer decode_in,
                                 decoder.CreateInputBuffer("decode_640", name));
+    context.decode_input_buffers.insert_or_assign(name, std::move(decode_in));
   }
   for (absl::string_view name : {"kv_cache_k_0", "kv_cache_v_0"}) {
     LITERT_ASSERT_OK_AND_ASSIGN(
-        context.prefill_input_buffers[name],
+        TensorBuffer prefill_kv,
         groups[0].input_kv_cache_buffers.at(name).Duplicate());
+    context.prefill_input_buffers.insert_or_assign(name, std::move(prefill_kv));
     LITERT_ASSERT_OK_AND_ASSIGN(
-        context.decode_input_buffers[name],
+        TensorBuffer decode_kv,
         groups[0].input_kv_cache_buffers.at(name).Duplicate());
+    context.decode_input_buffers.insert_or_assign(name, std::move(decode_kv));
   }
-  LITERT_ASSERT_OK_AND_ASSIGN(context.prefill_output_buffers["logits"],
-                              decoder.CreateOutputBuffer("prefill_640",
-                                                         "logits"));
-  LITERT_ASSERT_OK_AND_ASSIGN(context.decode_output_buffers["logits"],
-                              decoder.CreateOutputBuffer("decode_640",
-                                                         "logits"));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer prefill_logits,
+      decoder.CreateOutputBuffer("prefill_640", "logits"));
+  context.prefill_output_buffers.insert_or_assign("logits",
+                                                  std::move(prefill_logits));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer decode_logits,
+      decoder.CreateOutputBuffer("decode_640", "logits"));
+  context.decode_output_buffers.insert_or_assign("logits",
+                                                 std::move(decode_logits));
   SetFirstFloat(context.prefill_input_buffers.at("activations"), -2.0f);
   SetFirstFloat(context.decode_input_buffers.at("activations"), -3.0f);
 
@@ -1935,14 +1951,14 @@ TEST_F(LlmLiteRtNpuCloneContextTest,
   InferenceContext& ctx = group.text_decoder_inference_context;
   for (absl::string_view name : {"kv_cache_k_0", "kv_cache_v_0"}) {
     LITERT_ASSERT_OK_AND_ASSIGN(
-        ctx.prefill_input_buffers[name],
-        group.input_kv_cache_buffers.at(name).Duplicate());
+        TensorBuffer dup, group.input_kv_cache_buffers.at(name).Duplicate());
+    ctx.prefill_input_buffers.insert_or_assign(name, std::move(dup));
   }
   for (absl::string_view name :
        {"kv_cache_k_0", "kv_cache_v_0", "kv_cache_k_14", "kv_cache_v_14"}) {
     LITERT_ASSERT_OK_AND_ASSIGN(
-        ctx.decode_input_buffers[name],
-        group.input_kv_cache_buffers.at(name).Duplicate());
+        TensorBuffer dup, group.input_kv_cache_buffers.at(name).Duplicate());
+    ctx.decode_input_buffers.insert_or_assign(name, std::move(dup));
   }
 
   std::vector<NpuContextGroup> groups;
@@ -2024,8 +2040,10 @@ TEST_F(LlmLiteRtNpuCloneContextTest,
                                  ElementType::Float32,
                                  {1, 1, kSeqLen, kHeadDim}));
   LITERT_ASSERT_OK_AND_ASSIGN(
-      ctx.decode_input_buffers["kv_cache_k_31"],
+      TensorBuffer decode_dup,
       group.input_kv_cache_buffers.at("kv_cache_k_31").Duplicate());
+  ctx.decode_input_buffers.insert_or_assign("kv_cache_k_31",
+                                            std::move(decode_dup));
 
   std::vector<NpuContextGroup> groups;
   groups.push_back(std::move(group));

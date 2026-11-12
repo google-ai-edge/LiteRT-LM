@@ -82,9 +82,10 @@ TEST_F(NpuRopeTest, NpuRopeCreateFailsWhenCompiledModelNull) {
 
 TEST_F(NpuRopeTest, NpuRopeSetDecodePosition) {
   InferenceContext ctx;
-  ctx.decode_input_buffers[RopeSignatures::kInputPos] =
+  ctx.decode_input_buffers.insert_or_assign(
+      RopeSignatures::kInputPos,
       CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
-                                 {1});
+                                 {1}));
 
   // For testing SetDecodePosition, create with a dummy compiled model pointer
   // or cast
@@ -104,8 +105,10 @@ TEST_F(NpuRopeTest, NpuRopeSetDecodePosition) {
 
 TEST_F(NpuRopeTest, NpuRopeDrafterSetDecodePosition) {
   absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
-  in_buffers[RopeSignatures::kInputPos] = CreateTensorBufferWithDims(
-      std::vector<int32_t>{0}, ElementType::Int32, {1});
+  in_buffers.insert_or_assign(
+      RopeSignatures::kInputPos,
+      CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                 {1}));
 
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto rope, NpuRope::CreateForDrafter(
@@ -123,9 +126,10 @@ TEST_F(NpuRopeTest, NpuRopeDrafterSetDecodePosition) {
 
 TEST_F(NpuRopeTest, NpuRopeSetVerifyPositions) {
   InferenceContext ctx;
-  ctx.verify_input_buffers[RopeSignatures::kInputPos] =
+  ctx.verify_input_buffers.insert_or_assign(
+      RopeSignatures::kInputPos,
       CreateTensorBufferWithDims(std::vector<int32_t>{0, 0, 0, 0},
-                                 ElementType::Int32, {4});
+                                 ElementType::Int32, {4}));
 
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto rope, NpuRope::CreateForTest(
@@ -146,9 +150,10 @@ TEST_F(NpuRopeTest, NpuRopeSetVerifyPositions) {
 
 TEST_F(NpuRopeTest, NpuRopeSetPrefillPositionsAndZeroPads) {
   InferenceContext ctx;
-  ctx.prefill_input_buffers[RopeSignatures::kInputPos] =
+  ctx.prefill_input_buffers.insert_or_assign(
+      RopeSignatures::kInputPos,
       CreateTensorBufferWithDims(std::vector<int32_t>{99, 99, 99, 99, 99},
-                                 ElementType::Int32, {5});
+                                 ElementType::Int32, {5}));
 
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto rope, NpuRope::CreateForTest(

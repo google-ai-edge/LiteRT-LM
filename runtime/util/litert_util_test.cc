@@ -15,18 +15,21 @@
 #include "runtime/util/litert_util.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -42,6 +45,8 @@
 
 namespace litert::lm {
 namespace {
+
+using ::testing::Optional;
 
 class FakeModelResources : public ModelResources {
  public:
@@ -544,6 +549,151 @@ TEST(LiteRtUtilTest, ModelHasExternalWeights_EmbeddedWeightsModel) {
   ASSERT_OK_AND_ASSIGN(bool has_external_weights,
                        ModelHasExternalWeights(model_assets));
   EXPECT_FALSE(has_external_weights);
+}
+
+// Returns the kAutoRegisterAccelerators bitmask of `owned_env`, or nullopt if
+// the option is not set.
+std::optional<int64_t> GetAutoRegisterAccelerators(
+    const OwnedEnvironment& owned_env) {
+  auto options = owned_env.env.GetOptions();
+  if (!options.HasValue()) return std::nullopt;
+  auto option =
+      options->GetOption(EnvironmentOptions::Tag::kAutoRegisterAccelerators);
+  if (!option.HasValue()) return std::nullopt;
+  const int64_t* mask = std::get_if<int64_t>(&*option);
+  if (mask == nullptr) return std::nullopt;
+  return *mask;
+}
+
+// The accelerators registered for an NPU engine: the NPU accelerator is only
+// registered in builds with NPU support.
+int64_t NpuMask(::litert::HwAcceleratorSet accelerators) {
+#if !defined(LITERT_DISABLE_NPU)
+  accelerators |= ::litert::HwAccelerators::kNpu;
+#endif
+  return accelerators.value;
+}
+
+constexpr int64_t kCpuMask =
+    static_cast<int64_t>(::litert::HwAccelerators::kCpu);
+constexpr int64_t kCpuGpuMask =
+    static_cast<int64_t>(::litert::HwAccelerators::kCpu) |
+    static_cast<int64_t>(::litert::HwAccelerators::kGpu);
+
+TEST(LiteRtUtilTest,
+     CreateEnvironment_NpuOnly_RestrictsAutoRegisteredAccelerators) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(TestTaskPath()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, Backend::NPU));
+
+  ASSERT_OK_AND_ASSIGN(OwnedEnvironment owned_env,
+                       CreateEnvironment(settings, nullptr));
+  // NPU-only runs must not load libLiteRtGpuAccelerator.so.
+  EXPECT_THAT(GetAutoRegisterAccelerators(owned_env),
+              Optional(NpuMask(
+                  ::litert::HwAcceleratorSet(::litert::HwAccelerators::kCpu))));
+}
+
+TEST(LiteRtUtilTest,
+     CreateEnvironment_CpuOnly_RestrictsAutoRegisteredAccelerators) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(TestTaskPath()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, Backend::CPU));
+
+  FakeModelResources fake_resources;
+  ASSERT_OK_AND_ASSIGN(OwnedEnvironment owned_env,
+                       CreateEnvironment(settings, &fake_resources));
+  EXPECT_THAT(GetAutoRegisterAccelerators(owned_env), Optional(kCpuMask));
+}
+
+TEST(LiteRtUtilTest, CreateEnvironment_Gpu_RegistersGpuAccelerator) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(TestTaskPath()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, Backend::GPU));
+
+  ASSERT_OK_AND_ASSIGN(OwnedEnvironment owned_env,
+                       CreateEnvironment(settings, nullptr));
+  EXPECT_THAT(GetAutoRegisterAccelerators(owned_env), Optional(kCpuGpuMask));
+}
+
+TEST(LiteRtUtilTest, CreateEnvironment_GpuArtisan_RegistersGpuAccelerator) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(TestTaskPath()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, Backend::GPU_ARTISAN));
+
+  ASSERT_OK_AND_ASSIGN(OwnedEnvironment owned_env,
+                       CreateEnvironment(settings, nullptr));
+  EXPECT_THAT(GetAutoRegisterAccelerators(owned_env), Optional(kCpuGpuMask));
+}
+
+TEST(LiteRtUtilTest, CreateEnvironment_CustomBackend_RegistersGpuAccelerator) {
+  const Backend custom_backend =
+      RegisterCustomBackend("litert_util_test_custom_backend");
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(TestTaskPath()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, custom_backend));
+
+  ASSERT_OK_AND_ASSIGN(OwnedEnvironment owned_env,
+                       CreateEnvironment(settings, nullptr));
+  EXPECT_THAT(GetAutoRegisterAccelerators(owned_env), Optional(kCpuGpuMask));
+}
+
+TEST(LiteRtUtilTest,
+     CreateEnvironment_MultimodalNpuAndGpu_RegistersBothAccelerators) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(TestTaskPath()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, Backend::NPU,
+                                    /*vision_backend=*/Backend::GPU));
+
+  ASSERT_OK_AND_ASSIGN(OwnedEnvironment owned_env,
+                       CreateEnvironment(settings, nullptr));
+  EXPECT_THAT(GetAutoRegisterAccelerators(owned_env),
+              Optional(NpuMask(::litert::HwAccelerators::kCpu |
+                               ::litert::HwAccelerators::kGpu)));
+}
+
+TEST(LiteRtUtilTest,
+     CreateEnvironment_CpuWithGpuSampler_RegistersGpuAccelerator) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(TestTaskPath()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings settings,
+      EngineSettings::CreateDefault(model_assets, Backend::CPU,
+                                    /*vision_backend=*/std::nullopt,
+                                    /*audio_backend=*/std::nullopt,
+                                    /*sampler_backend=*/Backend::GPU));
+
+  FakeModelResources fake_resources;
+  ASSERT_OK_AND_ASSIGN(OwnedEnvironment owned_env,
+                       CreateEnvironment(settings, &fake_resources));
+  EXPECT_THAT(GetAutoRegisterAccelerators(owned_env), Optional(kCpuGpuMask));
+}
+
+TEST(LiteRtUtilTest,
+     CreateEnvironment_EmbeddingEngineSettings_RestrictsAccelerators) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(TestTaskPath()));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingEngineSettings settings,
+      EmbeddingEngineSettings::CreateDefault(model_assets, Backend::NPU));
+
+  ASSERT_OK_AND_ASSIGN(OwnedEnvironment owned_env,
+                       CreateEnvironment(settings, nullptr));
+  EXPECT_THAT(GetAutoRegisterAccelerators(owned_env),
+              Optional(NpuMask(
+                  ::litert::HwAcceleratorSet(::litert::HwAccelerators::kCpu))));
 }
 
 }  // namespace

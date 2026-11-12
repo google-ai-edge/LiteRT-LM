@@ -688,15 +688,21 @@ absl::StatusOr<NpuMask> NpuMask::Create(
               in_buffers,
           absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
               out_buffers) -> absl::Status {
-    LITERT_ASSIGN_OR_RETURN(in_buffers[MaskSignatures::kMaskInputTimeStep],
+    // Insert with insert_or_assign: operator[] default-constructs
+    // TensorBuffer(), which creates LiteRT's default Environment.
+    LITERT_ASSIGN_OR_RETURN(auto time_step_buf,
                             npu_auxiliary_compiled_model->CreateInputBuffer(
                                 signature, MaskSignatures::kMaskInputTimeStep));
-    in_buffers[MaskSignatures::kMaskInputTimeStep].Clear();
+    time_step_buf.Clear();
+    in_buffers.insert_or_assign(MaskSignatures::kMaskInputTimeStep,
+                                std::move(time_step_buf));
 
-    LITERT_ASSIGN_OR_RETURN(in_buffers[MaskSignatures::kMaskInputTokens],
+    LITERT_ASSIGN_OR_RETURN(auto tokens_buf,
                             npu_auxiliary_compiled_model->CreateInputBuffer(
                                 signature, MaskSignatures::kMaskInputTokens));
-    in_buffers[MaskSignatures::kMaskInputTokens].Clear();
+    tokens_buf.Clear();
+    in_buffers.insert_or_assign(MaskSignatures::kMaskInputTokens,
+                                std::move(tokens_buf));
 
     LITERT_ASSIGN_OR_RETURN(
         auto input_names,
@@ -704,19 +710,22 @@ absl::StatusOr<NpuMask> NpuMask::Create(
     if (absl::c_find(input_names, MaskSignatures::kMaskInputValidMask) !=
         input_names.end()) {
       LITERT_ASSIGN_OR_RETURN(
-          in_buffers[MaskSignatures::kMaskInputValidMask],
+          auto valid_mask_buf,
           npu_auxiliary_compiled_model->CreateInputBuffer(
               signature, MaskSignatures::kMaskInputValidMask));
-      in_buffers[MaskSignatures::kMaskInputValidMask].Clear();
+      valid_mask_buf.Clear();
+      in_buffers.insert_or_assign(MaskSignatures::kMaskInputValidMask,
+                                  std::move(valid_mask_buf));
     }
 
     for (const auto& name : input_names) {
       if (name == MaskSignatures::kMaskLocalContextLength ||
           name == MaskSignatures::kMaskGlobalContextLength) {
         LITERT_ASSIGN_OR_RETURN(
-            in_buffers[name],
+            auto ctx_len_buf,
             npu_auxiliary_compiled_model->CreateInputBuffer(signature, name));
-        in_buffers[name].Clear();
+        ctx_len_buf.Clear();
+        in_buffers.insert_or_assign(name, std::move(ctx_len_buf));
       }
     }
 
@@ -725,12 +734,13 @@ absl::StatusOr<NpuMask> NpuMask::Create(
         npu_auxiliary_compiled_model->GetSignatureOutputNames(signature));
     for (const auto& name : output_names) {
       if (decoder_inputs.contains(name)) {
-        LITERT_ASSIGN_OR_RETURN(out_buffers[name],
-                                decoder_inputs.at(name).Duplicate());
+        LITERT_ASSIGN_OR_RETURN(auto dup, decoder_inputs.at(name).Duplicate());
+        out_buffers.insert_or_assign(name, std::move(dup));
       } else {
         LITERT_ASSIGN_OR_RETURN(
-            out_buffers[name],
+            auto out_buf,
             npu_auxiliary_compiled_model->CreateOutputBuffer(signature, name));
+        out_buffers.insert_or_assign(name, std::move(out_buf));
       }
     }
     return absl::OkStatus();

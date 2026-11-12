@@ -73,14 +73,17 @@ absl::StatusOr<NpuRope> NpuRope::Create(
               in_buffers,
           absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
               out_buffers) -> absl::Status {
-    LITERT_ASSIGN_OR_RETURN(in_buffers[RopeSignatures::kInputPos],
+    // Insert with insert_or_assign: operator[] default-constructs
+    // TensorBuffer(), which creates LiteRT's default Environment.
+    LITERT_ASSIGN_OR_RETURN(auto pos_buf,
                             npu_auxiliary_compiled_model->CreateInputBuffer(
                                 signature, RopeSignatures::kInputPos));
-    in_buffers[RopeSignatures::kInputPos].Clear();
+    pos_buf.Clear();
+    in_buffers.insert_or_assign(RopeSignatures::kInputPos, std::move(pos_buf));
     for (const auto& name : rope_output_names) {
       if (decoder_inputs.contains(name)) {
-        LITERT_ASSIGN_OR_RETURN(out_buffers[name],
-                                decoder_inputs.at(name).Duplicate());
+        LITERT_ASSIGN_OR_RETURN(auto dup, decoder_inputs.at(name).Duplicate());
+        out_buffers.insert_or_assign(name, std::move(dup));
       }
     }
     return absl::OkStatus();
