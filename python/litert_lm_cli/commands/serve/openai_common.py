@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import abc
 import base64
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 import json
 import traceback
 from typing import Any
@@ -508,3 +508,120 @@ def translate_openai_messages(
     else:
       translated.append(translated_msg)
   return translated
+
+
+def _extract_function_name(entry: Any, context: str) -> str:
+  """Validates an OpenAI function tool descriptor and returns its name."""
+  if not isinstance(entry, Mapping):
+    raise ValueError(f"{context} must be a JSON object")
+  if entry.get("type") != "function":
+    raise ValueError(
+        f"Unsupported {context} type: {entry.get('type')!r}. Expected"
+        " 'function'."
+    )
+  fn = entry.get("function")
+  if not isinstance(fn, Mapping):
+    raise ValueError(f"{context}.function must be a JSON object")
+  name = fn.get("name")
+  if not isinstance(name, str) or not name:
+    raise ValueError(f"{context}.function.name must be a non-empty string")
+  return name
+
+
+def parse_tools(
+    body: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], set[str]]:
+  """Parses and validates OpenAI `tools` definitions from the request body."""
+  tools_data = body.get("tools")
+  if tools_data is None:
+    return [], set()
+  if not isinstance(tools_data, list):
+    raise ValueError(f"tools must be a list, got {type(tools_data).__name__}")
+
+  tool_defs: list[dict[str, Any]] = []
+  tool_names: set[str] = set()
+  for idx, item in enumerate(tools_data):
+    name = _extract_function_name(item, f"tools[{idx}]")
+    tool_defs.append(dict(item))
+    tool_names.add(name)
+  return tool_defs, tool_names
+
+
+def parse_tool_choice(
+    body: Mapping[str, Any],
+    tool_names: Collection[str],
+) -> str | dict[str, Any] | None:
+  """Parses and validates OpenAI `tool_choice` against declared `tool_names`."""
+  tool_choice = body.get("tool_choice")
+  if tool_choice is None:
+    return None
+
+  if isinstance(tool_choice, str):
+    if tool_choice in ("none", "auto"):
+      return tool_choice
+    if tool_choice == "required":
+      if not tool_names:
+        raise ValueError(
+            "tool_choice 'required' requires at least one tool in tools."
+        )
+      return "required"
+    raise ValueError(
+        f"Unsupported tool_choice: {tool_choice!r}. Expected 'auto', 'none',"
+        " 'required', or a function/allowed_tools object."
+    )
+
+  if isinstance(tool_choice, Mapping):
+    tc_type = tool_choice.get("type")
+    if tc_type == "function":
+      name = _extract_function_name(tool_choice, "tool_choice")
+      if name not in tool_names:
+        raise ValueError(
+            f"Tool {name!r} in tool_choice is not present in tools."
+        )
+      return {"type": "function", "function": {"name": name}}
+
+    if tc_type == "allowed_tools":
+      allowed = tool_choice.get("allowed_tools")
+      if not isinstance(allowed, Mapping):
+        raise ValueError("tool_choice.allowed_tools must be a JSON object")
+      mode = allowed.get("mode")
+      if mode not in ("auto", "required"):
+        raise ValueError(
+            f"Invalid tool_choice.allowed_tools.mode: {mode!r}. Expected 'auto'"
+            " or 'required'."
+        )
+      allowed_list = allowed.get("tools")
+      if not isinstance(allowed_list, list) or not allowed_list:
+        raise ValueError(
+            "tool_choice.allowed_tools.tools must be a non-empty list"
+        )
+      normalized_tools: list[dict[str, Any]] = []
+      for idx, item in enumerate(allowed_list):
+        name = _extract_function_name(
+            item, f"tool_choice.allowed_tools.tools[{idx}]"
+        )
+        if name not in tool_names:
+          raise ValueError(
+              f"Tool {name!r} in tool_choice.allowed_tools is not present in"
+              " tools."
+          )
+        normalized_tools.append(
+            {"type": "function", "function": {"name": name}}
+        )
+      return {
+          "type": "allowed_tools",
+          "allowed_tools": {
+              "mode": mode,
+              "tools": normalized_tools,
+          },
+      }
+
+    raise ValueError(
+        f"Unsupported tool_choice type: {tc_type!r}. Expected 'function' or"
+        " 'allowed_tools'."
+    )
+
+  raise ValueError(
+      "tool_choice must be a string or JSON object, got"
+      f" {type(tool_choice).__name__}"
+  )
