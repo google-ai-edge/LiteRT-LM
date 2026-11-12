@@ -48,6 +48,8 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
@@ -73,6 +75,7 @@ using ::testing::AllOf;
 using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 using ::testing::IsEmpty;
+using ::testing::Not;
 using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
@@ -888,6 +891,245 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
   ASSERT_OK_AND_ASSIGN(auto output_vector,
                        ReadTensorBuffer<float>(*output_embeddings));
   EXPECT_EQ(output_vector.size(), 25);
+}
+
+TEST(VisionLiteRtCompiledModelExecutorTest,
+     CreateExecutorGpuOptionConfigurationPaths) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestVisionModelWithAdapterPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      Environment env, Environment::Create(std::vector<Environment::Option>()));
+
+  // Exercise GPU option setup for the vision encoder. Headless Linux hosts may
+  // lack an OpenCL ICD when compiling the GPU delegate, so either successful
+  // creation or a delegate unavailability error is valid, whereas
+  // kInvalidArgument indicates invalid compilation options (e.g., missing
+  // hardware accelerator flags or unsupported backend dispatch).
+  ASSERT_OK_AND_ASSIGN(
+      VisionExecutorSettings encoder_gpu_settings,
+      VisionExecutorSettings::CreateDefault(model_assets,
+                                            /*encoder_backend=*/Backend::GPU,
+                                            /*adapter_backend=*/Backend::CPU));
+  encoder_gpu_settings.SetCacheDir(":nocache");
+  absl::StatusOr<std::unique_ptr<VisionLiteRtCompiledModelExecutor>>
+      encoder_gpu_executor =
+          VisionLiteRtCompiledModelExecutor::Create(encoder_gpu_settings, env);
+  if (!encoder_gpu_executor.ok()) {
+    EXPECT_THAT(encoder_gpu_executor,
+                Not(StatusIs(absl::StatusCode::kInvalidArgument)));
+  }
+
+  // Exercise GPU option setup (including IR model toggle) for the vision
+  // adapter alongside a CPU encoder.
+  ASSERT_OK_AND_ASSIGN(
+      VisionExecutorSettings adapter_gpu_settings,
+      VisionExecutorSettings::CreateDefault(model_assets,
+                                            /*encoder_backend=*/Backend::CPU,
+                                            /*adapter_backend=*/Backend::GPU));
+  adapter_gpu_settings.SetCacheDir(":nocache");
+  adapter_gpu_settings.SetUseIrModel(true);
+  absl::StatusOr<std::unique_ptr<VisionLiteRtCompiledModelExecutor>>
+      adapter_gpu_executor =
+          VisionLiteRtCompiledModelExecutor::Create(adapter_gpu_settings, env);
+  if (adapter_gpu_executor.ok()) {
+    std::vector<float> input_data(10 * 8, 1.0f);
+    RankedTensorType input_tensor_type(ElementType::Float32,
+                                       Layout(litert::Dimensions{1, 10, 8}));
+    ASSERT_OK_AND_ASSIGN(TensorBuffer input_buffer,
+                         CreateTensorBuffer<float>(absl::MakeSpan(input_data),
+                                                   input_tensor_type));
+    EXPECT_OK((*adapter_gpu_executor)->Encode(input_buffer));
+  } else {
+    EXPECT_THAT(adapter_gpu_executor,
+                Not(StatusIs(absl::StatusCode::kInvalidArgument)));
+  }
+}
+
+#if !defined(LITERT_DISABLE_NPU)
+TEST(VisionLiteRtCompiledModelExecutorTest,
+     CreateExecutorNpuOptionConfigurationDoesNotQueryCpuWeightCache) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestVisionModelWithAdapterPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      VisionExecutorSettings settings,
+      VisionExecutorSettings::CreateDefault(model_assets,
+                                            /*encoder_backend=*/Backend::NPU,
+                                            /*adapter_backend=*/Backend::NPU));
+  int cache_provider_calls = 0;
+  settings.SetCacheFileProvider(
+      [&](const ExecutorSettingsBase::CacheFileRequest&)
+          -> absl::StatusOr<std::shared_ptr<ScopedFile>> {
+        ++cache_provider_calls;
+        return absl::UnimplementedError("Unexpected CPU cache lookup on NPU.");
+      });
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      Environment env, Environment::Create(std::vector<Environment::Option>()));
+
+  absl::StatusOr<std::unique_ptr<VisionLiteRtCompiledModelExecutor>>
+      vision_executor =
+          VisionLiteRtCompiledModelExecutor::Create(settings, env);
+  EXPECT_EQ(cache_provider_calls, 0);
+  if (vision_executor.ok()) {
+    std::vector<float> input_data(10 * 8, 1.0f);
+    RankedTensorType input_tensor_type(ElementType::Float32,
+                                       Layout(litert::Dimensions{1, 10, 8}));
+    ASSERT_OK_AND_ASSIGN(TensorBuffer input_buffer,
+                         CreateTensorBuffer<float>(absl::MakeSpan(input_data),
+                                                   input_tensor_type));
+    ASSERT_OK_AND_ASSIGN(ExecutorVisionData output_data,
+                         (*vision_executor)->Encode(input_buffer));
+    ASSERT_OK_AND_ASSIGN(TensorBuffer * output_embeddings,
+                         output_data.GetMutableEmbeddingsPtr());
+    ASSERT_OK_AND_ASSIGN(std::vector<float> output_vector,
+                         ReadTensorBuffer<float>(*output_embeddings));
+    EXPECT_EQ(output_vector.size(), 30);
+  } else {
+    EXPECT_THAT(vision_executor,
+                Not(StatusIs(absl::StatusCode::kInvalidArgument)));
+  }
+}
+#endif  // !defined(LITERT_DISABLE_NPU)
+
+TEST(VisionLiteRtCompiledModelExecutorTest,
+     EncodeInputMapsSubCapacityCapsOutputRowsAndZerosAdapterTail) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      Environment env, Environment::Create(std::vector<Environment::Option>()));
+  RankedTensorType full_tensor_type(ElementType::Float32,
+                                    Layout(litert::Dimensions{1, 10, 8}));
+  RankedTensorType sub_tensor_type(ElementType::Float32,
+                                   Layout(litert::Dimensions{1, 4, 8}));
+  std::vector<float> full_input_data(10 * 8, 2.0f);
+  std::vector<float> sub_input_data(4 * 8, 1.0f);
+
+  for (const bool with_adapter : {true, false}) {
+    SCOPED_TRACE(with_adapter);
+    const absl::string_view relative_path =
+        with_adapter ? kTestVisionModelWithAdapterPath
+                     : kTestVisionModelWithoutAdapterPath;
+    const int expected_output_dim = with_adapter ? 6 : 5;
+    const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                    std::string(relative_path))
+                                       .string();
+    ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                         ModelAssets::Create(model_path));
+    ASSERT_OK_AND_ASSIGN(VisionExecutorSettings settings,
+                         VisionExecutorSettings::CreateDefault(
+                             model_assets,
+                             /*encoder_backend=*/Backend::CPU,
+                             /*adapter_backend=*/Backend::CPU));
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<VisionLiteRtCompiledModelExecutor> reused_executor,
+        VisionLiteRtCompiledModelExecutor::Create(settings, env));
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<VisionLiteRtCompiledModelExecutor> fresh_executor,
+        VisionLiteRtCompiledModelExecutor::Create(settings, env));
+
+    // Populate all 5 token rows of the cached encoder/adapter buffers first.
+    ASSERT_OK_AND_ASSIGN(
+        TensorBuffer full_buffer,
+        CreateTensorBuffer<float>(absl::MakeSpan(full_input_data),
+                                  full_tensor_type));
+    absl::flat_hash_map<std::string, TensorBuffer> full_maps;
+    full_maps["images"] = std::move(full_buffer);
+    ASSERT_OK(reused_executor->Encode(full_maps));
+
+    // Now encode a 4-patch input (shrink factor 2 -> 2 visual tokens < 5
+    // capacity) and verify both row capping and zero tail-padding against a
+    // freshly initialized executor.
+    ASSERT_OK(reused_executor->StartProfiling());
+    ASSERT_OK_AND_ASSIGN(TensorBuffer sub_buffer,
+                         CreateTensorBuffer<float>(
+                             absl::MakeSpan(sub_input_data), sub_tensor_type));
+    absl::flat_hash_map<std::string, TensorBuffer> sub_maps;
+    sub_maps["images"] = std::move(sub_buffer);
+    ASSERT_OK_AND_ASSIGN(ExecutorVisionData reused_output,
+                         reused_executor->Encode(sub_maps));
+    ASSERT_OK_AND_ASSIGN(ExecutorStats stats, reused_executor->StopProfiling());
+    EXPECT_EQ(stats.GetMetricAsInt64("Vision num patches"), 2);
+
+    ASSERT_OK_AND_ASSIGN(TensorBuffer * reused_embeddings,
+                         reused_output.GetMutableEmbeddingsPtr());
+    LITERT_ASSERT_OK_AND_ASSIGN(RankedTensorType reused_type,
+                                reused_embeddings->TensorType());
+    EXPECT_THAT(reused_type.Layout().Dimensions(),
+                ElementsAre(1, 2, expected_output_dim));
+    ASSERT_OK_AND_ASSIGN(std::vector<float> reused_vector,
+                         ReadTensorBuffer<float>(*reused_embeddings));
+    EXPECT_EQ(reused_vector.size(),
+              static_cast<size_t>(2 * expected_output_dim));
+
+    ASSERT_OK_AND_ASSIGN(TensorBuffer fresh_sub_buffer,
+                         CreateTensorBuffer<float>(
+                             absl::MakeSpan(sub_input_data), sub_tensor_type));
+    absl::flat_hash_map<std::string, TensorBuffer> fresh_sub_maps;
+    fresh_sub_maps["images"] = std::move(fresh_sub_buffer);
+    ASSERT_OK_AND_ASSIGN(ExecutorVisionData fresh_output,
+                         fresh_executor->Encode(fresh_sub_maps));
+    ASSERT_OK_AND_ASSIGN(TensorBuffer * fresh_embeddings,
+                         fresh_output.GetMutableEmbeddingsPtr());
+    ASSERT_OK_AND_ASSIGN(std::vector<float> fresh_vector,
+                         ReadTensorBuffer<float>(*fresh_embeddings));
+    EXPECT_EQ(reused_vector, fresh_vector);
+  }
+}
+
+TEST(VisionLiteRtCompiledModelExecutorTest,
+     ProfilingCollectsVisionStatsWithAndWithoutAdapter) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      Environment env, Environment::Create(std::vector<Environment::Option>()));
+  RankedTensorType input_tensor_type(ElementType::Float32,
+                                     Layout(litert::Dimensions{1, 10, 8}));
+  std::vector<float> input_data(10 * 8, 1.0f);
+
+  for (const bool with_adapter : {true, false}) {
+    SCOPED_TRACE(with_adapter);
+    const absl::string_view relative_path =
+        with_adapter ? kTestVisionModelWithAdapterPath
+                     : kTestVisionModelWithoutAdapterPath;
+    const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                    std::string(relative_path))
+                                       .string();
+    ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                         ModelAssets::Create(model_path));
+    ASSERT_OK_AND_ASSIGN(VisionExecutorSettings settings,
+                         VisionExecutorSettings::CreateDefault(
+                             model_assets,
+                             /*encoder_backend=*/Backend::CPU,
+                             /*adapter_backend=*/Backend::CPU));
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<VisionLiteRtCompiledModelExecutor> vision_executor,
+        VisionLiteRtCompiledModelExecutor::Create(settings, env));
+
+    EXPECT_THAT(vision_executor->StopProfiling(),
+                StatusIs(absl::StatusCode::kFailedPrecondition));
+    ASSERT_OK(vision_executor->StartProfiling());
+
+    ASSERT_OK_AND_ASSIGN(TensorBuffer single_buffer,
+                         CreateTensorBuffer<float>(absl::MakeSpan(input_data),
+                                                   input_tensor_type));
+    ASSERT_OK(vision_executor->Encode(single_buffer));
+
+    ASSERT_OK_AND_ASSIGN(TensorBuffer map_buffer,
+                         CreateTensorBuffer<float>(absl::MakeSpan(input_data),
+                                                   input_tensor_type));
+    absl::flat_hash_map<std::string, TensorBuffer> input_maps;
+    input_maps["images"] = std::move(map_buffer);
+    ASSERT_OK(vision_executor->Encode(input_maps));
+
+    ASSERT_OK_AND_ASSIGN(ExecutorStats stats, vision_executor->StopProfiling());
+    EXPECT_EQ(stats.module_name, "Vision");
+    EXPECT_EQ(stats.GetMetricAsInt64("Vision num images"), 2);
+    EXPECT_EQ(stats.GetMetricAsInt64("Vision num patches"), 5);
+    EXPECT_TRUE(stats.GetLatency("Vision encoder inference").has_value());
+    EXPECT_EQ(stats.GetLatency("Vision adapter inference").has_value(),
+              with_adapter);
+  }
 }
 
 }  // namespace
