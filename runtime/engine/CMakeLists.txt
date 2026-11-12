@@ -212,7 +212,6 @@ target_include_directories(runtime_engine_decision_engine
 
 target_link_libraries(runtime_engine_decision_engine
   INTERFACE
-    LiteRTLM::Runtime::Engine::Settings
     LiteRTLM::Runtime::Engine::IoTypes
     LITERTLM_DEPS
 )

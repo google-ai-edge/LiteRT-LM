@@ -253,6 +253,33 @@ target_link_libraries(runtime_core_prefix_cache
 )
 
 # ==============================================================================
+# LLM Decision Engine
+# ==============================================================================
+add_litertlm_library(runtime_core_llm_decision_engine STATIC
+  llm_decision_engine.cc
+)
+add_library(LiteRTLM::Runtime::Core::LlmDecisionEngine ALIAS runtime_core_llm_decision_engine)
+
+target_include_directories(runtime_core_llm_decision_engine
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_core_llm_decision_engine
+  PUBLIC
+    LiteRTLM::Runtime::Components::PromptTemplate
+    LiteRTLM::Runtime::Components::TokenizerInterface
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::ConfigRegistry
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::Factory
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::Interface
+    LiteRTLM::Runtime::Core::SessionUtils
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Util
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Facade
 # ==============================================================================
 add_library(runtime_core_libs INTERFACE)

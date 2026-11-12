@@ -84,7 +84,6 @@ cc_library(
     name = "decision_engine",
     hdrs = ["decision_engine.h"],
     deps = [
-        ":engine_settings",
         ":io_types",
         "@com_google_absl//absl/status:statusor",
     ],
