@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -262,6 +263,55 @@ bool IsValidConstraintProviderType(const LiteRtLmConstraintProviderType& type) {
   }
 }
 
+absl::StatusOr<std::vector<litert::lm::Channel>> ParseChannelsJson(
+    absl::string_view channels_json) {
+  auto parsed = nlohmann::ordered_json::parse(channels_json, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_array()) {
+    return absl::InvalidArgumentError(
+        "channels_json must be a valid JSON array.");
+  }
+  std::vector<litert::lm::Channel> channels;
+  channels.reserve(parsed.size());
+  for (const auto& item : parsed) {
+    if (!item.is_object()) {
+      return absl::InvalidArgumentError(
+          "Each entry in channels_json must be a JSON object.");
+    }
+    auto name_it = item.find("channel_name");
+    if (name_it == item.end() || !name_it->is_string() ||
+        name_it->get<std::string>().empty()) {
+      return absl::InvalidArgumentError(
+          "Each channel object must have a non-empty string 'channel_name'.");
+    }
+    auto start_it = item.find("start");
+    if (start_it == item.end() || !start_it->is_string()) {
+      return absl::InvalidArgumentError(
+          "Each channel object must have a string 'start'.");
+    }
+    auto end_it = item.find("end");
+    if (end_it == item.end() || !end_it->is_string()) {
+      return absl::InvalidArgumentError(
+          "Each channel object must have a string 'end'.");
+    }
+    bool is_reasoning_channel = false;
+    auto reasoning_it = item.find("is_reasoning_channel");
+    if (reasoning_it != item.end()) {
+      if (!reasoning_it->is_boolean()) {
+        return absl::InvalidArgumentError(
+            "Channel field 'is_reasoning_channel' must be a boolean.");
+      }
+      is_reasoning_channel = reasoning_it->get<bool>();
+    }
+    channels.push_back(litert::lm::Channel{
+        .channel_name = name_it->get<std::string>(),
+        .start = start_it->get<std::string>(),
+        .end = end_it->get<std::string>(),
+        .is_reasoning_channel = is_reasoning_channel,
+    });
+  }
+  return channels;
+}
+
 }  // namespace
 
 using ::litert::lm::Conversation;
@@ -351,6 +401,19 @@ LiteRtLmStatusCode litert_lm_conversation_config_set_constraint_provider(
   } else {
     config->constraint_provider_type = provider_type;
   }
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode litert_lm_conversation_config_set_channels(
+    LiteRtLmConversationConfig* config, const char* channels_json) {
+  LITERT_LM_C_RETURN_IF_NULL(config);
+  if (channels_json == nullptr) {
+    config->channels = std::nullopt;
+    return kLiteRtLmStatusOk;
+  }
+  LITERT_LM_C_ASSIGN_OR_RETURN(std::vector<litert::lm::Channel> channels,
+                               ParseChannelsJson(channels_json));
+  config->channels = std::move(channels);
   return kLiteRtLmStatusOk;
 }
 
@@ -623,6 +686,10 @@ LiteRtLmStatusCode litert_lm_conversation_create(
         *c_config->constraint_provider_type ==
             kLiteRtLmConstraintProviderTypeLlGuidance) {
       builder.SetConstraintProviderConfig(litert::lm::LlGuidanceConfig());
+    }
+
+    if (c_config->channels.has_value()) {
+      builder.SetChannels(*c_config->channels);
     }
 
     if (c_config->filter_channel_content_from_kv_cache.has_value()) {

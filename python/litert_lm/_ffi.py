@@ -569,6 +569,11 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.c_int,
   ]
+  lib.litert_lm_conversation_config_set_channels.restype = ctypes.c_int
+  lib.litert_lm_conversation_config_set_channels.argtypes = [
+      ctypes.c_void_p,
+      c_string_p,
+  ]
   lib.litert_lm_conversation_config_set_filter_channel_content_from_kv_cache.restype = (
       ctypes.c_int
   )

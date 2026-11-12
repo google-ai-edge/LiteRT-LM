@@ -224,6 +224,33 @@ class Tool(abc.ABC):
 
 
 @dataclasses.dataclass
+class Channel:
+  """Definition of a response channel (for example, a thinking channel).
+
+  Attributes:
+      channel_name: Name of the channel. Extracted content is written to
+        `message.channels[channel_name]`.
+      start: Delimiter string marking the start of the channel.
+      end: Delimiter string marking the end of the channel.
+      is_reasoning_channel: Whether content in this channel is also copied to
+        `message["reasoning_content"]`.
+  """
+
+  channel_name: str
+  start: str
+  end: str
+  is_reasoning_channel: bool = False
+
+  def to_json(self) -> dict[str, Any]:
+    return {
+        "channel_name": self.channel_name,
+        "start": self.start,
+        "end": self.end,
+        "is_reasoning_channel": self.is_reasoning_channel,
+    }
+
+
+@dataclasses.dataclass
 class ThinkingConfig:
   """Configuration for thinking/reasoning generation.
 
@@ -523,6 +550,10 @@ class AbstractEngine(abc.ABC):
       tool_event_handler: ToolEventHandler | None = None,
       automatic_tool_calling: bool = True,
       extra_context: collections.abc.Mapping[str, Any] | None = None,
+      channels: (
+          collections.abc.Sequence[Channel | collections.abc.Mapping[str, Any]]
+          | None
+      ) = None,
       filter_channel_content_from_kv_cache: bool | None = None,
       thinking_config: ThinkingConfig | None = None,
       sampler_config: SamplerConfig | None = None,
@@ -543,6 +574,9 @@ class AbstractEngine(abc.ABC):
         automatic_tool_calling: Whether to automatically call tools. If False,
           tool calls will be returned to the user to execute.
         extra_context: Extra context for the conversation.
+        channels: Custom response channels for this conversation. When None, the
+          model's default channels are used; when empty (`[]`), channels are
+          disabled.
         filter_channel_content_from_kv_cache: Whether to filter channel content
           from the KV cache. This is useful when the model responds with
           "channel" content, e.g. thinking/reasoning tokens, that should not be
@@ -667,6 +701,8 @@ class AbstractConversation(abc.ABC):
       tool_event_handler: A handler for tool call and tool response events.
       automatic_tool_calling: Whether to automatically call tools.
       extra_context: Extra context for the chat template.
+      channels: Custom response channels for this conversation, or None to use
+        the model's default channels.
       thinking_config: Configuration for thinking/reasoning generation.
       sampler_config: Configuration for the sampling process.
       lora_config: Configuration for LoRA adapters.
@@ -691,6 +727,10 @@ class AbstractConversation(abc.ABC):
       tool_event_handler: ToolEventHandler | None = None,
       automatic_tool_calling: bool = True,
       extra_context: collections.abc.Mapping[str, Any] | None = None,
+      channels: (
+          collections.abc.Sequence[Channel | collections.abc.Mapping[str, Any]]
+          | None
+      ) = None,
       thinking_config: ThinkingConfig | None = None,
       sampler_config: SamplerConfig | None = None,
       lora_config: LoraConfig | None = None,
@@ -707,6 +747,9 @@ class AbstractConversation(abc.ABC):
         automatic_tool_calling: Whether to automatically call tools. If False,
           tool calls will be returned to the user to execute.
         extra_context: Extra context for the chat template.
+        channels: Custom response channels for this conversation. When None, the
+          model's default channels are used; when empty (`[]`), channels are
+          disabled.
         thinking_config: Configuration for thinking/reasoning generation.
         sampler_config: Configuration for the sampling process. If None, then
           uses the engine's default values.
@@ -722,6 +765,7 @@ class AbstractConversation(abc.ABC):
     self.tool_event_handler = tool_event_handler
     self.automatic_tool_calling = automatic_tool_calling
     self.extra_context = extra_context or {}
+    self.channels = list(channels) if channels is not None else None
     self.thinking_config = thinking_config
     self.sampler_config = sampler_config
     self.chat_template = chat_template

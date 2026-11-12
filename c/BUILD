@@ -292,6 +292,7 @@ cc_library(
         "//runtime/components/constrained_decoding:suppress_tokens_config",
         "//runtime/components/constrained_decoding:tool_choice",
         "//runtime/conversation",
+        "//runtime/conversation:io_types",
         "//runtime/conversation:thinking_config",
         "//runtime/engine:engine_settings",
     ],

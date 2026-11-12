@@ -1264,6 +1264,81 @@ TEST(EngineCTest, CreateConversationConfigWithTools) {
   EXPECT_EQ(preface.tools, nlohmann::ordered_json::parse(tools_json));
 }
 
+TEST(EngineCTest, CreateConversationConfigWithChannels) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "cpu",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+  litert_lm_engine_settings_set_max_num_tokens(settings.get(), 16);
+
+  EnginePtr engine(CreateEngine(settings.get()), &litert_lm_engine_delete);
+  ASSERT_NE(engine, nullptr);
+
+  ConversationConfigPtr config(CreateConversationConfig(),
+                               &litert_lm_conversation_config_delete);
+  ASSERT_NE(config, nullptr);
+  ASSERT_EQ(
+      litert_lm_conversation_config_set_channels(
+          config.get(),
+          R"([{"channel_name":"thought","start":"<think>","end":"</think>","is_reasoning_channel":true}])"),
+      kLiteRtLmStatusOk);
+
+  ConversationPtr conversation(CreateConversation(engine.get(), config.get()),
+                               &litert_lm_conversation_delete);
+  ASSERT_NE(conversation, nullptr);
+  const auto& channels = conversation->conversation->GetConfig().GetChannels();
+  ASSERT_EQ(channels.size(), 1u);
+  EXPECT_EQ(channels[0].channel_name, "thought");
+  EXPECT_EQ(channels[0].start, "<think>");
+  EXPECT_EQ(channels[0].end, "</think>");
+  EXPECT_TRUE(channels[0].is_reasoning_channel);
+
+  // Passing "[]" disables channels.
+  ASSERT_EQ(litert_lm_conversation_config_set_channels(config.get(), "[]"),
+            kLiteRtLmStatusOk);
+  ConversationPtr disabled_conversation(
+      CreateConversation(engine.get(), config.get()),
+      &litert_lm_conversation_delete);
+  ASSERT_NE(disabled_conversation, nullptr);
+  EXPECT_THAT(disabled_conversation->conversation->GetConfig().GetChannels(),
+              IsEmpty());
+
+  // Passing nullptr clears the override.
+  ASSERT_EQ(litert_lm_conversation_config_set_channels(config.get(), nullptr),
+            kLiteRtLmStatusOk);
+  EXPECT_FALSE(config->channels.has_value());
+}
+
+TEST(EngineCTest, CreateConversationConfigWithInvalidChannelsReturnsError) {
+  ConversationConfigPtr config(CreateConversationConfig(),
+                               &litert_lm_conversation_config_delete);
+  ASSERT_NE(config, nullptr);
+
+  for (
+      const char* bad_json : {
+          "not_json",
+          "{}",
+          "[123]",
+          R"([{"start":"<a>","end":"</a>"}])",
+          R"([{"channel_name":"","start":"<a>","end":"</a>"}])",
+          R"([{"channel_name":"c","end":"</a>"}])",
+          R"([{"channel_name":"c","start":"<a>"}])",
+          R"([{"channel_name":"c","start":"<a>","end":"</a>","is_reasoning_channel":"yes"}])",
+      }) {
+    SCOPED_TRACE(bad_json);
+    litert_lm_clear_last_error();
+    EXPECT_EQ(
+        litert_lm_conversation_config_set_channels(config.get(), bad_json),
+        kLiteRtLmStatusInvalidArgument);
+    EXPECT_NE(litert_lm_get_last_error_message(), nullptr);
+  }
+}
+
 TEST(EngineCTest, CreateConversationConfigWithInvalidTools) {
   // 1. Create an engine.
   const std::string task_path = GetTestdataPath(
@@ -4418,6 +4493,14 @@ TEST(EngineCStatusTest, ConversationConfigSettersReturnStatus) {
            [](C* c) {
              return litert_lm_conversation_config_set_constraint_provider(
                  c, kLiteRtLmConstraintProviderTypeNone);
+           }},
+          {"set_channels",
+           [](C* c) {
+             return litert_lm_conversation_config_set_channels(c, "[]");
+           }},
+          {"set_channels_unset",
+           [](C* c) {
+             return litert_lm_conversation_config_set_channels(c, nullptr);
            }},
           {"set_filter_channel_content_from_kv_cache",
            [](C* c) {
