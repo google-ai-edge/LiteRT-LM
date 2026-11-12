@@ -15,16 +15,28 @@
 #include "runtime/util/lora_util.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
 #include <ios>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_common.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/test/matchers.h"  // from @litert
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -227,8 +239,7 @@ TEST(IsLoRABufferInputNameTest, MatchesLoRAWeightInputs) {
   EXPECT_TRUE(IsLoRABufferInputName("query_w_prime_left_0"));
   EXPECT_TRUE(IsLoRABufferInputName("lora_atten_o_b_prime_weight_12"));
   EXPECT_TRUE(IsLoRABufferInputName("value_w_prime_right3"));
-  EXPECT_TRUE(
-      IsLoRABufferInputName("transformer.layer_0.attn.q.w_prime_left"));
+  EXPECT_TRUE(IsLoRABufferInputName("transformer.layer_0.attn.q.w_prime_left"));
 }
 
 TEST(IsLoRABufferInputNameTest, MatchesLoRAParamTensor) {
@@ -241,6 +252,108 @@ TEST(IsLoRABufferInputNameTest, RejectsOtherModelInputs) {
   EXPECT_FALSE(IsLoRABufferInputName("prev_mask"));
   EXPECT_FALSE(IsLoRABufferInputName("lora_param_tensor_0"));
   EXPECT_FALSE(IsLoRABufferInputName(""));
+}
+
+TEST(LoRAParamTensorTest, ComputesLargestNonRankExtentAcross2DAnd3DShapes) {
+  // Rank 32 is the only shared dimension across {32, 4, 16} and {48, 32};
+  // largest non-rank extent is max(4 * 16, 48) = 64.
+  const std::vector<std::vector<int32_t>> lora_dims = {
+      {32, 4, 16},
+      {48, 32},
+  };
+  ASSERT_OK_AND_ASSIGN(int32_t end, ComputeLoRAParamTensorEnd(lora_dims));
+  EXPECT_EQ(end, 64);
+
+  std::vector<int32_t> params(7, -1);
+  ASSERT_OK(FillLoRAParamTensorValues(lora_dims, absl::MakeSpan(params)));
+  EXPECT_THAT(params, ::testing::ElementsAre(0, 64, 64, 64, 64, 64, 64));
+}
+
+TEST(LoRAParamTensorTest, IgnoresSingletonBatchDimensionsWhenFindingRank) {
+  // Both inputs have singleton 1 dimensions and rank 32; rank must resolve to
+  // 32 rather than 1, giving max(1536, 8 * 256) = 2048.
+  const std::vector<std::vector<int32_t>> lora_dims = {
+      {1, 32, 1, 1536},
+      {1, 8, 256, 32},
+  };
+  ASSERT_OK_AND_ASSIGN(int32_t end, ComputeLoRAParamTensorEnd(lora_dims));
+  EXPECT_EQ(end, 2048);
+}
+
+TEST(LoRAParamTensorTest, FailsOnInvalidInputs) {
+  EXPECT_FALSE(ComputeLoRAParamTensorEnd({}).ok());
+  const std::vector<std::vector<int32_t>> unshared_rank = {{32, 64}, {16, 48}};
+  EXPECT_FALSE(ComputeLoRAParamTensorEnd(unshared_rank).ok());
+
+  const std::vector<std::vector<int32_t>> valid_dims = {{32, 64}};
+  std::vector<int32_t> too_short_params(1, 0);
+  EXPECT_FALSE(
+      FillLoRAParamTensorValues(valid_dims, absl::MakeSpan(too_short_params))
+          .ok());
+}
+
+std::string GetChecksumFakeLmLoraPath() {
+  auto path = std::filesystem::path(::testing::SrcDir()) /
+              "litert_lm/runtime/testdata/checksum_fake_lm_lora.tflite";
+  return path.string();
+}
+
+TEST(LoRAParamTensorTest, PopulatesBufferFromCompiledModelSignature) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto options, litert::Options::Create());
+  options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compiled_model,
+      litert::CompiledModel::Create(env, GetChecksumFakeLmLoraPath(), options));
+
+  for (absl::string_view signature : {"prefill_8", "decode"}) {
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto param_buffer,
+        compiled_model.CreateInputBuffer(signature, kLoRAParamTensorName));
+    ASSERT_OK(PopulateLoRAParamTensor(compiled_model, signature, param_buffer));
+
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto lock_and_ptr,
+        litert::TensorBufferScopedLock::Create<const int32_t>(
+            param_buffer, litert::TensorBuffer::LockMode::kRead));
+    EXPECT_THAT(
+        absl::MakeConstSpan(lock_and_ptr.second, 7),
+        ::testing::ElementsAre(0, 64, 64, 64, 64, 64, 64))
+        << "signature: " << signature;
+  }
+}
+
+TEST(LoRAParamTensorTest, InitLoRAParamTensorIfPresentHandlesPresentAndAbsent) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto options, litert::Options::Create());
+  options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compiled_model,
+      litert::CompiledModel::Create(env, GetChecksumFakeLmLoraPath(), options));
+
+  absl::flat_hash_map<absl::string_view, litert::TensorBuffer> buffers_map;
+  // No-op when `lora_param_tensor` is absent from the map.
+  ASSERT_OK(
+      InitLoRAParamTensorIfPresent(compiled_model, "decode", buffers_map));
+  EXPECT_TRUE(buffers_map.empty());
+
+  // Populates `lora_param_tensor` in-place when present in the map.
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto param_buffer,
+      compiled_model.CreateInputBuffer("decode", kLoRAParamTensorName));
+  LITERT_ASSERT_OK(param_buffer.Clear());
+  buffers_map.insert_or_assign(kLoRAParamTensorName, std::move(param_buffer));
+
+  ASSERT_OK(
+      InitLoRAParamTensorIfPresent(compiled_model, "decode", buffers_map));
+  auto it = buffers_map.find(kLoRAParamTensorName);
+  ASSERT_NE(it, buffers_map.end());
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto lock_and_ptr,
+      litert::TensorBufferScopedLock::Create<const int32_t>(
+          it->second, litert::TensorBuffer::LockMode::kRead));
+  EXPECT_THAT(absl::MakeConstSpan(lock_and_ptr.second, 7),
+              ::testing::ElementsAre(0, 64, 64, 64, 64, 64, 64));
 }
 
 }  // namespace

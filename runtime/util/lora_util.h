@@ -18,10 +18,16 @@
 #include <cstdint>
 #include <memory>
 #include <utility>
+#include <vector>
 
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 
@@ -79,6 +85,11 @@ class MmapBufferRef : public litert::BufferRef<ByteT> {
   std::unique_ptr<MemoryMappedFileWithAutoAlignment> mapped_file_;
 };
 
+// Input of GPU models exported with runtime-BMM LoRA. It holds the channel
+// range of the LoRA BMM ops (see ml_drift::LlmRuntimeParams) and is not a LoRA
+// weight.
+inline constexpr absl::string_view kLoRAParamTensorName = "lora_param_tensor";
+
 // Returns true if the given name is a LoRA input name for the model.
 // The LoRA name is in the format of
 // "(query|key|value|post)_w_prime_(left|right)_[0-num_layers)" or
@@ -90,6 +101,34 @@ bool IsLoRAInputName(absl::string_view name);
 // buffers are owned by the LoRA and shared with every caller that binds them,
 // so they must not be cleared or overwritten when resetting model inputs.
 bool IsLoRABufferInputName(absl::string_view name);
+
+// Computes the end-channel value for `lora_param_tensor` from the dimensions of
+// all LoRA weight inputs of a signature. Returns the largest non-rank extent
+// across `lora_input_dims`.
+absl::StatusOr<int32_t> ComputeLoRAParamTensorEnd(
+    absl::Span<const std::vector<int32_t>> lora_input_dims);
+
+// Fills `params` (the int32 elements of `lora_param_tensor`) using the channel
+// range computed from `lora_input_dims`: element 0 is set to 0 (start index)
+// and the remaining elements are set to ComputeLoRAParamTensorEnd().
+absl::Status FillLoRAParamTensorValues(
+    absl::Span<const std::vector<int32_t>> lora_input_dims,
+    absl::Span<int32_t> params);
+
+// Populates `param_buffer` (`kLoRAParamTensorName`) with the LoRA channel
+// range computed from the LoRA weight inputs of `signature_name` in
+// `compiled_model`.
+absl::Status PopulateLoRAParamTensor(
+    const litert::CompiledModel& compiled_model,
+    absl::string_view signature_name, litert::TensorBuffer& param_buffer);
+
+// Populates `lora_param_tensor` (`kLoRAParamTensorName`) in `input_buffers_map`
+// using PopulateLoRAParamTensor() when that entry is present; otherwise no-op.
+absl::Status InitLoRAParamTensorIfPresent(
+    const litert::CompiledModel& compiled_model,
+    absl::string_view signature_name,
+    absl::flat_hash_map<absl::string_view, litert::TensorBuffer>&
+        input_buffers_map);
 
 }  // namespace litert::lm
 

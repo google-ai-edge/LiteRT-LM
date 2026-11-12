@@ -928,6 +928,10 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RunSignature(
     absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers,
     absl::flat_hash_map<absl::string_view, TensorBuffer>& output_buffers,
     bool async) {
+  bool bound_active_lora = false;
+  if (!bound_active_lora) {
+    ABSL_RETURN_IF_ERROR(BindZeroLoRABuffers(signature, input_buffers));
+  }
 
   ABSL_ASSIGN_OR_RETURN(const int current_step, GetCurrentStep());
   if (pre_graph_run_callback_) {
@@ -2255,6 +2259,75 @@ LlmLiteRtCompiledModelExecutorBase::GetProfileSummary() {
   LITERT_ASSIGN_OR_RETURN(auto summary,
                           profiler.GetProfileSummary(compiled_model_->Get()));
   return summary;
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorBase::BindZeroLoRABuffers(
+    absl::string_view signature_name,
+    absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers) {
+  auto sig_it = zero_lora_buffers_by_signature_.find(signature_name);
+  if (sig_it == zero_lora_buffers_by_signature_.end()) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto signature_input_names,
+        compiled_model_->GetSignatureInputNames(signature_name));
+    absl::flat_hash_map<std::string, TensorBuffer> signature_buffers;
+    for (const auto& input_name : signature_input_names) {
+      if (!IsLoRABufferInputName(input_name)) {
+        continue;
+      }
+      const TensorBuffer* reusable = nullptr;
+      auto requirements = compiled_model_->GetInputBufferRequirements(
+          signature_name, input_name);
+      if (requirements) {
+        auto supported_types = requirements->SupportedTypes();
+        if (supported_types) {
+          for (const auto& [other_sig, other_buffers] :
+               zero_lora_buffers_by_signature_) {
+            auto other_it = other_buffers.find(input_name);
+            if (other_it != other_buffers.end()) {
+              auto buffer_type = other_it->second.BufferType();
+              if (buffer_type &&
+                  std::find(supported_types->begin(), supported_types->end(),
+                            *buffer_type) != supported_types->end()) {
+                reusable = &other_it->second;
+                break;
+              }
+            }
+          }
+        }
+      }
+      if (reusable != nullptr) {
+        LITERT_ASSIGN_OR_RETURN(auto dup, reusable->Duplicate());
+        signature_buffers.insert_or_assign(input_name, std::move(dup));
+      } else if (input_name == kLoRAParamTensorName) {
+        LITERT_ASSIGN_OR_RETURN(
+            TensorBuffer buffer,
+            compiled_model_->CreateInputBuffer(signature_name, input_name));
+        ABSL_RETURN_IF_ERROR(
+            PopulateLoRAParamTensor(*compiled_model_, signature_name, buffer));
+        signature_buffers.insert_or_assign(input_name, std::move(buffer));
+      } else {
+        LITERT_ASSIGN_OR_RETURN(
+            TensorBuffer buffer,
+            compiled_model_->CreateInputBuffer(signature_name, input_name));
+        {
+          LITERT_ASSIGN_OR_RETURN(auto lock_and_addr,
+                                  litert::TensorBufferScopedLock::Create(
+                                      buffer, TensorBuffer::LockMode::kWrite));
+          LITERT_ASSIGN_OR_RETURN(auto packed_size, buffer.PackedSize());
+          memset(lock_and_addr.second, 0, packed_size);
+        }
+        signature_buffers.insert_or_assign(input_name, std::move(buffer));
+      }
+    }
+    sig_it = zero_lora_buffers_by_signature_
+                 .emplace(signature_name, std::move(signature_buffers))
+                 .first;
+  }
+  for (const auto& [lora_name, lora_buffer] : sig_it->second) {
+    LITERT_ASSIGN_OR_RETURN(auto dup, lora_buffer.Duplicate());
+    input_buffers.insert_or_assign(lora_name, std::move(dup));
+  }
+  return absl::OkStatus();
 }
 
 /* ===========================================================================*/

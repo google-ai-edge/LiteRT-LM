@@ -436,7 +436,8 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::UseLoRA(
       input_buffer = std::move(zero_buffer);
     }
   }
-  return absl::OkStatus();
+  return InitLoRAParamTensorIfPresent(compiled_model_, signature.Key(),
+                                      input_buffers_map_);
 }
 
 absl::StatusOr<std::unique_ptr<AudioContext>> AudioStreamingContext::Clone()
@@ -486,6 +487,8 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::InitializeBuffers(
     input_buffers_map_.insert_or_assign(input_names_[i],
                                         std::move(input_buffers[i]));
   }
+  ABSL_RETURN_IF_ERROR(InitLoRAParamTensorIfPresent(
+      compiled_model_, signature.Key(), input_buffers_map_));
 
   // Bind pointers to specific buffers only after the map is fully populated so
   // `flat_hash_map` rehashing cannot invalidate them.
