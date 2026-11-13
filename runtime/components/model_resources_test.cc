@@ -21,17 +21,21 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>  // NOLINT(build/c++11)
 #include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl  // IWYU pragma: keep
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/synchronization/barrier.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
+#include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/model_resources_task.h"
 #include "runtime/proto/embedding_metadata.pb.h"
@@ -44,6 +48,7 @@
 
 namespace {
 
+using ::absl_testing::IsOk;
 using ::absl_testing::IsOkAndHolds;
 using ::absl_testing::StatusIs;
 using ::litert::lm::LitertLmLoader;
@@ -373,9 +378,9 @@ TEST(TfLiteModelTypeToWireStringTest, ReturnsLowercaseEnumName) {
       "tf_lite_text_encoder");
 }
 
-class MinimalModelResources : public ::litert::lm::ModelResources {
+class MinimalModelResources : public litert::lm::ModelResources {
  public:
-  absl::StatusOr<std::unique_ptr<::litert::lm::Tokenizer>> GetTokenizer()
+  absl::StatusOr<std::unique_ptr<litert::lm::Tokenizer>> GetTokenizer()
       override {
     return absl::UnimplementedError("Minimal test tokenizer");
   }
@@ -413,7 +418,51 @@ TEST(ModelResourcesTest, DefaultImplementationsForMinimalSubclass) {
             std::nullopt);
   EXPECT_THAT(resources.GetExecutorMetadata(),
               StatusIs(absl::StatusCode::kUnimplemented));
-  EXPECT_THAT(resources.GetLlmMetadata(), ::absl_testing::IsOk());
+  EXPECT_THAT(resources.GetLlmMetadata(), IsOk());
+}
+
+TEST(ModelResourcesTest, ConcurrentLazyAccessTaskReturnsStablePointers) {
+  const auto model_path =
+      std::filesystem::path(testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.task";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto bundle, ModelAssetBundleResources::Create(
+                                        "tag", std::move(model_file)));
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       ModelResourcesTask::Create(std::move(bundle)));
+
+  constexpr int kNumThreads = 8;
+  absl::Barrier start_barrier(kNumThreads);
+  std::vector<const litert::Model*> models(kNumThreads, nullptr);
+  std::vector<const LlmMetadata*> metadata_ptrs(kNumThreads, nullptr);
+  std::vector<std::thread> threads;
+  threads.reserve(kNumThreads);
+  for (int i = 0; i < kNumThreads; ++i) {
+    threads.emplace_back([&, i]() {
+      start_barrier.Block();
+      EXPECT_TRUE(
+          model_resources->HasTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE));
+      EXPECT_FALSE(
+          model_resources->HasTFLiteModel(LlmMetadata::TF_LITE_VISION_ENCODER));
+      auto model =
+          model_resources->GetTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE);
+      ASSERT_OK(model);
+      models[i] = *model;
+      auto metadata = model_resources->GetLlmMetadata();
+      ASSERT_OK(metadata);
+      metadata_ptrs[i] = *metadata;
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  ASSERT_NE(models[0], nullptr);
+  ASSERT_NE(metadata_ptrs[0], nullptr);
+  for (int i = 1; i < kNumThreads; ++i) {
+    EXPECT_EQ(models[i], models[0]);
+    EXPECT_EQ(metadata_ptrs[i], metadata_ptrs[0]);
+  }
 }
 
 }  // namespace
