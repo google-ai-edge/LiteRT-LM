@@ -326,11 +326,14 @@ class SerialExecutionManager : public ExecutionManager {
   // - task_state: The state of the task.
   absl::Status UpdateTaskState(TaskId task_id, TaskState task_state);
 
-  // Updates all tasks to the given state.
+  // Updates all tasks to the given state and returns their (session_id,
+  // callback) pairs to be invoked after state updates complete.
   // - task_ids: The task IDs of the tasks.
   // - task_state: The state of the tasks.
-  absl::Status UpdateAllTasksToState(
-      const absl::flat_hash_set<TaskId>& task_ids, TaskState task_state);
+  absl::StatusOr<std::vector<std::pair<
+      SessionId, absl::AnyInvocable<void(absl::StatusOr<Responses>)>>>>
+  UpdateAllTasksToState(const absl::flat_hash_set<TaskId>& task_ids,
+                        TaskState task_state);
 
   // Returns all following tasks that are waiting.
   // - task_id: The task ID of the task.

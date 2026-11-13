@@ -492,18 +492,26 @@ absl::Status SerialExecutionManager::FinishTask(
     return invoke_callback_and_return(error_status);
   }
 
+  TaskState next_task_state =
+      responses.ok() ? responses->GetTaskState() : TaskState::kFailed;
+  const SessionId task_session_id = task_lookup_.at(task_id).session_id;
+  std::vector<std::pair<SessionId,
+                        absl::AnyInvocable<void(absl::StatusOr<Responses>)>>>
+      dependent_callbacks;
+  TaskState dependent_task_state = TaskState::kDependentTaskFailed;
   if (!responses.ok() || responses->GetTaskState() == TaskState::kCancelled) {
     auto following_waiting_tasks = FollowingWaitingTasks(task_id);
     if (!following_waiting_tasks.ok()) {
       return invoke_callback_and_return(following_waiting_tasks.status());
     }
-    auto status = UpdateAllTasksToState(following_waiting_tasks.value(),
-                                        responses.ok()
-                                            ? TaskState::kDependentTaskCancelled
-                                            : TaskState::kDependentTaskFailed);
-    if (!status.ok()) {
-      return invoke_callback_and_return(status);
+    dependent_task_state = responses.ok() ? TaskState::kDependentTaskCancelled
+                                          : TaskState::kDependentTaskFailed;
+    auto callbacks = UpdateAllTasksToState(*following_waiting_tasks,
+                                           dependent_task_state);
+    if (!callbacks.ok()) {
+      return invoke_callback_and_return(callbacks.status());
     }
+    dependent_callbacks = *std::move(callbacks);
   } else if (responses->GetTaskState() == TaskState::kDone ||
              responses->GetTaskState() == TaskState::kMaxNumTokensReached) {
     for (TaskId following_task_id : task_lookup_.at(task_id).following_tasks) {
@@ -520,10 +528,15 @@ absl::Status SerialExecutionManager::FinishTask(
     }
   }
 
-  TaskState next_task_state =
-      responses.ok() ? responses->GetTaskState() : TaskState::kFailed;
   ABSL_RETURN_IF_ERROR(UpdateTaskState(task_id, next_task_state));
-  callback(std::move(responses));
+  if (session_lookup_.contains(task_session_id)) {
+    callback(std::move(responses));
+  }
+  for (auto& [dep_session_id, dep_callback] : dependent_callbacks) {
+    if (session_lookup_.contains(dep_session_id)) {
+      dep_callback(Responses(dependent_task_state));
+    }
+  }
 
   return absl::OkStatus();
 }
@@ -578,16 +591,28 @@ absl::Status SerialExecutionManager::UpdateTaskState(TaskId task_id,
   return absl::OkStatus();
 }
 
-absl::Status SerialExecutionManager::UpdateAllTasksToState(
+absl::StatusOr<std::vector<
+    std::pair<SessionId, absl::AnyInvocable<void(absl::StatusOr<Responses>)>>>>
+SerialExecutionManager::UpdateAllTasksToState(
     const absl::flat_hash_set<TaskId>& task_ids, TaskState task_state) {
+  std::vector<std::pair<SessionId,
+                        absl::AnyInvocable<void(absl::StatusOr<Responses>)>>>
+      callbacks_to_invoke;
+  callbacks_to_invoke.reserve(task_ids.size());
   for (TaskId task_id : task_ids) {
-    if (task_lookup_.at(task_id).callback) {
-      task_lookup_.at(task_id).callback(Responses(task_state));
+    auto it = task_lookup_.find(task_id);
+    if (it == task_lookup_.end()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Task ", task_id, " not found in task list."));
     }
-    task_lookup_.at(task_id).dependent_tasks.clear();
+    if (it->second.callback != nullptr) {
+      callbacks_to_invoke.emplace_back(it->second.session_id,
+                                       std::move(it->second.callback));
+    }
+    it->second.dependent_tasks.clear();
     ABSL_RETURN_IF_ERROR(UpdateTaskState(task_id, task_state));
   }
-  return absl::OkStatus();
+  return callbacks_to_invoke;
 }
 
 absl::StatusOr<ExecutorInputs>

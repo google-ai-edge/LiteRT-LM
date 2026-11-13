@@ -6055,5 +6055,186 @@ TEST_P(ConversationTest,
               "max vision tokens per image (200).")));
 }
 
+TEST(ConversationAsyncLifecycleTest,
+     CloseConversationInTerminalCallbackDoesNotBlockNextTurn) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(10);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+  ASSERT_OK_AND_ASSIGN(auto config, ConversationConfig::CreateDefault(*engine));
+
+  // Turn 1: Create a single-use Conversation and destroy it inside its
+  // terminal callback (when message->is_null()).
+  ASSERT_OK_AND_ASSIGN(auto conv1, Conversation::Create(*engine, config));
+  absl::Notification conv1_done;
+  Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
+  ASSERT_OK(conv1->SendMessageAsync(
+      user_message, [&conv1, &conv1_done](absl::StatusOr<Message> message) {
+        EXPECT_OK(message);
+        if (!message.ok() || message->is_null()) {
+          conv1.reset();
+          if (!conv1_done.HasBeenNotified()) {
+            conv1_done.Notify();
+          }
+        }
+      }));
+  EXPECT_TRUE(conv1_done.WaitForNotificationWithTimeout(absl::Seconds(5)));
+
+  // Turn 2: A subsequent Conversation on the same Engine must complete
+  // normally without hanging on the callback thread pool.
+  ASSERT_OK_AND_ASSIGN(auto conv2, Conversation::Create(*engine, config));
+  absl::Notification conv2_done;
+  ASSERT_OK(conv2->SendMessageAsync(
+      user_message, [&conv2_done](absl::StatusOr<Message> message) {
+        EXPECT_OK(message);
+        if (!message.ok() || message->is_null()) {
+          if (!conv2_done.HasBeenNotified()) {
+            conv2_done.Notify();
+          }
+        }
+      }));
+  EXPECT_TRUE(conv2_done.WaitForNotificationWithTimeout(absl::Seconds(5)));
+}
+
+TEST(ConversationAsyncLifecycleTest,
+     CloseConversationInTerminalCallbackWithChannelFilteringDoesNotDeadlock) {
+  constexpr absl::string_view kPromptTemplateWithOpenChannel = R"jinja(
+{%- for message in messages -%}
+  {{- '<start_of_turn>' + message.role + '\n' -}}
+  {%- if message.content is string -%}
+    {{- message.content -}}
+  {%- else -%}
+    {%- for item in message.content -%}
+      {{- item.text -}}
+    {%- endfor -%}
+  {%- endif -%}
+  {{- '<end_of_turn>\n' -}}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+  {{- '<start_of_turn>assistant\n<|channel>thought\n' -}}
+{%- endif -%}
+)jinja";
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(32);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+  ASSERT_OK_AND_ASSIGN(
+      auto config,
+      ConversationConfig::Builder()
+          .SetOverwritePromptTemplate(
+              PromptTemplate(kPromptTemplateWithOpenChannel))
+          .SetFilterChannelContentFromKvCache(true)
+          .SetChannels({litert::lm::Channel{
+              .channel_name = "thought",
+              .start = "<|channel>thought\n",
+              .end = "<channel|>",
+          }})
+          .Build(*engine));
+
+  // Turn 1: Closing the Conversation inside the terminal callback when
+  // filter_channel_content_from_kv_cache is enabled (which schedules a
+  // background refill prefill task right before onDone) must not deadlock.
+  ASSERT_OK_AND_ASSIGN(auto conv1, Conversation::Create(*engine, config));
+  absl::Notification conv1_done;
+  Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
+  ASSERT_OK(conv1->SendMessageAsync(
+      user_message, [&conv1, &conv1_done](absl::StatusOr<Message> message) {
+        EXPECT_OK(message);
+        if (!message.ok() || message->is_null()) {
+          conv1.reset();
+          if (!conv1_done.HasBeenNotified()) {
+            conv1_done.Notify();
+          }
+        }
+      }));
+  EXPECT_TRUE(conv1_done.WaitForNotificationWithTimeout(absl::Seconds(5)));
+
+  // Turn 2: A subsequent Conversation on the same Engine must also complete
+  // normally.
+  ASSERT_OK_AND_ASSIGN(auto conv2, Conversation::Create(*engine, config));
+  absl::Notification conv2_done;
+  ASSERT_OK(conv2->SendMessageAsync(
+      user_message, [&conv2_done](absl::StatusOr<Message> message) {
+        EXPECT_OK(message);
+        if (!message.ok() || message->is_null()) {
+          if (!conv2_done.HasBeenNotified()) {
+            conv2_done.Notify();
+          }
+        }
+      }));
+  EXPECT_TRUE(conv2_done.WaitForNotificationWithTimeout(absl::Seconds(5)));
+}
+
+TEST(ConversationAsyncLifecycleTest,
+     CloseConversationInDependentCancelledCallbackDoesNotDeadlock) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(15);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+  ASSERT_OK_AND_ASSIGN(auto config, ConversationConfig::CreateDefault(*engine));
+
+  ASSERT_OK_AND_ASSIGN(auto conv1, Conversation::Create(*engine, config));
+  absl::Notification first_chunk_received;
+  absl::Notification dependent_turn_queued_and_cancelled;
+  absl::Notification conv1_closed;
+  Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
+
+  ASSERT_OK(conv1->SendMessageAsync(
+      user_message,
+      [&first_chunk_received, &dependent_turn_queued_and_cancelled](
+          absl::StatusOr<Message> message) {
+        if (message.ok() && !message->is_null() &&
+            !first_chunk_received.HasBeenNotified()) {
+          first_chunk_received.Notify();
+          dependent_turn_queued_and_cancelled.WaitForNotificationWithTimeout(
+              absl::Seconds(3));
+        }
+      }));
+
+  // Wait until the first turn's decode task is actively running, then queue a
+  // dependent turn and cancel the session from the main thread so FinishTask
+  // cascades TaskState::kDependentTaskCancelled via UpdateAllTasksToState.
+  ASSERT_TRUE(
+      first_chunk_received.WaitForNotificationWithTimeout(absl::Seconds(5)));
+  ASSERT_OK(conv1->SendMessageAsync(
+      user_message,
+      [&conv1, &conv1_closed](absl::StatusOr<Message> dep_message) {
+        if (!dep_message.ok()) {
+          conv1.reset();
+          conv1_closed.Notify();
+        }
+      }));
+  conv1->CancelProcess();
+  dependent_turn_queued_and_cancelled.Notify();
+  EXPECT_TRUE(conv1_closed.WaitForNotificationWithTimeout(absl::Seconds(5)));
+
+  // A subsequent Conversation on the same Engine must also complete normally.
+  ASSERT_OK_AND_ASSIGN(auto conv2, Conversation::Create(*engine, config));
+  absl::Notification conv2_done;
+  ASSERT_OK(conv2->SendMessageAsync(
+      user_message, [&conv2_done](absl::StatusOr<Message> message) {
+        EXPECT_OK(message);
+        if (!message.ok() || message->is_null()) {
+          if (!conv2_done.HasBeenNotified()) {
+            conv2_done.Notify();
+          }
+        }
+      }));
+  EXPECT_TRUE(conv2_done.WaitForNotificationWithTimeout(absl::Seconds(5)));
+}
+
 }  // namespace
 }  // namespace litert::lm

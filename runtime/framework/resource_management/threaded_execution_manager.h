@@ -363,13 +363,16 @@ class ThreadedExecutionManager : public ExecutionManager {
   absl::Status UpdateTaskState(TaskId task_id, TaskState task_state)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(session_and_task_lookup_mutex_);
 
-  // Updates all tasks to the given state.
+  // Updates all tasks to the given state and returns their callbacks to be
+  // invoked after state updates complete.
   // - task_ids: The task IDs of the tasks.
   // - task_state: The state of the tasks.
   // Note: UpdateAllTasksToState expects the callers to acquire the task lookup
   // mutex before calling it.
-  absl::Status UpdateAllTasksToState(
-      const absl::flat_hash_set<TaskId>& task_ids, TaskState task_state)
+  absl::StatusOr<std::vector<std::pair<
+      SessionId, absl::AnyInvocable<void(absl::StatusOr<Responses>)>>>>
+  UpdateAllTasksToState(const absl::flat_hash_set<TaskId>& task_ids,
+                        TaskState task_state)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(session_and_task_lookup_mutex_);
 
   // Processes and combines the contents of the preprocessed contents.
@@ -399,6 +402,16 @@ class ThreadedExecutionManager : public ExecutionManager {
   // The value is the task info.
   absl::flat_hash_map<TaskId, TaskInfo> task_lookup_
       ABSL_GUARDED_BY(session_and_task_lookup_mutex_) = {};
+  // Tracks the tasks and sessions with pending or executing terminal callbacks
+  // on `callback_thread_pool_`, so external callers of WaitUntilDone /
+  // WaitUntilSessionDone wait for the callback to return while re-entrant calls
+  // from inside the callback itself do not self-deadlock.
+  absl::flat_hash_set<TaskId> active_callback_task_ids_
+      ABSL_GUARDED_BY(session_and_task_lookup_mutex_) = {};
+  absl::flat_hash_map<SessionId, int> pending_callback_sessions_
+      ABSL_GUARDED_BY(session_and_task_lookup_mutex_) = {};
+  bool active_callback_waiting_for_execution_
+      ABSL_GUARDED_BY(session_and_task_lookup_mutex_) = false;
   // The last prefill token ID.
   int last_prefill_token_id_ = 0;
   // Tokenizer used for tokenization and detokenization.

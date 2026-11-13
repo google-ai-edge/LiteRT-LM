@@ -14,6 +14,7 @@
 
 #include "runtime/framework/resource_management/threaded_execution_manager.h"
 
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -72,6 +73,19 @@
 #include "runtime/util/tensor_buffer_util.h"
 
 namespace litert::lm {
+namespace {
+
+struct ActiveCallbackContext {
+  const ThreadedExecutionManager* runner = nullptr;
+  const std::vector<TaskId>* task_ids = nullptr;
+  const std::vector<SessionId>* session_ids = nullptr;
+};
+
+// Tracks the callback closure currently executing on this thread so re-entrant
+// WaitUntilDone / WaitUntilSessionDone calls do not self-deadlock.
+thread_local ActiveCallbackContext active_callback_context;
+
+}  // namespace
 
 ThreadedExecutionManager::ThreadedExecutionManager(
     Tokenizer* absl_nonnull tokenizer,
@@ -456,18 +470,34 @@ absl::Status ThreadedExecutionManager::FinishTask(
           absl::StrCat("Task ", task_id, " is not in Processing state."));
       return invoke_callback_and_return(error_status);
     }
+    std::vector<std::pair<SessionId,
+                          absl::AnyInvocable<void(absl::StatusOr<Responses>)>>>
+        dependent_callbacks;
+    TaskState dependent_task_state = TaskState::kDependentTaskFailed;
+    const SessionId task_session_id = task_lookup_.at(task_id).session_id;
+    std::vector<TaskId> callback_task_ids = {task_id};
+    std::vector<SessionId> callback_session_ids = {task_session_id};
     if (!responses.ok() || responses->GetTaskState() == TaskState::kCancelled) {
       auto following_waiting_tasks = FollowingWaitingTasks(task_id);
       if (!following_waiting_tasks.ok()) {
         return invoke_callback_and_return(following_waiting_tasks.status());
       }
-      auto status = UpdateAllTasksToState(
-          following_waiting_tasks.value(),
-          responses.ok() ? TaskState::kDependentTaskCancelled
-                         : TaskState::kDependentTaskFailed);
-      if (!status.ok()) {
-        return invoke_callback_and_return(status);
+      for (TaskId dep_task_id : *following_waiting_tasks) {
+        callback_task_ids.push_back(dep_task_id);
+        if (auto it = task_lookup_.find(dep_task_id);
+            it != task_lookup_.end()) {
+          callback_session_ids.push_back(it->second.session_id);
+        }
       }
+      dependent_task_state = responses.ok()
+                                 ? TaskState::kDependentTaskCancelled
+                                 : TaskState::kDependentTaskFailed;
+      auto callbacks = UpdateAllTasksToState(*following_waiting_tasks,
+                                             dependent_task_state);
+      if (!callbacks.ok()) {
+        return invoke_callback_and_return(callbacks.status());
+      }
+      dependent_callbacks = *std::move(callbacks);
     } else if (responses->GetTaskState() == TaskState::kDone ||
                responses->GetTaskState() == TaskState::kMaxNumTokensReached) {
       for (TaskId following_task_id :
@@ -509,33 +539,93 @@ absl::Status ThreadedExecutionManager::FinishTask(
 
     TaskState next_task_state =
         responses.ok() ? responses->GetTaskState() : TaskState::kFailed;
+    ABSL_RETURN_IF_ERROR(UpdateTaskState(task_id, next_task_state));
     if (callback_thread_pool_ != nullptr) {
-      ABSL_RETURN_IF_ERROR(callback_thread_pool_->Schedule(
-          [callback = std::move(callback), responses = std::move(responses),
-           task_id = task_id, next_task_state = std::move(next_task_state),
+      for (TaskId id : callback_task_ids) {
+        active_callback_task_ids_.insert(id);
+      }
+      for (SessionId sid : callback_session_ids) {
+        pending_callback_sessions_[sid]++;
+      }
+      absl::Status schedule_status = callback_thread_pool_->Schedule(
+          [callback = std::move(callback),
+           dependent_callbacks = std::move(dependent_callbacks),
+           dependent_task_state, responses = std::move(responses),
+           task_session_id, callback_task_ids, callback_session_ids,
            this]() mutable {
-            callback(std::move(responses));
-            absl::MutexLock lock(session_and_task_lookup_mutex_);
-            auto status = UpdateTaskState(task_id, next_task_state);
-            if (!status.ok()) {
-              ABSL_LOG(ERROR) << "Failed to update task state: " << status
-                              << " with task id: " << task_id;
+            const ActiveCallbackContext prev_context = active_callback_context;
+            active_callback_context = ActiveCallbackContext{
+                .runner = this,
+                .task_ids = &callback_task_ids,
+                .session_ids = &callback_session_ids,
+            };
+            auto is_session_alive = [this](SessionId sid) {
+              absl::MutexLock lock(session_and_task_lookup_mutex_);
+              return session_lookup_.contains(sid);
+            };
+            if (is_session_alive(task_session_id)) {
+              callback(std::move(responses));
             }
-          }));
-      ABSL_RETURN_IF_ERROR(
-          UpdateTaskState(task_id, TaskState::kLastCallbackQueued));
+            for (auto& [dep_session_id, dep_callback] : dependent_callbacks) {
+              if (is_session_alive(dep_session_id)) {
+                dep_callback(Responses(dependent_task_state));
+              }
+            }
+            active_callback_context = prev_context;
+            {
+              absl::MutexLock lock(session_and_task_lookup_mutex_);
+              for (TaskId id : callback_task_ids) {
+                active_callback_task_ids_.erase(id);
+              }
+              for (SessionId sid : callback_session_ids) {
+                if (auto it = pending_callback_sessions_.find(sid);
+                    it != pending_callback_sessions_.end() &&
+                    --it->second == 0) {
+                  pending_callback_sessions_.erase(it);
+                }
+              }
+            }
+          });
+      if (!schedule_status.ok()) {
+        for (TaskId id : callback_task_ids) {
+          active_callback_task_ids_.erase(id);
+        }
+        for (SessionId sid : callback_session_ids) {
+          if (auto it = pending_callback_sessions_.find(sid);
+              it != pending_callback_sessions_.end() && --it->second == 0) {
+            pending_callback_sessions_.erase(it);
+          }
+        }
+        return schedule_status;
+      }
     } else {
       callback(
           absl::InternalError("Callback thread pool is null, skipping "
                               "callback and ignoring task state."));
+      for (auto& [dep_session_id, dep_callback] : dependent_callbacks) {
+        dep_callback(
+            absl::InternalError("Callback thread pool is null, skipping "
+                                "callback and ignoring task state."));
+      }
     }
   }
 
   if (callback_thread_pool_ != nullptr) {
-    // TODO b/476205457 - Consider to use a asynchronous approach to handle the
-    // callback, and remove this WaitUntilDone.
-    ABSL_RETURN_IF_ERROR(
-        callback_thread_pool_->WaitUntilDone(absl::Seconds(10)));
+    // Wait for the scheduled callback to finish before starting the next task
+    // on execution_thread_pool_, unless the active callback on
+    // callback_thread_pool_ blocks in WaitUntilDone / WaitUntilSessionDone
+    // waiting for execution_thread_pool_ to execute an active task.
+    auto callback_done_or_yielded = [this, task_id]()
+        ABSL_SHARED_LOCKS_REQUIRED(session_and_task_lookup_mutex_) {
+          return !active_callback_task_ids_.contains(task_id) ||
+                 active_callback_waiting_for_execution_;
+        };
+    absl::MutexLock lock(session_and_task_lookup_mutex_);
+    if (!session_and_task_lookup_mutex_.AwaitWithTimeout(
+            absl::Condition(&callback_done_or_yielded), absl::Seconds(10))) {
+      return absl::DeadlineExceededError(
+          "Timed out waiting for callback thread pool to become done.");
+    }
   }
 
   return absl::OkStatus();
@@ -601,16 +691,28 @@ absl::Status ThreadedExecutionManager::UpdateTaskState(TaskId task_id,
   return absl::OkStatus();
 }
 
-absl::Status ThreadedExecutionManager::UpdateAllTasksToState(
+absl::StatusOr<std::vector<
+    std::pair<SessionId, absl::AnyInvocable<void(absl::StatusOr<Responses>)>>>>
+ThreadedExecutionManager::UpdateAllTasksToState(
     const absl::flat_hash_set<TaskId>& task_ids, TaskState task_state) {
+  std::vector<std::pair<SessionId,
+                        absl::AnyInvocable<void(absl::StatusOr<Responses>)>>>
+      callbacks_to_invoke;
+  callbacks_to_invoke.reserve(task_ids.size());
   for (TaskId task_id : task_ids) {
-    task_lookup_.at(task_id).dependent_tasks.clear();
-    if (task_lookup_.at(task_id).callback) {
-      task_lookup_.at(task_id).callback(Responses(task_state));
+    auto it = task_lookup_.find(task_id);
+    if (it == task_lookup_.end()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Task ", task_id, " not found in task list."));
+    }
+    it->second.dependent_tasks.clear();
+    if (it->second.callback != nullptr) {
+      callbacks_to_invoke.emplace_back(it->second.session_id,
+                                       std::move(it->second.callback));
     }
     ABSL_RETURN_IF_ERROR(UpdateTaskState(task_id, task_state));
   }
-  return absl::OkStatus();
+  return callbacks_to_invoke;
 }
 
 absl::StatusOr<ExecutorInputs>
@@ -792,14 +894,33 @@ ThreadedExecutionManager::Create(
 
 absl::Status ThreadedExecutionManager::WaitUntilDone(TaskId task_id,
                                                      absl::Duration timeout) {
-  auto task_done = [this, task_id]() {
+  const bool is_callback_thread = (active_callback_context.runner == this);
+  const bool is_reentrant_task_callback =
+      is_callback_thread && active_callback_context.task_ids != nullptr &&
+      std::find(active_callback_context.task_ids->begin(),
+                active_callback_context.task_ids->end(),
+                task_id) != active_callback_context.task_ids->end();
+  auto task_done = [this, task_id, is_reentrant_task_callback]() {
     session_and_task_lookup_mutex_.AssertReaderHeld();
-    return task_lookup_.contains(task_id) &&
-           IsTaskEndState(task_lookup_.at(task_id).task_state);
+    auto it = task_lookup_.find(task_id);
+    return it != task_lookup_.end() &&
+           IsTaskEndState(it->second.task_state) &&
+           (is_reentrant_task_callback ||
+            !active_callback_task_ids_.contains(task_id));
   };
   absl::MutexLock lock(session_and_task_lookup_mutex_);
-  return session_and_task_lookup_mutex_.AwaitWithTimeout(
-             absl::Condition(&task_done), timeout)
+  if (task_done()) {
+    return absl::OkStatus();
+  }
+  if (is_callback_thread) {
+    active_callback_waiting_for_execution_ = true;
+  }
+  bool completed = session_and_task_lookup_mutex_.AwaitWithTimeout(
+      absl::Condition(&task_done), timeout);
+  if (is_callback_thread) {
+    active_callback_waiting_for_execution_ = false;
+  }
+  return completed
              ? absl::OkStatus()
              : absl::DeadlineExceededError(absl::StrCat(
                    "Task ", task_id, " did not complete within the timeout of ",
@@ -808,14 +929,33 @@ absl::Status ThreadedExecutionManager::WaitUntilDone(TaskId task_id,
 
 absl::Status ThreadedExecutionManager::WaitUntilSessionDone(
     SessionId session_id, absl::Duration timeout) {
-  auto session_done = [this, session_id]() {
+  const bool is_callback_thread = (active_callback_context.runner == this);
+  const bool is_reentrant_session_callback =
+      is_callback_thread && active_callback_context.session_ids != nullptr &&
+      std::find(active_callback_context.session_ids->begin(),
+                active_callback_context.session_ids->end(),
+                session_id) != active_callback_context.session_ids->end();
+  auto session_done = [this, session_id, is_reentrant_session_callback]() {
     session_and_task_lookup_mutex_.AssertReaderHeld();
-    return session_lookup_.contains(session_id) &&
-           session_lookup_.at(session_id)->active_tasks.empty();
+    auto it = session_lookup_.find(session_id);
+    return it != session_lookup_.end() &&
+           it->second->active_tasks.empty() &&
+           (is_reentrant_session_callback ||
+            !pending_callback_sessions_.contains(session_id));
   };
   absl::MutexLock lock(session_and_task_lookup_mutex_);
-  return session_and_task_lookup_mutex_.AwaitWithTimeout(
-             absl::Condition(&session_done), timeout)
+  if (session_done()) {
+    return absl::OkStatus();
+  }
+  if (is_callback_thread) {
+    active_callback_waiting_for_execution_ = true;
+  }
+  bool completed = session_and_task_lookup_mutex_.AwaitWithTimeout(
+      absl::Condition(&session_done), timeout);
+  if (is_callback_thread) {
+    active_callback_waiting_for_execution_ = false;
+  }
+  return completed
              ? absl::OkStatus()
              : absl::DeadlineExceededError(
                    absl::StrCat("Session ", session_id,
