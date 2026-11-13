@@ -19,6 +19,7 @@
 // 2) Construct a graph model with the setting.
 // 3) Execute model inference and generate the output.
 
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -27,16 +28,18 @@
 #include <utility>
 #include <variant>
 
+#ifndef LITERT_LM_MAIN_NO_ENTRY_POINT
+#include "absl/flags/parse.h"  // from @com_google_absl
+#endif  // LITERT_LM_MAIN_NO_ENTRY_POINT
 #include "absl/base/log_severity.h"  // from @com_google_absl
 #include "absl/flags/flag.h"  // from @com_google_absl
-#include "absl/flags/parse.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
-#include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/log/globals.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
@@ -47,10 +50,10 @@
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/engine/shared_flags.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/status_macros.h"
-#include "runtime/engine/shared_flags.h"
 
 ABSL_FLAG(std::string, backend, "gpu",
           "Executor backend to use for LLM execution (cpu, gpu, etc.)");
@@ -71,30 +74,36 @@ using ::litert::lm::ModelAssets;
 using ::litert::lm::OptionalArgs;
 using ::nlohmann::json;
 
-absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateMessageCallback() {
-  return [](absl::StatusOr<Message> message) {
+constexpr absl::string_view kUsage =
+    "Usage: litert_lm_main --model_path=<path> "
+    "[--backend=cpu|gpu|npu] [--input_prompt=\"<prompt>\"] "
+    "[--input_prompt_file=<path>]";
+
+absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateMessageCallback(
+    std::ostream& out) {
+  return [&out](absl::StatusOr<Message> message) {
     if (!message.ok()) {
-      std::cout << "Error: " << message.status() << std::endl;
+      out << "Error: " << message.status() << std::endl;
       return;
     }
     if (message->is_null()) {
-      std::cout << std::endl << std::flush;
+      out << std::endl << std::flush;
       return;
     }
     for (const auto& content : (*message)["content"]) {
-      std::cout << content["text"].get<std::string>();
+      out << content["text"].get<std::string>();
     }
-    std::cout << std::flush;
+    out << std::flush;
   };
 }
 
 // Gets the input prompt from the command line flag or file.
-std::string GetInputPrompt() {
+absl::StatusOr<std::string> GetInputPrompt() {
   const std::string input_prompt = absl::GetFlag(FLAGS_input_prompt);
   const std::string input_prompt_file = absl::GetFlag(FLAGS_input_prompt_file);
   if (!input_prompt.empty() && !input_prompt_file.empty()) {
-    ABSL_LOG(FATAL) << "Only one of --input_prompt and --input_prompt_file can "
-                       "be specified.";
+    return absl::InvalidArgumentError(
+        "Only one of --input_prompt and --input_prompt_file can be specified.");
   }
   if (!input_prompt.empty()) {
     return input_prompt;
@@ -102,9 +111,8 @@ std::string GetInputPrompt() {
   if (!input_prompt_file.empty()) {
     std::ifstream file(input_prompt_file);
     if (!file.is_open()) {
-      std::cerr << "Error: Could not open file " << input_prompt_file
-                << std::endl;
-      return "";
+      return absl::NotFoundError(absl::StrCat(
+          "Could not open input_prompt_file: ", input_prompt_file));
     }
     std::stringstream buffer;
     buffer << file.rdbuf();
@@ -114,16 +122,17 @@ std::string GetInputPrompt() {
   return "What is the tallest building in the world?";
 }
 
-absl::Status MainHelper(int argc, char** argv) {
-  absl::ParseCommandLine(argc, argv);
+absl::Status MainHelper(std::ostream& out) {
   // Overrides the default for FLAGS_minloglevel to error.
   absl::SetMinLogLevel(absl::LogSeverityAtLeast::kError);
   absl::SetStderrThreshold(absl::LogSeverityAtLeast::kFatal);
 
   const std::string model_path = absl::GetFlag(FLAGS_model_path);
   if (model_path.empty()) {
-    return absl::InvalidArgumentError("Model path is empty.");
+    return absl::InvalidArgumentError(
+        absl::StrCat("--model_path must be specified.\n", kUsage));
   }
+  ABSL_ASSIGN_OR_RETURN(const std::string input_prompt, GetInputPrompt());
   ABSL_ASSIGN_OR_RETURN(ModelAssets model_assets,  // NOLINT
                         ModelAssets::Create(model_path));
   auto backend_str = absl::GetFlag(FLAGS_backend);
@@ -178,8 +187,7 @@ absl::Status MainHelper(int argc, char** argv) {
 
   // Prepare the message to send.
   json content_list = json::array();
-  const std::string input_prompt = GetInputPrompt();
-  std::cout << "input_prompt: " << input_prompt << std::endl;
+  out << "input_prompt: " << input_prompt << std::endl;
   content_list.push_back({{"type", "text"}, {"text", input_prompt}});
 
   // Limit the number of decoded tokens when --max_output_tokens is positive.
@@ -193,18 +201,43 @@ absl::Status MainHelper(int argc, char** argv) {
   // response.
   ABSL_RETURN_IF_ERROR(conversation->SendMessageAsync(
       json::object({{"role", "user"}, {"content", content_list}}),
-      CreateMessageCallback(), std::move(optional_args)));
+      CreateMessageCallback(out), std::move(optional_args)));
   ABSL_RETURN_IF_ERROR(engine->WaitUntilDone(absl::Minutes(10)));
 
   // Print the benchmark info.
   auto benchmark_info = conversation->GetBenchmarkInfo();
-  std::cout << std::endl << *benchmark_info << std::endl;
+  if (benchmark_info.ok()) {
+    out << std::endl << *benchmark_info << std::endl;
+  }
   return absl::OkStatus();
 }
 
 }  // namespace
 
-int main(int argc, char** argv) {
-  ABSL_CHECK_OK(MainHelper(argc, argv));
-  return 0;
+namespace litert::lm {
+
+int RunLiteRtLmFromFlags(std::ostream& out, std::ostream& err);
+
+int RunLiteRtLmFromFlags(std::ostream& out, std::ostream& err) {
+  const absl::Status status = MainHelper(out);
+  if (!status.ok()) {
+    err << "Error: " << status.message() << std::endl;
+    if (!absl::GetFlag(FLAGS_model_path).empty() &&
+        absl::GetFlag(FLAGS_backend) == "gpu") {
+      err << "Hint: pass --backend=cpu to run on CPU when a GPU delegate is "
+             "unavailable."
+          << std::endl;
+    }
+    return EXIT_FAILURE;
+  }
+  return EXIT_SUCCESS;
 }
+
+}  // namespace litert::lm
+
+#ifndef LITERT_LM_MAIN_NO_ENTRY_POINT
+int main(int argc, char** argv) {
+  absl::ParseCommandLine(argc, argv);
+  return litert::lm::RunLiteRtLmFromFlags(std::cout, std::cerr);
+}
+#endif  // LITERT_LM_MAIN_NO_ENTRY_POINT
