@@ -77,6 +77,12 @@ class LitertState : public StateInterface {
 
   absl::StatusOr<std::unique_ptr<StateInterface>> DeepCopy() const override;
 
+  absl::StatusOr<std::unique_ptr<StateInterface>> CopyLocalOrRecurrentState()
+      const override;
+
+  absl::Status RestoreLocalOrRecurrentState(
+      const StateInterface& other) override;
+
   // Creates a deep copy of this state with all state buffers backed by host
   // memory (`TensorBufferType::kHostMemory`), preserving allocation policy,
   // metadata, and ping-pong bank state.
@@ -124,6 +130,10 @@ class LitertState : public StateInterface {
     proto::StateBuffer::Type type = proto::StateBuffer::TYPE_UNSPECIFIED;
     std::optional<int> dynamic_dim;
   };
+
+  // Returns the state buffer bank that will be bound as input on the next step.
+  const absl::flat_hash_map<std::string, StateBuffer>& ActiveInputBank() const;
+  absl::flat_hash_map<std::string, StateBuffer>& ActiveInputBank();
 
   // Returns true if `DeepCopy()` snapshots buffers of `buffer_type` into host
   // memory (`TensorBufferType::kHostMemory`) instead of allocating new hardware

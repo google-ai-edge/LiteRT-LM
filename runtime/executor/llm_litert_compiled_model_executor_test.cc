@@ -79,7 +79,9 @@ namespace {
 
 using ::testing::Contains;
 using ::testing::Each;
+using ::testing::FloatNear;
 using ::testing::Ne;
+using ::testing::Pointwise;
 using ::testing::status::StatusIs;
 
 constexpr char kTestStaticModelPath[] =

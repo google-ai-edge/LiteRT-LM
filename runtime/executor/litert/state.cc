@@ -196,6 +196,21 @@ absl::Status BroadcastAndCopyBuffer(TensorBuffer& dst, int dst_batch_size,
   return absl::OkStatus();
 }
 
+bool IsLocalOrRecurrentStateBuffer(proto::StateBuffer::Type type) {
+  switch (type) {
+    case proto::StateBuffer::TYPE_LOCAL_KEY_CACHE:
+    case proto::StateBuffer::TYPE_LOCAL_VALUE_CACHE:
+    case proto::StateBuffer::TYPE_LINEAR_ATTENTION:
+      return true;
+    case proto::StateBuffer::TYPE_GLOBAL_KEY_CACHE:
+    case proto::StateBuffer::TYPE_GLOBAL_VALUE_CACHE:
+    case proto::StateBuffer::TYPE_UNSPECIFIED:
+      return false;
+    default:
+      return false;
+  }
+}
+
 }  // namespace
 
 absl::StatusOr<std::unique_ptr<LitertState>> LitertState::Create(
@@ -251,6 +266,20 @@ absl::Status LitertState::BroadcastAndCopyFrom(StateInterface& other) {
   }
 
   return absl::OkStatus();
+}
+
+const absl::flat_hash_map<std::string, LitertState::StateBuffer>&
+LitertState::ActiveInputBank() const {
+  return (bank_2_state_buffers_.has_value() && !bank_1_is_input_)
+             ? *bank_2_state_buffers_
+             : bank_1_state_buffers_;
+}
+
+absl::flat_hash_map<std::string, LitertState::StateBuffer>&
+LitertState::ActiveInputBank() {
+  return (bank_2_state_buffers_.has_value() && !bank_1_is_input_)
+             ? *bank_2_state_buffers_
+             : bank_1_state_buffers_;
 }
 
 bool LitertState::ShouldSnapshotToHostMemory(TensorBufferType buffer_type) {
@@ -313,6 +342,57 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::CloneInternal(
 
 absl::StatusOr<std::unique_ptr<StateInterface>> LitertState::DeepCopy() const {
   return CloneInternal();
+}
+
+absl::StatusOr<std::unique_ptr<StateInterface>>
+LitertState::CopyLocalOrRecurrentState() const {
+  absl::flat_hash_map<std::string, StateBuffer>
+      local_or_recurrent_state_buffers;
+  for (const auto& [name, state_buffer] : ActiveInputBank()) {
+    if (!IsLocalOrRecurrentStateBuffer(state_buffer.type)) {
+      continue;
+    }
+    ABSL_ASSIGN_OR_RETURN(
+        TensorBuffer buf_copy,
+        CopyTensorBufferToHostMemory(env_, state_buffer.buffer));
+    local_or_recurrent_state_buffers.insert_or_assign(
+        name, StateBuffer{
+                  .buffer = std::move(buf_copy),
+                  .type = state_buffer.type,
+                  .dynamic_dim = state_buffer.dynamic_dim,
+              });
+  }
+
+  auto copy = absl::WrapUnique(new LitertState(
+      batch_size_, num_entries_, env_,
+      std::move(local_or_recurrent_state_buffers),
+      /*bank_2_state_buffers=*/std::nullopt, allocation_policy_));
+  copy->bank_1_is_input_ = true;
+  copy->verified_gpu_inplace_signatures_ = verified_gpu_inplace_signatures_;
+  return copy;
+}
+
+absl::Status LitertState::RestoreLocalOrRecurrentState(
+    const StateInterface& other) {
+  const auto* other_litert = dynamic_cast<const LitertState*>(&other);
+  RET_CHECK(other_litert != nullptr) << "Only support LitertState.";
+  if (this == other_litert) {
+    return absl::OkStatus();
+  }
+  RET_CHECK(allocation_policy_ == other_litert->allocation_policy_)
+      << "Allocation policy mismatch.";
+  RET_CHECK_EQ(batch_size_, other_litert->batch_size_);
+
+  auto& dst_bank = ActiveInputBank();
+  const auto& src_bank = other_litert->ActiveInputBank();
+
+  for (const auto& [name, src_state_buffer] : src_bank) {
+    auto it = dst_bank.find(name);
+    RET_CHECK(it != dst_bank.end()) << "Missing state buffer: " << name;
+    ABSL_RETURN_IF_ERROR(
+        CopyTensorBufferContents(it->second.buffer, src_state_buffer.buffer));
+  }
+  return absl::OkStatus();
 }
 
 absl::StatusOr<std::unique_ptr<LitertState>>

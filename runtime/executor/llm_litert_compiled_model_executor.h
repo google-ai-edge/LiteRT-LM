@@ -109,6 +109,12 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   absl::Status RestoreContext(
       std::unique_ptr<LlmContext> context_data) override;
 
+  absl::StatusOr<std::unique_ptr<ProcessedContext>> SaveContext()
+      const override;
+
+  absl::Status RestoreContext(
+      std::unique_ptr<ProcessedContext> processed_context) override;
+
   absl::string_view ExecutorBackendName() const override {
     return "LiteRT Compiled Model";
   }
@@ -511,6 +517,14 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   absl::StatusOr<std::unique_ptr<StateInterface>> CloneState() const;
 
   absl::Status RestoreState(std::unique_ptr<StateInterface> state);
+
+  // Clones the non-rewindable local sliding-window KV cache and recurrent
+  // (linear/conv attention) state buffers.
+  absl::StatusOr<std::unique_ptr<StateInterface>> CloneLocalOrRecurrentState()
+      const;
+
+  absl::Status RestoreLocalOrRecurrentState(
+      std::unique_ptr<StateInterface> state);
 
   // Gets the LiteRT run options based on the current executor settings.
   litert::Options GetRunOptions() const;

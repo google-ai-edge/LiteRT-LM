@@ -60,6 +60,24 @@ class StateInterface {
   // Deep copies the KV cache. This is an expensive operation. Use sparingly.
   virtual absl::StatusOr<std::unique_ptr<StateInterface>> DeepCopy() const = 0;
 
+  // Deep copies the non-rewindable local sliding-window KV cache and recurrent
+  // (linear/conv attention) state buffers that are overwritten in place rather
+  // than indexed by global token position.
+  virtual absl::StatusOr<std::unique_ptr<StateInterface>>
+  CopyLocalOrRecurrentState() const {
+    return absl::UnimplementedError(
+        "CopyLocalOrRecurrentState not implemented");
+  }
+
+  // Copies the contents of the local/recurrent state buffers present in `other`
+  // into this state's existing buffers in place, leaving any position-indexed
+  // global KV cache buffers untouched.
+  virtual absl::Status RestoreLocalOrRecurrentState(
+      const StateInterface& other) {
+    return absl::UnimplementedError(
+        "RestoreLocalOrRecurrentState not implemented");
+  }
+
   // Returns true if this state container holds the tensor with the specified
   // `tensor_name`. The lookup maps to the signature input/output names of the
   // model.

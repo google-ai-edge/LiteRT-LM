@@ -33,10 +33,12 @@ class LlmProcessedContext : public ProcessedContext {
  public:
   explicit LlmProcessedContext(
       std::optional<uint32_t> lora_id, std::unique_ptr<StateInterface> state,
-      ::litert::lm::ProcessedTokens processed_tokens = {})
+      ::litert::lm::ProcessedTokens processed_tokens = {},
+      bool ran_decode = false)
       : lora_id_(lora_id),
         processed_tokens_(std::move(processed_tokens)),
-        state_(std::move(state)) {};
+        state_(std::move(state)),
+        ran_decode_(ran_decode) {};
 
   std::optional<uint32_t> lora_id() const override { return lora_id_; }
   void set_lora_id(std::optional<uint32_t> lora_id) override {
@@ -45,11 +47,13 @@ class LlmProcessedContext : public ProcessedContext {
   ProcessedTokens& processed_tokens() override { return processed_tokens_; }
 
   std::unique_ptr<StateInterface>& state() { return state_; }
+  bool ran_decode() const { return ran_decode_; }
 
  private:
   std::optional<uint32_t> lora_id_;
   ProcessedTokens processed_tokens_;
   std::unique_ptr<StateInterface> state_;
+  bool ran_decode_ = false;
 };
 
 }  // namespace litert::lm

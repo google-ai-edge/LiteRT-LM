@@ -1741,6 +1741,44 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreState(
   return absl::OkStatus();
 }
 
+absl::StatusOr<std::unique_ptr<StateInterface>>
+LlmLiteRtCompiledModelExecutorBase::CloneLocalOrRecurrentState() const {
+  const int output_heads =
+      llm_context_->runtime_config().output_heads.value_or(1);
+  // `state_` always has batch size 1 and is used during `Prefill` and
+  // single-candidate `Decode`. When `output_heads > 1`, `decode_state_` holds
+  // the multi-candidate state (batch size `output_heads`) during `Decode`,
+  // while `ran_decode` tracks whether the most recent step updated
+  // `decode_state_` (`true`) or `state_` (`false`).
+  const bool use_decode_state = output_heads > 1 &&
+                                llm_context_->runtime_state().ran_decode &&
+                                decode_state_ != nullptr;
+  StateInterface* active_state =
+      use_decode_state ? decode_state_.get() : state_.get();
+  if (active_state == nullptr) {
+    return nullptr;
+  }
+  return active_state->CopyLocalOrRecurrentState();
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreLocalOrRecurrentState(
+    std::unique_ptr<StateInterface> state) {
+  mtp_primed_ = false;
+  if (sampler_ != nullptr && sampler_->HandlesInput()) {
+    ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
+  }
+  if (state == nullptr) {
+    return absl::OkStatus();
+  }
+  // Select the destination state container matching the saved state's batch
+  // size (`state_` for batch size 1, `decode_state_` for multi-candidate
+  // batch size > 1), independent of what `ran_decode` was before restoring.
+  std::unique_ptr<StateInterface>& target =
+      state->GetBatchSize() > 1 ? decode_state_ : state_;
+  RET_CHECK(target != nullptr);
+  return target->RestoreLocalOrRecurrentState(*state);
+}
+
 absl::StatusOr<std::unique_ptr<LlmContext>>
 LlmLiteRtCompiledModelExecutorBase::CreateNewContext(
     std::optional<uint32_t> lora_id, RuntimeConfig runtime_config) const {
@@ -1802,6 +1840,45 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
   }
 
   force_prepare_needed_ = true;
+
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::unique_ptr<ProcessedContext>>
+LlmLiteRtCompiledModelExecutorBase::SaveContext() const {
+  std::optional<uint32_t> lora_id;
+  ABSL_ASSIGN_OR_RETURN(auto state, CloneLocalOrRecurrentState());
+  return std::make_unique<LlmProcessedContext>(
+      std::move(lora_id), std::move(state),
+      llm_context_->processed_context().processed_tokens(),
+      llm_context_->runtime_state().ran_decode);
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
+    std::unique_ptr<ProcessedContext> processed_context) {
+  RET_CHECK(processed_context != nullptr)
+          .SetCode(absl::StatusCode::kInvalidArgument)
+      << "ProcessedContext cannot be null.";
+  auto* llm_processed_context =
+      dynamic_cast<LlmProcessedContext*>(processed_context.get());
+  RET_CHECK(llm_processed_context != nullptr)
+          .SetCode(absl::StatusCode::kInvalidArgument)
+      << "ProcessedContext must be an LlmProcessedContext.";
+
+  const std::optional<uint32_t> lora_id = llm_processed_context->lora_id();
+  llm_context_->processed_context().set_lora_id(lora_id);
+
+  const int restored_step =
+      llm_processed_context->processed_tokens().TokenCount();
+  ABSL_RETURN_IF_ERROR(
+      RestoreLocalOrRecurrentState(std::move(llm_processed_context->state())));
+
+  llm_context_->processed_context().processed_tokens() =
+      std::move(llm_processed_context->processed_tokens());
+  llm_context_->runtime_state().current_step = restored_step;
+  llm_context_->runtime_state().ran_decode =
+      llm_processed_context->ran_decode();
+  force_prepare_needed_ = false;
 
   return absl::OkStatus();
 }
@@ -2100,7 +2177,13 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetCurrentStep(int new_step) {
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::Reset() {
   llm_context_->runtime_state().current_step = 0;
+  llm_context_->runtime_state().ran_decode = false;
+  llm_context_->processed_context().processed_tokens() = ProcessedTokens();
+  force_prepare_needed_ = false;
   mtp_primed_ = false;
+  if (sampler_ != nullptr && sampler_->HandlesInput()) {
+    ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
+  }
   // Zero out every state buffer, so that a new sequence does not continue from
   // the previous one. The KV cache alone could be kept, since its entries past
   // the current step are masked by position, but a linear attention state is a
