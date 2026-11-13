@@ -21,6 +21,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <limits>
@@ -33,6 +34,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -45,6 +47,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/constraint.h"
@@ -815,6 +818,9 @@ INSTANTIATE_TEST_SUITE_P(
         FakeLmTestCase{.name = "TokenInputWithoutVerify",
                        .model_file = "checksum_fake_lm_no_verify.tflite",
                        .supports_draft_verification = false},
+        FakeLmTestCase{.name = "TokenInputWithLoraParamTensor",
+                       .model_file = "checksum_fake_lm_lora.tflite",
+                       .supports_draft_verification = false},
         // Invalid verify signatures disturb neither decoding nor the valid
         // verify signature.
         FakeLmTestCase{.name = "TokenInputWithInvalidVerify",
@@ -825,6 +831,74 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<FakeLmTestCase>& info) {
       return info.param.name;
     });
+
+TEST(FakeLmLoraParamTensorTest, ZeroLoraBuffersFillLoraParamTensorRange) {
+  ASSERT_OK_AND_ASSIGN(auto resources, FakeLmModelResources::Create(
+                                           "checksum_fake_lm_lora.tflite",
+                                           /*embedder_file=*/std::nullopt));
+  ASSERT_OK_AND_ASSIGN(
+      auto model_assets,
+      ModelAssets::Create(FakeLmModelPath("checksum_fake_lm_lora.tflite")));
+  ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetCacheDir(":nocache");
+  settings.SetMaxNumTokens(kFakeLmContextSize);
+  CpuConfig cpu_config;
+  cpu_config.number_of_threads = 1;
+  settings.SetBackendConfig(cpu_config);
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, Environment::Create({}));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor,
+      LlmLiteRtCompiledModelExecutorStatic::Create(settings, env, *resources));
+
+  int prefill_checks = 0;
+  int decode_checks = 0;
+  executor->UpdatePreGraphRunCallback(
+      [&](absl::string_view signature_name, int current_step,
+          absl::flat_hash_map<absl::string_view, TensorBuffer>&
+              tensor_buffers) {
+        auto param_it = tensor_buffers.find("lora_param_tensor");
+        ASSERT_NE(param_it, tensor_buffers.end());
+        auto param_span = ReferTensorBufferAsSpan<int32_t>(param_it->second);
+        ASSERT_TRUE(param_span);
+        // Element 0 is the start index (0); the rest are the largest non-rank
+        // extent across LoRA inputs: max(4 * 16, 48) = 64.
+        EXPECT_THAT(*param_span, ElementsAre(0, 64, 64, 64, 64, 64, 64))
+            << "signature: " << signature_name;
+
+        for (absl::string_view weight_name :
+             {"key_w_prime_left_0", "query_w_prime_right_0"}) {
+          auto weight_it = tensor_buffers.find(weight_name);
+          ASSERT_NE(weight_it, tensor_buffers.end()) << weight_name;
+          LITERT_ASSERT_OK_AND_ASSIGN(size_t packed_size,
+                                      weight_it->second.PackedSize());
+          LITERT_ASSERT_OK_AND_ASSIGN(
+              auto lock_and_ptr,
+              litert::TensorBufferScopedLock::Create<const uint16_t>(
+                  weight_it->second, litert::TensorBuffer::LockMode::kRead));
+          absl::Span<const uint16_t> weight_span(
+              lock_and_ptr.second, packed_size / sizeof(uint16_t));
+          EXPECT_THAT(weight_span, ::testing::Each(0)) << weight_name;
+        }
+        if (signature_name == "decode") {
+          ++decode_checks;
+        } else {
+          ++prefill_checks;
+        }
+      });
+
+  const std::vector<int> prompt = {3, 1, 4};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto tokens_buffer,
+      CopyToTensorBuffer<int>(prompt, {1, static_cast<int>(prompt.size())}));
+  ExecutorInputs inputs;
+  inputs.SetTextData(ExecutorTextData(std::move(tokens_buffer)));
+  ASSERT_OK(executor->Prefill(inputs));
+  ASSERT_OK_AND_ASSIGN(auto output_tokens, executor->Decode());
+  EXPECT_GT(prefill_checks, 0);
+  EXPECT_GT(decode_checks, 0);
+  EXPECT_THAT(output_tokens, ElementsAre(ElementsAre(FakeLmNextToken(prompt))));
+}
 
 INSTANTIATE_TEST_SUITE_P(
     FakeLms, FakeLmDraftVerificationTest,
