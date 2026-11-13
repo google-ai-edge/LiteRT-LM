@@ -10,7 +10,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-antlr4rust = "0.5"
+antlr4rust = "0.6"
 chrono = "0.4"
 cxx = "=1.0.149"
 googletest = "0.14"
