@@ -61,8 +61,12 @@ ABSL_FLAG(std::string, model_path, "",
           "Path to the Any2Any .litertlm model file.");
 ABSL_FLAG(std::string, model_type, "minicpm-o-4.5",
           "Any2Any model architecture type (e.g. 'minicpm-o-4.5').");
-ABSL_FLAG(std::string, prompt, "Hello! How can you help me today?",
-          "Text prompt for the multimodal assistant.");
+ABSL_FLAG(std::string, prompt, "",
+          "Text prompt for the multimodal assistant. Defaults to 'Hello! How "
+          "can you help me today?' when no audio or image input is provided.");
+ABSL_FLAG(std::optional<std::string>, system_prompt, std::nullopt,
+          "Optional system prompt override (e.g. 'Perform ASR.' or 'Perform "
+          "TTS. Use the UK male voice.').");
 ABSL_FLAG(std::string, image_path, "",
           "Optional path to an input image file (PNG/JPEG).");
 ABSL_FLAG(std::string, audio_path, "",
@@ -73,7 +77,13 @@ ABSL_FLAG(std::optional<bool>, generate_audio, std::nullopt,
           "Whether to synthesize speech audio output in addition to text.");
 ABSL_FLAG(int, max_new_tokens, 512,
           "Maximum number of LLM text tokens to generate.");
+ABSL_FLAG(std::optional<int>, max_tts_tokens, std::nullopt,
+          "Optional maximum number of TTS audio frames to generate.");
 ABSL_FLAG(float, temperature, 0.7f, "Sampling temperature (0.0 for greedy).");
+ABSL_FLAG(std::optional<float>, tts_temperature, std::nullopt,
+          "Optional TTS audio token sampling temperature.");
+ABSL_FLAG(std::optional<int>, tts_top_k, std::nullopt,
+          "Optional TTS audio token top-k sampling limit.");
 ABSL_FLAG(std::string, language, "en-US", "Target output language.");
 ABSL_FLAG(std::string, voice, "default", "Target output voice identifier.");
 ABSL_FLAG(int, num_threads, 4,
@@ -166,7 +176,23 @@ absl::Status Run() {
     session_config.set_generate_audio(true);
   }
   session_config.set_max_new_tokens(absl::GetFlag(FLAGS_max_new_tokens));
+  if (const auto max_tts_tokens = absl::GetFlag(FLAGS_max_tts_tokens);
+      max_tts_tokens.has_value()) {
+    session_config.set_max_tts_tokens(*max_tts_tokens);
+  }
   session_config.set_temperature(absl::GetFlag(FLAGS_temperature));
+  if (const auto tts_temp = absl::GetFlag(FLAGS_tts_temperature);
+      tts_temp.has_value()) {
+    session_config.set_tts_temperature(*tts_temp);
+  }
+  if (const auto tts_top_k = absl::GetFlag(FLAGS_tts_top_k);
+      tts_top_k.has_value()) {
+    session_config.set_tts_top_k(*tts_top_k);
+  }
+  if (const auto sys_prompt = absl::GetFlag(FLAGS_system_prompt);
+      sys_prompt.has_value()) {
+    session_config.set_system_prompt(*sys_prompt);
+  }
   session_config.set_language(absl::GetFlag(FLAGS_language));
   session_config.set_voice(absl::GetFlag(FLAGS_voice));
 
@@ -194,7 +220,7 @@ absl::Status Run() {
     ABSL_ASSIGN_OR_RETURN(
         auto wav_source,
         litert::omni::asr::FileAudioSource::Create(
-            audio_path, /*interval=*/absl::Seconds(10),
+            audio_path, /*interval=*/absl::Seconds(60),
             /*overlap=*/absl::ZeroDuration(), /*sample_rate_hz=*/16000));
     ABSL_RETURN_IF_ERROR(
         raw_input->PushInput(litert::omni::OmniSession::AudioInputMetadata{
@@ -213,7 +239,10 @@ absl::Status Run() {
     }
   }
 
-  const std::string prompt = absl::GetFlag(FLAGS_prompt);
+  std::string prompt = absl::GetFlag(FLAGS_prompt);
+  if (prompt.empty() && audio_path.empty() && image_path.empty()) {
+    prompt = "Hello! How can you help me today?";
+  }
   if (!prompt.empty()) {
     ABSL_RETURN_IF_ERROR(raw_input->PushInput(
         litert::omni::OmniSession::TextInput{.text = prompt}));

@@ -55,9 +55,42 @@ message MiniCpmO {
   optional string language = 15;
 }
 
+// LiquidAI/LFM2.5-Audio-1.5B: FastConformer + MLP adapter audio encoder,
+// LFM2-1.2B hybrid short-conv + GQA LLM backbone, RQ-Transformer speech token
+// generator, and 24 kHz LFM2 neural audio detokenizer over Mimi codes.
+message Lfm2Audio {
+  // LLM backbone hidden dimension (default 2048).
+  optional int32 llm_hidden_size = 1;
+  // LLM backbone vocabulary size (default 65536).
+  optional int32 llm_vocab_size = 2;
+  // RQ-Transformer Depthformer hidden dimension (default 1024).
+  optional int32 tts_hidden_size = 3;
+  // Number of discrete audio tokens per codebook in Depthformer vocabulary
+  // (default 2049, including EOAudio=2048).
+  optional int32 tts_vocab_size = 4;
+  // Number of RVQ codebooks in the Mimi neural audio codec (default 8).
+  optional int32 tts_num_codebooks = 5;
+  // Number of log-mel spectrogram bins for FastConformer audio encoder (default
+  // 128).
+  optional int32 audio_mel_bins = 6;
+  // Temporal subsampling factor of FastConformer audio encoder (default 8).
+  optional int32 audio_subsampling_factor = 7;
+  // Whether to synthesize speech output by default.
+  optional bool generate_audio = 8;
+  // Maximum number of LLM tokens to generate per turn (default 512).
+  optional int32 max_new_tokens = 9;
+  // Maximum number of TTS audio frames to generate per turn (default 1024).
+  optional int32 max_tts_tokens = 10;
+  // Default speaker or voice identifier.
+  optional string voice = 11;
+  // Default language code in BCP-47 format (e.g., "en-US").
+  optional string language = 12;
+}
+
 // Architecture-specific parameters for Any-to-Any multimodal models.
 message Any2AnyModelType {
   oneof model_type {
     MiniCpmO minicpm_o = 1;
+    Lfm2Audio lfm2_audio = 2;
   }
 }

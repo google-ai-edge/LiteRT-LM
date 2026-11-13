@@ -14,27 +14,22 @@
 
 #include "omni/any2any/minicpm_o/minicpm_o_factory.h"
 
-#include <cstddef>
-#include <functional>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
-#include "litert/cc/litert_model.h"  // from @litert
+#include "omni/any2any/any2any_session.h"
 #include "omni/any2any/minicpm_o/minicpm_o_audio_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_fan_out_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_frontend_stage.h"
@@ -53,201 +48,11 @@
 #include "omni/omni_session.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
-#include "runtime/executor/llm_executor_settings.h"
-#include "runtime/executor/llm_litert_compiled_model_executor_factory.h"
 #include "runtime/proto/any2any_metadata.pb.h"
-#include "runtime/proto/llm_metadata.pb.h"
-#include "runtime/util/scoped_file.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::any2any {
 namespace {
-
-class BackboneLmModelResources : public lm::ModelResources {
- public:
-  explicit BackboneLmModelResources(std::shared_ptr<lm::ModelResources> inner)
-      : inner_(std::move(inner)) {}
-
-  using lm::ModelResources::GetTFLiteModel;
-  using lm::ModelResources::GetTFLiteModelBackendConstraint;
-  using lm::ModelResources::GetTFLiteModelBuffer;
-  using lm::ModelResources::GetTFLiteModelPreferActivationType;
-  using lm::ModelResources::GetTFLiteModelSectionFileRegion;
-  using lm::ModelResources::GetTokenizer;
-  using lm::ModelResources::GetWeightInMemoryMap;
-  using lm::ModelResources::GetWeightsSectionOffset;
-  using lm::ModelResources::HasTFLiteModel;
-
-  bool HasTFLiteModel(
-      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
-    return HasTFLiteModel(lm::TfLiteModelTypeToWireString(model_type));
-  }
-
-  bool HasTFLiteModel(absl::string_view model_type_str) override {
-    return inner_->HasTFLiteModel(MapModelTypeString(model_type_str));
-  }
-
-  absl::StatusOr<const Model*> GetTFLiteModel(
-      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
-    return GetTFLiteModel(lm::TfLiteModelTypeToWireString(model_type));
-  }
-
-  absl::StatusOr<const Model*> GetTFLiteModel(
-      absl::string_view model_type_str) override {
-    return inner_->GetTFLiteModel(MapModelTypeString(model_type_str));
-  }
-
-  absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
-    return GetTFLiteModelBuffer(lm::TfLiteModelTypeToWireString(model_type));
-  }
-
-  absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
-      absl::string_view model_type_str) override {
-    return inner_->GetTFLiteModelBuffer(MapModelTypeString(model_type_str));
-  }
-
-  absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
-    return GetWeightsSectionOffset(lm::TfLiteModelTypeToWireString(model_type));
-  }
-
-  absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
-      absl::string_view model_type_str) override {
-    return inner_->GetWeightsSectionOffset(MapModelTypeString(model_type_str));
-  }
-
-  absl::StatusOr<lm::FileRegion> GetTFLiteModelSectionFileRegion(
-      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
-    return GetTFLiteModelSectionFileRegion(
-        lm::TfLiteModelTypeToWireString(model_type));
-  }
-
-  absl::StatusOr<lm::FileRegion> GetTFLiteModelSectionFileRegion(
-      absl::string_view model_type_str) override {
-    return inner_->GetTFLiteModelSectionFileRegion(
-        MapModelTypeString(model_type_str));
-  }
-
-  std::optional<std::string> GetTFLiteModelBackendConstraint(
-      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
-    return GetTFLiteModelBackendConstraint(
-        lm::TfLiteModelTypeToWireString(model_type));
-  }
-
-  std::optional<std::string> GetTFLiteModelBackendConstraint(
-      absl::string_view model_type_str) override {
-    return inner_->GetTFLiteModelBackendConstraint(
-        MapModelTypeString(model_type_str));
-  }
-
-  std::optional<std::string> GetTFLiteModelPreferActivationType(
-      lm::proto::LlmMetadata::TfLiteModelType model_type) override {
-    return GetTFLiteModelPreferActivationType(
-        lm::TfLiteModelTypeToWireString(model_type));
-  }
-
-  std::optional<std::string> GetTFLiteModelPreferActivationType(
-      absl::string_view model_type_str) override {
-    return inner_->GetTFLiteModelPreferActivationType(
-        MapModelTypeString(model_type_str));
-  }
-
-  const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-  GetWeightInMemoryMap(
-      lm::proto::LlmMetadata::TfLiteModelType model_type) const override {
-    return GetWeightInMemoryMap(lm::TfLiteModelTypeToWireString(model_type));
-  }
-
-  const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
-  GetWeightInMemoryMap(absl::string_view model_type_str) const override {
-    return inner_->GetWeightInMemoryMap(MapModelTypeString(model_type_str));
-  }
-
-  absl::StatusOr<std::reference_wrapper<lm::ScopedFile>> GetScopedFile()
-      override {
-    return inner_->GetScopedFile();
-  }
-
-  absl::StatusOr<std::unique_ptr<lm::Tokenizer>> GetTokenizer() override {
-    return inner_->GetTokenizer();
-  }
-
-  absl::StatusOr<const lm::proto::LlmMetadata*> GetLlmMetadata() override {
-    return inner_->GetLlmMetadata();
-  }
-
-  absl::StatusOr<const lm::proto::ExecutorMetadata*> GetExecutorMetadata()
-      override {
-    return inner_->GetExecutorMetadata();
-  }
-
-  absl::StatusOr<const lm::proto::Any2AnyMetadata*> GetAny2AnyMetadata()
-      override {
-    return inner_->GetAny2AnyMetadata();
-  }
-
- private:
-  static std::string MapModelTypeString(absl::string_view model_type_str) {
-    if (absl::EqualsIgnoreCase(
-            model_type_str,
-            lm::TfLiteModelTypeToWireString(
-                lm::proto::LlmMetadata::TF_LITE_PREFILL_DECODE))) {
-      return lm::TfLiteModelTypeToWireString(
-          lm::proto::Any2AnyMetadata::TF_LITE_LLM_BACKBONE);
-    }
-    if (absl::EqualsIgnoreCase(model_type_str,
-                               lm::TfLiteModelTypeToWireString(
-                                   lm::proto::LlmMetadata::TF_LITE_EMBEDDER))) {
-      return lm::TfLiteModelTypeToWireString(
-          lm::proto::Any2AnyMetadata::TF_LITE_TEXT_EMBEDDER);
-    }
-    return std::string(model_type_str);
-  }
-
-  std::shared_ptr<lm::ModelResources> inner_;
-};
-
-absl::StatusOr<std::unique_ptr<LiteRtLmRunner>> CreateBackboneLmRunner(
-    Environment& env, const ModelOptions& options,
-    std::shared_ptr<lm::ModelResources> lm_resources) {
-  std::optional<lm::ModelAssets> model_assets;
-  auto scoped_file = lm_resources->GetScopedFile();
-  if (scoped_file.ok()) {
-    LITERT_ASSIGN_OR_RETURN(auto dup_file, scoped_file->get().Duplicate());
-    auto shared_scoped_file =
-        std::make_shared<lm::ScopedFile>(std::move(dup_file));
-    ABSL_ASSIGN_OR_RETURN(
-        model_assets,
-        lm::ModelAssets::Create(shared_scoped_file, options.model_dir));
-  } else {
-    ABSL_ASSIGN_OR_RETURN(model_assets,
-                          lm::ModelAssets::Create(options.model_dir));
-  }
-  ABSL_ASSIGN_OR_RETURN(auto executor_settings,
-                        lm::LlmExecutorSettings::CreateDefault(
-                            std::move(*model_assets), options.backend,
-                            /*sampler_backend=*/lm::Backend::CPU));
-  if (options.backend == lm::Backend::CPU && options.num_threads > 0) {
-    lm::CpuConfig cpu_config;
-    cpu_config.number_of_threads = options.num_threads;
-    executor_settings.SetBackendConfig(cpu_config);
-  } else if (options.backend == lm::Backend::GPU) {
-    executor_settings.SetActivationDataType(
-        options.force_fp32_on_gpu ? lm::ActivationDataType::FLOAT32
-                                  : lm::ActivationDataType::FLOAT16);
-  }
-  if (!options.cache_dir.empty()) {
-    executor_settings.SetCacheDir(options.cache_dir);
-  }
-  auto backbone_resources =
-      std::make_unique<BackboneLmModelResources>(std::move(lm_resources));
-  LITERT_ASSIGN_OR_RETURN(auto executor,
-                          lm::CreateLlmLiteRtCompiledModelExecutor(
-                              executor_settings, env, *backbone_resources));
-  return std::make_unique<LiteRtLmRunnerImpl>(std::move(executor),
-                                              std::move(backbone_resources));
-}
 
 ModelOptions MakeModelOptions(absl::string_view model_path,
                               absl::string_view cache_dir, lm::Backend backend,
