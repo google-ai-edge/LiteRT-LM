@@ -62,8 +62,10 @@ cc_test(
     deps = [
         ":state",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/c:litert_common",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_environment",

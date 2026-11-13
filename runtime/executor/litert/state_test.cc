@@ -27,8 +27,10 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -271,6 +273,65 @@ TEST_F(LitertStateTest, CopyContentsFromPreservesPingPongInputBank) {
   ASSERT_FALSE(next.input_buffers.empty());
   for (auto& [name, buffer] : next.input_buffers) {
     ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, 9)) << name;
+  }
+}
+
+// GPU command buffers prepared in advance rely on the next runs binding the
+// same buffers as before, so restoring contents must not flip which bank the
+// destination reads next, even if the source's bank parity differs.
+TEST_F(LitertStateTest, CopyContentsFromKeepsDestinationPingPongBankParity) {
+  ASSERT_NO_FATAL_FAILURE(SetUpKV(kTestStaticModelPath,
+                                  LitertState::AllocationPolicy::kPingPong,
+                                  /*batch_size=*/1));
+  // Advance the destination by one step, so that it reads bank 2 next. The
+  // buffers written in this step are the ones it must read in the next step.
+  absl::flat_hash_map<std::string, LiteRtTensorBuffer> expected_next_inputs;
+  {
+    ASSERT_OK_AND_ASSIGN(
+        auto step,
+        kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+    ASSERT_FALSE(step.output_buffers.empty());
+    for (auto& [name, buffer] : step.output_buffers) {
+      expected_next_inputs[name] = buffer.Get();
+    }
+  }
+
+  // The source runs two steps, so it reads bank 1 next, i.e. its parity
+  // differs from the destination's. Its next input bank (bank 1) holds 3 and
+  // its next output bank (bank 2) holds 5.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<LitertState> source,
+      LitertState::Create(*env_, *compiled_model_, kDecodeSignatureRunner,
+                          /*executor_metadata=*/nullptr,
+                          LitertState::AllocationPolicy::kPingPong,
+                          /*batch_size=*/1));
+  ASSERT_TRUE(kv_cache_->CanCopyContentsFrom(*source));
+  {
+    ASSERT_OK_AND_ASSIGN(
+        auto first_step,
+        source->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+    for (auto& [_, buffer] : first_step.input_buffers) {
+      ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 3));
+    }
+    for (auto& [_, buffer] : first_step.output_buffers) {
+      ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 5));
+    }
+    ASSERT_OK(source->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner)
+                  .status());
+  }
+
+  ASSERT_OK(kv_cache_->CopyContentsFrom(*source));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto next,
+      kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+  ASSERT_EQ(next.input_buffers.size(), expected_next_inputs.size());
+  for (auto& [name, buffer] : next.input_buffers) {
+    EXPECT_EQ(buffer.Get(), expected_next_inputs.at(name)) << name;
+    ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, 3)) << name;
+  }
+  for (auto& [name, buffer] : next.output_buffers) {
+    ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, 5)) << name;
   }
 }
 

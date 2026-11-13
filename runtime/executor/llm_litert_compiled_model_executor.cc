@@ -1726,14 +1726,27 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreState(
   std::unique_ptr<StateInterface>& target =
       state->GetBatchSize() > 1 ? decode_state_ : state_;
 
-  // `CloneState()` snapshots shared NPU/DMA state buffers (`Ahwb`, `Ion`,
-  // `DmaBuf`, `FastRpc`) into host memory via `LitertState::DeepCopy()`. Copy
-  // such snapshots back into the existing bound hardware buffers in place so
-  // hardware delegates do not lose their bound device buffer handles.
+  // Restore into the existing hardware state buffers in place instead of
+  // swapping in the restored buffer objects:
+  // - `CloneState()` snapshots shared NPU/DMA state buffers (`Ahwb`, `Ion`,
+  //   `DmaBuf`, `FastRpc`) into host memory via `LitertState::DeepCopy()`, and
+  //   hardware delegates must not lose their bound device buffer handles.
+  // - GPU accelerators may prepare command buffers in advance
+  //   (`SetNumStepsOfCommandBufferPreparations()`), which is only valid while
+  //   the GPU resource bindings stay the same as in previous steps. Swapping
+  //   the KV cache buffer objects on every context switch breaks that and,
+  //   depending on the GPU backend, either re-records command buffers or
+  //   replays command buffers bound to another context's KV cache.
+  // CPU state buffers are swapped since no bindings are cached for them, and
+  // so are GPU state buffers whose layout changed (e.g. a resized dynamic KV
+  // cache), which the GPU accelerator detects as a binding change. Host memory
+  // snapshots are always copied in place, even if their layout changed:
+  // swapping them in would hand host buffers to the hardware delegate, so
+  // `CopyContentsFrom()` returns an error for a layout mismatch instead.
   auto* current = dynamic_cast<LitertState*>(target.get());
   auto* restored = dynamic_cast<LitertState*>(state.get());
   if (current != nullptr && restored != nullptr && !current->IsHostMemory() &&
-      restored->IsHostMemory()) {
+      (restored->IsHostMemory() || current->CanCopyContentsFrom(*restored))) {
     return current->CopyContentsFrom(*restored);
   }
 

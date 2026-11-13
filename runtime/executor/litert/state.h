@@ -96,12 +96,32 @@ class LitertState : public StateInterface {
   // Returns true if all state buffers are backed by host memory.
   bool IsHostMemory() const;
 
-  // Copies the contents of all state buffers (both banks for kPingPong) and
-  // the ping-pong bank index from `other` into this state's existing buffers,
-  // without reallocating them. `other` must have the same allocation policy,
-  // batch size, number of entries and set of state buffers. The buffer types
-  // may differ (e.g. restoring a host memory snapshot into NPU or GPU buffers
-  // in place without replacing bound hardware buffer handles).
+  // Returns whether `CopyContentsFrom(other)` is supported, i.e. `other` has
+  // the same allocation policy, batch size, number of entries and set of state
+  // buffers as this state.
+  //
+  // args:
+  //   other: the state whose contents would be copied into this state.
+  // returns: true if the layouts of both states match.
+  bool CanCopyContentsFrom(const LitertState& other) const;
+
+  // Copies the contents of all state buffers (both banks for kPingPong) from
+  // `other` into this state's existing buffers, without reallocating them.
+  // `other` must satisfy `CanCopyContentsFrom()`. The buffer types may differ
+  // (e.g. restoring a host memory snapshot into NPU or GPU buffers in place
+  // without replacing bound hardware buffer handles).
+  //
+  // This state keeps its own ping-pong bank parity: the bank that `other` would
+  // read from in its next run is copied into the bank that this state reads
+  // from in its next run. This keeps the GPU resource bindings of the next runs
+  // identical to the ones before the copy, which GPU command buffers prepared
+  // in advance (`SetNumStepsOfCommandBufferPreparations()`) rely on. Buffers of
+  // the same device type are copied on the device when supported.
+  //
+  // args:
+  //   other: the state to copy contents from.
+  // returns: OK on success, or an error if the layouts mismatch or a copy
+  //   fails.
   absl::Status CopyContentsFrom(const LitertState& other);
 
   // Resizes the KV cache to the given number of entries (sequence length).
@@ -139,6 +159,18 @@ class LitertState : public StateInterface {
   // memory (`TensorBufferType::kHostMemory`) instead of allocating new hardware
   // buffers of the same type.
   static bool ShouldSnapshotToHostMemory(TensorBufferType buffer_type);
+
+  // Copies the contents of every buffer in the `src` bank into the buffer of
+  // the same name in the `dst` bank, without changing the buffer objects.
+  //
+  // args:
+  //   dst: the bank to copy into.
+  //   src: the bank to copy from. Must have the same buffer names as `dst`.
+  // returns: OK on success, or an error if the banks have different buffer
+  //   names or a copy fails.
+  static absl::Status CopyBankContents(
+      absl::flat_hash_map<std::string, StateBuffer>& dst,
+      const absl::flat_hash_map<std::string, StateBuffer>& src);
 
   // Deep copies all state buffers. Buffers are snapshotted into host memory if
   // `force_host_memory` is true or `ShouldSnapshotToHostMemory()` returns true

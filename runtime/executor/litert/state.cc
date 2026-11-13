@@ -416,6 +416,35 @@ bool LitertState::IsHostMemory() const {
   return true;
 }
 
+bool LitertState::CanCopyContentsFrom(const LitertState& other) const {
+  if (allocation_policy_ != other.allocation_policy_ ||
+      batch_size_ != other.batch_size_ || num_entries_ != other.num_entries_ ||
+      bank_2_state_buffers_.has_value() !=
+          other.bank_2_state_buffers_.has_value() ||
+      bank_1_state_buffers_.size() != other.bank_1_state_buffers_.size()) {
+    return false;
+  }
+  for (const auto& [name, _] : bank_1_state_buffers_) {
+    if (!other.bank_1_state_buffers_.contains(name)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+absl::Status LitertState::CopyBankContents(
+    absl::flat_hash_map<std::string, StateBuffer>& dst,
+    const absl::flat_hash_map<std::string, StateBuffer>& src) {
+  RET_CHECK_EQ(dst.size(), src.size());
+  for (auto& [name, state_buffer] : dst) {
+    const auto it = src.find(name);
+    RET_CHECK(it != src.end()) << "Missing state buffer: " << name;
+    ABSL_RETURN_IF_ERROR(
+        CopyTensorBufferContents(state_buffer.buffer, it->second.buffer));
+  }
+  return absl::OkStatus();
+}
+
 absl::Status LitertState::CopyContentsFrom(const LitertState& other) {
   if (this == &other) {
     return absl::OkStatus();
@@ -427,26 +456,20 @@ absl::Status LitertState::CopyContentsFrom(const LitertState& other) {
   RET_CHECK_EQ(bank_2_state_buffers_.has_value(),
                other.bank_2_state_buffers_.has_value());
 
-  auto copy_bank = [](absl::flat_hash_map<std::string, StateBuffer>& dst,
-                      const absl::flat_hash_map<std::string, StateBuffer>& src)
-      -> absl::Status {
-    RET_CHECK_EQ(dst.size(), src.size());
-    for (auto& [name, state_buffer] : dst) {
-      auto it = src.find(name);
-      RET_CHECK(it != src.end()) << "Missing state buffer: " << name;
-      ABSL_RETURN_IF_ERROR(
-          CopyTensorBufferContents(state_buffer.buffer, it->second.buffer));
-    }
-    return absl::OkStatus();
-  };
-
-  ABSL_RETURN_IF_ERROR(
-      copy_bank(bank_1_state_buffers_, other.bank_1_state_buffers_));
-  if (bank_2_state_buffers_.has_value()) {
-    ABSL_RETURN_IF_ERROR(
-        copy_bank(*bank_2_state_buffers_, *other.bank_2_state_buffers_));
+  if (!bank_2_state_buffers_.has_value()) {
+    return CopyBankContents(bank_1_state_buffers_, other.bank_1_state_buffers_);
   }
-  bank_1_is_input_ = other.bank_1_is_input_;
+  // Keep this state's bank parity so that the next runs bind the same buffers
+  // as they would have without the copy. If the parities differ, the bank that
+  // `other` reads next is bank 2 while this state reads bank 1 next (or vice
+  // versa), so the banks are copied crosswise.
+  const bool same_parity = bank_1_is_input_ == other.bank_1_is_input_;
+  ABSL_RETURN_IF_ERROR(CopyBankContents(
+      bank_1_state_buffers_, same_parity ? other.bank_1_state_buffers_
+                                         : *other.bank_2_state_buffers_));
+  ABSL_RETURN_IF_ERROR(CopyBankContents(
+      *bank_2_state_buffers_, same_parity ? *other.bank_2_state_buffers_
+                                          : other.bank_1_state_buffers_));
   return absl::OkStatus();
 }
 
