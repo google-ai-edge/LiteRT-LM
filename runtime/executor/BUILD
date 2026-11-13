@@ -241,9 +241,11 @@ cc_library(
     ],
 )
 
-# Flags to configure the static GPU accelerator backend for Apple targets (iOS and macOS)
+# Flags to configure the GPU accelerator backend for Apple targets (iOS and macOS)
 # and Android.
-# By default, iOS uses Metal ("metal"), macOS uses WebGPU ("webgpu"), and Android uses OpenCL/OpenGL.
+# By default, iOS uses Metal ("metal"), macOS uses WebGPU ("webgpu"), static Android builds use
+# OpenCL/OpenGL, and dynamic Android builds use ml_drift_gpu_accelerator_so (OpenCL if available,
+# otherwise WebGPU if Dawn is available).
 # Pass --//runtime/executor:gpu_accelerator=webgpu or =metal to override.
 # This flag selects both the inference accelerator (below) and the GPU sampler linked by
 # //runtime/components:default_static_gpu_samplers; the two must always
@@ -335,11 +337,8 @@ selects.config_setting_group(
 cc_library(
     name = "default_dynamic_gpu_accelerator",
     data = select({
-        ":android_webgpu": [
-            "@litert//litert/runtime/accelerators/gpu:ml_drift_gpu_accelerator_so",
-        ],
         "@platforms//os:android": [
-            "@litert//litert/runtime/accelerators/gpu:ml_drift_cl_gl_accelerator_so",
+            "@litert//litert/runtime/accelerators/gpu:ml_drift_gpu_accelerator_so",
         ],
         ":macos_metal": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_metal_accelerator_dylib",

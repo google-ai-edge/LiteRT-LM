@@ -214,7 +214,7 @@ def run_engine(
 
     env = os.environ.copy()
 
-    if is_dynamic:
+    if is_dynamic or backend == "gpu":
       discovered_dirs = _get_dynamic_lib_dirs(engine_binary)
       print(f"\n[DEBUG] Found dynamic libraries in: {discovered_dirs}\n")
       lib_paths = os.pathsep.join(discovered_dirs)

@@ -14,18 +14,63 @@
 
 #include "runtime/components/sampler_factory.h"
 
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
+#include "litert/cc/litert_api_types.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_environment_options.h"  // from @litert
+#include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/sampler.h"
+#include "runtime/components/top_k_webgpu_sampler.h"
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+
+extern "C" {
+extern int (*LiteRtTopKOpenClSampler_Create_Static)(
+    const struct LiteRtRuntimeCApiStruct*, LiteRtEnvironment, int, int, int,
+    const void*, const void*, void**, char**);
+extern void (*LiteRtTopKOpenClSampler_Destroy_Static)(void*);
+extern int (*LiteRtTopKOpenClSampler_SampleToIdAndScoreBuffer_Static)(
+    void*, LiteRtTensorBuffer, LiteRtTensorBuffer, const LiteRtTensorBuffer*,
+    char**);
+extern int (*LiteRtTopKOpenClSampler_UpdateConfig_Static)(void*, const void*,
+                                                          int, void*, char**);
+extern int (*LiteRtTopKOpenClSampler_CanHandleInput_Static)(void*);
+extern int (*LiteRtTopKOpenClSampler_HandlesInput_Static)(void*);
+extern int (*LiteRtTopKOpenClSampler_SetInferenceFuncAndInputTensors_Static)(
+    void*, int (*)(void*), void*, LiteRtTensorBuffer, LiteRtTensorBuffer,
+    LiteRtTensorBuffer, LiteRtTensorBuffer, LiteRtTensorBuffer,
+    LiteRtTensorBuffer, LiteRtTensorBuffer, char**);
+
+extern int (*LiteRtTopKWebGpuSampler_Create_Static)(
+    const struct LiteRtRuntimeCApiStruct*, LiteRtEnvironment, int, int, int,
+    const void*, const void*, void**, char**);
+extern void (*LiteRtTopKWebGpuSampler_Destroy_Static)(void*);
+extern int (*LiteRtTopKWebGpuSampler_SampleToIdAndScoreBuffer_Static)(
+    void*, LiteRtTensorBuffer, LiteRtTensorBuffer, const LiteRtTensorBuffer*,
+    char**);
+extern int (*LiteRtTopKWebGpuSampler_UpdateConfig_Static)(void*, const void*,
+                                                          int, void*, char**);
+extern int (*LiteRtTopKWebGpuSampler_CanHandleInput_Static)(void*);
+extern int (*LiteRtTopKWebGpuSampler_HandlesInput_Static)(void*);
+extern int (*LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors_Static)(
+    void*, int (*)(void*), void*, LiteRtTensorBuffer, LiteRtTensorBuffer,
+    LiteRtTensorBuffer, LiteRtTensorBuffer, LiteRtTensorBuffer,
+    LiteRtTensorBuffer, LiteRtTensorBuffer, char**);
+}  // extern "C"
 
 namespace litert::lm {
 namespace {
@@ -180,6 +225,165 @@ TEST(SamplerFactoryTest, UpdateOrRecreateSamplerFailsWithoutSampler) {
                                       /*batch_size=*/1, unspecified),
               StatusIs(absl::StatusCode::kInternal));
   EXPECT_EQ(max_top_k, 0);
+}
+
+int g_fake_opencl_create_calls = 0;
+int g_fake_webgpu_create_calls = 0;
+
+int FakeOpenClCreate(const struct LiteRtRuntimeCApiStruct*, LiteRtEnvironment,
+                     int, int, int, const void*, const void*,
+                     void** sampler_out, char**) {
+  ++g_fake_opencl_create_calls;
+  static int dummy_cl_sampler = 1;
+  *sampler_out = &dummy_cl_sampler;
+  return 0;
+}
+
+int FakeWebGpuCreate(const struct LiteRtRuntimeCApiStruct*, LiteRtEnvironment,
+                     int, int, int, const void*, const void*,
+                     void** sampler_out, char**) {
+  ++g_fake_webgpu_create_calls;
+  static int dummy_wgpu_sampler = 2;
+  *sampler_out = &dummy_wgpu_sampler;
+  return 0;
+}
+
+void FakeDestroy(void*) {}
+int FakeSample(void*, LiteRtTensorBuffer, LiteRtTensorBuffer,
+               const LiteRtTensorBuffer*, char**) {
+  return 0;
+}
+int FakeUpdateConfig(void*, const void*, int, void*, char**) { return 0; }
+int FakeBoolStub(void*) { return 0; }
+int FakeSetInference(void*, int (*)(void*), void*, LiteRtTensorBuffer,
+                     LiteRtTensorBuffer, LiteRtTensorBuffer, LiteRtTensorBuffer,
+                     LiteRtTensorBuffer, LiteRtTensorBuffer, LiteRtTensorBuffer,
+                     char**) {
+  return 0;
+}
+
+TEST(SamplerFactoryTest,
+     CreateGpuSamplerSelectsMatchingBackendWhenMultipleStaticSamplersLinked) {
+  auto prev_cl_create = LiteRtTopKOpenClSampler_Create_Static;
+  auto prev_cl_destroy = LiteRtTopKOpenClSampler_Destroy_Static;
+  auto prev_cl_sample = LiteRtTopKOpenClSampler_SampleToIdAndScoreBuffer_Static;
+  auto prev_cl_update = LiteRtTopKOpenClSampler_UpdateConfig_Static;
+  auto prev_cl_can_handle = LiteRtTopKOpenClSampler_CanHandleInput_Static;
+  auto prev_cl_handles = LiteRtTopKOpenClSampler_HandlesInput_Static;
+  auto prev_cl_set_inf =
+      LiteRtTopKOpenClSampler_SetInferenceFuncAndInputTensors_Static;
+
+  auto prev_wgpu_create = LiteRtTopKWebGpuSampler_Create_Static;
+  auto prev_wgpu_destroy = LiteRtTopKWebGpuSampler_Destroy_Static;
+  auto prev_wgpu_sample =
+      LiteRtTopKWebGpuSampler_SampleToIdAndScoreBuffer_Static;
+  auto prev_wgpu_update = LiteRtTopKWebGpuSampler_UpdateConfig_Static;
+  auto prev_wgpu_can_handle = LiteRtTopKWebGpuSampler_CanHandleInput_Static;
+  auto prev_wgpu_handles = LiteRtTopKWebGpuSampler_HandlesInput_Static;
+  auto prev_wgpu_set_inf =
+      LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors_Static;
+
+  absl::Cleanup restore = [&] {
+    LiteRtTopKOpenClSampler_Create_Static = prev_cl_create;
+    LiteRtTopKOpenClSampler_Destroy_Static = prev_cl_destroy;
+    LiteRtTopKOpenClSampler_SampleToIdAndScoreBuffer_Static = prev_cl_sample;
+    LiteRtTopKOpenClSampler_UpdateConfig_Static = prev_cl_update;
+    LiteRtTopKOpenClSampler_CanHandleInput_Static = prev_cl_can_handle;
+    LiteRtTopKOpenClSampler_HandlesInput_Static = prev_cl_handles;
+    LiteRtTopKOpenClSampler_SetInferenceFuncAndInputTensors_Static =
+        prev_cl_set_inf;
+
+    LiteRtTopKWebGpuSampler_Create_Static = prev_wgpu_create;
+    LiteRtTopKWebGpuSampler_Destroy_Static = prev_wgpu_destroy;
+    LiteRtTopKWebGpuSampler_SampleToIdAndScoreBuffer_Static = prev_wgpu_sample;
+    LiteRtTopKWebGpuSampler_UpdateConfig_Static = prev_wgpu_update;
+    LiteRtTopKWebGpuSampler_CanHandleInput_Static = prev_wgpu_can_handle;
+    LiteRtTopKWebGpuSampler_HandlesInput_Static = prev_wgpu_handles;
+    LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors_Static =
+        prev_wgpu_set_inf;
+  };
+
+  LiteRtTopKOpenClSampler_Create_Static = &FakeOpenClCreate;
+  LiteRtTopKOpenClSampler_Destroy_Static = &FakeDestroy;
+  LiteRtTopKOpenClSampler_SampleToIdAndScoreBuffer_Static = &FakeSample;
+  LiteRtTopKOpenClSampler_UpdateConfig_Static = &FakeUpdateConfig;
+  LiteRtTopKOpenClSampler_CanHandleInput_Static = &FakeBoolStub;
+  LiteRtTopKOpenClSampler_HandlesInput_Static = &FakeBoolStub;
+  LiteRtTopKOpenClSampler_SetInferenceFuncAndInputTensors_Static =
+      &FakeSetInference;
+
+  LiteRtTopKWebGpuSampler_Create_Static = &FakeWebGpuCreate;
+  LiteRtTopKWebGpuSampler_Destroy_Static = &FakeDestroy;
+  LiteRtTopKWebGpuSampler_SampleToIdAndScoreBuffer_Static = &FakeSample;
+  LiteRtTopKWebGpuSampler_UpdateConfig_Static = &FakeUpdateConfig;
+  LiteRtTopKWebGpuSampler_CanHandleInput_Static = &FakeBoolStub;
+  LiteRtTopKWebGpuSampler_HandlesInput_Static = &FakeBoolStub;
+  LiteRtTopKWebGpuSampler_SetInferenceFuncAndInputTensors_Static =
+      &FakeSetInference;
+
+  g_fake_opencl_create_calls = 0;
+  g_fake_webgpu_create_calls = 0;
+
+  // 1. Empty environment has neither OpenCL nor WebGPU device tag, so GPU
+  // sampler creation falls back cleanly to CPU TopPSampler.
+  LITERT_ASSERT_OK_AND_ASSIGN(auto empty_env, litert::Environment::Create({}));
+  ASSERT_OK_AND_ASSIGN(
+      auto cpu_fallback,
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    std::cref(empty_env), /*sequence_size=*/1,
+                    /*vocab_size=*/128));
+  EXPECT_NE(dynamic_cast<TopPSampler*>(cpu_fallback.get()), nullptr);
+  EXPECT_EQ(g_fake_opencl_create_calls, 0);
+  EXPECT_EQ(g_fake_webgpu_create_calls, 0);
+
+#if LITERT_HAS_OPENCL_SUPPORT
+  // 2. Environment publishing kOpenClDeviceId selects the OpenCL sampler.
+  const std::vector<litert::EnvironmentOptions::Option> cl_opts = {
+      {litert::EnvironmentOptions::Tag::kOpenClDeviceId, int64_t{1}},
+  };
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto cl_env,
+      litert::Environment::Create(litert::EnvironmentOptions(cl_opts)));
+  ASSERT_OK_AND_ASSIGN(
+      auto cl_sampler,
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    std::cref(cl_env), /*sequence_size=*/1,
+                    /*vocab_size=*/128));
+  EXPECT_EQ(dynamic_cast<TopPSampler*>(cl_sampler.get()), nullptr);
+  EXPECT_EQ(g_fake_opencl_create_calls, 1);
+  EXPECT_EQ(g_fake_webgpu_create_calls, 0);
+#endif  // LITERT_HAS_OPENCL_SUPPORT
+
+#if LITERT_HAS_WEBGPU_SUPPORT
+  // 3. Environment publishing kWebGpuDevice selects the WebGPU sampler.
+  const std::vector<litert::EnvironmentOptions::Option> wgpu_opts = {
+      {litert::EnvironmentOptions::Tag::kWebGpuDevice, int64_t{1}},
+  };
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto wgpu_env,
+      litert::Environment::Create(litert::EnvironmentOptions(wgpu_opts)));
+  ASSERT_OK_AND_ASSIGN(
+      auto wgpu_sampler,
+      CreateSampler(Backend::GPU, /*batch_size=*/1, TopPParams(1, 0.0f, 1.0f),
+                    std::cref(wgpu_env), /*sequence_size=*/1,
+                    /*vocab_size=*/128));
+  EXPECT_EQ(dynamic_cast<TopPSampler*>(wgpu_sampler.get()), nullptr);
+  EXPECT_EQ(g_fake_webgpu_create_calls, 1);
+#endif  // LITERT_HAS_WEBGPU_SUPPORT
+}
+
+TEST(SamplerFactoryTest, TopKWebGpuSamplerReadsRuntimeLibraryDirOption) {
+  const std::string empty_dir = testing::TempDir();
+  const std::vector<litert::EnvironmentOptions::Option> opts = {
+      {litert::EnvironmentOptions::Tag::kRuntimeLibraryDir,
+       litert::StringView(empty_dir)},
+  };
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, litert::Environment::Create(litert::EnvironmentOptions(opts)));
+  auto status_or = TopKWebGpuSampler::Create(
+      env, /*batch_size=*/1, /*sequence_size=*/1, /*vocab_size=*/128,
+      /*activation_data_type=*/std::nullopt, TopPParams(1, 0.0f, 1.0f));
+  EXPECT_FALSE(status_or.ok());
 }
 
 }  // namespace

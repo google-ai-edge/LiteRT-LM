@@ -290,7 +290,28 @@ cc_library(
 # Apple and Android conditions below follow the same
 # //runtime/executor:gpu_accelerator flag.
 cc_library(
-    name = "default_static_gpu_samplers",
+    name = "default_dynamic_mode_gpu_samplers",
+    visibility = ["//visibility:private"],
+    deps = select({
+        "//runtime/executor:android_webgpu": [":top_k_webgpu_sampler_static"],
+        "@platforms//os:android": [
+            ":top_k_opencl_sampler_static",
+            ":top_k_webgpu_sampler_static",
+        ],
+        "//runtime/executor:ios_webgpu": [":top_k_webgpu_sampler_static"],
+        "//runtime/executor:macos_metal": [":top_k_metal_sampler_static"],
+        "@platforms//os:ios": [":top_k_metal_sampler_static"],
+        "@platforms//os:macos": [
+            ":top_k_metal_sampler_static",
+            ":top_k_webgpu_sampler_static",
+        ],
+        "//conditions:default": [":top_k_webgpu_sampler_static"],
+    }),
+)
+
+cc_library(
+    name = "default_static_mode_gpu_samplers",
+    visibility = ["//visibility:private"],
     deps = select({
         "//runtime/executor:android_webgpu": [":top_k_webgpu_sampler_static"],
         "@platforms//os:android": [":top_k_opencl_sampler_static"],
@@ -305,16 +326,31 @@ cc_library(
     }),
 )
 
+cc_library(
+    name = "default_static_gpu_samplers",
+    deps = select({
+        "@litert//litert:litert_runtime_link_mode_dynamic": [":default_dynamic_mode_gpu_samplers"],
+        "//conditions:default": [":default_static_mode_gpu_samplers"],
+    }),
+)
+
 cc_test(
     name = "sampler_factory_test",
     srcs = ["sampler_factory_test.cc"],
     deps = [
         ":sampler",
         ":sampler_factory",
+        ":top_k_webgpu_sampler",
         ":top_p_cpu_sampler",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/cc:litert_api_types",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_environment_options",
+        "@litert//litert/test:matchers",
         "//runtime/executor:executor_settings_base",
         "//runtime/proto:sampler_params_cc_proto",
         "//runtime/util:test_utils",
@@ -838,63 +874,15 @@ cc_test(
     ],
 )
 
-genrule(
-    name = "generate_webgpu_dawn_stub",
-    srcs = ["@dawn//:include/dawn/webgpu.h"],
-    outs = ["webgpu_dawn_stub.cc"],
-    cmd = "sed -n -E 's/.*WGPU_EXPORT .* (wgpu[A-Za-z0-9_]+)\\(.*/extern \"C\" __declspec(dllexport) void \\1() {}/p' $(location @dawn//:include/dawn/webgpu.h) > $@",
-    target_compatible_with = ["@platforms//os:windows"],
-)
-
-cc_binary(
-    name = "stub/webgpu_dawn.dll",
-    srcs = [":webgpu_dawn_stub.cc"],
-    linkshared = 1,
-    target_compatible_with = ["@platforms//os:windows"],
-)
-
-filegroup(
-    name = "webgpu_dawn_interface_lib",
-    srcs = [":stub/webgpu_dawn.dll"],
-    output_group = "interface_library",
-    target_compatible_with = ["@platforms//os:windows"],
-)
-
-cc_import(
-    name = "webgpu_dawn_dll_import",
-    interface_library = ":webgpu_dawn_interface_lib",
-    system_provided = 1,
-    target_compatible_with = ["@platforms//os:windows"],
-)
-
+# Stages prebuilt Dawn shared libraries in desktop runfiles without adding a
+# load-time link dependency (Dawn is loaded on demand via webgpu_dawn_loader).
 cc_library(
     name = "webgpu_dawn_shared_lib",
-    srcs = select({
-        "//build_config:android_arm64": ["//prebuilt/android_arm64:libwebgpu_dawn.so"],
-        "//build_config:android_x86_64": ["//prebuilt/android_x86_64:libwebgpu_dawn.so"],
-        "//build_config:linux_x86_64": ["//prebuilt/linux_x86_64:libwebgpu_dawn.so"],
-        "//build_config:linux_arm64": ["//prebuilt/linux_arm64:libwebgpu_dawn.so"],
-        "@platforms//os:macos": ["//prebuilt/macos_arm64:libwebgpu_dawn.dylib"],
-        "//conditions:default": [],
-    }),
     data = select({
         "//build_config:linux_x86_64": ["//prebuilt/linux_x86_64:libwebgpu_dawn.so"],
         "//build_config:linux_arm64": ["//prebuilt/linux_arm64:libwebgpu_dawn.so"],
         "@platforms//os:macos": ["//prebuilt/macos_arm64:libwebgpu_dawn.dylib"],
         "@platforms//os:windows": ["//prebuilt/windows_x86_64:webgpu_dawn.dll"],
-        "//conditions:default": [],
-    }),
-    linkopts = select({
-        "@platforms//os:macos": ["-Wl,-rpath,@loader_path"],
-        "@platforms//os:ios": ["-Wl,-rpath,@loader_path"],
-        "@platforms//os:windows": [
-            "/DELAYLOAD:webgpu_dawn.dll",
-            "delayimp.lib",
-        ],
-        "//conditions:default": [],
-    }),
-    deps = select({
-        "@platforms//os:windows": [":webgpu_dawn_dll_import"],
         "//conditions:default": [],
     }),
 )
@@ -909,6 +897,7 @@ TOP_K_WEBGPU_SAMPLER_COMMON_DEPS = [
     "@com_google_absl//absl/status",
     "@com_google_absl//absl/status:statusor",
     "@com_google_absl//absl/strings",
+    "@com_google_absl//absl/strings:string_view",
     "@com_google_absl//absl/types:span",
     "@com_google_absl//absl/time",
     "@ml_drift//ml_drift/common:data_type",
@@ -930,6 +919,7 @@ TOP_K_WEBGPU_SAMPLER_COMMON_DEPS = [
     "@ml_drift//ml_drift/webgpu:instance",
     "@ml_drift//ml_drift/webgpu:spatial_tensor",
     "@ml_drift//ml_drift/webgpu:webgpu_headers",
+    "@litert//ml_drift_delegate/delegate:webgpu_dawn_loader",
     "//runtime/executor:executor_settings_base",
     "//runtime/proto:sampler_params_cc_proto",
     "//runtime/util:litert_status_util",
