@@ -60,6 +60,8 @@
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/util/model_type_utils.h"
@@ -275,6 +277,38 @@ std::string ApplyFallbackPromptTemplate(const PromptTemplateInput& input,
   return output;
 }
 
+// Returns whether `Conversation` should use step-only checkpoint rewinding
+// (`Session::SaveCheckpoint` / `Session::RewindToCheckpoint`) by default when
+// filtering channel content from the KV cache.
+//
+// Returning `false` routes checkpointing through `Session::SaveContext` and
+// `Session::RestoreContext`, which delegates to the executor's context saving:
+// - If the model has non-rewindable local sliding-window ring buffers or
+//   recurrent states, those buffers are snapshotted and restored alongside the
+//   token step counter.
+// - If the model only has position-indexed global KV cache buffers, no buffers
+//   are copied and `SaveContext` / `RestoreContext` simply saves and rewinds
+//   the token step counter.
+bool ShouldEnableRewindingByDefault(const EngineSettings& engine_settings) {
+  const auto& main_settings = engine_settings.GetMainExecutorSettings();
+  switch (main_settings.GetBackend()) {
+    case Backend::CPU:
+    case Backend::GPU:
+      return false;
+    case Backend::GPU_ARTISAN: {
+      auto gpu_artisan_config =
+          main_settings.GetBackendConfig<GpuArtisanConfig>();
+      if (gpu_artisan_config.ok() &&
+          gpu_artisan_config->use_autosized_ringbuffers) {
+        return false;
+      }
+      return true;
+    }
+    default:
+      return true;
+  }
+}
+
 }  // namespace
 
 absl::StatusOr<ConversationConfig> ConversationConfig::CreateDefault(
@@ -293,7 +327,8 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     bool filter_channel_content_from_kv_cache,
     bool return_error_on_parse_failure, bool return_error_on_max_tokens_reached,
     std::optional<ThinkingConfig> thinking_config, bool stream_tool_calls,
-    const std::string& stream_tool_calls_channel_name, bool enable_rewinding) {
+    const std::string& stream_tool_calls_channel_name,
+    std::optional<bool> enable_rewinding) {
   if (preface.has_value() && !std::holds_alternative<JsonPreface>(*preface)) {
     return absl::InvalidArgumentError("Only JsonPreface is supported for now.");
   }
@@ -371,13 +406,16 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
             session_config_copy.GetLlmModelType(), tool_call_config, channels));
   }
 
+  const bool resolved_enable_rewinding = enable_rewinding.value_or(
+      ShouldEnableRewindingByDefault(engine_settings));
+
   return ConversationConfig(
       session_config_copy, preface.value_or(JsonPreface()), prompt_template,
       processor_config, enable_constrained_decoding, prefill_preface_on_init,
       std::move(constraint_provider_config), std::move(channels),
       filter_channel_content_from_kv_cache, return_error_on_parse_failure,
       return_error_on_max_tokens_reached, thinking_config, stream_tool_calls,
-      stream_tool_calls_channel_name, enable_rewinding);
+      stream_tool_calls_channel_name, resolved_enable_rewinding);
 }
 
 absl::StatusOr<std::string>
