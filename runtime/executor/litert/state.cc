@@ -660,15 +660,18 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
       RET_CHECK_EQ(dims.size(), 4);
       context_size = dims[3];
     } else if (!key_cache_input_names.empty()) {
-      // Fallback: get capacity from key cache tensor layout.
-      // Usually key cache layout is [batch, num_heads, sequence_length,
-      // head_dim]
+      // Fallback: get capacity from key cache tensor layout. Both
+      // [batch, num_heads, sequence_length, head_dim] and
+      // [batch, sequence_length, num_heads, head_dim] are in use (the latter
+      // e.g. in the litert-community Qwen2.5 exports), so the sequence axis is
+      // whichever of the two middle dimensions is larger; reading dims[2]
+      // alone returns the KV head count for the second layout.
       LITERT_ASSIGN_OR_RETURN(const RankedTensorType k_tensor_type,
                               compiled_model.GetInputTensorType(
                                   signature_name, key_cache_input_names[0]));
       auto dims = k_tensor_type.Layout().Dimensions();
       RET_CHECK_GE(dims.size(), 3);
-      context_size = dims[2];
+      context_size = std::max(dims[1], dims[2]);
     } else {
       context_size = std::numeric_limits<int>::max();
     }
