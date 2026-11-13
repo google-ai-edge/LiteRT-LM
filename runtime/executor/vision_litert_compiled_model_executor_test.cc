@@ -617,7 +617,7 @@ TEST(VisionLiteRtCompiledModelExecutorTest, EncodeInputMapsWithCancellation) {
       auto input_buffer,
       CreateTensorBuffer<float>(absl::MakeSpan(input_data), input_tensor_type));
   absl::flat_hash_map<std::string, TensorBuffer> input_maps;
-  input_maps["images"] = std::move(input_buffer);
+  input_maps.insert_or_assign("images", std::move(input_buffer));
 
   ASSERT_OK_AND_ASSIGN(auto expected_output,
                        vision_executor->Encode(input_maps));
@@ -739,7 +739,7 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
 
   // Verify buffer reuse across repeated map-based Encode() calls.
   absl::flat_hash_map<std::string, TensorBuffer> input_maps;
-  input_maps["images"] = std::move(input_buffer);
+  input_maps.insert_or_assign("images", std::move(input_buffer));
   ASSERT_OK_AND_ASSIGN(auto map_output_data,
                        vision_executor->Encode(input_maps));
   ASSERT_OK_AND_ASSIGN(TensorBuffer * map_output_embeddings,
@@ -749,7 +749,7 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
   EXPECT_EQ(map_output_vector, output_vector);
 
   absl::flat_hash_map<std::string, TensorBuffer> second_input_maps;
-  second_input_maps["images"] = std::move(second_input_buffer);
+  second_input_maps.insert_or_assign("images", std::move(second_input_buffer));
   ASSERT_OK_AND_ASSIGN(auto second_map_output_data,
                        vision_executor->Encode(second_input_maps));
   ASSERT_OK_AND_ASSIGN(TensorBuffer * second_map_output_embeddings,
@@ -833,7 +833,7 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
 
   // Verify buffer reuse across repeated map-based Encode() calls.
   absl::flat_hash_map<std::string, TensorBuffer> input_maps;
-  input_maps["images"] = std::move(input_buffer);
+  input_maps.insert_or_assign("images", std::move(input_buffer));
   ASSERT_OK_AND_ASSIGN(auto map_output_data,
                        vision_executor->Encode(input_maps));
   ASSERT_OK_AND_ASSIGN(TensorBuffer * map_output_embeddings,
@@ -843,7 +843,7 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
   EXPECT_EQ(map_output_vector, output_vector);
 
   absl::flat_hash_map<std::string, TensorBuffer> second_input_maps;
-  second_input_maps["images"] = std::move(second_input_buffer);
+  second_input_maps.insert_or_assign("images", std::move(second_input_buffer));
   ASSERT_OK_AND_ASSIGN(auto second_map_output_data,
                        vision_executor->Encode(second_input_maps));
   ASSERT_OK_AND_ASSIGN(TensorBuffer * second_map_output_embeddings,
@@ -1036,7 +1036,7 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
         CreateTensorBuffer<float>(absl::MakeSpan(full_input_data),
                                   full_tensor_type));
     absl::flat_hash_map<std::string, TensorBuffer> full_maps;
-    full_maps["images"] = std::move(full_buffer);
+    full_maps.insert_or_assign("images", std::move(full_buffer));
     ASSERT_OK(reused_executor->Encode(full_maps));
 
     // Now encode a 4-patch input (shrink factor 2 -> 2 visual tokens < 5
@@ -1047,7 +1047,7 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
                          CreateTensorBuffer<float>(
                              absl::MakeSpan(sub_input_data), sub_tensor_type));
     absl::flat_hash_map<std::string, TensorBuffer> sub_maps;
-    sub_maps["images"] = std::move(sub_buffer);
+    sub_maps.insert_or_assign("images", std::move(sub_buffer));
     ASSERT_OK_AND_ASSIGN(ExecutorVisionData reused_output,
                          reused_executor->Encode(sub_maps));
     ASSERT_OK_AND_ASSIGN(ExecutorStats stats, reused_executor->StopProfiling());
@@ -1068,7 +1068,7 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
                          CreateTensorBuffer<float>(
                              absl::MakeSpan(sub_input_data), sub_tensor_type));
     absl::flat_hash_map<std::string, TensorBuffer> fresh_sub_maps;
-    fresh_sub_maps["images"] = std::move(fresh_sub_buffer);
+    fresh_sub_maps.insert_or_assign("images", std::move(fresh_sub_buffer));
     ASSERT_OK_AND_ASSIGN(ExecutorVisionData fresh_output,
                          fresh_executor->Encode(fresh_sub_maps));
     ASSERT_OK_AND_ASSIGN(TensorBuffer * fresh_embeddings,
@@ -1119,7 +1119,7 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
                          CreateTensorBuffer<float>(absl::MakeSpan(input_data),
                                                    input_tensor_type));
     absl::flat_hash_map<std::string, TensorBuffer> input_maps;
-    input_maps["images"] = std::move(map_buffer);
+    input_maps.insert_or_assign("images", std::move(map_buffer));
     ASSERT_OK(vision_executor->Encode(input_maps));
 
     ASSERT_OK_AND_ASSIGN(ExecutorStats stats, vision_executor->StopProfiling());

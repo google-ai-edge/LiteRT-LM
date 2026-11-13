@@ -1154,7 +1154,7 @@ TEST_F(
                        Layout(Dimensions({1, bad_num_elements}))),
       bad_num_elements * sizeof(float));
   ASSERT_TRUE(bad_size_buf.HasValue());
-  mismatched_buffers["prev_key_0"] = std::move(*bad_size_buf);
+  mismatched_buffers.insert_or_assign("prev_key_0", std::move(*bad_size_buf));
   auto bad_context =
       std::make_unique<AudioStreamingContext>(std::move(mismatched_buffers));
   EXPECT_FALSE(audio_executor->RestoreContext(std::move(bad_context)).ok());

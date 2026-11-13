@@ -414,8 +414,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
         auto tokens_buffer,
         compiled_model_->CreateInputBuffer(prefill_signature,
                                            prefill_signatures_.input_tokens));
-    prefill_input_buffers[prefill_signatures_.input_tokens] =
-        std::move(tokens_buffer);
+    prefill_input_buffers.insert_or_assign(prefill_signatures_.input_tokens,
+                                           std::move(tokens_buffer));
   } else {
     // If input_tokens is empty, we must have input_embeddings.
     if (!prefill_signatures_.input_embeddings.has_value()) {
@@ -428,8 +428,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
         auto embeddings_buffer,
         compiled_model_->CreateInputBuffer(
             prefill_signature, prefill_signatures_.input_embeddings.value()));
-    prefill_input_buffers[prefill_signatures_.input_embeddings.value()] =
-        std::move(embeddings_buffer);
+    prefill_input_buffers.insert_or_assign(
+        prefill_signatures_.input_embeddings.value(),
+        std::move(embeddings_buffer));
 
     // We may have per layer embedding as well.
     if (prefill_signatures_.input_per_layer_embeddings.has_value()) {
@@ -440,9 +441,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
           compiled_model_->CreateInputBuffer(
               prefill_signature,
               prefill_signatures_.input_per_layer_embeddings.value()));
-      prefill_input_buffers[prefill_signatures_.input_per_layer_embeddings
-                                .value()] =
-          std::move(per_layer_embeddings_buffer);
+      prefill_input_buffers.insert_or_assign(
+          prefill_signatures_.input_per_layer_embeddings.value(),
+          std::move(per_layer_embeddings_buffer));
     }
   }
   ABSL_RETURN_IF_ERROR(dyn_shape_resolver(prefill_signatures_.input_positions));
@@ -450,8 +451,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
       auto positions_buffer,
       compiled_model_->CreateInputBuffer(prefill_signature,
                                          prefill_signatures_.input_positions));
-  prefill_input_buffers[prefill_signatures_.input_positions] =
-      std::move(positions_buffer);
+  prefill_input_buffers.insert_or_assign(prefill_signatures_.input_positions,
+                                         std::move(positions_buffer));
 
   if (prefill_signatures_.input_attn_mask.has_value()) {
     ABSL_ASSIGN_OR_RETURN(
@@ -469,13 +470,18 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
         auto attn_mask_buffer,
         compiled_model_->CreateInputBuffer(
             prefill_signature, prefill_signatures_.input_attn_mask.value()));
-    prefill_input_buffers[prefill_signatures_.input_attn_mask.value()] =
-        std::move(attn_mask_buffer);
+    prefill_input_buffers.insert_or_assign(
+        prefill_signatures_.input_attn_mask.value(),
+        std::move(attn_mask_buffer));
     if (prefill_signatures_.input_attn_mask_local.has_value()) {
-      auto attn_mask_local_buffer = compiled_model_->CreateInputBuffer(
-          prefill_signature, prefill_signatures_.input_attn_mask_local.value());
-      prefill_input_buffers[prefill_signatures_.input_attn_mask_local.value()] =
-          std::move(*attn_mask_local_buffer);
+      LITERT_ASSIGN_OR_RETURN(
+          auto attn_mask_local_buffer,
+          compiled_model_->CreateInputBuffer(
+              prefill_signature,
+              prefill_signatures_.input_attn_mask_local.value()));
+      prefill_input_buffers.insert_or_assign(
+          prefill_signatures_.input_attn_mask_local.value(),
+          std::move(attn_mask_local_buffer));
     }
   }
   if (prefill_signatures_.input_int32_param.has_value()) {
@@ -484,8 +490,9 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillInputBuffers(
         auto param_tensor_buffer,
         compiled_model_->CreateInputBuffer(
             prefill_signature, prefill_signatures_.input_int32_param.value()));
-    prefill_input_buffers[prefill_signatures_.input_int32_param.value()] =
-        std::move(param_tensor_buffer);
+    prefill_input_buffers.insert_or_assign(
+        prefill_signatures_.input_int32_param.value(),
+        std::move(param_tensor_buffer));
   }
   return absl::OkStatus();
 }
@@ -509,7 +516,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::CreatePrefillOutputBuffers(
     LITERT_ASSIGN_OR_RETURN(
         auto output_buffer,
         compiled_model_->CreateOutputBuffer(prefill_signature, output_name));
-    prefill_output_buffers[output_name] = std::move(output_buffer);
+    prefill_output_buffers.insert_or_assign(output_name,
+                                            std::move(output_buffer));
   }
   return absl::OkStatus();
 }
@@ -880,7 +888,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunPrefill(
   absl::flat_hash_map<absl::string_view, TensorBuffer> input_buffers;
   for (const auto& [input_name, input_buffer] : prefill_input_buffers) {
     LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
-    input_buffers[input_name] = std::move(input_buffer_dup);
+    input_buffers.insert_or_assign(input_name, std::move(input_buffer_dup));
   }
 
   LitertState* litert_state = nullptr;
@@ -896,11 +904,11 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunPrefill(
         auto state_buffers,
         litert_state->GetStateBuffers(*compiled_model_, prefill_signature));
     for (auto& [name, buffer] : state_buffers.input_buffers) {
-      input_buffers[name] = std::move(buffer);
+      input_buffers.insert_or_assign(name, std::move(buffer));
     }
     for (auto& [name, buffer] : state_buffers.output_buffers) {
       buffer.ClearEvent();
-      output_buffers[name] = std::move(buffer);
+      output_buffers.insert_or_assign(name, std::move(buffer));
     }
   }
   // Bind non-KV-cache output buffers to the final output buffers map.
@@ -909,7 +917,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunPrefill(
   for (const auto& [output_name, output_buffer] : prefill_output_buffers) {
     LITERT_ASSIGN_OR_RETURN(auto output_buffer_dup, output_buffer.Duplicate());
     output_buffer_dup.ClearEvent();
-    output_buffers[output_name] = std::move(output_buffer_dup);
+    output_buffers.insert_or_assign(output_name, std::move(output_buffer_dup));
   }
 
   return RunSignature(prefill_signature, input_buffers, output_buffers, async);
@@ -1203,7 +1211,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
   absl::flat_hash_map<absl::string_view, TensorBuffer> decode_input_buffers;
   for (const auto& [input_name, input_buffer] : decode_input_buffers_) {
     LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
-    decode_input_buffers[input_name] = std::move(input_buffer_dup);
+    decode_input_buffers.insert_or_assign(input_name,
+                                          std::move(input_buffer_dup));
   }
 
   int output_heads = 1;
@@ -1226,18 +1235,19 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::BindTensorsAndRunDecode(
             : output_buffer.Duplicate();
     RET_CHECK(output_buffer_dup) << "Failed to duplicate output buffer.";
     output_buffer_dup->ClearEvent();
-    decode_output_buffers[output_name] = std::move(*output_buffer_dup);
+    decode_output_buffers.insert_or_assign(output_name,
+                                           std::move(*output_buffer_dup));
   }
 
   LITERT_ASSIGN_OR_RETURN(
       auto state_buffers,
       litert_state->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
   for (auto& [name, buffer] : state_buffers.input_buffers) {
-    decode_input_buffers[name] = std::move(buffer);
+    decode_input_buffers.insert_or_assign(name, std::move(buffer));
   }
   for (auto& [name, buffer] : state_buffers.output_buffers) {
     buffer.ClearEvent();
-    decode_output_buffers[name] = std::move(buffer);
+    decode_output_buffers.insert_or_assign(name, std::move(buffer));
   }
 
   return RunSignature(kDecodeSignatureRunner, decode_input_buffers,
@@ -2384,7 +2394,7 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
     LITERT_ASSIGN_OR_RETURN(
         auto input_buffer,
         compiled_model->CreateInputBuffer(kDecodeSignatureRunner, input_name));
-    decode_input_buffers[input_name] = std::move(input_buffer);
+    decode_input_buffers.insert_or_assign(input_name, std::move(input_buffer));
   }
   LITERT_ASSIGN_OR_RETURN(
       size_t decode_signature_index,
@@ -2410,19 +2420,18 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
           auto output_buffer,
           CreateFP16OutputBuffer(lrt_env, *compiled_model, signature_index,
                                  output_name, i));
-      decode_output_buffers[output_name] = std::move(output_buffer);
+      decode_output_buffers.insert_or_assign(output_name,
+                                             std::move(output_buffer));
     } else {
       auto output_buffer_or = compiled_model->CreateOutputBuffer(
           kDecodeSignatureRunner, output_name);
       if (output_buffer_or) {
-        decode_output_buffers[output_name] = std::move(*output_buffer_or);
+        decode_output_buffers.insert_or_assign(output_name,
+                                               std::move(*output_buffer_or));
         continue;
       }
       if (!use_generic_npu_compiler_plugin) {
-        LITERT_ASSIGN_OR_RETURN(auto output_buffer,
-                                std::move(output_buffer_or));
-        decode_output_buffers[output_name] = std::move(output_buffer);
-        continue;
+        LITERT_RETURN_IF_ERROR(::litert::Unexpected(output_buffer_or.Error()));
       }
       ABSL_LOG(WARNING) << "Falling back to host memory for NPU decode output '"
                         << output_name
@@ -2435,7 +2444,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
           CreateHostOutputBuffer(lrt_env, *compiled_model,
                                  decode_signature_index, i,
                                  std::move(output_tensor_type)));
-      decode_output_buffers[output_name] = std::move(output_buffer);
+      decode_output_buffers.insert_or_assign(output_name,
+                                             std::move(output_buffer));
     }
   }
 
@@ -2803,10 +2813,11 @@ absl::Status LlmLiteRtCompiledModelExecutorDynamic::DecodeInternal(
   ABSL_RETURN_IF_ERROR(ResolveDynamicShape(*compiled_model_, "decode",
                                            signatures_.input_attn_mask.value(),
                                            current_kv_len));
-  LITERT_ASSIGN_OR_RETURN(
-      decode_input_buffers_[signatures_.input_attn_mask.value()],
-      compiled_model_->CreateInputBuffer("decode",
-                                         signatures_.input_attn_mask.value()));
+  LITERT_ASSIGN_OR_RETURN(auto attn_mask_buffer,
+                          compiled_model_->CreateInputBuffer(
+                              "decode", signatures_.input_attn_mask.value()));
+  decode_input_buffers_.insert_or_assign(signatures_.input_attn_mask.value(),
+                                         std::move(attn_mask_buffer));
 
   return LlmLiteRtCompiledModelExecutorBase::DecodeInternal(token,
                                                             output_logits);
@@ -2913,7 +2924,8 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
       LITERT_ASSIGN_OR_RETURN(auto input_buffer,
                               compiled_model->CreateInputBuffer(
                                   kDecodeSignatureRunner, input_name));
-      decode_input_buffers[input_name] = std::move(input_buffer);
+      decode_input_buffers.insert_or_assign(input_name,
+                                            std::move(input_buffer));
     }
   }
   for (auto output_name : decode_signature.OutputNames()) {
@@ -2923,7 +2935,8 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
     LITERT_ASSIGN_OR_RETURN(auto output_buffer,
                             compiled_model->CreateOutputBuffer(
                                 kDecodeSignatureRunner, output_name));
-    decode_output_buffers[output_name] = std::move(output_buffer);
+    decode_output_buffers.insert_or_assign(output_name,
+                                           std::move(output_buffer));
   }
 
   bool enable_profiling =

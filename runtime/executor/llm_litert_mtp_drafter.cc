@@ -249,7 +249,8 @@ LlmLiteRtMtpDrafter::Create(
       LITERT_ASSIGN_OR_RETURN(auto input_buffer,
                               mtp_drafter_model.CreateInputBuffer(
                                   drafter_signature.Key(), input_name));
-      mtp_drafter_input_buffers[input_name] = std::move(input_buffer);
+      mtp_drafter_input_buffers.insert_or_assign(input_name,
+                                                 std::move(input_buffer));
     }
 
     for (size_t i = 0; i < drafter_signature.OutputNames().size(); ++i) {
@@ -259,12 +260,14 @@ LlmLiteRtMtpDrafter::Create(
             auto output_buffer,
             CreateFP16OutputBuffer(env, mtp_drafter_model,
                                    /*signature_index=*/0, output_name, i));
-        mtp_drafter_output_buffers[output_name] = std::move(output_buffer);
+        mtp_drafter_output_buffers.insert_or_assign(output_name,
+                                                    std::move(output_buffer));
       } else {
         LITERT_ASSIGN_OR_RETURN(auto output_buffer,
                                 mtp_drafter_model.CreateOutputBuffer(
                                     drafter_signature.Key(), output_name));
-        mtp_drafter_output_buffers[output_name] = std::move(output_buffer);
+        mtp_drafter_output_buffers.insert_or_assign(output_name,
+                                                    std::move(output_buffer));
       }
     }
   }
@@ -394,8 +397,8 @@ absl::Status LlmLiteRtMtpDrafter::PrepareDrafterInputBuffers(
     LITERT_ASSIGN_OR_RETURN(
         auto kv_cache_buffer_dup,
         output_kv_cache_buffers.at(kv_cache_input_name).Duplicate());
-    active_drafter_input_buffers_[kv_cache_input_name] =
-        std::move(kv_cache_buffer_dup);
+    active_drafter_input_buffers_.insert_or_assign(
+        kv_cache_input_name, std::move(kv_cache_buffer_dup));
   }
   LITERT_RETURN_IF_ERROR(
       active_drafter_input_buffers_["input_pos"].Write<int32_t>(

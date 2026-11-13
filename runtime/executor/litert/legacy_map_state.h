@@ -70,7 +70,7 @@ class LegacyMapState : public StateInterface {
         return absl::InternalError(
             "Failed to duplicate buffer in LegacyMapState");
       }
-      cloned_buffers[name] = std::move(*buffer_dup);
+      cloned_buffers.insert_or_assign(name, std::move(*buffer_dup));
     }
     return std::make_unique<LegacyMapState>(std::move(cloned_buffers));
   }

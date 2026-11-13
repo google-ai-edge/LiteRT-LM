@@ -203,8 +203,9 @@ absl::Status LoRA::Init() {
     if (!IsLoRABufferInputName(input_name)) {
       continue;
     }
-    LITERT_ASSIGN_OR_RETURN(primary_buffers[input_name],
+    LITERT_ASSIGN_OR_RETURN(auto buf,
                             create_buffer(signature_name_, input_name));
+    primary_buffers.insert_or_assign(input_name, std::move(buf));
   }
 
   // A LoRA that matches none of the model's LoRA inputs has no effect at all,
@@ -307,8 +308,8 @@ absl::Status LoRA::Init() {
         // right below, before any other buffer is added.
         reusable = &buffers.back();
       }
-      LITERT_ASSIGN_OR_RETURN(signature_buffers[input_name],
-                              reusable->Duplicate());
+      LITERT_ASSIGN_OR_RETURN(auto dup, reusable->Duplicate());
+      signature_buffers.insert_or_assign(input_name, std::move(dup));
     }
     if (signature_runnable) {
       lora_buffers_by_signature_[signature_key] = std::move(signature_buffers);
@@ -343,7 +344,8 @@ LoRA::GetLoRABuffers(absl::string_view signature_name) const {
   }
   absl::flat_hash_map<absl::string_view, litert::TensorBuffer> buffers;
   for (const auto& [name, buffer] : signature_it->second) {
-    LITERT_ASSIGN_OR_RETURN(buffers[name], buffer.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(auto dup, buffer.Duplicate());
+    buffers.insert_or_assign(name, std::move(dup));
   }
   return buffers;
 }

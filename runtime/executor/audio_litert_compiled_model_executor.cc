@@ -445,7 +445,7 @@ absl::StatusOr<std::unique_ptr<AudioContext>> AudioStreamingContext::Clone()
       new_state_buffers;
   for (auto& [name, buffer] : state_buffers_) {
     LITERT_ASSIGN_OR_RETURN(auto new_buffer, buffer.Duplicate());
-    new_state_buffers[name] = std::move(new_buffer);
+    new_state_buffers.insert_or_assign(name, std::move(new_buffer));
   }
   auto context =
       std::make_unique<AudioStreamingContext>(std::move(new_state_buffers));
@@ -483,7 +483,8 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::InitializeBuffers(
   input_names_.reserve(signature.InputNames().size());
   for (size_t i = 0; i < signature.InputNames().size(); ++i) {
     input_names_.emplace_back(signature.InputNames()[i]);
-    input_buffers_map_[input_names_[i]] = std::move(input_buffers[i]);
+    input_buffers_map_.insert_or_assign(input_names_[i],
+                                        std::move(input_buffers[i]));
   }
 
   // Bind pointers to specific buffers only after the map is fully populated so
@@ -511,7 +512,8 @@ absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::InitializeBuffers(
   output_names_.reserve(signature.OutputNames().size());
   for (size_t i = 0; i < signature.OutputNames().size(); ++i) {
     output_names_.emplace_back(signature.OutputNames()[i]);
-    output_buffers_map_[output_names_[i]] = std::move(output_buffers[i]);
+    output_buffers_map_.insert_or_assign(output_names_[i],
+                                         std::move(output_buffers[i]));
   }
 
   // Bind pointers to specific buffers only after the map is fully populated.
@@ -860,7 +862,7 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
           auto lora_buffers,
           audio_encoder_->GetMutableLoraManager()->GetLoRABuffers());
       for (auto& [name, buffer] : lora_buffers) {
-        input_buffers_map[name] = std::move(buffer);
+        input_buffers_map.insert_or_assign(name, std::move(buffer));
       }
     }
   }
@@ -1324,7 +1326,7 @@ AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::BuildStateBuffersMap(
     } else {
       LITERT_RETURN_IF_ERROR(new_buffer.Clear());
     }
-    state_buffers[name] = std::move(new_buffer);
+    state_buffers.insert_or_assign(name, std::move(new_buffer));
   }
   return state_buffers;
 }

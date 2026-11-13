@@ -544,7 +544,7 @@ absl::StatusOr<std::unique_ptr<LlmLiteRtVerifier>> LlmLiteRtVerifier::Create(
     LITERT_ASSIGN_OR_RETURN(
         auto input_buffer,
         base_model.CreateInputBuffer(signature.Key(), input_name));
-    input_buffers[input_name] = std::move(input_buffer);
+    input_buffers.insert_or_assign(input_name, std::move(input_buffer));
   }
   LITERT_ASSIGN_OR_RETURN(size_t signature_index,
                           base_model.GetSignatureIndex(signature.Key()));
@@ -559,12 +559,12 @@ absl::StatusOr<std::unique_ptr<LlmLiteRtVerifier>> LlmLiteRtVerifier::Create(
           auto output_buffer,
           CreateFP16OutputBuffer(env, base_model, signature_index, output_name,
                                  i));
-      output_buffers[output_name] = std::move(output_buffer);
+      output_buffers.insert_or_assign(output_name, std::move(output_buffer));
     } else {
       LITERT_ASSIGN_OR_RETURN(
           auto output_buffer,
           base_model.CreateOutputBuffer(signature.Key(), output_name));
-      output_buffers[output_name] = std::move(output_buffer);
+      output_buffers.insert_or_assign(output_name, std::move(output_buffer));
     }
   }
 
@@ -650,11 +650,13 @@ absl::StatusOr<std::unique_ptr<LlmLiteRtVerifier>> LlmLiteRtVerifier::Create(
   // the buffer maps for each pass.
   absl::flat_hash_map<absl::string_view, TensorBuffer> active_input_buffers;
   for (const auto& [name, buffer] : input_buffers) {
-    LITERT_ASSIGN_OR_RETURN(active_input_buffers[name], buffer.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(auto dup, buffer.Duplicate());
+    active_input_buffers.insert_or_assign(name, std::move(dup));
   }
   absl::flat_hash_map<absl::string_view, TensorBuffer> active_output_buffers;
   for (const auto& [name, buffer] : output_buffers) {
-    LITERT_ASSIGN_OR_RETURN(active_output_buffers[name], buffer.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(auto dup, buffer.Duplicate());
+    active_output_buffers.insert_or_assign(name, std::move(dup));
   }
 
   // Same default as the prefill's padding.
@@ -738,8 +740,8 @@ absl::Status LlmLiteRtVerifier::Run(
   }
 
   for (const auto& [input_name, input_buffer] : state_buffers.input_buffers) {
-    LITERT_ASSIGN_OR_RETURN(active_input_buffers_[input_name],
-                            input_buffer.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(auto dup, input_buffer.Duplicate());
+    active_input_buffers_.insert_or_assign(input_name, std::move(dup));
   }
   if (signatures_.input_int32_param.has_value()) {
     // Only the rows of the tokens update the KV cache.
@@ -750,8 +752,8 @@ absl::Status LlmLiteRtVerifier::Run(
 
   for (const auto& [output_name, output_buffer] :
        state_buffers.output_buffers) {
-    LITERT_ASSIGN_OR_RETURN(active_output_buffers_[output_name],
-                            output_buffer.Duplicate());
+    LITERT_ASSIGN_OR_RETURN(auto dup, output_buffer.Duplicate());
+    active_output_buffers_.insert_or_assign(output_name, std::move(dup));
   }
   for (auto& [output_name, output_buffer] : active_output_buffers_) {
     LITERT_RETURN_IF_ERROR(output_buffer.ClearEvent());

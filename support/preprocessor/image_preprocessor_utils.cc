@@ -251,7 +251,7 @@ absl::StatusOr<InputImage> PatchifyImageImpl(
   }
 
   absl::flat_hash_map<std::string, TensorBuffer> tensor_map;
-  tensor_map["images"] = std::move(patches_buffer);
+  tensor_map.insert_or_assign("images", std::move(patches_buffer));
   // Transformer (ViT) encoders consume a per-patch "positions_xy" tensor, while
   // single input encoders (e.g. LFM2 VL) only consume the "images" tensor.
   if (patchify_config->emit_positions) {
@@ -278,7 +278,7 @@ absl::StatusOr<InputImage> PatchifyImageImpl(
         }
       }
     }
-    tensor_map["positions_xy"] = std::move(positions_buffer);
+    tensor_map.insert_or_assign("positions_xy", std::move(positions_buffer));
   }
   return InputImage(std::move(tensor_map));
 }
@@ -300,10 +300,11 @@ absl::StatusOr<InputImage> CreatePatchPositionsImage(
   const int num_patches = grid.NumPatches();
   absl::flat_hash_map<std::string, TensorBuffer> tensor_map;
   LITERT_ASSIGN_OR_RETURN(
-      tensor_map["positions_xy"],
+      auto positions_buffer,
       ::litert::TensorBuffer::CreateManagedHostMemory(
           MakeRankedTensorType<int32_t>({1, num_patches, 2}),
           num_patches * 2 * sizeof(int32_t)));
+  tensor_map.insert_or_assign("positions_xy", std::move(positions_buffer));
   return InputImage(std::move(tensor_map));
 }
 

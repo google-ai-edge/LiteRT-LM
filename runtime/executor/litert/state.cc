@@ -287,8 +287,8 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::CloneInternal(
 
   absl::flat_hash_map<std::string, StateBuffer> bank_1_state_buffers;
   for (const auto& [name, state_buffer] : bank_1_state_buffers_) {
-    ABSL_ASSIGN_OR_RETURN(bank_1_state_buffers[name],
-                          clone_state_buffer(state_buffer));
+    ABSL_ASSIGN_OR_RETURN(StateBuffer cloned, clone_state_buffer(state_buffer));
+    bank_1_state_buffers.insert_or_assign(name, std::move(cloned));
   }
 
   std::optional<absl::flat_hash_map<std::string, StateBuffer>>
@@ -296,7 +296,9 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::CloneInternal(
   if (bank_2_state_buffers_.has_value()) {
     auto& map = bank_2_state_buffers.emplace();
     for (const auto& [name, state_buffer] : *bank_2_state_buffers_) {
-      ABSL_ASSIGN_OR_RETURN(map[name], clone_state_buffer(state_buffer));
+      ABSL_ASSIGN_OR_RETURN(StateBuffer cloned,
+                            clone_state_buffer(state_buffer));
+      map.insert_or_assign(name, std::move(cloned));
     }
   }
 
@@ -484,7 +486,7 @@ absl::StatusOr<LitertState::StateBuffers> LitertState::GetStateBuffers(
       continue;
     }
     LITERT_ASSIGN_OR_RETURN(auto duplicated, state_buffer.buffer.Duplicate());
-    buffers.input_buffers[input_name] = std::move(duplicated);
+    buffers.input_buffers.insert_or_assign(input_name, std::move(duplicated));
   }
   if (should_verify_skipped_inputs) {
     verified_gpu_inplace_signatures_.insert(std::string(signature_name));
@@ -492,7 +494,7 @@ absl::StatusOr<LitertState::StateBuffers> LitertState::GetStateBuffers(
 
   for (const auto& [input_name, state_buffer] : *output_bank) {
     LITERT_ASSIGN_OR_RETURN(auto duplicated, state_buffer.buffer.Duplicate());
-    buffers.output_buffers[input_name] = std::move(duplicated);
+    buffers.output_buffers.insert_or_assign(input_name, std::move(duplicated));
   }
   return buffers;
 }
@@ -595,26 +597,29 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
 
   for (const auto& input_name : key_cache_input_names) {
     LITERT_ASSIGN_OR_RETURN(
-        bank_1_state_buffers[input_name],
+        StateBuffer state_buf,
         create_and_init_buffer(input_name, proto::StateBuffer::TYPE_UNSPECIFIED,
                                k_dynamic_dim, /*is_output=*/is_gpu_optimized,
                                /*clear_buffer=*/clear_kv_cache_before_prefill));
+    bank_1_state_buffers.insert_or_assign(input_name, std::move(state_buf));
   }
   for (const auto& input_name : value_cache_input_names) {
     LITERT_ASSIGN_OR_RETURN(
-        bank_1_state_buffers[input_name],
+        StateBuffer state_buf,
         create_and_init_buffer(input_name, proto::StateBuffer::TYPE_UNSPECIFIED,
                                v_dynamic_dim, /*is_output=*/is_gpu_optimized,
                                /*clear_buffer=*/clear_kv_cache_before_prefill));
+    bank_1_state_buffers.insert_or_assign(input_name, std::move(state_buf));
   }
   for (const auto& input_name : linear_attention_input_names) {
     LITERT_ASSIGN_OR_RETURN(
-        bank_1_state_buffers[input_name],
+        StateBuffer state_buf,
         create_and_init_buffer(input_name,
                                proto::StateBuffer::TYPE_LINEAR_ATTENTION,
                                /*dynamic_dim=*/std::nullopt,
                                /*is_output=*/is_gpu_optimized,
                                /*clear_buffer=*/clear_kv_cache_before_prefill));
+    bank_1_state_buffers.insert_or_assign(input_name, std::move(state_buf));
   }
 
   std::optional<absl::flat_hash_map<std::string, StateBuffer>>
@@ -623,20 +628,21 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::HeuristicBasedCreate(
     auto& bank_2 = bank_2_state_buffers.emplace();
     for (const auto& [input_name, bank_1_buf] : bank_1_state_buffers) {
       LITERT_ASSIGN_OR_RETURN(
-          bank_2[input_name],
-          create_and_init_buffer(
-              input_name, bank_1_buf.type,
-              /*dynamic_dim=*/std::nullopt, /*is_output=*/true,
-              /*clear_buffer=*/false));
+          StateBuffer bank_2_buf,
+          create_and_init_buffer(input_name, bank_1_buf.type,
+                                 /*dynamic_dim=*/std::nullopt,
+                                 /*is_output=*/true,
+                                 /*clear_buffer=*/false));
       LITERT_ASSIGN_OR_RETURN(auto in_buf_type, bank_1_buf.buffer.BufferType());
       LITERT_ASSIGN_OR_RETURN(auto out_buf_type,
-                              bank_2[input_name].buffer.BufferType());
+                              bank_2_buf.buffer.BufferType());
       RET_CHECK(in_buf_type == out_buf_type)
           << "AllocationPolicy::kPingPong requires matching input and output "
              "buffer types for state tensor '"
           << input_name << "', but got " << static_cast<int>(in_buf_type)
           << " vs " << static_cast<int>(out_buf_type)
           << ". In-place GPU composite ops cannot be used with kPingPong.";
+      bank_2.insert_or_assign(input_name, std::move(bank_2_buf));
     }
   }
 
@@ -803,10 +809,11 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
   absl::flat_hash_map<std::string, StateBuffer> bank_1_state_buffers;
   for (const auto& meta : state_buffer_metas) {
     LITERT_ASSIGN_OR_RETURN(
-        bank_1_state_buffers[meta.name],
+        StateBuffer state_buf,
         create_and_init_buffer(meta.name, meta.type, meta.dynamic_dim,
                                /*is_output=*/is_gpu_optimized,
                                /*clear_buffer=*/clear_kv_cache_before_prefill));
+    bank_1_state_buffers.insert_or_assign(meta.name, std::move(state_buf));
   }
 
   std::optional<absl::flat_hash_map<std::string, StateBuffer>>
@@ -815,22 +822,23 @@ absl::StatusOr<std::unique_ptr<LitertState>> LitertState::MetadataBasedCreate(
     auto& bank_2 = bank_2_state_buffers.emplace();
     for (const auto& meta : state_buffer_metas) {
       LITERT_ASSIGN_OR_RETURN(
-          bank_2[meta.name],
+          StateBuffer bank_2_buf,
           create_and_init_buffer(meta.name, meta.type,
                                  /*dynamic_dim=*/std::nullopt,
                                  /*is_output=*/true,
                                  /*clear_buffer=*/false));
       LITERT_ASSIGN_OR_RETURN(
           auto in_buf_type,
-          bank_1_state_buffers[meta.name].buffer.BufferType());
+          bank_1_state_buffers.at(meta.name).buffer.BufferType());
       LITERT_ASSIGN_OR_RETURN(auto out_buf_type,
-                              bank_2[meta.name].buffer.BufferType());
+                              bank_2_buf.buffer.BufferType());
       RET_CHECK(in_buf_type == out_buf_type)
           << "AllocationPolicy::kPingPong requires matching input and output "
              "buffer types for state tensor '"
           << meta.name << "', but got " << static_cast<int>(in_buf_type)
           << " vs " << static_cast<int>(out_buf_type)
           << ". In-place GPU composite ops cannot be used with kPingPong.";
+      bank_2.insert_or_assign(meta.name, std::move(bank_2_buf));
     }
   }
 

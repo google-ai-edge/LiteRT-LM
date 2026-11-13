@@ -515,7 +515,7 @@ TEST_F(SessionUtilsTest, PreprocessContentsMultimodal) {
   std::vector<float> map_data = {0.7f, 0.8f};
   LITERT_ASSERT_OK_AND_ASSIGN(auto map_tensor,
                               CopyToTensorBuffer<float>(map_data, {1, 2}));
-  tensor_map["key1"] = std::move(map_tensor);
+  tensor_map.insert_or_assign("key1", std::move(map_tensor));
   contents.emplace_back(InputImage(std::move(tensor_map)));
   contents.emplace_back(InputImageEnd());
 
@@ -697,7 +697,7 @@ TEST_F(SessionUtilsTest, CalculateInputDataTokensWithVisionViT) {
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto pos_tensor, CopyToTensorBuffer<int>(dummy_positions, {1, 2520, 2}));
   absl::flat_hash_map<std::string, TensorBuffer> tensor_map;
-  tensor_map["positions_xy"] = std::move(pos_tensor);
+  tensor_map.insert_or_assign("positions_xy", std::move(pos_tensor));
 
   std::vector<InputData> contents;
   contents.emplace_back(InputImage(std::move(tensor_map)));

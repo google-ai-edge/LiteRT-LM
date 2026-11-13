@@ -466,8 +466,10 @@ TEST(CreateInputDataCopyTest, InputImage) {
       ::litert::TensorBuffer original_tensor_buffer_2,
       ::litert::TensorBuffer::CreateManaged(env, kTensorBufferType, kTensorType,
                                             kTensorSize));
-  original_tensor_map["test_key_1"] = std::move(original_tensor_buffer_1);
-  original_tensor_map["test_key_2"] = std::move(original_tensor_buffer_2);
+  original_tensor_map.insert_or_assign("test_key_1",
+                                       std::move(original_tensor_buffer_1));
+  original_tensor_map.insert_or_assign("test_key_2",
+                                       std::move(original_tensor_buffer_2));
   original_data = InputImage(std::move(original_tensor_map));
   ASSERT_OK_AND_ASSIGN(copied_data, CreateInputDataCopy(original_data));
   ASSERT_TRUE(std::holds_alternative<InputImage>(copied_data));
