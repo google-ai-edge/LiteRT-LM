@@ -14,14 +14,18 @@
 
 #include "runtime/conversation/model_data_processor/gemma4_data_processor.h"
 
+#if !defined(LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED)
 #include <cstddef>
+#endif  // !LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#if !defined(LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED)
 #include "absl/log/absl_log.h"  // from @com_google_absl
+#endif  // !LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -214,6 +218,13 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
       std::move(channel_start_token), std::move(channel_end_token)));
 }
 
+MultimodalTokenRegexes Gemma4DataProcessor::GetMultimodalTokenRegexes() const {
+  return {
+      .image_token_regex = R"regex((<start_of_image>|<\|image\|>))regex",
+      .audio_token_regex = R"regex((<start_of_audio>|<\|audio\|>))regex",
+  };
+}
+
 absl::StatusOr<std::vector<InputData>>
 Gemma4DataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt,
@@ -235,6 +246,7 @@ Gemma4DataProcessor::ToInputDataVectorImpl(
       .audio_suffix = "",
       .add_audio_end = true,
   };
+  ApplyMultimodalDelimiterNonces(multi_config, GetMultimodalDelimiterNonces());
   ImagePreprocessParameter image_preprocess_parameter;
   image_preprocess_parameter.SetPatchifyConfig(
       ImagePreprocessParameter::PatchifyConfig{

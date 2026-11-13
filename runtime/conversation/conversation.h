@@ -42,6 +42,7 @@
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
+#include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
@@ -130,6 +131,13 @@ class ConversationConfig {
   // Returns whether to enable rewinding behavior (moving backwards in context
   // without fully resetting to the beginning of the conversation).
   bool enable_rewinding() const { return enable_rewinding_; }
+
+  // Returns whether multimodal placeholder delimiters in prompt templates are
+  // replaced with per-instance random runtime nonces so literal multimodal
+  // delimiter strings in non-media text are passed through verbatim.
+  bool sanitize_multimodal_delimiters() const {
+    return sanitize_multimodal_delimiters_;
+  }
 
  public:
   // Builder class for ConversationConfig.
@@ -269,6 +277,17 @@ class ConversationConfig {
       return *this;
     }
 
+    // Sets whether to protect multimodal placeholder delimiters in prompt
+    // templates with per-instance random 128-bit runtime nonces (default:
+    // false). When enabled, literal multimodal delimiter strings (such as
+    // `<start_of_image>` or `<start_of_audio>`) in non-media text are passed
+    // through verbatim rather than split as media placeholders.
+    Builder& SetSanitizeMultimodalDelimiters(
+        bool sanitize_multimodal_delimiters) {
+      sanitize_multimodal_delimiters_ = sanitize_multimodal_delimiters;
+      return *this;
+    }
+
     absl::StatusOr<ConversationConfig> Build(const Engine& engine) {
       return ConversationConfig::CreateInternal(
           engine, session_config_, preface_, overwrite_prompt_template_,
@@ -277,7 +296,7 @@ class ConversationConfig {
           filter_channel_content_from_kv_cache_, return_error_on_parse_failure_,
           return_error_on_max_tokens_reached_, thinking_config_,
           stream_tool_calls_, stream_tool_calls_channel_name_,
-          enable_rewinding_);
+          enable_rewinding_, sanitize_multimodal_delimiters_);
     }
 
     // Returns a unique pointer to a ConversationConfig.
@@ -303,6 +322,7 @@ class ConversationConfig {
     bool stream_tool_calls_ = false;
     std::string stream_tool_calls_channel_name_ = "tool_call";
     std::optional<bool> enable_rewinding_ = std::nullopt;
+    bool sanitize_multimodal_delimiters_ = false;
   };
 
   // Returns the constrained decoding config.
@@ -354,7 +374,8 @@ class ConversationConfig {
       std::optional<ThinkingConfig> thinking_config = std::nullopt,
       bool stream_tool_calls = false,
       const std::string& stream_tool_calls_channel_name = "tool_call",
-      std::optional<bool> enable_rewinding = std::nullopt);
+      std::optional<bool> enable_rewinding = std::nullopt,
+      bool sanitize_multimodal_delimiters = false);
 
   explicit ConversationConfig(
       SessionConfig session_config, Preface preface,
@@ -370,7 +391,8 @@ class ConversationConfig {
       std::optional<ThinkingConfig> thinking_config = std::nullopt,
       bool stream_tool_calls = false,
       const std::string& stream_tool_calls_channel_name = "tool_call",
-      bool enable_rewinding = true)
+      bool enable_rewinding = true,
+      bool sanitize_multimodal_delimiters = false)
       : session_config_(std::move(session_config)),
         preface_(std::move(preface)),
         prompt_template_(std::move(prompt_template)),
@@ -386,7 +408,8 @@ class ConversationConfig {
         thinking_config_(thinking_config),
         stream_tool_calls_(stream_tool_calls),
         stream_tool_calls_channel_name_(stream_tool_calls_channel_name),
-        enable_rewinding_(enable_rewinding) {}
+        enable_rewinding_(enable_rewinding),
+        sanitize_multimodal_delimiters_(sanitize_multimodal_delimiters) {}
 
   SessionConfig session_config_;
   Preface preface_;
@@ -403,6 +426,7 @@ class ConversationConfig {
   bool stream_tool_calls_;
   std::string stream_tool_calls_channel_name_;
   bool enable_rewinding_;
+  bool sanitize_multimodal_delimiters_;
 };
 
 // Optional arguments for sending a message to the LLM.
@@ -738,11 +762,14 @@ class Conversation {
       Engine& engine, std::unique_ptr<Engine::Session> session,
       std::unique_ptr<ModelDataProcessor> model_data_processor, Preface preface,
       PromptTemplate prompt_template, ConversationConfig config,
-      std::unique_ptr<ConstraintProvider> constraint_provider = nullptr)
+      std::unique_ptr<ConstraintProvider> constraint_provider = nullptr,
+      std::optional<MultimodalDelimiterSanitizer> multimodal_sanitizer =
+          std::nullopt)
       : engine_(engine),
         model_data_processor_(std::move(model_data_processor)),
         preface_(preface),
         prompt_template_(std::move(prompt_template)),
+        multimodal_sanitizer_(std::move(multimodal_sanitizer)),
         config_(config),
         constraint_provider_(std::move(constraint_provider)),
         session_(std::move(session)) {
@@ -852,6 +879,7 @@ class Conversation {
   std::unique_ptr<ModelDataProcessor> model_data_processor_;
   Preface preface_;
   PromptTemplate prompt_template_;
+  std::optional<MultimodalDelimiterSanitizer> multimodal_sanitizer_;
   // The constraint is currently created from the tools defined in the preface,
   // if any.
   std::unique_ptr<Constraint> constraint_;

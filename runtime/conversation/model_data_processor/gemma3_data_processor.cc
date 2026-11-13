@@ -14,14 +14,12 @@
 
 #include "runtime/conversation/model_data_processor/gemma3_data_processor.h"
 
-#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -32,8 +30,10 @@
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "runtime/components/constrained_decoding/constraint.h"
 #if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+#include <cstddef>
 #include <variant>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
 #elif !defined(LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED)
 #include "runtime/components/constrained_decoding/constraint_provider.h"
@@ -229,6 +229,13 @@ absl::StatusOr<ordered_json> Gemma3DataProcessor::MessageToTemplateInput(
   return template_input;
 }
 
+MultimodalTokenRegexes Gemma3DataProcessor::GetMultimodalTokenRegexes() const {
+  return {
+      .image_token_regex = "(<start_of_image>|<image_soft_token>)",
+      .audio_token_regex = "(<start_of_audio>|<audio_soft_token>)",
+  };
+}
+
 absl::StatusOr<std::vector<InputData>>
 Gemma3DataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt, const ordered_json& messages,
@@ -250,6 +257,7 @@ Gemma3DataProcessor::ToInputDataVectorImpl(
       .audio_suffix = "\n\n",
       .add_audio_end = true,
   };
+  ApplyMultimodalDelimiterNonces(multi_config, GetMultimodalDelimiterNonces());
   ImagePreprocessParameter image_preprocess_parameter;
   image_preprocess_parameter.SetTargetDimensions(Dimensions(
       {1, config_.image_tensor_height, config_.image_tensor_width, 3}));

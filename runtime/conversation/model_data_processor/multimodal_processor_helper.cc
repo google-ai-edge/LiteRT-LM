@@ -25,12 +25,17 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/random/random.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/str_replace.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "litert/cc/litert_macros.h"  // from @litert
@@ -191,6 +196,172 @@ absl::StatusOr<const TensorBufferMap*> GetPatchifiedTensorMap(
 }
 
 }  // namespace
+
+absl::StatusOr<MultimodalDelimiterSanitizer>
+MultimodalDelimiterSanitizer::Create(
+    absl::string_view template_source,
+    const MultimodalTokenRegexes& token_regexes) {
+  MultimodalDelimiterSanitizer sanitizer;
+  if (token_regexes.IsEmpty()) {
+    sanitizer.rewritten_template_ = std::string(template_source);
+    return sanitizer;
+  }
+
+  std::optional<RE2> image_re;
+  std::optional<RE2> audio_re;
+  std::optional<RE2> video_re;
+  std::vector<std::string> combined_alternatives;
+  std::vector<absl::string_view> active_modality_tags;
+
+  if (!token_regexes.image_token_regex.empty()) {
+    image_re.emplace(token_regexes.image_token_regex, RE2::Quiet);
+    if (!image_re->ok()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Invalid image_token_regex: ", token_regexes.image_token_regex));
+    }
+    combined_alternatives.push_back(
+        absl::StrCat("(?:", token_regexes.image_token_regex, ")"));
+    active_modality_tags.push_back("img");
+  }
+  if (!token_regexes.audio_token_regex.empty()) {
+    audio_re.emplace(token_regexes.audio_token_regex, RE2::Quiet);
+    if (!audio_re->ok()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Invalid audio_token_regex: ", token_regexes.audio_token_regex));
+    }
+    combined_alternatives.push_back(
+        absl::StrCat("(?:", token_regexes.audio_token_regex, ")"));
+    active_modality_tags.push_back("aud");
+  }
+  if (!token_regexes.video_token_regex.empty()) {
+    video_re.emplace(token_regexes.video_token_regex, RE2::Quiet);
+    if (!video_re->ok()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Invalid video_token_regex: ", token_regexes.video_token_regex));
+    }
+    combined_alternatives.push_back(
+        absl::StrCat("(?:", token_regexes.video_token_regex, ")"));
+    active_modality_tags.push_back("vid");
+  }
+
+  RE2 combined_re(
+      absl::StrCat("(", absl::StrJoin(combined_alternatives, "|"), ")"),
+      RE2::Quiet);
+  if (!combined_re.ok()) {
+    return absl::InvalidArgumentError("Failed to compile multimodal regex.");
+  }
+
+  absl::BitGen bitgen;
+  do {
+    const uint64_t hi = absl::Uniform<uint64_t>(bitgen);
+    const uint64_t lo = absl::Uniform<uint64_t>(bitgen);
+    sanitizer.nonce_hex_ = absl::StrFormat("%016x%016x", hi, lo);
+  } while (absl::StrContains(template_source, sanitizer.nonce_hex_));
+
+  absl::flat_hash_map<std::pair<std::string, std::string>, std::string>
+      token_to_nonce;
+  size_t next_id = 0;
+  auto get_or_create_nonce =
+      [&](absl::string_view modality_tag,
+          absl::string_view original_token) -> const std::string& {
+    auto key =
+        std::make_pair(std::string(modality_tag), std::string(original_token));
+    auto [it, inserted] = token_to_nonce.try_emplace(std::move(key), "");
+    if (inserted) {
+      it->second = absl::StrCat("<<__litert_mm_", modality_tag, "_",
+                                sanitizer.nonce_hex_, "_", next_id++, "__>>");
+      sanitizer.restore_replacements_.emplace_back(
+          it->second, std::string(original_token));
+      if (modality_tag == "img" &&
+          sanitizer.nonces_.image_nonce_token.empty()) {
+        sanitizer.nonces_.image_nonce_token = it->second;
+      }
+    }
+    return it->second;
+  };
+
+  absl::string_view view = template_source;
+  const char* cursor = view.data();
+  std::string matched;
+  std::string rewritten;
+  rewritten.reserve(template_source.size());
+
+  while (RE2::FindAndConsume(&view, combined_re, &matched)) {
+    const char* match_begin = view.data() - matched.size();
+    absl::StrAppend(
+        &rewritten,
+        absl::string_view(cursor, static_cast<size_t>(match_begin - cursor)));
+    cursor = view.data();
+
+    if (matched.empty()) {
+      if (view.empty()) {
+        break;
+      }
+      rewritten.push_back(view.front());
+      view.remove_prefix(1);
+      cursor = view.data();
+      continue;
+    }
+
+    absl::string_view modality_tag;
+    if (image_re.has_value() && RE2::FullMatch(matched, *image_re)) {
+      modality_tag = "img";
+    } else if (audio_re.has_value() && RE2::FullMatch(matched, *audio_re)) {
+      modality_tag = "aud";
+    } else if (video_re.has_value() && RE2::FullMatch(matched, *video_re)) {
+      modality_tag = "vid";
+    }
+
+    if (modality_tag.empty()) {
+      absl::StrAppend(&rewritten, matched);
+    } else {
+      absl::StrAppend(&rewritten, get_or_create_nonce(modality_tag, matched));
+    }
+  }
+  absl::StrAppend(&rewritten, view);
+  sanitizer.rewritten_template_ = std::move(rewritten);
+
+  if (image_re.has_value() && RE2::FullMatch("<start_of_image>", *image_re)) {
+    sanitizer.fallback_image_placeholder_ =
+        get_or_create_nonce("img", "<start_of_image>");
+  }
+  if (audio_re.has_value() && RE2::FullMatch("<start_of_audio>", *audio_re)) {
+    sanitizer.fallback_audio_placeholder_ =
+        get_or_create_nonce("aud", "<start_of_audio>");
+  }
+
+  if (image_re.has_value()) {
+    if (sanitizer.nonces_.image_nonce_token.empty()) {
+      sanitizer.nonces_.image_nonce_token = absl::StrCat(
+          "<<__litert_mm_img_", sanitizer.nonce_hex_, "_", next_id++, "__>>");
+    }
+    sanitizer.nonces_.image_token_regex = absl::StrCat(
+        "(<<__litert_mm_img_", sanitizer.nonce_hex_, "_[0-9]+__>>)");
+  }
+  if (audio_re.has_value()) {
+    sanitizer.nonces_.audio_token_regex = absl::StrCat(
+        "(<<__litert_mm_aud_", sanitizer.nonce_hex_, "_[0-9]+__>>)");
+  }
+  if (video_re.has_value()) {
+    sanitizer.nonces_.video_token_regex = absl::StrCat(
+        "(<<__litert_mm_vid_", sanitizer.nonce_hex_, "_[0-9]+__>>)");
+  }
+  sanitizer.nonces_.delimiter_regex =
+      absl::StrCat("(<<__litert_mm_(?:",
+                   absl::StrJoin(active_modality_tags, "|"), ")_",
+                   sanitizer.nonce_hex_, "_[0-9]+__>>)");
+
+  return sanitizer;
+}
+
+std::string MultimodalDelimiterSanitizer::RestoreDelimiters(
+    std::string rendered) const {
+  if (restore_replacements_.empty() ||
+      !absl::StrContains(rendered, nonce_hex_)) {
+    return rendered;
+  }
+  return absl::StrReplaceAll(rendered, restore_replacements_);
+}
 
 absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
     absl::string_view rendered_template_prompt,
