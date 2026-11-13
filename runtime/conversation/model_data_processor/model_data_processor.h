@@ -137,6 +137,11 @@ class ModelDataProcessor {
   // Returns the end of tool call blocks.
   virtual absl::string_view CodeFenceEnd() const { return ""; }
 
+  // Returns the regex matching multimodal placeholder delimiters in rendered
+  // prompt templates (e.g. `<start_of_image>`, `<|audio|>`), or empty if the
+  // processor does not split rendered prompts on multimodal delimiters.
+  virtual absl::string_view MultimodalDelimiterRegex() const { return ""; }
+
   // Clones the state of the other model data processor.
   virtual absl::Status CloneState(const ModelDataProcessor& other) = 0;
 

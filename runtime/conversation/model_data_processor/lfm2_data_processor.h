@@ -62,6 +62,8 @@ class Lfm2DataProcessor
   // Returns the end of tool call blocks.
   absl::string_view CodeFenceEnd() const override;
 
+  absl::string_view MultimodalDelimiterRegex() const override;
+
  private:
   explicit Lfm2DataProcessor(
       const Lfm2DataProcessorConfig& config = Lfm2DataProcessorConfig(),

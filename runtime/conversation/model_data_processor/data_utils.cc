@@ -14,22 +14,28 @@
 
 #include "runtime/conversation/model_data_processor/data_utils.h"
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 
 #include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/status_macros.h"
+#include "re2/re2.h"  // from @com_googlesource_code_re2
 
 namespace litert::lm {
 
@@ -172,6 +178,301 @@ absl::StatusOr<ordered_json> FormatToolsArray(
     formatted_tools.push_back(formatted_tool);
   }
   return formatted_tools;
+}
+
+namespace {
+
+constexpr absl::string_view kMultimodalEscapePrefix = "<<__litert_mm_esc__:";
+constexpr absl::string_view kMultimodalEscapePrefixUpper =
+    "<<__LITERT_MM_ESC__:";
+constexpr absl::string_view kMultimodalEscapeSuffix = ">>";
+
+std::string WrapEscapedBytes(absl::string_view raw) {
+  return absl::StrCat(kMultimodalEscapePrefix, absl::BytesToHexString(raw),
+                      kMultimodalEscapeSuffix);
+}
+
+bool IsMediaItemObject(const ordered_json& obj) {
+  if (!obj.is_object() || !obj.contains("type") || !obj["type"].is_string()) {
+    return false;
+  }
+  const std::string& type = obj["type"].get_ref<const std::string&>();
+  return type == "image" || type == "audio";
+}
+
+bool IsProtectedStructuralField(absl::string_view key, absl::string_view val,
+                                bool skip_media_items) {
+  if (!skip_media_items) {
+    return false;
+  }
+  if (key == "role") {
+    return true;
+  }
+  if (key == "type" &&
+      (val == "text" || val == "tool_response" || val == "function")) {
+    return true;
+  }
+  return false;
+}
+
+bool StringNeedsEscaping(absl::string_view text, const RE2& delimiter_re) {
+  if (absl::StrContains(text, kMultimodalEscapePrefix) ||
+      absl::StrContains(text, kMultimodalEscapePrefixUpper)) {
+    return true;
+  }
+  absl::string_view match;
+  return delimiter_re.Match(text, 0, text.size(), RE2::UNANCHORED, &match, 1) &&
+         !match.empty();
+}
+
+bool EscapeStringInPlace(std::string& text, const RE2& delimiter_re) {
+  if (!StringNeedsEscaping(text, delimiter_re)) {
+    return false;
+  }
+  std::string out;
+  out.reserve(text.size() + 32);
+  absl::string_view remaining = text;
+  while (!remaining.empty()) {
+    size_t best_pos = absl::string_view::npos;
+    size_t best_len = 0;
+
+    const size_t lower_pos = remaining.find(kMultimodalEscapePrefix);
+    if (lower_pos != absl::string_view::npos) {
+      best_pos = lower_pos;
+      best_len = kMultimodalEscapePrefix.size();
+    }
+
+    const size_t upper_pos = remaining.find(kMultimodalEscapePrefixUpper);
+    if (upper_pos != absl::string_view::npos && upper_pos < best_pos) {
+      best_pos = upper_pos;
+      best_len = kMultimodalEscapePrefixUpper.size();
+    }
+
+    absl::string_view delim_match;
+    if (delimiter_re.Match(remaining, 0, remaining.size(), RE2::UNANCHORED,
+                           &delim_match, 1) &&
+        !delim_match.empty()) {
+      const size_t delim_pos =
+          static_cast<size_t>(delim_match.data() - remaining.data());
+      if (delim_pos < best_pos ||
+          (delim_pos == best_pos && delim_match.size() > best_len)) {
+        best_pos = delim_pos;
+        best_len = delim_match.size();
+      }
+    }
+
+    if (best_pos == absl::string_view::npos) {
+      out.append(remaining.data(), remaining.size());
+      break;
+    }
+
+    out.append(remaining.data(), best_pos);
+    out.append(WrapEscapedBytes(remaining.substr(best_pos, best_len)));
+    remaining.remove_prefix(best_pos + best_len);
+  }
+  text = std::move(out);
+  return true;
+}
+
+const std::string* GetTextItemString(const ordered_json& item) {
+  if (item.is_string()) {
+    return &item.get_ref<const std::string&>();
+  }
+  if (item.is_object() && item.contains("type") && item["type"].is_string() &&
+      item["type"].get_ref<const std::string&>() == "text" &&
+      item.contains("text") && item["text"].is_string()) {
+    return &item["text"].get_ref<const std::string&>();
+  }
+  return nullptr;
+}
+
+std::string* GetMutableTextItemString(ordered_json& item) {
+  if (item.is_string()) {
+    return &item.get_ref<std::string&>();
+  }
+  if (item.is_object() && item.contains("type") && item["type"].is_string() &&
+      item["type"].get_ref<const std::string&>() == "text" &&
+      item.contains("text") && item["text"].is_string()) {
+    return &item["text"].get_ref<std::string&>();
+  }
+  return nullptr;
+}
+
+size_t FindFirstUnclosedAngleBracket(absl::string_view text) {
+  const absl::string_view trimmed = absl::StripTrailingAsciiWhitespace(text);
+  const size_t last_gt = trimmed.rfind('>');
+  return last_gt == absl::string_view::npos ? trimmed.find('<')
+                                            : trimmed.find('<', last_gt + 1);
+}
+
+bool NeedsEscapingImpl(const ordered_json& value, const RE2& delimiter_re,
+                       bool skip_media_items) {
+  if (value.is_string()) {
+    return StringNeedsEscaping(value.get_ref<const std::string&>(),
+                               delimiter_re);
+  }
+  if (value.is_array()) {
+    for (size_t i = 0; i < value.size(); ++i) {
+      if (NeedsEscapingImpl(value[i], delimiter_re, skip_media_items)) {
+        return true;
+      }
+      if (i + 1 < value.size()) {
+        const std::string* curr_text = GetTextItemString(value[i]);
+        const std::string* next_text = GetTextItemString(value[i + 1]);
+        if (curr_text != nullptr && next_text != nullptr &&
+            FindFirstUnclosedAngleBracket(*curr_text) !=
+                absl::string_view::npos) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  if (value.is_object()) {
+    if (skip_media_items && IsMediaItemObject(value)) {
+      return false;
+    }
+    for (const auto& [key, val] : value.items()) {
+      if (StringNeedsEscaping(key, delimiter_re)) {
+        return true;
+      }
+      if (val.is_string() &&
+          IsProtectedStructuralField(key, val.get_ref<const std::string&>(),
+                                     skip_media_items)) {
+        continue;
+      }
+      if (NeedsEscapingImpl(val, delimiter_re, skip_media_items)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+void EscapeJsonImpl(ordered_json& value, const RE2& delimiter_re,
+                    bool skip_media_items) {
+  if (value.is_string()) {
+    EscapeStringInPlace(value.get_ref<std::string&>(), delimiter_re);
+    return;
+  }
+  if (value.is_array()) {
+    for (auto& elem : value) {
+      EscapeJsonImpl(elem, delimiter_re, skip_media_items);
+    }
+    for (size_t i = 0; i + 1 < value.size(); ++i) {
+      std::string* curr_text = GetMutableTextItemString(value[i]);
+      if (curr_text == nullptr ||
+          GetMutableTextItemString(value[i + 1]) == nullptr) {
+        continue;
+      }
+      const size_t first_lt = FindFirstUnclosedAngleBracket(*curr_text);
+      if (first_lt == absl::string_view::npos) {
+        continue;
+      }
+      const size_t trimmed_len =
+          absl::StripTrailingAsciiWhitespace(*curr_text).size();
+      std::string escaped;
+      escaped.reserve(curr_text->size() + 32);
+      escaped.append(curr_text->data(), first_lt);
+      for (size_t pos = first_lt; pos < trimmed_len; ++pos) {
+        if ((*curr_text)[pos] == '<') {
+          escaped.append(WrapEscapedBytes("<"));
+        } else {
+          escaped.push_back((*curr_text)[pos]);
+        }
+      }
+      escaped.append(curr_text->data() + trimmed_len,
+                     curr_text->size() - trimmed_len);
+      *curr_text = std::move(escaped);
+    }
+    return;
+  }
+  if (value.is_object()) {
+    if (skip_media_items && IsMediaItemObject(value)) {
+      return;
+    }
+    bool any_key_changed = false;
+    for (auto& [key, val] : value.items()) {
+      if (!any_key_changed && StringNeedsEscaping(key, delimiter_re)) {
+        any_key_changed = true;
+      }
+      if (val.is_string() &&
+          IsProtectedStructuralField(key, val.get_ref<const std::string&>(),
+                                     skip_media_items)) {
+        continue;
+      }
+      EscapeJsonImpl(val, delimiter_re, skip_media_items);
+    }
+    if (any_key_changed) {
+      ordered_json rebuilt = ordered_json::object();
+      for (auto& [key, val] : value.items()) {
+        std::string clean_key = key;
+        EscapeStringInPlace(clean_key, delimiter_re);
+        rebuilt[std::move(clean_key)] = std::move(val);
+      }
+      value = std::move(rebuilt);
+    }
+  }
+}
+
+}  // namespace
+
+bool NeedsMultimodalDelimiterEscaping(const ordered_json& value,
+                                      absl::string_view delimiter_regex,
+                                      bool skip_media_items) {
+  if (delimiter_regex.empty()) {
+    return false;
+  }
+  RE2 delimiter_re(delimiter_regex);
+  if (!delimiter_re.ok()) {
+    return false;
+  }
+  return NeedsEscapingImpl(value, delimiter_re, skip_media_items);
+}
+
+void EscapeMultimodalDelimitersInJson(ordered_json& value,
+                                      absl::string_view delimiter_regex,
+                                      bool skip_media_items) {
+  if (delimiter_regex.empty()) {
+    return;
+  }
+  RE2 delimiter_re(delimiter_regex);
+  if (!delimiter_re.ok()) {
+    return;
+  }
+  EscapeJsonImpl(value, delimiter_re, skip_media_items);
+}
+
+std::string UnescapeMultimodalDelimiters(absl::string_view text) {
+  if (!absl::StrContains(text, kMultimodalEscapePrefix) &&
+      !absl::StrContains(text, kMultimodalEscapePrefixUpper)) {
+    return std::string(text);
+  }
+  static const LazyRE2 kUnescapeRe = {
+      R"regex(<<__litert_mm_esc__:((?:[0-9a-f]{2})+)>>|<<__LITERT_MM_ESC__:((?:[0-9A-F]{2})+)>>)regex"};
+  std::string out;
+  out.reserve(text.size());
+  absl::string_view remaining = text;
+  absl::string_view submatches[3];
+  while (kUnescapeRe->Match(remaining, 0, remaining.size(), RE2::UNANCHORED,
+                            submatches, 3)) {
+    const absl::string_view full_match = submatches[0];
+    const absl::string_view lower_hex = submatches[1];
+    const absl::string_view upper_hex = submatches[2];
+    const size_t pos =
+        static_cast<size_t>(full_match.data() - remaining.data());
+    out.append(remaining.data(), pos);
+    if (!lower_hex.empty()) {
+      out.append(absl::HexStringToBytes(lower_hex));
+    } else {
+      std::string decoded = absl::HexStringToBytes(upper_hex);
+      absl::AsciiStrToUpper(&decoded);
+      out.append(decoded);
+    }
+    remaining.remove_prefix(pos + full_match.size());
+  }
+  out.append(remaining.data(), remaining.size());
+  return out;
 }
 
 }  // namespace litert::lm

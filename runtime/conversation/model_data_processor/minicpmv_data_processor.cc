@@ -137,6 +137,10 @@ MiniCpmVDataProcessor::Create(
       new MiniCpmVDataProcessor(config, std::move(image_preprocessor)));
 }
 
+absl::string_view MiniCpmVDataProcessor::MultimodalDelimiterRegex() const {
+  return "(<image_soft_token>)";
+}
+
 absl::StatusOr<std::vector<InputData>>
 MiniCpmVDataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt, const ordered_json& messages,
@@ -173,8 +177,9 @@ MiniCpmVDataProcessor::ToInputDataVectorImpl(
 
   for (size_t img_idx = 0; img_idx < image_bytes_list.size(); ++img_idx) {
     const size_t marker_pos = marker_positions[img_idx];
-    AppendText(absl::string_view(rendered_template_prompt)
-                   .substr(text_cursor, marker_pos - text_cursor),
+    AppendText(UnescapeMultimodalDelimiters(
+                   absl::string_view(rendered_template_prompt)
+                       .substr(text_cursor, marker_pos - text_cursor)),
                output);
     text_cursor = marker_pos + kImageSoftToken.size();
 
@@ -226,8 +231,10 @@ MiniCpmVDataProcessor::ToInputDataVectorImpl(
     }
   }
 
-  AppendText(absl::string_view(rendered_template_prompt).substr(text_cursor),
-             output);
+  AppendText(
+      UnescapeMultimodalDelimiters(
+          absl::string_view(rendered_template_prompt).substr(text_cursor)),
+      output);
   return output;
 }
 

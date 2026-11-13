@@ -50,6 +50,7 @@
 #include "runtime/conversation/internal_callback_util.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
+#include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
@@ -1189,7 +1190,9 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
 
 absl::StatusOr<std::string> Conversation::RenderMessageIntoString(
     const Message& message, OptionalArgs optional_args) {
-  return GetSingleTurnText(message, optional_args);
+  ABSL_ASSIGN_OR_RETURN(std::string rendered,
+                        GetSingleTurnText(message, optional_args));
+  return UnescapeMultimodalDelimiters(rendered);
 }
 
 absl::StatusOr<std::string> Conversation::RenderPrefaceIntoString(
@@ -1217,7 +1220,8 @@ absl::StatusOr<std::string> Conversation::RenderPrefaceIntoString(
   }
 
   tmpl_input.add_generation_prompt = false;
-  return ApplyTemplate(tmpl_input);
+  ABSL_ASSIGN_OR_RETURN(std::string rendered, ApplyTemplate(tmpl_input));
+  return UnescapeMultimodalDelimiters(rendered);
 }
 
 absl::StatusOr<std::string> Conversation::GetPrefillTextForMessages(
@@ -1365,9 +1369,19 @@ Conversation::RewindAndGetInputDataVector(const OptionalArgs& optional_args) {
 absl::StatusOr<std::string> Conversation::ApplyTemplate(
     PromptTemplateInput& input) {
   StripBlobsFromTemplateInput(input);
-  absl::StatusOr<std::string> rendered = prompt_template_.Apply(input);
+  const absl::string_view delimiter_regex =
+      model_data_processor_->MultimodalDelimiterRegex();
+  PromptTemplateInput escaped_input;
+  const PromptTemplateInput* input_to_apply = &input;
+  if (NeedsMultimodalDelimiterEscapingInTemplateInput(input, delimiter_regex)) {
+    escaped_input = input;
+    EscapeMultimodalDelimitersInTemplateInput(escaped_input, delimiter_regex);
+    input_to_apply = &escaped_input;
+  }
+  absl::StatusOr<std::string> rendered =
+      prompt_template_.Apply(*input_to_apply);
   if (absl::IsUnimplemented(rendered.status())) {
-    return ApplyFallbackPromptTemplate(input, config_);
+    return ApplyFallbackPromptTemplate(*input_to_apply, config_);
   }
   return rendered;
 }

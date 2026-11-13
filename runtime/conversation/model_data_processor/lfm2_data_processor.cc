@@ -72,11 +72,15 @@ absl::string_view Lfm2DataProcessor::CodeFenceEnd() const {
   return config_.code_fence_end;
 }
 
+absl::string_view Lfm2DataProcessor::MultimodalDelimiterRegex() const {
+  return R"regex((<\|image_start\|>|<image>))regex";
+}
+
 absl::StatusOr<std::vector<InputData>> Lfm2DataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt, const ordered_json& messages,
     const Lfm2DataProcessorArguments& args) const {
   MultimodalPromptProcessingConfig multi_config{
-      .delimiter_regex = R"regex((<\|image_start\|>|<image>))regex",
+      .delimiter_regex = std::string(MultimodalDelimiterRegex()),
       .image_token_regex = R"regex((<\|image_start\|>|<image>))regex",
       .boi_token = config_.boi_token,
       .image_suffix = config_.eoi_token,

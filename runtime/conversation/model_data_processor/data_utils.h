@@ -102,6 +102,25 @@ absl::StatusOr<nlohmann::ordered_json> FormatToolsArray(
         absl::StatusOr<std::string>(const nlohmann::ordered_json&)>
         format_tool);
 
+// Returns true if `value` contains any non-media string (or adjacent text item
+// boundary) that must be escaped before prompt template rendering so literal
+// occurrences of `delimiter_regex` are not mistaken for media placeholders.
+bool NeedsMultimodalDelimiterEscaping(const nlohmann::ordered_json& value,
+                                      absl::string_view delimiter_regex,
+                                      bool skip_media_items = true);
+
+// Escapes occurrences of `delimiter_regex` (and internal escape sentinels) in
+// non-media strings of `value` in-place. When `skip_media_items` is true,
+// `{"type": "image"}` and `{"type": "audio"}` objects are left untouched so
+// prompt templates still emit real media placeholders for them.
+void EscapeMultimodalDelimitersInJson(nlohmann::ordered_json& value,
+                                      absl::string_view delimiter_regex,
+                                      bool skip_media_items = true);
+
+// Restores literal text previously escaped by
+// `EscapeMultimodalDelimitersInJson`.
+std::string UnescapeMultimodalDelimiters(absl::string_view text);
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_DATA_UTILS_H_

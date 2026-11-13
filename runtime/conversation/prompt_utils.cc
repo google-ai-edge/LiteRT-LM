@@ -22,9 +22,11 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/util/status_macros.h"
 
@@ -126,6 +128,8 @@ absl::StatusOr<SingleTurnTemplateRenderResult> RenderSingleTurnTemplate(
       closing_tmpl_input.extra_context["is_last_part"] = true;
       closing_tmpl_input.add_generation_prompt = false;
       StripBlobsFromTemplateInput(closing_tmpl_input);
+      EscapeMultimodalDelimitersInTemplateInput(
+          closing_tmpl_input, processor.MultimodalDelimiterRegex());
       ABSL_ASSIGN_OR_RETURN(std::string closing_text,
                             prompt_template.Apply(closing_tmpl_input));
       prefill_text += closing_text;
@@ -151,6 +155,8 @@ absl::StatusOr<SingleTurnTemplateRenderResult> RenderSingleTurnTemplate(
       }
 
       StripBlobsFromTemplateInput(preface_tmpl_input);
+      EscapeMultimodalDelimitersInTemplateInput(
+          preface_tmpl_input, processor.MultimodalDelimiterRegex());
       ABSL_ASSIGN_OR_RETURN(std::string preface_text,
                             prompt_template.Apply(preface_tmpl_input));
       prefill_text += preface_text;
@@ -173,6 +179,8 @@ absl::StatusOr<SingleTurnTemplateRenderResult> RenderSingleTurnTemplate(
     }
 
     StripBlobsFromTemplateInput(tmpl_input);
+    EscapeMultimodalDelimitersInTemplateInput(
+        tmpl_input, processor.MultimodalDelimiterRegex());
     ABSL_ASSIGN_OR_RETURN(std::string new_text,
                           prompt_template.Apply(tmpl_input));
     prefill_text += new_text;
@@ -185,6 +193,32 @@ void StripBlobsFromTemplateInput(PromptTemplateInput& input) {
   if (input.extra_context.contains("message")) {
     StripBlobs(input.extra_context["message"]);
   }
+}
+
+bool NeedsMultimodalDelimiterEscapingInTemplateInput(
+    const PromptTemplateInput& input, absl::string_view delimiter_regex) {
+  if (delimiter_regex.empty()) {
+    return false;
+  }
+  return NeedsMultimodalDelimiterEscaping(input.messages, delimiter_regex,
+                                          /*skip_media_items=*/true) ||
+         NeedsMultimodalDelimiterEscaping(input.tools, delimiter_regex,
+                                          /*skip_media_items=*/false) ||
+         NeedsMultimodalDelimiterEscaping(input.extra_context, delimiter_regex,
+                                          /*skip_media_items=*/true);
+}
+
+void EscapeMultimodalDelimitersInTemplateInput(
+    PromptTemplateInput& input, absl::string_view delimiter_regex) {
+  if (delimiter_regex.empty()) {
+    return;
+  }
+  EscapeMultimodalDelimitersInJson(input.messages, delimiter_regex,
+                                   /*skip_media_items=*/true);
+  EscapeMultimodalDelimitersInJson(input.tools, delimiter_regex,
+                                   /*skip_media_items=*/false);
+  EscapeMultimodalDelimitersInJson(input.extra_context, delimiter_regex,
+                                   /*skip_media_items=*/true);
 }
 
 }  // namespace litert::lm

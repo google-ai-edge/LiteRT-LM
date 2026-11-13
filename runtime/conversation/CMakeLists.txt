@@ -32,6 +32,7 @@ target_link_libraries(runtime_conversation_conversation
     LiteRTLM::Runtime::Conversation::InternalCallbackUtil
     LiteRTLM::Runtime::Conversation::IoTypes
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::ConfigRegistry
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::DataUtils
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Factory
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Interface
     LiteRTLM::Runtime::Core::SessionUtils
@@ -109,6 +110,7 @@ target_include_directories(runtime_conversation_prompt_utils
 
 target_link_libraries(runtime_conversation_prompt_utils
   PUBLIC
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::DataUtils
     LITERTLM_DEPS
 )
 

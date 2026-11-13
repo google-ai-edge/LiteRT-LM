@@ -22,6 +22,7 @@
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "runtime/conversation/model_data_processor/fastvlm_data_processor_config.h"
@@ -43,12 +44,16 @@ FastVlmDataProcessor::Create(FastVlmDataProcessorConfig config) {
       config, std::make_unique<StbImagePreprocessor>()));
 }
 
+absl::string_view FastVlmDataProcessor::MultimodalDelimiterRegex() const {
+  return "(<image_soft_token>)";
+}
+
 absl::StatusOr<std::vector<InputData>>
 FastVlmDataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt, const ordered_json& messages,
     const FastVlmDataProcessorArguments& args) const {
   MultimodalPromptProcessingConfig multi_config{
-      .delimiter_regex = "(<image_soft_token>)",
+      .delimiter_regex = std::string(MultimodalDelimiterRegex()),
       .image_token_regex = "(<image_soft_token>)",
       .audio_token_regex = "",
       .boi_token = "",

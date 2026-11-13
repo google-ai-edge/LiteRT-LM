@@ -76,6 +76,8 @@ class Gemma4DataProcessor
   // Returns the end of tool call blocks.
   absl::string_view CodeFenceEnd() const override;
 
+  absl::string_view MultimodalDelimiterRegex() const override;
+
  private:
 #if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
   // TODO(b/574011343): Remove the FST path once LLGuidance tool call

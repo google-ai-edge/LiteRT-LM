@@ -124,8 +124,8 @@ absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
             "Image placeholder found but no image preprocessor is configured.");
       }
 
-      std::string text =
-          absl::StrCat(text_part, config.image_prefix, config.boi_token);
+      std::string text = absl::StrCat(UnescapeMultimodalDelimiters(text_part),
+                                      config.image_prefix, config.boi_token);
       if (!text.empty()) {
         input_data.emplace_back(InputText(std::move(text)));
       }
@@ -157,8 +157,8 @@ absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
             "Audio placeholder found but no audio preprocessor is configured.");
       }
 
-      std::string text =
-          absl::StrCat(text_part, config.audio_prefix, config.boa_token);
+      std::string text = absl::StrCat(UnescapeMultimodalDelimiters(text_part),
+                                      config.audio_prefix, config.boa_token);
       if (!text.empty()) {
         input_data.emplace_back(InputText(std::move(text)));
       }
@@ -201,7 +201,7 @@ absl::StatusOr<std::vector<InputData>> ProcessMultimodalPrompt(
 
   // 6. Append remaining prompt text.
   if (!prompt_view.empty()) {
-    input_data.push_back(InputText(std::string(prompt_view)));
+    input_data.push_back(InputText(UnescapeMultimodalDelimiters(prompt_view)));
   }
 
   return input_data;
