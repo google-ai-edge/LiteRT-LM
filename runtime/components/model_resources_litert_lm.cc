@@ -83,14 +83,13 @@ absl::StatusOr<litert::Model> CreateModelFromFileSection(ScopedFile& model_file,
   LITERT_ASSIGN_OR_RETURN(auto dup_file, model_file.Duplicate());
   LITERT_ASSIGN_OR_RETURN(int fd, dup_file.Release());
   auto model_or =
-      litert::Model::CreateFromFd(fd, begin_offset, end_offset - begin_offset);
+      CreateLiteRtModelFromFd(fd, begin_offset, end_offset - begin_offset);
 #if defined(_WIN32)
   _close(fd);
 #else
   close(fd);
 #endif
-  LITERT_ASSIGN_OR_RETURN(auto model, model_or);
-  return model;
+  return model_or;
 #endif  // defined(_WIN32) && defined(LITERT_DYNAMIC_RUNTIME)
 }
 
@@ -156,7 +155,7 @@ absl::StatusOr<const litert::Model*> ModelResourcesLitertLm::GetTFLiteModel(
 
   ABSL_ASSIGN_OR_RETURN(litert::BufferRef<uint8_t> buffer_ref,
                         GetTFLiteModelSectionBuffer(key));
-  LITERT_ASSIGN_OR_RETURN(auto model, Model::CreateFromBuffer(buffer_ref));
+  ABSL_ASSIGN_OR_RETURN(auto model, CreateLiteRtModelFromBuffer(buffer_ref));
   auto model_ptr = std::make_unique<litert::Model>(std::move(model));
   auto* raw_model_ptr = model_ptr.get();
   model_map_[key] = std::move(model_ptr);

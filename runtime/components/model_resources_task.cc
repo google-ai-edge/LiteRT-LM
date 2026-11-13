@@ -27,7 +27,6 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
-#include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -87,7 +86,7 @@ absl::StatusOr<const litert::Model*> ModelResourcesTask::GetTFLiteModel(
   }
   ABSL_VLOG(1) << "litert model size: " << buffer->size();
   auto buffer_ref = BufferRef<uint8_t>(buffer->data(), buffer->size());
-  LITERT_ASSIGN_OR_RETURN(auto model, Model::CreateFromBuffer(buffer_ref));
+  ABSL_ASSIGN_OR_RETURN(auto model, CreateLiteRtModelFromBuffer(buffer_ref));
   model_map_[model_type] = std::make_unique<Model>(std::move(model));
   return model_map_[model_type].get();
 }

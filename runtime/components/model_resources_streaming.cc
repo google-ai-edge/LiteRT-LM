@@ -107,13 +107,13 @@ absl::StatusOr<const litert::Model*> ModelResourcesStreaming::GetTFLiteModel(
         absl::StrCat("Model buffer not found for type: ", key));
   }
 
-  auto expected_model =
-      litert::Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
-          reinterpret_cast<uint8_t*>(buf_it->second.data()),
-          buf_it->second.size()));
-  if (!expected_model.HasValue()) {
+  auto expected_model = CreateLiteRtModelFromBuffer(litert::BufferRef<uint8_t>(
+      reinterpret_cast<uint8_t*>(buf_it->second.data()),
+      buf_it->second.size()));
+  if (!expected_model.ok()) {
     return absl::InternalError(
-        absl::StrCat("Failed to create model from buffer for type: ", key));
+        absl::StrCat("Failed to create model from buffer for type: ", key, ": ",
+                     expected_model.status().message()));
   }
   auto model = std::make_unique<litert::Model>(std::move(*expected_model));
   const auto* model_ptr = model.get();

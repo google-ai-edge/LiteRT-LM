@@ -18,6 +18,7 @@
 // All the loaded model resources the executor needs to hold to avoid the model
 // being destroyed.
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -31,6 +32,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #ifdef ENABLE_HUGGINGFACE_TOKENIZER
 #include "support/tokenizer/huggingface_tokenizer.h"
@@ -103,6 +105,15 @@ template <typename TfLiteModelTypeT>
 constexpr bool kIsNonLlmTfLiteModelType =
     kIsTfLiteModelType<TfLiteModelTypeT> &&
     !std::is_same_v<TfLiteModelTypeT, proto::LlmMetadata::TfLiteModelType>;
+
+// Load a LiteRT model without an Environment. Use these instead of LiteRT's
+// Environment-less `Model::CreateFrom*` overloads, which create a leaked
+// default Environment that registers every accelerator (e.g. loading the GPU
+// accelerator on NPU-only runs). Loading a model does not use an Environment.
+absl::StatusOr<litert::Model> CreateLiteRtModelFromBuffer(
+    litert::BufferRef<uint8_t> buffer);
+absl::StatusOr<litert::Model> CreateLiteRtModelFromFd(int fd, size_t offset,
+                                                      size_t size);
 
 // Describes the location of a contiguous region of bytes in a file.
 struct FileRegion {

@@ -55,6 +55,7 @@ using ::litert::lm::ScopedFile;
 using ::litert::lm::TfLiteModelTypeToWireString;
 using ::litert::lm::proto::EmbeddingMetadata;
 using ::litert::lm::proto::LlmMetadata;
+using ::testing::AnyOf;
 namespace schema = ::litert::lm::schema;
 
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
@@ -342,6 +343,27 @@ TEST(ModelResourcesTest, GetTFLiteModelPropagatesSectionMapFailure) {
               StatusIs(absl::StatusCode::kNotFound));
   EXPECT_THAT(model_resources->GetTFLiteModelBuffer(LlmMetadata::TF_LITE_AUX),
               StatusIs(absl::StatusCode::kNotFound));
+}
+
+// File-backed loading maps the section itself (or falls back to the buffer
+// where that is unsupported). A section that fails to map must still not read
+// as a missing model.
+TEST(ModelResourcesTest,
+     GetTFLiteModelPropagatesSectionMapFailureWithFileBackedLoading) {
+  ASSERT_OK_AND_ASSIGN(const std::string model_path,
+                       WriteTruncatedPerLayerEmbedderModelFile());
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      ModelResourcesLitertLm::Create(
+          std::move(loader), /*enable_file_backed_model_loading=*/true));
+
+  EXPECT_THAT(
+      model_resources->GetTFLiteModel(LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER),
+      StatusIs(
+          AnyOf(absl::StatusCode::kUnavailable, absl::StatusCode::kInternal)));
 }
 
 TEST(ParseLlmTfLiteModelTypeTest, ParsesWireStringsCaseInsensitively) {

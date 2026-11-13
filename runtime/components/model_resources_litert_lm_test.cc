@@ -15,10 +15,13 @@
 #include "runtime/components/model_resources_litert_lm.h"
 
 #include <filesystem>  // NOLINT: Required for path manipulation.
+#include <sstream>
 #include <utility>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "litert/c/internal/litert_logging.h"  // from @litert
+#include "litert/cc/internal/litert_logging.h"  // from @litert
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
@@ -28,9 +31,43 @@ namespace litert::lm {
 namespace {
 
 using ::litert::lm::proto::LlmMetadata;
+using ::testing::HasSubstr;
+using ::testing::Not;
 
 constexpr char kTestLmPath[] =
     "litert_lm/runtime/testdata/test_lm.litertlm";
+
+// Loading models must not create LiteRT's default Environment, which registers
+// every accelerator (logging NPU registration failures and loading the GPU
+// accelerator on NPU-only runs). The default Environment is a process-wide
+// static that logs its creation once, so no test in this binary may create it.
+TEST(ModelResourcesLitertLmTest, GetTFLiteModelDoesNotCreateEnvironment) {
+  for (bool file_backed : {true, false}) {
+    const auto model_path =
+        std::filesystem::path(::testing::SrcDir()) / kTestLmPath;
+    ASSERT_OK_AND_ASSIGN(auto model_file,
+                         ScopedFile::Open(model_path.string()));
+    ASSERT_OK_AND_ASSIGN(auto loader,
+                         LitertLmLoader::Create(std::move(model_file)));
+    ASSERT_OK_AND_ASSIGN(
+        auto model_resources,
+        ModelResourcesLitertLm::Create(std::move(loader), file_backed));
+
+    ::litert::InterceptLogs intercepted_logs;
+    LiteRtSetMinLoggerSeverity(LiteRtGetDefaultLogger(),
+                               kLiteRtLogSeverityInfo);
+    ASSERT_OK_AND_ASSIGN(
+        const auto* tflite_model,
+        model_resources->GetTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE));
+    EXPECT_GT(tflite_model->GetNumSignatures(), 0);
+
+    std::ostringstream logs;
+    logs << intercepted_logs;
+    EXPECT_THAT(logs.str(),
+                Not(HasSubstr("Creating LiteRT environment with options")))
+        << "file_backed=" << file_backed;
+  }
+}
 
 // Loads a TFLite model from a .litertlm file with file-backed loading enabled.
 // With the dynamically linked LiteRT runtime on Windows this used to pass a C

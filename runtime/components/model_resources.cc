@@ -15,6 +15,7 @@
 #include "runtime/components/model_resources.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -28,6 +29,10 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
+#include "litert/c/litert_model.h"  // from @litert
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
+#include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/proto/any2any_metadata.pb.h"
 #include "runtime/proto/embedding_metadata.pb.h"
@@ -37,6 +42,26 @@
 #include "runtime/proto/text2speech_metadata.pb.h"
 
 namespace litert::lm {
+
+// The LiteRT model loaders ignore their environment argument, so pass none
+// rather than the default Environment the C++ wrappers would create.
+absl::StatusOr<litert::Model> CreateLiteRtModelFromBuffer(
+    litert::BufferRef<uint8_t> buffer) {
+  LiteRtModel model;
+  LITERT_RETURN_IF_ERROR(LiteRtCreateModelFromBuffer(
+      /*environment=*/nullptr, buffer.Data(), buffer.Size(), &model))
+      << "Failed to load model from buffer";
+  return litert::Model::CreateFromOwnedHandle(model);
+}
+
+absl::StatusOr<litert::Model> CreateLiteRtModelFromFd(int fd, size_t offset,
+                                                      size_t size) {
+  LiteRtModel model;
+  LITERT_RETURN_IF_ERROR(LiteRtCreateModelFromFd(/*environment=*/nullptr, fd,
+                                                 offset, size, &model))
+      << "Failed to load model from fd";
+  return litert::Model::CreateFromOwnedHandle(model);
+}
 
 std::string TfLiteModelTypeToWireString(
     proto::LlmMetadata::TfLiteModelType model_type) {

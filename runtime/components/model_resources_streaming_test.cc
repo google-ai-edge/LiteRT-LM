@@ -26,6 +26,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -36,6 +37,9 @@
 
 namespace litert::lm {
 namespace {
+
+using ::testing::status::IsOkAndHolds;
+using ::testing::status::StatusIs;
 
 class MemoryDataStream : public DataStream {
  public:
@@ -353,6 +357,32 @@ TEST(ModelResourcesStreamingTest, SetWeightsFromStreamSharesWeights) {
       proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
   EXPECT_TRUE(prefill_map == nullptr ||
               !prefill_map->contains("tflite_weights:tf_lite_embedder"));
+}
+
+TEST(ModelResourcesStreamingTest, GetTFLiteModelLoadsAndCachesModel) {
+  ModelResourcesStreaming model_resources;
+  model_resources.SetModelBuffer(proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+                                 BuildModelWithExternalBufferGroups({}));
+
+  ASSERT_OK_AND_ASSIGN(const litert::Model* model,
+                       model_resources.GetTFLiteModel(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  ASSERT_NE(model, nullptr);
+  EXPECT_THAT(model_resources.GetTFLiteModel(
+                  proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+              IsOkAndHolds(model));
+}
+
+TEST(ModelResourcesStreamingTest, GetTFLiteModelFailsOnInvalidModelBuffer) {
+  ModelResourcesStreaming model_resources;
+  const std::string invalid_bytes = "not_a_tflite_model";
+  model_resources.SetModelBuffer(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+      std::vector<char>(invalid_bytes.begin(), invalid_bytes.end()));
+
+  EXPECT_THAT(model_resources.GetTFLiteModel(
+                  proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+              StatusIs(absl::StatusCode::kInternal));
 }
 
 }  // namespace
