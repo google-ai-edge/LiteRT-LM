@@ -758,5 +758,4 @@ export declare interface LiteRtLmWasm extends WasmModule {
   ReadableStreamDataStream: ReadableStreamDataStreamConstructor;
   ConversationConfig: ConversationConfigConstructor;
   Conversation: ConversationConstructor;
-  clearStoredWeightsStreams(): Promise<WasmResult<void>>;
 }

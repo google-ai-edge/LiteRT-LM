@@ -49,7 +49,6 @@
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/data_stream.h"
-#include "runtime/util/streamed_weights_manager.h"
 
 using emscripten::optional_override;
 using emscripten::val;
@@ -341,10 +340,6 @@ static absl::StatusOr<std::vector<litert::lm::InputData>> ParseInputData(
 // or a JS Error (see status_to_val.h). They must never throw from C++.
 EMSCRIPTEN_BINDINGS(litertlm_web) {
   emscripten::function("setupLogging", &SetupLogging);
-  emscripten::function(
-      "clearStoredWeightsStreams", optional_override([]() {
-        return StatusToVal(litert::lm::ClearStoredWeightsStreams());
-      }) LITERTLM_EM_ASYNC);
 
   emscripten::enum_<litert::lm::Backend>("Backend")
       .value("UNSPECIFIED", litert::lm::Backend::UNSPECIFIED)

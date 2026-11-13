@@ -354,22 +354,8 @@ AudioLiteRtCompiledModelExecutor::CompileAudioSubmodel(
   ABSL_RETURN_IF_ERROR(
       SetExternalWeightOptions(resources, model_type, options));
 
-#ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
-      __attribute__((weak));
-  if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(model_type));
-  }
-#endif
-  auto expected_compiled_model =
-      CompiledModel::Create(env, model.Get(), options);
-#ifdef __EMSCRIPTEN__
-  if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel("");
-  }
-#endif
   LITERT_ASSIGN_OR_RETURN(auto compiled_model,
-                          std::move(expected_compiled_model));
+                          CompiledModel::Create(env, model.Get(), options));
   LITERT_ASSIGN_OR_RETURN(auto signatures, model.GetSignatures());
   if (signatures.size() != 1) {
     return absl::InvalidArgumentError(absl::StrCat(

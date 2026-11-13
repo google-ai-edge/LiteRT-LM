@@ -189,20 +189,8 @@ export class EmbeddingEngine implements Deletable {
       fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings(
           wasmSettings, settings);
 
-      try {
-        engine = unwrapWasmResult(
-            await wasm.EmbeddingEngine.createEngine(wasmSettings));
-      } finally {
-        if (resolvedBackend === Backend.GPU ||
-            settings.visionBackend === Backend.GPU ||
-            settings.audioBackend === Backend.GPU) {
-          try {
-            unwrapWasmResult(await wasm.clearStoredWeightsStreams());
-          } catch (cleanupError) {
-            console.error('Error clearing stored weights streams:', cleanupError);
-          }
-        }
-      }
+      engine = unwrapWasmResult(
+          await wasm.EmbeddingEngine.createEngine(wasmSettings));
       cleanupWasmSettings();
 
       cleanup.add(() => {

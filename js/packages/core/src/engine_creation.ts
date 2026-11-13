@@ -23,16 +23,13 @@ const engineCreationMutexes = new WeakMap<object, Mutex>();
  * at most one `Engine` or `EmbeddingEngine` is created at a time per Wasm
  * module.
  *
- * Engine creation with streamed weights relies on state that is global to the
- * Wasm module: the model that is currently being compiled, the stored weights
- * streams (keyed only by model type), and the WebGPU weight upload callback.
- * `clearStoredWeightsStreams()` also clears the streams of every engine.
  * Creation suspends Wasm (JSPI / Asyncify) while it waits for weights to
  * download, and the JS event loop keeps running in the meantime. Without this
- * mutex, a second creation could start while the first is suspended, upload
- * the wrong weights, clear the first engine's streams, or deadlock on a C++
- * mutex held by the suspended stack. It also keeps concurrent creations from
- * racing to set up the default WebGPU device.
+ * mutex, a second creation could start while the first is suspended and race
+ * with it on state that is global to the Wasm module, e.g. to set up the
+ * default WebGPU device, or deadlock on a C++ mutex held by the suspended
+ * stack. (The streamed weights themselves are not shared: each model's weights
+ * are uploaded from its own stream.)
  */
 export function runExclusiveEngineCreation<T>(
     wasmModule: object, fn: () => Promise<T>| T): Promise<T> {

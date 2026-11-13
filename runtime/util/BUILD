@@ -46,36 +46,29 @@ cc_library(
 )
 
 cc_library(
-    name = "streamed_weights_manager",
-    srcs = ["streamed_weights_manager.cc"],
-    hdrs = ["streamed_weights_manager.h"],
+    name = "streamed_weights_uploader",
+    srcs = ["streamed_weights_uploader.cc"],
+    hdrs = ["streamed_weights_uploader.h"],
     deps = [
         ":data_stream",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/base:no_destructor",
-        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_options",
         "@litert//weight_loader:external_weight_loader",
-        "//runtime/components:model_resources",
     ] + select({
         "//conditions:default": [],
     }),
 )
 
 cc_test(
-    name = "streamed_weights_manager_test",
-    srcs = ["streamed_weights_manager_test.cc"],
+    name = "streamed_weights_uploader_test",
+    srcs = ["streamed_weights_uploader_test.cc"],
     deps = [
         ":data_stream",
-        ":streamed_weights_manager",
+        ":streamed_weights_uploader",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
-        "//runtime/proto:embedding_metadata_cc_proto",
-        "//runtime/proto:llm_metadata_cc_proto",
+        "@litert//litert/cc:litert_options",
     ],
 )
 

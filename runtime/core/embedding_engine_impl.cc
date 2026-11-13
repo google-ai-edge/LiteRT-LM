@@ -69,7 +69,6 @@
 #include "runtime/util/litert_lm_streaming_loader.h"
 #include "runtime/util/litert_util.h"
 #include "runtime/util/status_macros.h"
-#include "runtime/util/streamed_weights_manager.h"
 #include "runtime/util/tensor_buffer_util.h"
 #include "schema/core/litertlm_header_schema_generated.h"
 #include "schema/core/litertlm_read.h"
@@ -733,10 +732,10 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
   }
 
   auto streaming_resources = std::make_unique<ModelResourcesStreaming>();
-
-  absl::Cleanup clear_stored_weights = [] {
-    ClearStoredWeightsStreams().IgnoreError();
-  };
+  // The stream of the text encoder's TFLiteWeights section, from which its
+  // weights are uploaded while it is compiled. Held until then if the section
+  // precedes the text encoder model.
+  std::shared_ptr<DataStream> text_encoder_weights_stream;
 
   // Unlike Create, the streamed path cannot resolve settings up front: the
   // metadata they depend on only arrives partway through the stream. Run this
@@ -922,7 +921,7 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                 model_type, *section->data_stream, size));
             ABSL_LOG(INFO) << "Text encoder weights read.";
           } else {
-            StoreWeightsStream(model_type, std::move(section->data_stream));
+            text_encoder_weights_stream = std::move(section->data_stream);
           }
           if (owned_env == nullptr) {
             ABSL_ASSIGN_OR_RETURN(
@@ -943,10 +942,9 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
                 compiled_text_encoder_info,
                 EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
                     settings.GetMainExecutorSettings(), owned_env->env,
-                    *streaming_resources));
+                    *streaming_resources,
+                    std::move(text_encoder_weights_stream)));
             ABSL_LOG(INFO) << "text_encoder compiled.";
-            ABSL_RETURN_IF_ERROR(ClearStoredWeightsStream(
-                proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
           }
         } else if (model_type ==
                        proto::EmbeddingMetadata::TF_LITE_VISION_ENCODER ||
@@ -970,10 +968,10 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
               model_type, *section->data_stream, size));
           ABSL_LOG(INFO) << "Weights read.";
         } else {
-          ABSL_LOG(INFO)
-              << "Storing TFLiteWeights section stream for model type: "
-              << model_type_str;
-          StoreWeightsStream(model_type_str, std::move(section->data_stream));
+          // No other model is compiled from streamed weights. The section is
+          // discarded when its stream is dropped.
+          ABSL_LOG(INFO) << "Skipping TFLiteWeights section for model type: "
+                         << model_type_str;
         }
         break;
       }
@@ -1003,8 +1001,6 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
     ABSL_RETURN_IF_ERROR(InitializeEmbeddingLookups(
         owned_env->env, *streaming_resources, embedding_lookup,
         per_layer_embedding_lookup));
-    ABSL_RETURN_IF_ERROR(
-        ClearStoredWeightsStream(proto::EmbeddingMetadata::TF_LITE_EMBEDDER));
   }
 
   if (!compiled_text_encoder_info.has_value()) {
@@ -1017,9 +1013,7 @@ EmbeddingEngineImpl::CreateStreamingWeights(EmbeddingEngineSettings settings) {
         compiled_text_encoder_info,
         EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
             settings.GetMainExecutorSettings(), owned_env->env,
-            *streaming_resources));
-    ABSL_RETURN_IF_ERROR(ClearStoredWeightsStream(
-        proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
+            *streaming_resources, std::move(text_encoder_weights_stream)));
   }
 
   // Default vision_tokens_per_image from metadata if not explicitly set in

@@ -37,6 +37,7 @@
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/util/data_stream.h"
 
 namespace litert::lm {
 
@@ -82,10 +83,13 @@ struct TextEncoderVariant {
 // embedding vector (`[batch, output_dim]`).
 class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
  public:
-  // Compiles the text encoder model from the given resources.
+  // Compiles the text encoder model from the given resources. If
+  // `weights_stream` is not null, the model's external weights that are not in
+  // host memory are uploaded from it while the model is compiled (on the Web).
   static absl::StatusOr<CompiledTextEncoderInfo> CompileTextEncoder(
       const EmbeddingExecutorSettings& executor_settings,
-      litert::Environment& env, ModelResources& resources);
+      litert::Environment& env, ModelResources& resources,
+      std::shared_ptr<DataStream> weights_stream = nullptr);
 
   // Creates an EmbeddingLiteRtCompiledModelExecutor from the given settings,
   // LiteRT environment, and model resources.

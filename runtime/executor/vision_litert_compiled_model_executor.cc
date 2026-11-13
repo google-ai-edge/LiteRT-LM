@@ -427,22 +427,8 @@ VisionLiteRtCompiledModelExecutor::VisionSubmodel::Create(
         runtime_options.SetSelectedSignatures(selected_signatures));
   }
 
-#ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
-      __attribute__((weak));
-  if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(model_type));
-  }
-#endif
-  Expected<CompiledModel> expected_compiled_model =
-      CompiledModel::Create(env, model->Get(), options);
-#ifdef __EMSCRIPTEN__
-  if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel("");
-  }
-#endif
   LITERT_ASSIGN_OR_RETURN(auto compiled_model,
-                          std::move(expected_compiled_model));
+                          CompiledModel::Create(env, model->Get(), options));
   auto submodel =
       absl::WrapUnique(new VisionSubmodel(*model, std::move(compiled_model)));
 

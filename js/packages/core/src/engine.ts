@@ -122,23 +122,12 @@ export class Engine implements Deletable {
       wasmEngineSettings.setParallelFileSectionLoading(false);
       wasmEngineSettings.setSingleThreadedExecution(true);
 
-      try {
-        if (resolvedBackend === Backend.GPU_ARTISAN) {
-          engine = unwrapWasmResult(await wasm.Engine.createLegacyEngine(
-              wasmEngineSettings, inputPromptAsHint));
-        } else {
-          engine = unwrapWasmResult(await wasm.Engine.createEngine(
-              wasmEngineSettings, inputPromptAsHint));
-        }
-      } finally {
-        if (resolvedBackend === Backend.GPU || visionBackend === Backend.GPU ||
-            audioBackend === Backend.GPU) {
-          try {
-            unwrapWasmResult(await wasm.clearStoredWeightsStreams());
-          } catch (cleanupError) {
-            console.error('Error clearing stored weights streams:', cleanupError);
-          }
-        }
+      if (resolvedBackend === Backend.GPU_ARTISAN) {
+        engine = unwrapWasmResult(await wasm.Engine.createLegacyEngine(
+            wasmEngineSettings, inputPromptAsHint));
+      } else {
+        engine = unwrapWasmResult(await wasm.Engine.createEngine(
+            wasmEngineSettings, inputPromptAsHint));
       }
       cleanupWasmEngineSettings();
 

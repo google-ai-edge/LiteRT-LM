@@ -509,23 +509,22 @@ target_link_libraries(runtime_util_metrics_util
 )
 
 # ==============================================================================
-# Streamed Weights Manager
+# Streamed Weights Uploader
 # ==============================================================================
-add_litertlm_library(runtime_util_streamed_weights_manager STATIC
-  streamed_weights_manager.cc
+add_litertlm_library(runtime_util_streamed_weights_uploader STATIC
+  streamed_weights_uploader.cc
 )
-add_library(LiteRTLM::Runtime::Util::StreamedWeightsManager
-  ALIAS runtime_util_streamed_weights_manager)
+add_library(LiteRTLM::Runtime::Util::StreamedWeightsUploader
+  ALIAS runtime_util_streamed_weights_uploader)
 
-target_include_directories(runtime_util_streamed_weights_manager
+target_include_directories(runtime_util_streamed_weights_uploader
   PRIVATE
+    ${LITERT_INCLUDE_DIR}
     "${LITERTLM_INCLUDE_PATHS}"
 )
 
-target_link_libraries(runtime_util_streamed_weights_manager
+target_link_libraries(runtime_util_streamed_weights_uploader
   PUBLIC
-    LiteRTLM::Runtime::Components::ModelResourcesInterface
-    LiteRTLM::Runtime::Engine::IoTypes
     LiteRTLM::Runtime::Util::DataStream
     LITERTLM_DEPS
 )
@@ -558,7 +557,7 @@ target_link_libraries(runtime_util_libs INTERFACE
   LiteRTLM::Runtime::Util::ModelTypeUtils
   LiteRTLM::Runtime::Util::SafetensorsUtil
   LiteRTLM::Runtime::Util::ScopedFile
-  LiteRTLM::Runtime::Util::StreamedWeightsManager
+  LiteRTLM::Runtime::Util::StreamedWeightsUploader
   LiteRTLM::Runtime::Util::TensorBufferUtil
   LiteRTLM::Runtime::Util::ZipReadonlyMemFile
   LiteRTLM::Runtime::Util::ZipUtils

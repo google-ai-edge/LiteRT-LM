@@ -1276,7 +1276,9 @@ cc_library(
         "//runtime/components/embedding_lookup:embedding_lookup_manager",
         "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/util:convert_tensor_buffer",
+        "//runtime/util:data_stream",
         "//runtime/util:litert_status_util",
+        "//runtime/util:streamed_weights_uploader",
     ],
 )
 

@@ -22,7 +22,6 @@
 #include <utility>
 #include <vector>
 
-#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/log/check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -76,7 +75,7 @@
 #include "runtime/util/litert_util.h"
 #include "runtime/util/runtime_debugger.h"
 #include "runtime/util/status_macros.h"  // NOLINT
-#include "runtime/util/streamed_weights_manager.h"
+#include "runtime/util/streamed_weights_uploader.h"
 #include "schema/core/litertlm_header_schema_generated.h"
 #include "schema/core/litertlm_read.h"
 #ifdef ENABLE_HUGGINGFACE_TOKENIZER
@@ -91,10 +90,13 @@ namespace litert::lm {
 namespace {
 
 // Compiles a LiteRt model from the given model type. Used for prefill/decode
-// models and MTP drafter models.
+// models and MTP drafter models. If `weights_stream` is not null, the model's
+// external weights that are not in host memory are uploaded from it while the
+// model is compiled (on the Web).
 absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
     const LlmExecutorSettings& executor_settings, Environment& lrt_env,
-    ModelResources& resources, proto::LlmMetadata::TfLiteModelType model_type) {
+    ModelResources& resources, proto::LlmMetadata::TfLiteModelType model_type,
+    std::shared_ptr<DataStream> weights_stream = nullptr) {
   ABSL_ASSIGN_OR_RETURN(auto model_buffer_view,
                         resources.GetTFLiteModelBuffer(model_type));
   litert::BufferRef<uint8_t> model_buffer(
@@ -153,19 +155,14 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
 
   std::unique_ptr<CompiledModel> compiled_model;
   {
-#ifdef __EMSCRIPTEN__
-    SetCurrentlyCompilingModel(model_type);
-#endif
-    // Reset on failure too: the weight upload callback resolves its source
-    // purely from this global, so a stale value would misdirect the next
-    // submodel's upload. Also clear the stored weights stream for `model_type`
-    // now that compilation has finished consuming it.
-    absl::Cleanup cleanup_weights_stream = [model_type] {
-#ifdef __EMSCRIPTEN__
-      SetCurrentlyCompilingModel("");
-#endif
-      ClearStoredWeightsStream(model_type).IgnoreError();
-    };
+    // The uploader must outlive compilation. Destroying it afterwards drops
+    // the weights stream, which discards whatever compilation didn't consume.
+    std::unique_ptr<StreamedWeightsUploader> weights_uploader;
+    if (weights_stream != nullptr) {
+      weights_uploader =
+          std::make_unique<StreamedWeightsUploader>(std::move(weights_stream));
+      weights_uploader->SetOnOptions(compilation_options);
+    }
     LITERT_ASSIGN_OR_RETURN(
         auto compiled_model_tmp,
         CompiledModel::Create(lrt_env, model_buffer, compilation_options));
@@ -713,13 +710,6 @@ EngineAdvancedImpl::CreateStreamingWeights(
   std::unique_ptr<CompiledModel> compiled_main_model;
   std::unique_ptr<CompiledModel> compiled_drafter_model;
 
-  // Drop the registrations made below on every path out of this function.
-  // Otherwise a failed load leaves the streams' cached bytes pinned until the
-  // next engine creation clears them.
-  absl::Cleanup clear_stored_weights = [] {
-    ClearStoredWeightsStreams().IgnoreError();
-  };
-
   // Whether `engine_settings` has been updated and validated with the model's
   // metadata. Models must not be compiled before this is true, since
   // compilation depends on the updated settings (e.g. max_num_tokens).
@@ -959,10 +949,6 @@ EngineAdvancedImpl::CreateStreamingWeights(
                    "load it lazily.";
             break;
           }
-          ABSL_LOG(INFO)
-              << "Storing TFLiteWeights section stream for model type: "
-              << static_cast<int>(model_type);
-          StoreWeightsStream(model_type, std::move(section->data_stream));
           if (owned_env == nullptr) {
             return absl::InternalError(
                 "Environment must be created before compilation.");
@@ -984,7 +970,8 @@ EngineAdvancedImpl::CreateStreamingWeights(
                 compiled_main_model,
                 CompileModel(engine_settings.GetMainExecutorSettings(),
                              owned_env->env, *streaming_model_resources,
-                             proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+                             proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+                             std::move(section->data_stream)));
             ABSL_LOG(INFO) << "Main model compiled.";
           } else if (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) {
             ABSL_LOG(INFO) << "Compiling drafter model from stream...";
@@ -992,8 +979,15 @@ EngineAdvancedImpl::CreateStreamingWeights(
                 compiled_drafter_model,
                 CompileModel(engine_settings.GetMainExecutorSettings(),
                              owned_env->env, *streaming_model_resources,
-                             proto::LlmMetadata::TF_LITE_MTP_DRAFTER));
+                             proto::LlmMetadata::TF_LITE_MTP_DRAFTER,
+                             std::move(section->data_stream)));
             ABSL_LOG(INFO) << "Drafter model compiled.";
+          } else {
+            // No other model is compiled from streamed weights. The section is
+            // discarded when its stream is dropped.
+            ABSL_LOG(INFO)
+                << "Skipping TFLiteWeights section for model type: "
+                << static_cast<int>(model_type);
           }
         }
         break;

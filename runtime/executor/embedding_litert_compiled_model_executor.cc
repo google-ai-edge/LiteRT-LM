@@ -67,7 +67,9 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/data_stream.h"
 #include "runtime/util/status_macros.h"
+#include "runtime/util/streamed_weights_uploader.h"
 
 namespace litert::lm {
 namespace {
@@ -176,7 +178,7 @@ absl::StatusOr<std::map<int, size_t>> GetTextEncoderSignatureMap(
 absl::StatusOr<CompiledTextEncoderInfo>
 EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
     const EmbeddingExecutorSettings& executor_settings, Environment& env,
-    ModelResources& resources) {
+    ModelResources& resources, std::shared_ptr<DataStream> weights_stream) {
   ABSL_ASSIGN_OR_RETURN(
       auto text_encoder_model,
       resources.GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
@@ -256,21 +258,17 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
         runtime_options.SetSelectedSignatures(selected_signatures));
   }
 
-#ifdef __EMSCRIPTEN__
-  extern void SetCurrentlyCompilingModel(absl::string_view model_type_str)
-      __attribute__((weak));
-  if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel(TfLiteModelTypeToWireString(
-        proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
+  // The uploader must outlive compilation. Destroying it afterwards drops the
+  // weights stream, which discards whatever compilation didn't consume.
+  std::unique_ptr<StreamedWeightsUploader> weights_uploader;
+  if (weights_stream != nullptr) {
+    weights_uploader =
+        std::make_unique<StreamedWeightsUploader>(std::move(weights_stream));
+    weights_uploader->SetOnOptions(options);
   }
-#endif
   auto compiled_model_status_or =
       CompiledModelWrapper::Create(env, text_encoder_model->Get(), options);
-#ifdef __EMSCRIPTEN__
-  if (SetCurrentlyCompilingModel) {
-    SetCurrentlyCompilingModel("");
-  }
-#endif
+  weights_uploader.reset();
   LITERT_ASSIGN_OR_RETURN(auto compiled_model,
                           std::move(compiled_model_status_or));
   auto compiled_model_ptr =
