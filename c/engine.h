@@ -1341,7 +1341,9 @@ LiteRtLmStatusCode litert_lm_engine_create(
 // The caller MUST destroy every session and conversation created from an
 // engine before destroying the engine itself. Destroying an engine with
 // live children, or using a child after its engine has been destroyed, is
-// undefined behavior.
+// undefined behavior. The same holds for decision engines created with
+// `litert_lm_experimental_decision_engine_create_from_engine` (see
+// decision_engine.h).
 //
 // Handles are not thread-safe; see "Threading model" at the top of this file.
 

@@ -30,6 +30,8 @@ exports_files([
     "api_export.h",
     "conversation.cc",
     "conversation.h",
+    "decision_engine.cc",
+    "decision_engine.h",
     "embedding_engine.cc",
     "embedding_engine.h",
     "engine.cc",
@@ -106,6 +108,11 @@ EMBEDDING_ENGINE_DEPS = [
     "//runtime/proto:embedding_metadata_cc_proto",
 ]
 
+DECISION_ENGINE_DEPS = [
+    "//runtime/core:llm_decision_engine",
+    "//runtime/engine:decision_engine",
+]
+
 MODEL_INFO_DEPS = [
     "//schema/model_info",
 ]
@@ -118,6 +125,7 @@ ENGINE_COMMON_DEPS = (
     ENGINE_LITE_COMMON_DEPS +
     CONVERSATION_DEPS +
     EMBEDDING_ENGINE_DEPS +
+    DECISION_ENGINE_DEPS +
     MODEL_INFO_DEPS +
     EXPERIMENTAL_DEPS
 )
@@ -222,6 +230,18 @@ cc_library(
     ],
 )
 
+# Header library for decision engine C API.
+cc_library(
+    name = "decision_engine_headers",
+    hdrs = ["decision_engine.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":api_export_headers",
+        ":engine_headers",
+        ":error_reporter_headers",
+    ],
+)
+
 # Header library for experimental C API.
 cc_library(
     name = "experimental_headers",
@@ -265,6 +285,7 @@ cc_test(
     deps = [
         ":api_export_headers",
         ":conversation_headers",
+        ":decision_engine_headers",
         ":embedding_engine_headers",
         ":engine_headers",
         ":error_reporter_headers",
@@ -422,6 +443,7 @@ cc_library(
     name = "engine",
     srcs = [
         "conversation.cc",
+        "decision_engine.cc",
         "embedding_engine.cc",
         "engine.cc",
         "experimental.cc",
@@ -430,6 +452,7 @@ cc_library(
     hdrs = [
         "api_export.h",
         "conversation.h",
+        "decision_engine.h",
         "embedding_engine.h",
         "engine.h",
         "error_reporter.h",
@@ -450,6 +473,7 @@ cc_library(
     name = "engine_cpu",
     srcs = [
         "conversation.cc",
+        "decision_engine.cc",
         "embedding_engine.cc",
         "engine.cc",
         "experimental.cc",
@@ -458,6 +482,7 @@ cc_library(
     hdrs = [
         "api_export.h",
         "conversation.h",
+        "decision_engine.h",
         "embedding_engine.h",
         "engine.h",
         "error_reporter.h",
@@ -630,6 +655,31 @@ cc_test(
 )
 
 cc_test(
+    name = "decision_engine_test",
+    srcs = ["decision_engine_test.cc"],
+    data = [
+        "//runtime/testdata",
+    ],
+    tags = ["requires-mac-inputs:hard"],
+    target_compatible_with = select({
+        "@platforms//os:ios": [],
+        "@platforms//os:linux": [],
+        "@platforms//os:osx": [],
+        "@platforms//os:windows": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":decision_engine_headers",
+        ":engine",
+        ":engine_headers",
+        ":error_reporter_headers",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
     name = "error_reporter_test",
     srcs = ["error_reporter_test.cc"],
     data = [
@@ -658,6 +708,7 @@ cc_binary(
     name = "litert-lm",
     srcs = [
         "conversation.cc",
+        "decision_engine.cc",
         "embedding_engine.cc",
         "engine.cc",
         "experimental.cc",
@@ -711,6 +762,7 @@ cc_binary(
     linkshared = 1,
     deps = ENGINE_COMMON_DEPS + [
         ":conversation_headers",
+        ":decision_engine_headers",
         ":embedding_engine_headers",
         ":engine_headers",
         ":experimental_headers",

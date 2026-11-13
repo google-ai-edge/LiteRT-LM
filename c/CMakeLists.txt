@@ -94,6 +94,7 @@ target_link_libraries(c_engine
   PUBLIC
     LITERTLM_DEPS
     LiteRTLM::C::EmbeddingEngine
+    LiteRTLM::C::DecisionEngine
     LiteRTLM::C::Conversation
     LiteRTLM::C::ErrorReporter
     LiteRTLM::C::Internal
@@ -127,6 +128,29 @@ target_link_libraries(c_embedding_engine
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Engine
     LiteRTLM::Runtime::Executor
+)
+
+# ==============================================================================
+# Decision Engine
+# ==============================================================================
+add_litertlm_library(c_decision_engine STATIC
+  decision_engine.cc
+)
+add_library(LiteRTLM::C::DecisionEngine ALIAS c_decision_engine)
+
+target_include_directories(c_decision_engine
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(c_decision_engine
+  PUBLIC
+    LITERTLM_DEPS
+    LiteRTLM::C::ErrorReporter
+    LiteRTLM::C::Internal
+    LiteRTLM::Runtime::Core::LlmDecisionEngine
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Engine::DecisionEngine
 )
 
 # ==============================================================================
@@ -183,4 +207,5 @@ target_link_libraries(c_libs INTERFACE
   LiteRTLM::C::Conversation
   LiteRTLM::C::Engine
   LiteRTLM::C::EmbeddingEngine
+  LiteRTLM::C::DecisionEngine
 )
