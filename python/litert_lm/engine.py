@@ -329,6 +329,12 @@ class Engine(interfaces.AbstractEngine):
       tool_event_handler: interfaces.ToolEventHandler | None = None,
       automatic_tool_calling: bool = True,
       extra_context: collections.abc.Mapping[str, Any] | None = None,
+      channels: (
+          collections.abc.Sequence[
+              interfaces.Channel | collections.abc.Mapping[str, Any]
+          ]
+          | None
+      ) = None,
       filter_channel_content_from_kv_cache: bool | None = None,
       thinking_config: interfaces.ThinkingConfig | None = None,
       sampler_config: interfaces.SamplerConfig | None = None,
@@ -450,6 +456,24 @@ class Engine(interfaces.AbstractEngine):
               constrained_decoding_config.provider.value,
           )
 
+      if channels is not None:
+        serialized_channels = []
+        for channel in channels:
+          if isinstance(channel, interfaces.Channel):
+            serialized_channels.append(channel.to_json())
+          elif isinstance(channel, collections.abc.Mapping):
+            serialized_channels.append(dict(channel))
+          else:
+            raise ValueError(
+                "Each entry in channels must be a Channel or Mapping."
+            )
+        call_checked(
+            self._lib,
+            "litert_lm_conversation_config_set_channels",
+            conv_config,
+            json.dumps(serialized_channels),
+        )
+
       if filter_channel_content_from_kv_cache is not None:
         call_checked(
             self._lib,
@@ -490,6 +514,7 @@ class Engine(interfaces.AbstractEngine):
         tool_event_handler=tool_event_handler,
         automatic_tool_calling=automatic_tool_calling,
         extra_context=extra_context or {},
+        channels=channels,
         thinking_config=thinking_config,
         sampler_config=sampler_config,
         lora_config=lora_config,

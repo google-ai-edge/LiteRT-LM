@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import pathlib
 from unittest import mock
@@ -1942,6 +1943,57 @@ class FunctionCallingTest(LiteRtLmTestBase):
 
       with self.assertRaisesRegex(RuntimeError, "Unsupported tool_choice"):
         conversation.send_message("Hello", tool_choice="sometimes")
+
+  def test_create_conversation_with_channels(self):
+    lib = litert_lm._ffi._get_lib()
+    with (
+        mock.patch.object(
+            lib,
+            "litert_lm_conversation_config_set_channels",
+            wraps=lib.litert_lm_conversation_config_set_channels,
+        ) as mock_set_channels,
+        self._create_engine() as engine,
+    ):
+      with engine.create_conversation() as default_conv:
+        self.assertIsNone(default_conv.channels)
+      mock_set_channels.assert_not_called()
+
+      custom_channel = litert_lm.Channel(
+          channel_name="thought",
+          start="<think>",
+          end="</think>",
+          is_reasoning_channel=True,
+      )
+      with engine.create_conversation(channels=[custom_channel]) as conv:
+        self.assertEqual(conv.channels, [custom_channel])
+        with conv.clone() as cloned:
+          self.assertEqual(cloned.channels, [custom_channel])
+      mock_set_channels.assert_called_once()
+      self.assertEqual(
+          json.loads(mock_set_channels.call_args.args[1]),
+          [{
+              "channel_name": "thought",
+              "start": "<think>",
+              "end": "</think>",
+              "is_reasoning_channel": True,
+          }],
+      )
+
+      mock_set_channels.reset_mock()
+      with engine.create_conversation(channels=[]) as disabled_conv:
+        self.assertEqual(disabled_conv.channels, [])
+      mock_set_channels.assert_called_once()
+      self.assertEqual(mock_set_channels.call_args.args[1], "[]")
+
+      with self.assertRaisesRegex(
+          ValueError, "Each entry in channels must be a Channel or Mapping"
+      ):
+        engine.create_conversation(channels=["bad"])  # pyrefly: ignore[bad-argument-type]
+
+      with self.assertRaisesRegex(RuntimeError, "channel_name"):
+        engine.create_conversation(
+            channels=[{"channel_name": "", "start": "<a>", "end": "</a>"}]
+        )
 
 
 if __name__ == "__main__":

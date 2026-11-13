@@ -202,6 +202,23 @@ LiteRtLmStatusCode litert_lm_conversation_config_set_constraint_provider(
     LiteRtLmConversationConfig* config,
     LiteRtLmConstraintProviderType provider_type);
 
+// Sets the response channels for this conversation config.
+//
+// @param config The config to modify.
+// @param channels_json A JSON array of channel objects, each containing
+//   `"channel_name"` (non-empty string), `"start"` (string), `"end"` (string),
+//   and optional `"is_reasoning_channel"` (boolean). Pass `"[]"` to disable
+//   channels, or NULL to clear any override so the conversation uses the
+//   model's default channels.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `config` is NULL or `channels_json` is not NULL and not a valid JSON array
+//   of channel objects.
+//
+// Added in version 1.2.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_conversation_config_set_channels(
+    LiteRtLmConversationConfig* config, const char* channels_json);
+
 // Sets whether to filter channel content from the KV cache.
 // @param config The config to modify.
 // @param filter_channel_content_from_kv_cache Whether to filter channel
