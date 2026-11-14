@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {findModel, getNonDefaultBackendSummary, isGpuOnlyTextModel, migrateModelPath, MODELS, selectCustomModel, SettingsStore} from './settings_store.js';
+import {CPU_TEXT_WASM_WARNING_BYTES, findModel, getCpuTextMemoryWarning, getModalityConfigs, getNonDefaultBackendSummary, isGpuOnlyTextModel, migrateModelPath, MODELS, parseModelSizeBytes, selectCustomModel, SettingsStore} from './settings_store.js';
 
 describe('SettingsStore', () => {
   let mockCallbackCount = 0;
@@ -270,6 +270,32 @@ describe('SettingsStore', () => {
          label: 'WebGPU · CPU',
          detail: 'Backend: WebGPU · CPU (Vision, Audio on CPU)',
        });
+
+       // Disabled Vision and/or Audio modalities
+       store.resetDefaults('experimental');
+       store.visionBackend = 'off';
+       expect(getNonDefaultBackendSummary(store)).toEqual({
+         label: 'No Vision',
+         detail: 'Modalities: Vision off (Text, Audio on WebGPU)',
+       });
+
+       store.audioBackend = 'off';
+       expect(getNonDefaultBackendSummary(store)).toEqual({
+         label: 'Text only',
+         detail: 'Modalities: Text only on WebGPU (Vision, Audio off)',
+       });
+
+       store.visionBackend = 'gpu';
+       expect(getNonDefaultBackendSummary(store)).toEqual({
+         label: 'No Audio',
+         detail: 'Modalities: Audio off (Text, Vision on WebGPU)',
+       });
+
+       // Persists and restores 'off' across reloads
+       store.saveSettings();
+       const reloaded = new SettingsStore(mockUpdateCallback);
+       expect(reloaded.audioBackend).toBe('off');
+       expect(reloaded.visionBackend).toBe('gpu');
      });
 
   it('selects built-in models in selectCustomModel without adding duplicates to customModels',
@@ -299,5 +325,115 @@ describe('SettingsStore', () => {
        selectCustomModel(store, otherCustom);
        expect(store.selectedModelPath).toBe(otherCustom.path);
        expect(store.customModels).toEqual([custom, otherCustom]);
+     });
+
+  it('never blocks CPU text unless the model is -gpu.litertlm, regardless of size or format',
+     () => {
+       const store = new SettingsStore(mockUpdateCallback);
+       store.customModels = [
+         {
+           name: 'Huge Standard Model',
+           filename: 'gemma-4-9B-it.litertlm',
+           path: 'https://example.com/gemma-4-9B-it.litertlm',
+           size: '5.40 GB',
+         },
+         {
+           name: 'External Weights Repo',
+           filename: 'model.litertlm',
+           path: 'hf://org/external-weights-repo',
+           size: '2.10 GB',
+         },
+         {
+           name: 'Artisan GPU Package',
+           filename: 'gemma-4-E2B-it-gpu.litertlm',
+           path: 'hf://org/artisan-gpu-repo',
+           size: '1.10 GB',
+         },
+       ];
+
+       store.textBackend = 'cpu';
+
+       store.selectedModelPath = 'https://example.com/gemma-4-9B-it.litertlm';
+       expect(isGpuOnlyTextModel(store.selectedModelPath, store)).toBeFalse();
+       expect(getModalityConfigs(store).text.backend).toBe('cpu');
+
+       store.selectedModelPath = 'hf://org/external-weights-repo';
+       expect(isGpuOnlyTextModel(store.selectedModelPath, store)).toBeFalse();
+       expect(getModalityConfigs(store).text.backend).toBe('cpu');
+
+       store.selectedModelPath = 'local-dir://big-unlisted-4gb.litertlm';
+       expect(isGpuOnlyTextModel(store.selectedModelPath, store)).toBeFalse();
+       expect(getModalityConfigs(store).text.backend).toBe('cpu');
+
+       // Only -gpu.litertlm is coerced / hard-blocked from CPU text.
+       store.selectedModelPath = 'hf://org/artisan-gpu-repo';
+       expect(isGpuOnlyTextModel(store.selectedModelPath, store)).toBeTrue();
+       expect(getModalityConfigs(store).text.backend).toBe('gpu');
+     });
+
+  it('computes non-blocking CPU WASM memory warnings around the ~1.5 GB threshold',
+     () => {
+       expect(parseModelSizeBytes('900 MB')).toBe(900_000_000);
+       expect(parseModelSizeBytes('1.49 GB')).toBe(1_490_000_000);
+       expect(parseModelSizeBytes('1.50 GB')).toBe(CPU_TEXT_WASM_WARNING_BYTES);
+       expect(parseModelSizeBytes('')).toBeNull();
+       expect(parseModelSizeBytes('unknown')).toBeNull();
+
+       const models = {
+         customModels: [
+           {
+             name: 'Small',
+             filename: 'small.litertlm',
+             path: 'https://example.com/small.litertlm',
+             size: '1.20 GB',
+           },
+           {
+             name: 'AtThreshold',
+             filename: 'threshold.litertlm',
+             path: 'https://example.com/threshold.litertlm',
+             size: '1.50 GB',
+           },
+           {
+             name: 'Large',
+             filename: 'large.litertlm',
+             path: 'https://example.com/large.litertlm',
+             size: '2.40 GB',
+           },
+           {
+             name: 'UnknownSize',
+             filename: 'unknown.litertlm',
+             path: 'https://example.com/unknown.litertlm',
+             size: '',
+           },
+         ],
+       };
+
+       // Below 1.5 GB -> no warning
+       expect(getCpuTextMemoryWarning(
+                  'https://example.com/small.litertlm', models))
+           .toBeNull();
+
+       // At or above 1.5 GB -> non-blocking warning citing model size
+       const atThreshold = getCpuTextMemoryWarning(
+           'https://example.com/threshold.litertlm', models);
+       expect(atThreshold).toContain('1.50 GB');
+       expect(atThreshold).toContain('~1.5 GB practical limit');
+       expect(atThreshold).toContain('loading may fail');
+
+       const largeWarn = getCpuTextMemoryWarning(
+           'https://example.com/large.litertlm', models);
+       expect(largeWarn).toContain('2.40 GB may not fit in WASM memory');
+
+       // Unknown metadata size falls back to cached byte count when available
+       expect(getCpuTextMemoryWarning(
+                  'https://example.com/unknown.litertlm', models))
+           .toBeNull();
+       expect(getCpuTextMemoryWarning(
+                  'https://example.com/unknown.litertlm', models, 1_850_000_000))
+           .toContain('1.85 GB may not fit in WASM memory');
+
+       // -gpu.litertlm uses its own WebGPU-only block rather than the size warning
+       expect(getCpuTextMemoryWarning(MODELS[0]!.path, models, 2_300_000_000))
+           .toBeNull();
      });
 });

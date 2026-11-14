@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-import {AutoToolChat, ChatInterface, ContentPart, Message, MessageLike, SamplerType, ToolProgressEvent} from '@litert-lm/core';
+import {AutoToolChat, ChatInterface, ContentPart, ConversationConfig, Message, MessageLike, SamplerType, ToolProgressEvent} from '@litert-lm/core';
 import {z} from 'zod';
 
 import {CodeSandbox} from '../components/code_sandbox.js';
 import {createObjectUrl} from '../components/util.js';
 
 import {ModelLoaderService} from './model_loader_service.js';
-import {findModel, migrateModelPath, ModelSettings, SettingsStore} from './settings_store.js';
+import {DEFAULT_MODEL_CONFIG, findModel, migrateModelPath, ModelSettings, SettingsStore} from './settings_store.js';
 import {createEnabledTools} from './tools.js';
 
 const ConversationMetaSchema = z.object({
@@ -196,6 +196,57 @@ function formatToolCallOutput(e: ToolProgressEvent): string {
   if (e.result === undefined) return '';
   return typeof e.result === 'string' ? e.result :
                                         JSON.stringify(e.result, null, 2);
+}
+
+/** Maps a settings sampler key (`'greedy'`, `'top_k'`, `'top_p'`) to `SamplerType`. */
+export function toSamplerType(type: string): SamplerType {
+  if (type === 'top_k') return SamplerType.TOP_K;
+  if (type === 'top_p') return SamplerType.TOP_P;
+  return SamplerType.GREEDY;
+}
+
+/**
+ * Builds the `@litert-lm/core` `ConversationConfig` for `settings` and optional
+ * replay history. Shared with the code snippet generator so the two cannot
+ * drift.
+ */
+export function getUserConversationConfig(
+    settings: ModelSettings,
+    historyMessages: readonly Pick<StoredMessage, 'role'|'text'>[] = []):
+    ConversationConfig {
+  const prefaceMessages: Message[] = [];
+  const systemPrompt = (settings.systemPrompt ?? '').trim();
+  if (systemPrompt) {
+    prefaceMessages.push({role: 'system', content: systemPrompt});
+  }
+  // Media in the history are replayed as text placeholders (e.g.
+  // `[image: name]`); only media in new messages reach the model.
+  prefaceMessages.push(
+      ...historyMessages.map(msg => ({role: msg.role, content: msg.text})));
+
+  const samplerType = settings.samplerType ?? DEFAULT_MODEL_CONFIG.samplerType;
+  const topK = settings.topK ?? DEFAULT_MODEL_CONFIG.topK;
+  return {
+    sessionConfig: {
+      maxOutputTokens:
+          settings.maxOutputTokens ?? DEFAULT_MODEL_CONFIG.maxOutputTokens,
+      samplerParams: {
+        type: toSamplerType(samplerType),
+        temperature: settings.temperature ?? DEFAULT_MODEL_CONFIG.temperature,
+        p: settings.topP ?? DEFAULT_MODEL_CONFIG.topP,
+        // Greedy sampling skips the reload that raises the engine's max
+        // Top-K (see `ModelLoaderService.needsModelReload`).
+        k: samplerType === 'greedy' ? 1 : topK,
+      },
+    },
+    preface: {
+      messages: prefaceMessages.length > 0 ? prefaceMessages : undefined,
+      extra_context: {
+        'enable_thinking':
+            settings.enableThinking ?? DEFAULT_MODEL_CONFIG.enableThinking,
+      },
+    },
+  };
 }
 
 /** Returns the status to show when nothing is in progress. */
@@ -464,12 +515,6 @@ export class ChatSessionStore {
     this.updateCallback();
   }
 
-  private getSamplerTypeEnum(type: string): SamplerType {
-    if (type === 'top_k') return SamplerType.TOP_K;
-    if (type === 'top_p') return SamplerType.TOP_P;
-    return SamplerType.GREEDY;
-  }
-
   async createConversationSession() {
     if (!this.modelLoader.engine) return;
     this.updateStatus('Creating conversation session...');
@@ -479,37 +524,12 @@ export class ChatSessionStore {
       this.activeConversation = null;
     }
 
-    const prefaceMessages: Message[] = [];
-    const systemPrompt = this.settings.systemPrompt.trim();
-    if (systemPrompt) {
-      prefaceMessages.push({role: 'system', content: systemPrompt});
-    }
-    // Media in the history are replayed as text placeholders (e.g.
-    // `[image: name]`); only media in new messages reach the model.
-    prefaceMessages.push(
-        ...this.messages.map(msg => ({role: msg.role, content: msg.text})));
+    const config =
+        getUserConversationConfig(this.settings.modelSettings, this.messages);
 
     this.activeConversation = new AutoToolChat({
       engine: this.modelLoader.engine,
-      config: {
-        sessionConfig: {
-          maxOutputTokens: this.settings.maxOutputTokens,
-          samplerParams: {
-            type: this.getSamplerTypeEnum(this.settings.samplerType),
-            temperature: this.settings.temperature,
-            p: this.settings.topP,
-            // Greedy sampling skips the reload that raises the engine's max
-            // Top-K (see `ModelLoaderService.needsModelReload`).
-            k: this.settings.samplerType === 'greedy' ? 1 : this.settings.topK,
-          }
-        },
-        preface: {
-          messages: prefaceMessages.length > 0 ? prefaceMessages : undefined,
-          extra_context: {
-            'enable_thinking': this.settings.enableThinking,
-          }
-        },
-      },
+      config,
       tools: createEnabledTools(
           this.settings.disabledTools, {codeSandbox: this.codeSandbox}),
       onToolProgress: (e: ToolProgressEvent) => {
