@@ -55,9 +55,57 @@ message MiniCpmO {
   optional string language = 15;
 }
 
+// Qwen/Qwen2.5-Omni-3B: Whisper-style 128-mel audio encoder, Qwen2.5 Thinker
+// LLM backbone, Talker autoregressive speech codec decoder, and 24 kHz
+// Token2Wav (DiT + BigVGAN) vocoder.
+message QwenOmni {
+  // Thinker LLM backbone hidden dimension (default 2048).
+  optional int32 llm_hidden_size = 1;
+  // Thinker LLM backbone vocabulary size (default 151936).
+  optional int32 llm_vocab_size = 2;
+  // Talker speech decoder hidden dimension (default 896).
+  optional int32 tts_hidden_size = 3;
+  // Number of discrete audio tokens in Talker vocabulary (default 8448).
+  optional int32 tts_vocab_size = 4;
+  // Number of mel spectrogram bins for Token2Wav vocoder (default 80).
+  optional int32 tts_num_mel_bins = 5;
+  // Number of codec codebooks predicted per Talker step (default 1).
+  optional int32 tts_num_codebooks = 6;
+  // Vision encoder input resolution in pixels (default 448).
+  optional int32 vision_image_size = 7;
+  // Vision encoder patch size in pixels (default 14).
+  optional int32 vision_patch_size = 8;
+  // Spatial patch merge factor along height and width (default 2).
+  optional int32 vision_spatial_merge_size = 9;
+  // Number of mel spectrogram frequency bins for the audio encoder (default
+  // 128).
+  optional int32 audio_num_mel_bins = 10;
+  // Number of mel spectrogram frames per audio encoder chunk (default 200).
+  optional int32 audio_chunk_frames = 11;
+  // Temporal pooling factor applied after the audio encoder conv2 stem (default
+  // 2).
+  optional int32 audio_pool_step = 12;
+  // Whether to synthesize speech output by default.
+  optional bool generate_audio = 13;
+  // Maximum number of Thinker LLM tokens to generate per turn (default 512).
+  optional int32 max_new_tokens = 14;
+  // Maximum number of Talker codec tokens to generate per turn (default 1024).
+  optional int32 max_tts_tokens = 15;
+  // Default speaker or voice identifier (e.g., "Chelsie", "Ethan").
+  optional string voice = 16;
+  // Default language code in BCP-47 format (e.g., "en-US").
+  optional string language = 17;
+  // Whether the Thinker/Talker backbones use Mixture-of-Experts layers.
+  optional bool is_moe = 18;
+  // Speaker-specific Talker text BOS token ID from spk_dict.pt (e.g., 151872
+  // for "Chelsie", 151870 for "Ethan").
+  optional int32 tts_text_bos_token_id = 19;
+}
+
 // Architecture-specific parameters for Any-to-Any multimodal models.
 message Any2AnyModelType {
   oneof model_type {
     MiniCpmO minicpm_o = 1;
+    QwenOmni qwen_omni = 2;
   }
 }
