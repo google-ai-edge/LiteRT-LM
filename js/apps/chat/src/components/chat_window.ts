@@ -24,14 +24,19 @@ import {customElement, property, query, state} from 'lit/decorators.js';
 
 import {LlmChatStateController} from '../state_controller.js';
 import {MediaKind, promptHasContent, PromptMedia, PromptPart, promptPartsToText} from '../stores/chat_session_store.js';
+import {buildModelCodeSnippet} from '../stores/code_snippet.js';
 import {getModelKey} from '../stores/model_loader_service.js';
+import {getModalityConfigs} from '../stores/settings_store.js';
 import {sharedStyles} from '../styles/shared_styles.js';
 import {AudioRecorder, toSupportedAudio} from '../utils/audio.js';
+import {copyToClipboard} from '../utils/clipboard.js';
 import type {LitertCameraCapture} from './camera_capture.js';
 import {chatWindowStyles} from './chat_window_styles.js';
 import type {CustomDropdown} from './custom_dropdown.js';
-import {focusNowAndNextFrame} from './focus_util.js';
+import {focusNowAndNextFrame, trapTabKey} from './focus_util.js';
+import {highlight} from './hljs_util.js';
 import {addRemoteModelFromInput, getActiveModelSummary, modelSelectorStyles, renderModelDropdownItems, selectModelWithLargeModelCheck, triggerLitertModelUpload} from './model_selector_shared.js';
+import {renderHtml} from './util.js';
 
 /* tslint:disable:no-new-decorators */
 
@@ -104,6 +109,9 @@ export class LitertChatWindow extends LitElement {
   @state() private isModelMenuOpen = false;
   @state() private isAddingModel = false;
   @state() private isLookingUpModel = false;
+  @state() private isCodePopoverOpen = false;
+  @state() private codeCopied = false;
+  private codeCopyResetTimer: number|undefined;
   @state()
   private isCompactViewport =
       typeof window !== 'undefined' ? window.innerWidth <= 600 : false;
@@ -198,6 +206,9 @@ export class LitertChatWindow extends LitElement {
 
   override disconnectedCallback() {
     document.removeEventListener('click', this.handleAddModelOutsideClick);
+    document.removeEventListener('click', this.handleCodePopoverOutsideClick);
+    window.clearTimeout(this.codeCopyResetTimer);
+    this.codeCopyResetTimer = undefined;
     if (typeof window !== 'undefined') {
       window.removeEventListener('keydown', this.handleGlobalScrollKeyDown);
     }
@@ -304,6 +315,15 @@ export class LitertChatWindow extends LitElement {
   }
 
   protected override willUpdate() {
+    if (this.state?.settings) {
+      const modalities = getModalityConfigs(this.state.settings);
+      if (modalities.audio.backend === 'off' && this.isRecording) {
+        this.cancelRecording();
+      }
+      if (modalities.vision.backend === 'off' && this.isCameraModalOpen) {
+        this.camera?.close();
+      }
+    }
     if (!this.state?.chatSession) return;
     const isGenerating = this.state.chatSession.isGenerating;
     const messageCount = this.state.chatSession.messages.length;
@@ -688,11 +708,22 @@ export class LitertChatWindow extends LitElement {
 
   /** Adds image and audio files to the prompt at the saved caret position. */
   private async addMediaFiles(files: File[]) {
+    const modalities = getModalityConfigs(this.state.settings);
+    const visionOff = modalities.vision.backend === 'off';
+    const audioOff = modalities.audio.backend === 'off';
     for (const file of files) {
       let kind: MediaKind;
       if (file.type.startsWith('image/')) {
+        if (visionOff) {
+          this.setStatus('Vision is turned off in Experimental settings.');
+          continue;
+        }
         kind = 'image';
       } else if (file.type.startsWith('audio/')) {
+        if (audioOff) {
+          this.setStatus('Audio is turned off in Experimental settings.');
+          continue;
+        }
         kind = 'audio';
       } else {
         this.setStatus(
@@ -714,6 +745,10 @@ export class LitertChatWindow extends LitElement {
   private async toggleRecording() {
     if (this.isRecording) {
       await this.finishRecording();
+      return;
+    }
+    if (getModalityConfigs(this.state.settings).audio.backend === 'off') {
+      this.setStatus('Audio is turned off in Experimental settings.');
       return;
     }
     try {
@@ -764,6 +799,10 @@ export class LitertChatWindow extends LitElement {
   }
 
   private async openCamera() {
+    if (getModalityConfigs(this.state.settings).vision.backend === 'off') {
+      this.setStatus('Vision is turned off in Experimental settings.');
+      return;
+    }
     if (!(await this.camera?.open())) {
       this.cameraFallbackInput?.click();
     }
@@ -837,6 +876,20 @@ export class LitertChatWindow extends LitElement {
     const parts = this.serializeEditor();
     if (!promptHasContent(parts)) return;
 
+    const modalities = getModalityConfigs(this.state.settings);
+    const hasDisabledImage = modalities.vision.backend === 'off' &&
+        parts.some(p => p.type === 'media' && p.media.kind === 'image');
+    const hasDisabledAudio = modalities.audio.backend === 'off' &&
+        parts.some(p => p.type === 'media' && p.media.kind === 'audio');
+    if (hasDisabledImage || hasDisabledAudio) {
+      const which = hasDisabledImage && hasDisabledAudio ?
+          'Vision and Audio are' :
+          (hasDisabledImage ? 'Vision is' : 'Audio is');
+      this.setStatus(
+          `${which} turned off in Experimental settings — remove the attachment or re-enable it before sending.`);
+      return;
+    }
+
     this.chatInput.replaceChildren();
     this.savedRange = null;
     this.updateEmptyState();
@@ -892,6 +945,9 @@ export class LitertChatWindow extends LitElement {
     if (this.isAddingModel) {
       this.closeComposerAddModel(false);
     }
+    if (this.isCodePopoverOpen) {
+      this.closeCodePopover(false);
+    }
     this.modelDropdown?.open();
     this.modelDropdown?.focusButton();
   }
@@ -909,8 +965,8 @@ export class LitertChatWindow extends LitElement {
   }
 
   /**
-   * Dismisses any open model picker menu or Add-URL popover in the composer,
-   * returning true when an open control was closed.
+   * Dismisses any open model picker menu, Add-URL popover, or Get-Code popover
+   * in the composer, returning true when an open control was closed.
    */
   dismissTransientMenus(): boolean {
     if (this.modelDropdown?.isOpen) {
@@ -922,6 +978,10 @@ export class LitertChatWindow extends LitElement {
       this.closeComposerAddModel(true);
       return true;
     }
+    if (this.isCodePopoverOpen) {
+      this.closeCodePopover(true);
+      return true;
+    }
     return false;
   }
 
@@ -930,6 +990,96 @@ export class LitertChatWindow extends LitElement {
     this.modelDropdown?.close();
     if (this.isAddingModel) {
       this.closeComposerAddModel(false);
+    }
+    if (this.isCodePopoverOpen) {
+      this.closeCodePopover(false);
+    }
+  }
+
+  private readonly handleCodePopoverOutsideClick = (e: MouseEvent) => {
+    if (!this.isCodePopoverOpen) return;
+    const btn = this.renderRoot.querySelector<HTMLElement>('#btn-get-code');
+    const popover =
+        this.renderRoot.querySelector<HTMLElement>('#composer-code-popover');
+    const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+    const target = e.target as Node | null;
+    const insideBtn = Boolean(
+        btn && (path.includes(btn) || (target && btn.contains(target))));
+    const insidePopover = Boolean(
+        popover &&
+        (path.includes(popover) || (target && popover.contains(target))));
+    if (!insideBtn && !insidePopover) {
+      this.closeCodePopover(false);
+    }
+  };
+
+  private toggleCodePopover() {
+    if (this.isCodePopoverOpen) {
+      this.closeCodePopover(true);
+      return;
+    }
+    this.modelDropdown?.close();
+    if (this.isAddingModel) {
+      this.closeComposerAddModel(false);
+    }
+    this.codeCopied = false;
+    this.isCodePopoverOpen = true;
+    setTimeout(() => {
+      if (this.isConnected && this.isCodePopoverOpen) {
+        document.addEventListener('click', this.handleCodePopoverOutsideClick);
+      }
+    }, 0);
+    void this.updateComplete.then(() => {
+      focusNowAndNextFrame(() => {
+        if (!this.isCodePopoverOpen) return;
+        this.renderRoot
+            .querySelector<HTMLButtonElement>('#btn-copy-model-code')
+            ?.focus();
+      });
+    });
+  }
+
+  private closeCodePopover(restoreFocus = false) {
+    this.isCodePopoverOpen = false;
+    document.removeEventListener('click', this.handleCodePopoverOutsideClick);
+    window.clearTimeout(this.codeCopyResetTimer);
+    this.codeCopyResetTimer = undefined;
+    this.codeCopied = false;
+    if (restoreFocus) {
+      void this.updateComplete.then(() => {
+        this.renderRoot.querySelector<HTMLButtonElement>('#btn-get-code')
+            ?.focus();
+      });
+    }
+  }
+
+  private handleCodePopoverKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      this.closeCodePopover(true);
+      return;
+    }
+    if (e.key === 'Tab') {
+      const popover =
+          this.renderRoot.querySelector<HTMLElement>('#composer-code-popover');
+      if (popover) {
+        trapTabKey(e, popover);
+      }
+    }
+  }
+
+  private async copyModelCode(snippet: string) {
+    try {
+      await copyToClipboard(snippet);
+      this.codeCopied = true;
+      window.clearTimeout(this.codeCopyResetTimer);
+      this.codeCopyResetTimer = window.setTimeout(() => {
+        this.codeCopied = false;
+        this.codeCopyResetTimer = undefined;
+      }, 2000);
+    } catch (err) {
+      console.error('[LiteRT-LM] Failed to copy code snippet:', err);
     }
   }
 
@@ -953,6 +1103,9 @@ export class LitertChatWindow extends LitElement {
   };
 
   private openComposerAddModel() {
+    if (this.isCodePopoverOpen) {
+      this.closeCodePopover(false);
+    }
     this.isAddingModel = true;
     setTimeout(() => {
       if (this.isConnected && this.isAddingModel) {
@@ -1089,6 +1242,62 @@ export class LitertChatWindow extends LitElement {
     const cleanModelName = modelSummary.name;
     const isAddModelDisabled = this.isLookingUpModel || isLoading;
     const showScrollBottom = !this.shouldAutoScroll && !isMessagesEmpty;
+    const modalities = getModalityConfigs(this.state.settings);
+    const visionOff = modalities.vision.backend === 'off';
+    const audioOff = modalities.audio.backend === 'off';
+    const allMediaOff = visionOff && audioOff;
+    const mediaAccept = allMediaOff ? '' :
+        visionOff                   ? 'audio/*' :
+        audioOff                    ? 'image/*' :
+                                      'image/*,audio/*';
+    const addMediaTitle = allMediaOff ?
+        'Vision and Audio are turned off in Experimental settings' :
+        visionOff ? 'Add audio (Vision is turned off in Experimental settings)' :
+        audioOff ? 'Add images (Audio is turned off in Experimental settings)' :
+                   'Add images or audio';
+    const addMediaAriaLabel = allMediaOff ?
+        'Add images or audio (disabled: Vision and Audio are turned off in Experimental settings)' :
+        addMediaTitle;
+    const cameraTitle = visionOff ?
+        'Vision is turned off in Experimental settings' :
+        'Take a photo';
+    const cameraAriaLabel = visionOff ?
+        'Take a photo (disabled: Vision is turned off in Experimental settings)' :
+        'Take a photo';
+    const recordTitle = audioOff ?
+        'Audio is turned off in Experimental settings' :
+        (this.isRecording ? 'Stop and attach recording' : 'Record audio');
+    const recordAriaLabel = audioOff ?
+        'Record audio (disabled: Audio is turned off in Experimental settings)' :
+        recordTitle;
+    const editorPlaceholder = isLoading ?
+        'Model is preparing, please wait...' :
+        (this.isCompactViewport || allMediaOff ?
+             'Message LiteRT-LM...' :
+             visionOff ? 'Message LiteRT-LM... Drop or attach audio.' :
+             audioOff  ? 'Message LiteRT-LM... Drop or attach images.' :
+                         'Message LiteRT-LM... Drop or attach images & audio.');
+    const capabilityModalityLabel = allMediaOff ? 'Text-Only Mode' :
+        visionOff                               ? 'Audio' :
+        audioOff                                ? 'Vision' :
+                                                  'Vision & Audio';
+    const capabilityModalityIcon = allMediaOff ?
+        svg`<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>` :
+        visionOff ?
+        svg`<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line>` :
+        svg`<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline>`;
+    const runtimeLead =
+        modalities.text.backend === 'cpu' ? 'in WASM' : 'with WebGPU';
+    const heroCapabilitiesSentence = allMediaOff ?
+        'Verify math in the JS sandbox and preview generated HTML with zero server round-trips.' :
+        visionOff ?
+        'Attach audio inline, verify math in the JS sandbox, and preview generated HTML with zero server round-trips.' :
+        audioOff ?
+        'Attach images inline, verify math in the JS sandbox, and preview generated HTML with zero server round-trips.' :
+        'Attach images or audio inline, verify math in the JS sandbox, and preview generated HTML with zero server round-trips.';
+    const codeSnippet = this.isCodePopoverOpen ?
+        buildModelCodeSnippet(this.state.settings) :
+        '';
 
     return html`
       <!-- Top Error Banner -->
@@ -1153,17 +1362,15 @@ export class LitertChatWindow extends LitElement {
             </div>
             <h2 class="hero-heading">Private, on-device AI in your browser</h2>
             <p class="hero-subtitle">
-              Run <strong>${cleanModelName}</strong> locally with WebGPU. Attach images or audio inline, verify math in the JS sandbox, and preview generated HTML with zero server round-trips.
+              Run <strong>${cleanModelName}</strong> locally ${runtimeLead}${allMediaOff ? ' in text-only mode' : ''}. ${heroCapabilitiesSentence}
             </p>
 
             <ul class="capability-row" aria-label="Supported capabilities">
               <li class="capability-tag">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                  <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                  <polyline points="21 15 16 10 5 21"></polyline>
+                  ${capabilityModalityIcon}
                 </svg>
-                Vision &amp; Audio
+                ${capabilityModalityLabel}
               </li>
               <li class="capability-tag">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1237,7 +1444,7 @@ export class LitertChatWindow extends LitElement {
         <input
           type="file"
           id="media-input"
-          accept="image/*,audio/*"
+          accept=${mediaAccept}
           multiple
           hidden
           @change=${this.handleMediaInputChange}
@@ -1324,11 +1531,7 @@ export class LitertChatWindow extends LitElement {
             aria-multiline="true"
             aria-label="Message"
             aria-disabled=${isLoading ? 'true' : 'false'}
-            data-placeholder=${
-        isLoading ? 'Model is preparing, please wait...' :
-                    (this.isCompactViewport ?
-                         'Message LiteRT-LM...' :
-                         'Message LiteRT-LM... Drop or attach images & audio.')}
+            data-placeholder=${editorPlaceholder}
             @input=${this.updateEmptyState}
             @keyup=${this.handleEditorSelect}
             @mouseup=${this.handleEditorSelect}
@@ -1336,6 +1539,73 @@ export class LitertChatWindow extends LitElement {
             @keydown=${this.handleKeyDown}
             @paste=${this.handleEditorPaste}
           ></div>
+
+          ${this.isCodePopoverOpen ? html`
+            <div
+              id="composer-code-popover"
+              class="composer-code-popover"
+              role="dialog"
+              aria-modal="false"
+              aria-labelledby="composer-code-title"
+              @keydown=${this.handleCodePopoverKeyDown}
+            >
+              <div class="code-popover-header">
+                <div class="code-popover-title-wrap">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="16 18 22 12 16 6"></polyline>
+                    <polyline points="8 6 2 12 8 18"></polyline>
+                  </svg>
+                  <span id="composer-code-title" class="code-popover-title">Use with @litert-lm/core</span>
+                  <span class="code-popover-model-pill" title=${cleanModelName}>${cleanModelName}</span>
+                </div>
+                <div class="code-popover-actions">
+                  <button
+                    id="btn-copy-model-code"
+                    type="button"
+                    class="btn-copy-snippet ${this.codeCopied ? 'copied' : ''}"
+                    @click=${() => this.copyModelCode(codeSnippet)}
+                  >
+                    ${this.codeCopied ? html`
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                      </svg>
+                      <span>Copied</span>
+                    ` : html`
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                      </svg>
+                      <span>Copy code</span>
+                    `}
+                  </button>
+                  <button
+                    id="btn-close-code-popover"
+                    type="button"
+                    class="btn-close-code-popover"
+                    aria-label="Close code snippet"
+                    title="Close"
+                    @click=${() => this.closeCodePopover(true)}
+                  >✕</button>
+                </div>
+              </div>
+              <pre
+                class="code-popover-pre"
+                tabindex="0"
+                role="region"
+                aria-label="@litert-lm/core code snippet"
+              ><code class="hljs language-typescript">${renderHtml(highlight(codeSnippet, 'typescript'))}</code></pre>
+              <div class="code-popover-footer">
+                <span class="code-popover-install"><code>npm i @litert-lm/core</code></span>
+                <span class="sr-only" role="status" aria-live="polite">${this.codeCopied ? 'Copied code to clipboard' : ''}</span>
+                <a
+                  class="code-popover-docs-link"
+                  href="https://ai.google.dev/edge/litert-lm/js"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >JS API docs ↗</a>
+              </div>
+            </div>
+          ` : nothing}
 
           <div class="composer-toolbar">
             <div class="composer-tools-left">
@@ -1345,8 +1615,13 @@ export class LitertChatWindow extends LitElement {
                   .value=${selectedPath}
                   @toggle-open=${(e: CustomEvent<{open: boolean}>) => {
                     this.isModelMenuOpen = e.detail.open;
-                    if (e.detail.open && this.isAddingModel) {
-                      this.closeComposerAddModel(false);
+                    if (e.detail.open) {
+                      if (this.isAddingModel) {
+                        this.closeComposerAddModel(false);
+                      }
+                      if (this.isCodePopoverOpen) {
+                        this.closeCodePopover(false);
+                      }
                     }
                   }}
                   @change=${this.handleComposerModelChange}
@@ -1437,6 +1712,23 @@ export class LitertChatWindow extends LitElement {
                   </div>
                 ` : nothing}
               </div>
+              <button
+                id="btn-get-code"
+                type="button"
+                class="btn-get-code ${this.isCodePopoverOpen ? 'open' : ''}"
+                title="Get @litert-lm/core code for this model and config"
+                aria-label="Get code"
+                aria-haspopup="dialog"
+                aria-expanded=${this.isCodePopoverOpen ? 'true' : 'false'}
+                aria-controls=${this.isCodePopoverOpen ? 'composer-code-popover' : nothing}
+                @click=${this.toggleCodePopover}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="16 18 22 12 16 6"></polyline>
+                  <polyline points="8 6 2 12 8 18"></polyline>
+                </svg>
+                <span class="get-code-label">Code</span>
+              </button>
             </div>
 
             <div class="composer-tools-right">
@@ -1445,9 +1737,9 @@ export class LitertChatWindow extends LitElement {
                   id="btn-add-media"
                   type="button"
                   class="btn-icon"
-                  title="Add images or audio"
-                  aria-label="Add images or audio"
-                  ?disabled=${isLoading}
+                  title=${addMediaTitle}
+                  aria-label=${addMediaAriaLabel}
+                  ?disabled=${isLoading || allMediaOff}
                   @mousedown=${(e: Event) => e.preventDefault()}
                   @click=${() => this.mediaInput?.click()}
                 >
@@ -1460,9 +1752,9 @@ export class LitertChatWindow extends LitElement {
                   id="btn-camera"
                   type="button"
                   class="btn-icon"
-                  title="Take a photo"
-                  aria-label="Take a photo"
-                  ?disabled=${isLoading}
+                  title=${cameraTitle}
+                  aria-label=${cameraAriaLabel}
+                  ?disabled=${isLoading || visionOff}
                   @mousedown=${(e: Event) => e.preventDefault()}
                   @click=${this.openCamera}
                 >
@@ -1475,9 +1767,9 @@ export class LitertChatWindow extends LitElement {
                   id="btn-record"
                   type="button"
                   class="btn-icon ${this.isRecording ? 'recording' : ''}"
-                  title=${this.isRecording ? 'Stop and attach recording' : 'Record audio'}
-                  aria-label=${this.isRecording ? 'Stop and attach recording' : 'Record audio'}
-                  ?disabled=${isLoading}
+                  title=${recordTitle}
+                  aria-label=${recordAriaLabel}
+                  ?disabled=${isLoading || audioOff}
                   @mousedown=${(e: Event) => e.preventDefault()}
                   @click=${this.toggleRecording}
                 >${this.isRecording ? html`⏹ ${Math.floor(this.recordingSeconds / 60)}:${

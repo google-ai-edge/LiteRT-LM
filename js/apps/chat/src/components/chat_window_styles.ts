@@ -781,6 +781,224 @@ export const chatWindowStyles = css`
     color: var(--teal, #14d4aa);
   }
 
+  .btn-get-code {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    height: 34px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border, #262f40);
+    background-color: var(--bg-card, #171c26);
+    color: var(--text-secondary, #cbd5e1);
+    font-family: inherit;
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+    white-space: nowrap;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .btn-get-code svg {
+    color: var(--text-muted, #94a3b8);
+    flex-shrink: 0;
+    transition: color 0.15s ease;
+  }
+
+  .btn-get-code:hover {
+    background-color: var(--bg-elevated, #1e2432);
+    border-color: var(--border-strong, #364156);
+    color: var(--text, #f1f5f9);
+  }
+
+  .btn-get-code:hover svg,
+  .btn-get-code.open svg {
+    color: var(--teal, #14d4aa);
+  }
+
+  .btn-get-code.open {
+    background-color: var(--bg-elevated, #1e2432);
+    border-color: var(--teal, #14d4aa);
+    color: var(--text, #f1f5f9);
+    box-shadow: 0 0 0 2px var(--teal-subtle, rgba(20, 212, 170, 0.14));
+  }
+
+  .composer-code-popover {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 0;
+    width: min(600px, 100%);
+    max-width: calc(100vw - 24px);
+    max-height: min(410px, calc(100dvh - 176px));
+    display: flex;
+    flex-direction: column;
+    border-radius: 14px;
+    border: 1px solid var(--border-strong, #364156);
+    background-color: var(--bg-card, #171c26);
+    box-shadow: var(--shadow-md, 0 10px 28px rgba(0, 0, 0, 0.48));
+    z-index: 100000;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+
+  .code-popover-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 12px;
+    background-color: var(--code-header-bg, #141923);
+    border-bottom: 1px solid var(--border, #262f40);
+    flex-shrink: 0;
+  }
+
+  .code-popover-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .code-popover-title-wrap > svg {
+    color: var(--teal, #14d4aa);
+    flex-shrink: 0;
+  }
+
+  .code-popover-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--text, #f1f5f9);
+    white-space: nowrap;
+  }
+
+  .code-popover-model-pill {
+    font-size: 0.68rem;
+    font-weight: 600;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text-muted, #94a3b8);
+    background-color: var(--bg-card, #171c26);
+    border: 1px solid var(--border, #262f40);
+    border-radius: 999px;
+    padding: 1px 7px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .code-popover-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .btn-copy-snippet {
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background-color: var(--teal-btn-bg, #14d4aa);
+    color: var(--teal-btn-text, #041f18);
+    font-family: inherit;
+    font-size: 0.73rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    transition: background-color 0.14s ease, border-color 0.14s ease;
+  }
+
+  .btn-copy-snippet:hover {
+    background-color: var(--teal-btn-hover, #2ee0b8);
+  }
+
+  .btn-close-code-popover {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-muted, #94a3b8);
+    font-size: 0.8rem;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: background-color 0.14s ease, color 0.14s ease;
+  }
+
+  .btn-close-code-popover:hover {
+    background-color: var(--bg-elevated, #1e2432);
+    color: var(--text, #f1f5f9);
+  }
+
+  .code-popover-pre {
+    margin: 0;
+    padding: 12px 14px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong, #364156) transparent;
+    background-color: var(--code-bg, #080b10);
+    color: var(--hljs-fg, #e2e8f0);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.775rem;
+    line-height: 1.5;
+    tab-size: 2;
+  }
+
+  .code-popover-pre:focus-visible {
+    outline: 2px solid var(--teal, #14d4aa);
+    outline-offset: -2px;
+  }
+
+  .code-popover-pre code {
+    font-family: inherit;
+    font-size: inherit;
+    background: transparent;
+    padding: 0;
+  }
+
+  .code-popover-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 7px 12px;
+    background-color: var(--code-header-bg, #141923);
+    border-top: 1px solid var(--border, #262f40);
+    font-size: 0.71rem;
+    color: var(--text-muted, #94a3b8);
+    flex-shrink: 0;
+  }
+
+  .code-popover-install code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem;
+    color: var(--text-secondary, #cbd5e1);
+  }
+
+  .code-popover-docs-link {
+    color: light-dark(var(--teal-dark, #115e59), var(--teal, #14d4aa));
+    text-decoration: none;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .code-popover-docs-link:hover {
+    text-decoration: underline;
+  }
+
   .composer-add-model-popover {
     position: absolute;
     bottom: calc(100% + 8px);
@@ -1032,6 +1250,12 @@ export const chatWindowStyles = css`
       max-width: 220px;
     }
 
+    .btn-get-code {
+      height: 32px;
+      padding: 0 9px;
+      font-size: 0.73rem;
+    }
+
     .model-pill-state:not(.active-state) {
       display: none;
     }
@@ -1061,6 +1285,20 @@ export const chatWindowStyles = css`
     }
 
     .capability-tag:not(:last-child)::after {
+      display: none;
+    }
+
+    .btn-get-code {
+      width: 32px;
+      padding: 0;
+    }
+
+    .btn-get-code .get-code-label,
+    .code-popover-model-pill {
+      display: none;
+    }
+
+    .composer-toolbar:has(.is-recording) .btn-get-code {
       display: none;
     }
 
@@ -1121,6 +1359,11 @@ export const chatWindowStyles = css`
       font-size: 0.7rem;
     }
 
+    .btn-get-code {
+      width: 28px;
+      height: 28px;
+    }
+
     .model-pill-state {
       font-size: 0.64rem;
     }
@@ -1173,6 +1416,21 @@ export const chatWindowStyles = css`
       padding: 0 9px;
       gap: 5px;
       font-size: 0.74rem;
+    }
+
+    .btn-get-code {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+    }
+
+    .btn-get-code .get-code-label,
+    .code-popover-model-pill {
+      display: none;
+    }
+
+    .composer-toolbar:has(.is-recording) .btn-get-code {
+      display: none;
     }
 
     .model-pill-state:not(.active-state),

@@ -94,6 +94,21 @@ describe('litert-chat-window', () => {
     mockSettings.customModels = [];
     mockSettings.localDirModels = [];
     mockSettings.textBackend = 'gpu';
+    mockSettings.visionBackend = 'gpu';
+    mockSettings.audioBackend = 'gpu';
+    mockSettings.textPrecision = 'default';
+    mockSettings.visionPrecision = 'default';
+    mockSettings.audioPrecision = 'default';
+    mockSettings.contextLength = 4096;
+    mockSettings.maxOutputTokens = 2048;
+    mockSettings.samplerType = 'greedy';
+    mockSettings.temperature = 1.0;
+    mockSettings.topP = 0.95;
+    mockSettings.topK = 64;
+    mockSettings.enableThinking = true;
+    mockSettings.enableSpeculativeDecoding = false;
+    mockSettings.systemPrompt = '';
+    mockSettings.disabledTools = [];
 
     mockLocalDirService = jasmine.createSpyObj('LocalDirectoryService', [
       'mountDirectory',
@@ -996,6 +1011,133 @@ describe('litert-chat-window', () => {
                .toBeNull();
            expect(sendBtn.disabled).toBeFalse();
            expect(sendBtn.textContent?.trim()).toBe('Send');
+         });
+    });
+
+    describe('Get code popover and modality disabling', () => {
+      it('opens Get code popover with live @litert-lm/core snippet, shows Copied feedback, traps Tab, and restores focus on Escape',
+         async () => {
+           mockSettings.selectedModelPath = MODELS[0]!.path;
+           mockSettings.samplerType = 'top_k';
+           mockSettings.topK = 40;
+           mockSettings.temperature = 0.7;
+           mockSettings.visionBackend = 'off';
+           element.requestUpdate();
+           await element.updateComplete;
+
+           const codeBtn = element.shadowRoot!.querySelector<HTMLButtonElement>(
+               '#btn-get-code')!;
+           expect(codeBtn).toBeTruthy();
+           expect(codeBtn.getAttribute('aria-expanded')).toBe('false');
+
+           codeBtn.click();
+           await element.updateComplete;
+           await new Promise(resolve => requestAnimationFrame(resolve));
+
+           expect(codeBtn.getAttribute('aria-expanded')).toBe('true');
+           const popover = element.shadowRoot!.querySelector<HTMLElement>(
+               '#composer-code-popover')!;
+           expect(popover).toBeTruthy();
+           const preText =
+               popover.querySelector('.code-popover-pre')!.textContent ?? '';
+           expect(preText).toContain(`model: '${MODELS[0]!.path}'`);
+           expect(preText).toContain('type: SamplerType.TOP_K');
+           expect(preText).toContain('audioBackend: Backend.GPU');
+           expect(preText).not.toContain('visionBackend');
+           expect(preText).not.toContain('maxNumImages');
+
+           const copyBtn = popover.querySelector<HTMLButtonElement>(
+               '#btn-copy-model-code')!;
+           expect(element.shadowRoot!.activeElement).toBe(copyBtn);
+
+           if (navigator.clipboard && 'writeText' in navigator.clipboard) {
+             spyOn(navigator.clipboard, 'writeText').and.resolveTo();
+           }
+           copyBtn.click();
+           await new Promise(resolve => setTimeout(resolve, 0));
+           await element.updateComplete;
+           expect(copyBtn.textContent).toContain('Copied');
+
+           // Escape closes the popover and restores focus to #btn-get-code
+           popover.dispatchEvent(new KeyboardEvent(
+               'keydown', {key: 'Escape', bubbles: true, cancelable: true}));
+           await element.updateComplete;
+           expect(element.shadowRoot!.querySelector('#composer-code-popover'))
+               .toBeNull();
+           expect(element.shadowRoot!.activeElement).toBe(codeBtn);
+         });
+
+      it('disables camera, mic, and media attach buttons with explanations when Vision and/or Audio are off',
+         async () => {
+           const addMediaBtn =
+               element.shadowRoot!.querySelector<HTMLButtonElement>(
+                   '#btn-add-media')!;
+           const cameraBtn =
+               element.shadowRoot!.querySelector<HTMLButtonElement>(
+                   '#btn-camera')!;
+           const recordBtn =
+               element.shadowRoot!.querySelector<HTMLButtonElement>(
+                   '#btn-record')!;
+           const mediaInput =
+               element.shadowRoot!.querySelector<HTMLInputElement>(
+                   '#media-input')!;
+
+           const heroSubtitle = () =>
+               element.shadowRoot!
+                   .querySelector<HTMLElement>('.hero-subtitle')!
+                   .textContent!.replace(/\s+/g, ' ')
+                   .trim();
+           const firstCapTag = () =>
+               element.shadowRoot!
+                   .querySelector<HTMLElement>('.capability-tag')!
+                   .textContent!.replace(/\s+/g, ' ')
+                   .trim();
+
+           expect(heroSubtitle()).toContain('Attach images or audio inline');
+           expect(firstCapTag()).toBe('Vision & Audio');
+
+           mockSettings.visionBackend = 'off';
+           mockSettings.audioBackend = 'gpu';
+           element.requestUpdate();
+           await element.updateComplete;
+
+           expect(cameraBtn.disabled).toBeTrue();
+           expect(cameraBtn.title).toContain('Vision is turned off');
+           expect(recordBtn.disabled).toBeFalse();
+           expect(addMediaBtn.disabled).toBeFalse();
+           expect(addMediaBtn.title).toContain('Vision is turned off');
+           expect(mediaInput.accept).toBe('audio/*');
+           expect(heroSubtitle()).toContain('Attach audio inline');
+           expect(heroSubtitle()).not.toContain('images');
+           expect(firstCapTag()).toBe('Audio');
+
+           // Rejects dropped/picked images when Vision is off
+           await addImageViaPicker();
+           expect(mockChatSession.createMedia).not.toHaveBeenCalled();
+           expect(mockState.statusText).toContain('Vision is turned off');
+
+           mockSettings.visionBackend = 'gpu';
+           mockSettings.audioBackend = 'off';
+           element.requestUpdate();
+           await element.updateComplete;
+           expect(heroSubtitle()).toContain('Attach images inline');
+           expect(heroSubtitle()).not.toContain('audio');
+           expect(firstCapTag()).toBe('Vision');
+
+           mockSettings.visionBackend = 'off';
+           mockSettings.audioBackend = 'off';
+           element.requestUpdate();
+           await element.updateComplete;
+
+           expect(cameraBtn.disabled).toBeTrue();
+           expect(recordBtn.disabled).toBeTrue();
+           expect(recordBtn.title).toContain('Audio is turned off');
+           expect(addMediaBtn.disabled).toBeTrue();
+           expect(addMediaBtn.title)
+               .toContain('Vision and Audio are turned off');
+           expect(heroSubtitle()).toContain('in text-only mode');
+           expect(heroSubtitle()).not.toContain('Attach');
+           expect(firstCapTag()).toBe('Text-Only Mode');
          });
     });
   });
