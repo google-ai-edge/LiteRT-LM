@@ -454,7 +454,7 @@ describe('litert-sidebar', () => {
       await toggleSettingsPage('experimental');
     });
 
-    it('disables CPU text backend for -gpu.litertlm models and enables it for non-GPU models',
+    it('only blocks CPU text for -gpu.litertlm and shows a non-blocking warning for large models',
        async () => {
          const textBackend = element.shadowRoot!.querySelector<HTMLSelectElement>(
              '#text-backend')!;
@@ -463,15 +463,31 @@ describe('litert-sidebar', () => {
          expect(textBackend.disabled).toBeTrue();
          expect(textBackend.value).toBe('gpu');
          expect(textBackend.getAttribute('title')).toContain('-gpu.litertlm');
+         expect(textBackend.getAttribute('title')).not.toContain('inline-weight');
+         expect(Array.from(textBackend.options).map(o => o.value))
+             .toEqual(['gpu', 'cpu']);
          expect(note.textContent).toContain('WebGPU-only');
-         expect(note.querySelectorAll('.nowrap').length).toBeGreaterThan(0);
+         expect(note.textContent).toContain('-gpu.litertlm');
+         expect(note.textContent).not.toContain('inline-weight');
+         expect(note.classList.contains('warning')).toBeFalse();
 
+         // Large standard .litertlm (2.40 GB): NEVER disabled; shows non-blocking
+         // WASM memory warning when CPU text is selected.
+         mockSettings.customModels = [{
+           name: 'Large Standard',
+           filename: 'gemma-3-4b-it.litertlm',
+           path: 'https://example.com/gemma-3-4b-it.litertlm',
+           size: '2.40 GB',
+         }];
          mockSettings.selectedModelPath =
-             'https://example.com/gemma-3-1b-it.litertlm';
+             'https://example.com/gemma-3-4b-it.litertlm';
          element.requestUpdate();
          await element.updateComplete;
 
          expect(textBackend.disabled).toBeFalse();
+         expect(textBackend.getAttribute('title'))
+             .toContain('2.40 GB may not fit in WASM memory');
+
          textBackend.value = 'cpu';
          textBackend.dispatchEvent(new Event('change'));
          expect(mockSettings.textBackend).toBe('cpu');
@@ -479,11 +495,33 @@ describe('litert-sidebar', () => {
 
          element.requestUpdate();
          await element.updateComplete;
+         expect(textBackend.disabled).toBeFalse();
+         expect(note.classList.contains('warning')).toBeTrue();
+         expect(note.textContent)
+             .toContain('2.40 GB may not fit in WASM memory (~1.5 GB practical limit); loading may fail.');
+         expect(note.textContent).not.toContain('inline-weight');
+
          const textPrecision =
              element.shadowRoot!.querySelector<HTMLSelectElement>(
                  '#text-precision')!;
          expect(textPrecision.disabled).toBeTrue();
          expect(textPrecision.value).toBe('fp32');
+
+         // Small standard .litertlm (0.95 GB): no warning class.
+         mockSettings.customModels = [{
+           name: 'Small Standard',
+           filename: 'gemma-3-1b-it.litertlm',
+           path: 'https://example.com/gemma-3-1b-it.litertlm',
+           size: '0.95 GB',
+         }];
+         mockSettings.selectedModelPath =
+             'https://example.com/gemma-3-1b-it.litertlm';
+         element.requestUpdate();
+         await element.updateComplete;
+
+         expect(textBackend.disabled).toBeFalse();
+         expect(note.classList.contains('warning')).toBeFalse();
+         expect(note.textContent).toContain('~1.5 GB');
        });
 
     it('updates vision/audio backends and activation precision and resets experimental group',

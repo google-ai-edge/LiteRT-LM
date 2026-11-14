@@ -20,7 +20,7 @@ import {teeStream} from '../tee_stream.js';
 
 import {LocalDirectoryService} from './local_directory_service.js';
 import {parseModelReference} from './model_reference.js';
-import {CustomModel, EXPERIMENTAL_SETTING_KEYS, getModalityConfigs, LEGACY_MODEL_PATHS, ModalityBackend, ModalityConfig, ModelSettings} from './settings_store.js';
+import {CustomModel, EXPERIMENTAL_SETTING_KEYS, getModalityConfigs, LEGACY_MODEL_PATHS, MODALITIES, ModalityBackend, ModalityConfig, ModelSettings} from './settings_store.js';
 
 function toBackend({backend}: ModalityConfig): Backend {
   return backend === 'cpu' ? Backend.CPU : Backend.GPU;
@@ -38,6 +38,46 @@ const SUPPRESSED_WARNING_PATTERNS = [
   /mel_filterbank\.cc:.*Missing \d+ bands\s+starting at \d+ in mel-frequency design\./,
   /tasks\.cc:.*Failed to get (?:prefill|decode) profile summary: UNIMPLEMENTED: GetProfileSummary not implemented for backend: GpuArtisan/,
 ];
+
+const WASM_OOM_ERROR_PATTERN =
+    /out of memory|\boom\b|cannot enlarge memory|cannot allocate|allocation failed|bad_alloc|array buffer allocation|invalid (?:typed )?array (?:buffer )?length|resource_exhausted|failed to (?:allocate|reserve) memory/i;
+
+const WASM_ABORT_TRAP_PATTERN =
+    /\b(?:RuntimeError:\s*)?(?:Aborted\([^)]*\)|unreachable|memory access out of bounds)\b/i;
+
+/**
+ * Formats an error thrown while loading or compiling a model into an actionable
+ * status message without dumping raw multi-line WASM stack traces.
+ */
+export function formatModelLoadError(
+    err: unknown,
+    settings: ModelSettings&
+    Partial<Pick<{customModels: CustomModel[]; localDirModels: CustomModel[]},
+                 'customModels'|'localDirModels'>>): string {
+  const error = err as {name?: string; message?: string} | null | undefined;
+  if (error?.name === 'AbortError') {
+    return 'Model download cancelled by user.';
+  }
+  const rawMessage = (typeof error?.message === 'string' && error.message) ?
+      error.message :
+      String(err);
+  const firstLine = rawMessage.split('\n')[0]!.trim();
+  const modalities = getModalityConfigs(settings);
+  const usesCpu = MODALITIES.some(m => modalities[m].backend === 'cpu');
+
+  if (WASM_OOM_ERROR_PATTERN.test(rawMessage)) {
+    if (usesCpu) {
+      return 'Failed to load model: out of WASM memory on CPU. Switch backend to GPU in Experimental settings or try a smaller model (~1.5 GB or less).';
+    }
+    return 'Failed to load model: out of memory. Close other tabs or try a smaller model.';
+  }
+  if (usesCpu &&
+      (error?.name === 'RuntimeError' ||
+       WASM_ABORT_TRAP_PATTERN.test(rawMessage))) {
+    return 'Failed to load model: WASM aborted while loading on CPU (likely out of WASM memory). Switch backend to GPU in Experimental settings or try a smaller model (~1.5 GB or less).';
+  }
+  return `Failed to load model: ${firstLine || rawMessage}`;
+}
 
 /**
  * Maximum number of images in a conversation. Artisan models reserve GPU memory
@@ -540,12 +580,7 @@ export class ModelLoaderService {
       this.downloadProgresses.delete(modelKey);
       this.downloadSpeeds.delete(modelKey);
 
-      const error = err as Error;
-      if (error.name === 'AbortError') {
-        this.updateStatus('Model download cancelled by user.');
-      } else {
-        this.updateStatus(`Failed to load model: ${error.message || error}`);
-      }
+      this.updateStatus(formatModelLoadError(err, settings));
       this.updateCallback();
     } finally {
       this.downloadAbortController = null;

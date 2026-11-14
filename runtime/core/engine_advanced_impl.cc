@@ -144,9 +144,10 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
         UpdateCompilationOptions(executor_settings, compilation_options));
   }
 
-  // Weights already in host memory, e.g. a token embedding table that a
-  // deduplicated model file stores once in the embedder's section. The weight
-  // loader uploads these from host memory and streams the rest.
+  // Weights already in host memory, e.g. external weights on CPU, or a token
+  // embedding table that a deduplicated model file stores once in the
+  // embedder's section. The weight loader reads these from host memory and
+  // streams the rest.
   if (const auto* weight_map = resources.GetWeightInMemoryMap(model_type);
       weight_map != nullptr) {
     LITERT_RETURN_IF_ERROR(
@@ -947,6 +948,25 @@ EngineAdvancedImpl::CreateStreamingWeights(
                 << "The engine's speculative decoding mode is off. Skipping "
                    "weights for MTP drafter; sessions of this engine can't "
                    "load it lazily.";
+            break;
+          }
+          if ((model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE ||
+               model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) &&
+              engine_settings.GetMainExecutorSettings().GetBackend() ==
+                  Backend::CPU) {
+            // The CPU backend restores external weights from host memory and
+            // cannot consume a weights stream, so read them in here; the model
+            // is compiled from them after all sections are processed.
+            const size_t size = section_metadata->end_offset() -
+                                section_metadata->begin_offset();
+            ABSL_LOG(INFO) << "Reading weights (" << size
+                           << " bytes) for model type "
+                           << static_cast<int>(model_type)
+                           << " into host memory...";
+            ABSL_RETURN_IF_ERROR(
+                streaming_model_resources->SetWeightsFromStream(
+                    model_type, *section->data_stream, size));
+            ABSL_LOG(INFO) << "Weights read.";
             break;
           }
           if (owned_env == nullptr) {
