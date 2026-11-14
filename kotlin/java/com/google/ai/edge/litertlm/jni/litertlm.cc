@@ -33,6 +33,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "litert/cc/internal/scoped_file.h"  // from @litert
@@ -135,6 +136,127 @@ absl::StatusOr<litert::lm::ActivationDataType> ConvertActivationDataType(
       return absl::InvalidArgumentError(absl::StrCat(
           "Unsupported activation data type: ", activation_data_type));
   }
+}
+
+// Converts native Responses into LiteRtLmJni.RawResponses.
+jobject CreateRawResponsesJni(JNIEnv* env, const Responses& responses) {
+  auto fail_if_no_exception = [env](const char* msg) -> jobject {
+    if (!env->ExceptionCheck()) {
+      ThrowLiteRtLmJniException(env, msg);
+    }
+    return nullptr;
+  };
+  ScopedLocalRef<jclass> raw_cls(
+      env,
+      env->FindClass("com/google/ai/edge/litertlm/LiteRtLmJni$RawResponses"));
+  if (raw_cls.get() == nullptr) {
+    return fail_if_no_exception("Failed to find RawResponses class.");
+  }
+  jmethodID ctor = env->GetMethodID(raw_cls.get(), "<init>",
+                                    "([Ljava/lang/String;[F[I[[F)V");
+  if (ctor == nullptr) {
+    return fail_if_no_exception("Failed to find RawResponses constructor.");
+  }
+
+  ScopedLocalRef<jclass> string_cls(env, env->FindClass("java/lang/String"));
+  if (string_cls.get() == nullptr) {
+    return fail_if_no_exception("Failed to find java.lang.String class.");
+  }
+  const auto& texts = responses.GetTexts();
+  ScopedLocalRef<jobjectArray> texts_arr(
+      env, env->NewObjectArray(static_cast<jsize>(texts.size()),
+                               string_cls.get(), nullptr));
+  if (texts_arr.get() == nullptr) {
+    return fail_if_no_exception("Failed to allocate texts array.");
+  }
+  for (size_t i = 0; i < texts.size(); ++i) {
+    ScopedLocalRef<jstring> j_text(env, NewStringStandardUTF(env, texts[i]));
+    env->SetObjectArrayElement(texts_arr.get(), static_cast<jsize>(i),
+                               j_text.get());
+  }
+
+  const auto& scores = responses.GetScores();
+  ScopedLocalRef<jfloatArray> scores_arr(
+      env, env->NewFloatArray(static_cast<jsize>(scores.size())));
+  if (scores_arr.get() == nullptr) {
+    return fail_if_no_exception("Failed to allocate scores array.");
+  }
+  if (!scores.empty()) {
+    env->SetFloatArrayRegion(scores_arr.get(), 0,
+                             static_cast<jsize>(scores.size()), scores.data());
+  }
+
+  ScopedLocalRef<jintArray> lengths_arr(env, nullptr);
+  if (responses.GetTokenLengths().has_value()) {
+    const auto& lengths = *responses.GetTokenLengths();
+    lengths_arr.reset(env->NewIntArray(static_cast<jsize>(lengths.size())));
+    if (lengths_arr.get() == nullptr) {
+      return fail_if_no_exception("Failed to allocate tokenLengths array.");
+    }
+    if (!lengths.empty()) {
+      std::vector<jint> j_lengths(lengths.begin(), lengths.end());
+      env->SetIntArrayRegion(lengths_arr.get(), 0,
+                             static_cast<jsize>(j_lengths.size()),
+                             j_lengths.data());
+    }
+  }
+
+  ScopedLocalRef<jobjectArray> token_scores_arr(env, nullptr);
+  if (responses.GetTokenScores().has_value()) {
+    const auto& token_scores = *responses.GetTokenScores();
+    ScopedLocalRef<jclass> float_array_cls(env, env->FindClass("[F"));
+    if (float_array_cls.get() == nullptr) {
+      return fail_if_no_exception("Failed to find float[] class.");
+    }
+    token_scores_arr.reset(
+        env->NewObjectArray(static_cast<jsize>(token_scores.size()),
+                            float_array_cls.get(), nullptr));
+    if (token_scores_arr.get() == nullptr) {
+      return fail_if_no_exception("Failed to allocate tokenScores array.");
+    }
+    for (size_t i = 0; i < token_scores.size(); ++i) {
+      const auto& row = token_scores[i];
+      ScopedLocalRef<jfloatArray> row_arr(
+          env, env->NewFloatArray(static_cast<jsize>(row.size())));
+      if (row_arr.get() == nullptr) {
+        return fail_if_no_exception("Failed to allocate tokenScores row.");
+      }
+      if (!row.empty()) {
+        env->SetFloatArrayRegion(row_arr.get(), 0,
+                                 static_cast<jsize>(row.size()), row.data());
+      }
+      env->SetObjectArrayElement(token_scores_arr.get(), static_cast<jsize>(i),
+                                 row_arr.get());
+    }
+  }
+
+  jobject raw_obj =
+      env->NewObject(raw_cls.get(), ctor, texts_arr.get(), scores_arr.get(),
+                     lengths_arr.get(), token_scores_arr.get());
+  if (raw_obj == nullptr) {
+    return fail_if_no_exception("Failed to instantiate RawResponses.");
+  }
+  return raw_obj;
+}
+
+std::vector<std::string> ExtractStringVector(JNIEnv* env,
+                                             jobjectArray j_strings) {
+  std::vector<std::string> result;
+  if (j_strings == nullptr) {
+    return result;
+  }
+  const jsize length = env->GetArrayLength(j_strings);
+  result.reserve(length);
+  for (jsize i = 0; i < length; ++i) {
+    ScopedLocalRef<jstring> elem(
+        env, static_cast<jstring>(env->GetObjectArrayElement(j_strings, i)));
+    if (elem.get() == nullptr) {
+      ThrowLiteRtLmJniException(env, "Target text element cannot be null.");
+      return {};
+    }
+    result.push_back(JStringToString(env, elem.get()));
+  }
+  return result;
 }
 
 // Helper function to convert BenchmarkInfo to Java object
@@ -1076,7 +1198,7 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateSession)(
     JNIEnv* env, jclass thiz, jlong engine_pointer, jobject sampler_config_obj,
     jstring lora_path_str, jstring audio_lora_path_str,
     jobject enable_speculative_decoding, jobject speculative_decoding_mode,
-    jobject speculative_lenience) {
+    jobject speculative_lenience, jobject apply_prompt_template) {
   auto session_config = SessionConfig::CreateDefault();
   if (!ApplyOptionalSpeculativeDecodingMode(env, speculative_decoding_mode,
                                             enable_speculative_decoding,
@@ -1084,6 +1206,10 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateSession)(
     return 0;
   }
   ApplyOptionalSpeculativeLenience(env, speculative_lenience, session_config);
+  if (auto opt_apply = GetOptionalBoolean(env, apply_prompt_template);
+      opt_apply.has_value()) {
+    session_config.SetApplyPromptTemplateInSession(*opt_apply);
+  }
 
   if (sampler_config_obj != nullptr) {
     session_config.GetMutableSamplerParams() =
@@ -1324,6 +1450,79 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeCancelProcess)(
   session->CancelProcess();
 }
 
+LITERTLM_JNIEXPORT jobject JNICALL JNI_METHOD(nativeRunTextScoring)(
+    JNIEnv* env, jclass thiz, jlong session_pointer, jobjectArray target_text,
+    jboolean store_token_lengths) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  std::vector<std::string> targets = ExtractStringVector(env, target_text);
+  if (env->ExceptionCheck()) {
+    return nullptr;
+  }
+  std::vector<absl::string_view> target_views(targets.begin(), targets.end());
+  auto responses = session->RunTextScoring(
+      target_views, static_cast<bool>(store_token_lengths));
+  if (!responses.ok()) {
+    ThrowLiteRtLmJniException(env, absl::StrCat("Failed to run text scoring: ",
+                                                responses.status().ToString()));
+    return nullptr;
+  }
+  if (responses->GetTexts().empty()) {
+    responses->GetMutableTexts() = std::move(targets);
+  }
+  return CreateRawResponsesJni(env, *responses);
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSaveCheckpoint)(
+    JNIEnv* env, jclass thiz, jlong session_pointer, jstring label) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  std::string label_str = JStringToString(env, label);
+  auto status = session->SaveCheckpoint(label_str);
+  if (!status.ok()) {
+    ThrowLiteRtLmJniException(
+        env, absl::StrCat("Failed to save checkpoint: ", status.ToString()));
+  }
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeRewindToCheckpoint)(
+    JNIEnv* env, jclass thiz, jlong session_pointer, jstring label) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  std::string label_str = JStringToString(env, label);
+  auto status = session->RewindToCheckpoint(label_str);
+  if (!status.ok()) {
+    ThrowLiteRtLmJniException(
+        env,
+        absl::StrCat("Failed to rewind to checkpoint: ", status.ToString()));
+  }
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeRewindToStep)(
+    JNIEnv* env, jclass thiz, jlong session_pointer, jint step) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  auto status = session->RewindToStep(static_cast<int>(step));
+  if (!status.ok()) {
+    ThrowLiteRtLmJniException(
+        env, absl::StrCat("Failed to rewind to step: ", status.ToString()));
+  }
+}
+
+LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeGetCurrentStep)(
+    JNIEnv* env, jclass thiz, jlong session_pointer) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  auto current_step = session->GetCurrentStep();
+  if (!current_step.ok()) {
+    ThrowLiteRtLmJniException(env,
+                              absl::StrCat("Failed to get current step: ",
+                                           current_step.status().ToString()));
+    return 0;
+  }
+  return static_cast<jint>(*current_step);
+}
+
 LITERTLM_JNIEXPORT jobject JNICALL
 JNI_METHOD(nativeConversationGetBenchmarkInfo)(JNIEnv* env, jclass thiz,
                                                jlong conversation_pointer) {
@@ -1353,6 +1552,29 @@ LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeConversationGetTokenCount)(
   }
 
   return *tokens_count;
+}
+
+LITERTLM_JNIEXPORT jobject JNICALL JNI_METHOD(nativeConversationRunTextScoring)(
+    JNIEnv* env, jclass thiz, jlong conversation_pointer,
+    jobjectArray target_text) {
+  Conversation* conversation =
+      reinterpret_cast<Conversation*>(conversation_pointer);
+  std::vector<std::string> targets = ExtractStringVector(env, target_text);
+  if (env->ExceptionCheck()) {
+    return nullptr;
+  }
+  std::vector<absl::string_view> target_views(targets.begin(), targets.end());
+  auto responses = conversation->RunTextScoring(target_views);
+  if (!responses.ok()) {
+    ThrowLiteRtLmJniException(
+        env, absl::StrCat("Failed to run conversation text scoring: ",
+                          responses.status().ToString()));
+    return nullptr;
+  }
+  if (responses->GetTexts().empty()) {
+    responses->GetMutableTexts() = std::move(targets);
+  }
+  return CreateRawResponsesJni(env, *responses);
 }
 
 LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateConversation)(
