@@ -304,12 +304,6 @@ build:windows --host_copt=-D_ENABLE_EXTENDED_ALIGNED_STORAGE
 # keep the behavior this build had before that change.
 build:windows --define=xnn_enable_avx512bf16=false
 
-# LiteRT's WebGPU Dawn dynamic loader (enabled by default in OSS) links
-# `libdawn_proc`, which defines every `wgpu*` entry point. This build already
-# links the prebuilt `webgpu_dawn.dll` through a stub import library, so MSVC
-# fails with LNK2005 duplicate symbols. Opt out to keep linking Dawn directly.
-build:windows --define=litert_webgpu_dawn_dynamic_loader=false
-
 # Enable the runfiles symlink tree on Windows. This makes it possible to build
 # the pip package on Windows without an intermediate data-file archive, as the
 # build_pip_package script in its current form (as of Aug 2023) uses the
