@@ -36,6 +36,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
+#include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -73,6 +74,7 @@ namespace {
 
 using ::testing::ElementsAre;
 using ::testing::Return;
+using ::testing::status::StatusIs;
 
 constexpr int kVocabSize = 10;
 constexpr int kValidTokensInAudioData = 4;
@@ -407,6 +409,91 @@ TEST_P(ExecutionManagerTest, IsDebuggerEnabledIsTrueWithRuntimeDebugger) {
                          /*audio_executor_settings=*/nullptr,
                          /*audio_executor=*/nullptr, runtime_debugger);
   EXPECT_TRUE(execution_manager_->IsDebuggerEnabled());
+}
+
+TEST_P(ExecutionManagerTest,
+       DeleteSessionDebugCapturesSucceedsWithoutRuntimeDebugger) {
+  CreateExecutionManager(CreateDefaultFakeLlmExecutor());
+  ASSERT_OK_AND_ASSIGN(SessionConfig session_config,
+                       CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  EXPECT_OK(execution_manager_->DeleteSessionDebugCaptures(session_id));
+}
+
+TEST_P(ExecutionManagerTest, DeleteSessionDebugCapturesRemovesCaptures) {
+  const std::filesystem::path cache_dir =
+      std::filesystem::path(testing::TempDir()) /
+      (GetParam() == ExecutionManagerType::kThreaded ? "threaded" : "serial");
+  std::shared_ptr<RuntimeDebugger> runtime_debugger =
+      RuntimeDebugger::Create(cache_dir.string());
+  ASSERT_NE(runtime_debugger, nullptr);
+  CreateExecutionManager(CreateDefaultFakeLlmExecutor(),
+                         /*audio_executor_settings=*/nullptr,
+                         /*audio_executor=*/nullptr, runtime_debugger);
+  EXPECT_THAT(
+      execution_manager_->DeleteSessionDebugCaptures(/*session_id=*/999),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+
+  ASSERT_OK_AND_ASSIGN(SessionConfig session_config,
+                       CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  runtime_debugger->ObserveTokens(
+      session_id, Responses(TaskState::kDone, {"t1"}, {1.0f}, {1}, {{101}}));
+  const std::filesystem::path capture_dir(runtime_debugger->capture_dir());
+  const std::filesystem::path session_dir =
+      capture_dir / std::to_string(session_id);
+  const std::filesystem::path tokens_file =
+      session_dir / "generated_tokens.jsonl";
+  EXPECT_TRUE(std::filesystem::exists(tokens_file));
+
+  EXPECT_OK(execution_manager_->DeleteSessionDebugCaptures(session_id));
+  EXPECT_FALSE(std::filesystem::exists(tokens_file));
+  EXPECT_TRUE(std::filesystem::exists(session_dir));
+
+  EXPECT_OK(execution_manager_->ReleaseSession(session_id));
+  EXPECT_FALSE(std::filesystem::exists(session_dir));
+  EXPECT_FALSE(std::filesystem::exists(capture_dir));
+}
+
+TEST_P(ExecutionManagerTest,
+       DeleteSessionDebugCapturesRejectsActiveTaskAndDrainsCallback) {
+  std::unique_ptr<FakeLlmExecutor> fake_llm_executor =
+      CreateDefaultFakeLlmExecutor();
+  fake_llm_executor->SetDecodeDelay(absl::Milliseconds(200));
+  CreateExecutionManager(std::move(fake_llm_executor));
+  ASSERT_OK_AND_ASSIGN(SessionConfig session_config,
+                       CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+
+  absl::Notification task_done;
+  ASSERT_OK_AND_ASSIGN(const TaskId task_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddDecodeTask(
+      session_id, task_id, /*dependency_task_ids=*/{},
+      RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
+      SuppressTokensConfig::Default(), /*constraint=*/nullptr,
+      /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
+      [&task_done](absl::StatusOr<Responses> responses) {
+        if (!responses.ok() || IsTaskEndState(responses->GetTaskState())) {
+          task_done.Notify();
+          // Keep the terminal callback running so that the task stays in
+          // `kLastCallbackQueued` while DeleteSessionDebugCaptures() is called.
+          absl::SleepFor(absl::Milliseconds(100));
+        }
+      }));
+
+  EXPECT_THAT(execution_manager_->DeleteSessionDebugCaptures(session_id),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+
+  if (GetParam() == ExecutionManagerType::kThreaded) {
+    task_done.WaitForNotification();
+  } else {
+    ASSERT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
+  }
+  EXPECT_OK(execution_manager_->DeleteSessionDebugCaptures(session_id));
 }
 
 TEST_P(ExecutionManagerTest, CanGetMutableBenchmarkInfo) {
