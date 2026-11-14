@@ -185,6 +185,10 @@ struct LiteRtLmSettings {
   std::optional<bool> use_hw_cache_update_for_npu = std::nullopt;
   std::optional<bool> use_hw_ple_for_npu = std::nullopt;
   bool enable_npu_debug_logging = false;
+  // NPU dynamic KV cache allocation (-1 means unset; required for dynamic
+  // models, ignored for static models). See NpuConfig for semantics.
+  int npu_dynamic_kv_cache_initial_size = -1;
+  int npu_dynamic_kv_cache_growth_step = -1;
   bool disable_input_prompt_as_hint = false;
   absl::flat_hash_map<std::string, std::string> custom_backend_options;
 };
