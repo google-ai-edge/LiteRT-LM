@@ -23,3 +23,27 @@
  
  #elif defined(__aarch64__) && defined(__LITTLE_ENDIAN__) &&                 \
      defined(__ARM_FEATURE_CRC32) && defined(ABSL_INTERNAL_HAVE_ARM_NEON) && \
+
+--- absl/base/attributes.h
++++ absl/base/attributes.h
+@@ -1026,7 +1026,20 @@
+ // compiler support differs. If system libraries compiled with GCC are mixed
+ // with libraries compiled with Clang, types will have different ideas about
+ // their ABI, leading to hard to debug crashes.
++//
++// LiteRT-LM: Enabled for Clang so that absl::Status uses the same calling
++// convention as the prebuilt libGemmaModelConstraintProvider binaries, which
++// are built with ABSL_ATTRIBUTE_TRIVIAL_ABI enabled. See
++// https://github.com/google-ai-edge/LiteRT-LM/issues/4567.
++#if ABSL_HAVE_CPP_ATTRIBUTE(clang::trivial_abi)
++#define ABSL_ATTRIBUTE_TRIVIAL_ABI [[clang::trivial_abi]]
++#define ABSL_HAVE_ATTRIBUTE_TRIVIAL_ABI 1
++#elif ABSL_HAVE_ATTRIBUTE(trivial_abi)
++#define ABSL_ATTRIBUTE_TRIVIAL_ABI __attribute__((trivial_abi))
++#define ABSL_HAVE_ATTRIBUTE_TRIVIAL_ABI 1
++#else
+ #define ABSL_ATTRIBUTE_TRIVIAL_ABI
++#endif
+ 
+ // ABSL_ATTRIBUTE_NO_UNIQUE_ADDRESS
+ //
