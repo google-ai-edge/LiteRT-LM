@@ -35,6 +35,7 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/embedding_lookup/embedding_lookup_accelerators.h"
 #include "runtime/util/status_macros.h"  //NOLINT
 #if defined(__ANDROID__)
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
@@ -164,20 +165,23 @@ EndOfMultiModalEmbedding::Create(litert::Environment& env,
 
 absl::Status EndOfMultiModalEmbedding::Initialize() {
   LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
+  const bool use_npu = UseNpuForEmbeddingLookup();
+  if (use_npu) {
+    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
+                                    litert::HwAccelerators::kCpu);
+  } else {
+    options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+  }
 #if defined(__ANDROID__)
-  options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
-                                  litert::HwAccelerators::kCpu);
-#else
-  options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
-#endif
-#if defined(__ANDROID__)
-  LITERT_ASSIGN_OR_RETURN(
-      ::litert::qualcomm::QualcommOptions & qnn_opts,
-      options.GetOptions<::litert::qualcomm::QualcommOptions>());
-  qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
-  qnn_opts.SetHtpPerformanceMode(
-      ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::
-          kSustainedHighPerformance);
+  if (use_npu) {
+    LITERT_ASSIGN_OR_RETURN(
+        ::litert::qualcomm::QualcommOptions & qnn_opts,
+        options.GetOptions<::litert::qualcomm::QualcommOptions>());
+    qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
+    qnn_opts.SetHtpPerformanceMode(
+        ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::
+            kSustainedHighPerformance);
+  }
 #endif
 
   LITERT_ASSIGN_OR_RETURN(
