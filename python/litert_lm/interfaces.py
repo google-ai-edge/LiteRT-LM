@@ -474,13 +474,16 @@ class AbstractEngine(abc.ABC):
         generation, keep at least one prefill signature and "decode". When MTP
         is enabled, make sure "verify" is also included. If None, every
         signature of the model is used.
-      enable_debugger: Experimental. Whether to enable the AI Edge Debugger,
-        which captures per-token traces and, on CPU/GPU, intermediate
+      enable_debugger: Experimental. Whether to enable the AI Edge Debugger on
+        supported CPU/GPU backends, capturing per-token traces and intermediate
         activations under `<cache_dir>/litert_lm_debugger/<session_id>/`.
         Requires `cache_dir` set to a writable directory (not ":nocache" or
-        ":memory"); otherwise engine creation fails. Not supported when weights
-        are streamed. If None, use the native engine's default (off). Captures
-        hold unencrypted user data; enable only for development or diagnostics.
+        ":memory"); otherwise engine creation fails. Ignored with a warning on
+        unsupported backends or streamed weights. If None, use the native
+        engine's default (off). Captures hold unencrypted user data; enable only
+        for development or diagnostics and delete them with
+        `Session.delete_debug_captures()` or
+        `Conversation.delete_debug_captures()`.
   """
 
   model_path: str
@@ -873,15 +876,21 @@ class AbstractConversation(abc.ABC):
     """
     return None
 
+  def delete_debug_captures(self) -> None:
+    """Deletes AI Edge Debugger captures of this conversation's session.
+
+    Does nothing by default, i.e. when the debugger is not supported.
+    """
+
 
 @dataclasses.dataclass
 class BenchmarkInfo:
   """Results from a benchmark run.
 
   Attributes:
-      init_time_in_second: The time in seconds to create the engine. Session
-        and conversation creation are not included. 0 if the engine didn't
-        report it.
+      init_time_in_second: The time in seconds to create the engine. Session and
+        conversation creation are not included. 0 if the engine didn't report
+        it.
       time_to_first_token_in_second: The time in seconds to the first token.
       last_prefill_token_count: The number of tokens in the last prefill.
       last_prefill_tokens_per_second: The number of tokens processed per second
@@ -1151,6 +1160,12 @@ class AbstractSession(abc.ABC):
         trace log path, or None if the debugger is disabled or uninitialized.
     """
     return None
+
+  def delete_debug_captures(self) -> None:
+    """Deletes AI Edge Debugger captures of this session.
+
+    Does nothing by default, i.e. when the debugger is not supported.
+    """
 
 
 @dataclasses.dataclass
