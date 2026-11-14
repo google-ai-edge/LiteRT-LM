@@ -20,8 +20,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <ostream>
+#include <random>
 #include <set>
 #include <string>
 #include <type_traits>
@@ -54,8 +56,12 @@
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/options/litert_google_tensor_options.h"  // from @litert  // IWYU pragma: keep
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert  // IWYU pragma: keep
+#include "runtime/components/sampler_params_util.h"
+#include "runtime/components/sampling_cpu_util.h"
+#include "runtime/components/sampling_uniforms.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep NOLINT
 
@@ -356,8 +362,104 @@ absl::StatusOr<int> ApplyGreedySampling(::litert::TensorBuffer& decoded_logits,
   }
 }
 
+bool IsGreedySampling(const proto::SamplerParameters& sampler_params) {
+  switch (sampler_params.type()) {
+    case proto::SamplerParameters::TYPE_UNSPECIFIED:
+    case proto::SamplerParameters::GREEDY:
+      return true;
+    case proto::SamplerParameters::TOP_K:
+    case proto::SamplerParameters::TOP_P: {
+      const proto::SamplerParameters normalized =
+          NormalizeSamplerParams(sampler_params);
+      if (!ValidateTopPSamplingParams(normalized.type(), normalized.k(),
+                                      normalized.p(), normalized.temperature())
+               .ok()) {
+        return false;
+      }
+      return normalized.k() == 1 || normalized.temperature() == 0.0f;
+    }
+    default:
+      return false;
+  }
+}
 
+absl::StatusOr<int> ApplySampling(
+    ::litert::TensorBuffer& decoded_logits,
+    const proto::SamplerParameters& sampler_params,
+    std::shared_ptr<std::default_random_engine>& rng, float scale,
+    int32_t zero_point, bool use_neon_sampling) {
+  if (IsGreedySampling(sampler_params)) {
+    return ApplyGreedySampling(decoded_logits, use_neon_sampling);
+  }
 
+  const proto::SamplerParameters normalized =
+      NormalizeSamplerParams(sampler_params);
+  ABSL_RETURN_IF_ERROR(
+      ValidateTopPSamplingParams(normalized.type(), normalized.k(),
+                                 normalized.p(), normalized.temperature()));
+
+  LITERT_ASSIGN_OR_RETURN(::litert::RankedTensorType logits_type,
+                          decoded_logits.TensorType());
+  LITERT_ASSIGN_OR_RETURN(size_t num_elements,
+                          logits_type.Layout().NumElements());
+  if (num_elements == 0) {
+    return absl::InvalidArgumentError("Logits tensor cannot be empty.");
+  }
+
+  std::vector<float> dequantized_logits;
+  const auto elem_type = logits_type.ElementType();
+  if (elem_type == ::litert::ElementType::Float32) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto lock_and_addr,
+        ::litert::TensorBufferScopedLock::Create<float>(
+            decoded_logits, ::litert::TensorBuffer::LockMode::kRead));
+    dequantized_logits.assign(lock_and_addr.second,
+                              lock_and_addr.second + num_elements);
+  } else if (elem_type == ::litert::ElementType::Int16) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto lock_and_addr,
+        ::litert::TensorBufferScopedLock::Create<int16_t>(
+            decoded_logits, ::litert::TensorBuffer::LockMode::kRead));
+    dequantized_logits.resize(num_elements);
+    const int16_t* src_ptr = lock_and_addr.second;
+    for (size_t i = 0; i < num_elements; ++i) {
+      dequantized_logits[i] = scale * (static_cast<float>(src_ptr[i]) -
+                                       static_cast<float>(zero_point));
+    }
+  } else if (elem_type == ::litert::ElementType::Int8) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto lock_and_addr,
+        ::litert::TensorBufferScopedLock::Create<int8_t>(
+            decoded_logits, ::litert::TensorBuffer::LockMode::kRead));
+    dequantized_logits.resize(num_elements);
+    const int8_t* src_ptr = lock_and_addr.second;
+    for (size_t i = 0; i < num_elements; ++i) {
+      dequantized_logits[i] = scale * (static_cast<float>(src_ptr[i]) -
+                                       static_cast<float>(zero_point));
+    }
+  } else {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Unsupported tensor element type for sampling: ", elem_type));
+  }
+
+  if (rng == nullptr) {
+    rng = std::make_shared<std::default_random_engine>(normalized.seed());
+  }
+  float uniform = 0.0f;
+  DrawSamplingUniforms(normalized, *rng, absl::MakeSpan(&uniform, 1));
+
+  const int effective_k =
+      std::min(normalized.k(), static_cast<int>(num_elements));
+  std::vector<std::vector<float>> sampled_scores;
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<std::vector<int>> sampled_ids,
+      TopKTopPSampling(absl::MakeConstSpan(dequantized_logits), effective_k,
+                       normalized.p(), normalized.temperature(),
+                       absl::MakeConstSpan(&uniform, 1), /*batch_size=*/1,
+                       /*sequence_size=*/1, sampled_scores));
+  RET_CHECK(!sampled_ids.empty() && !sampled_ids[0].empty());
+  return sampled_ids[0][0];
+}
 
 absl::Status DequantizeLogits(const ::litert::TensorBuffer& src,
                               ::litert::TensorBuffer& dst, float scale,

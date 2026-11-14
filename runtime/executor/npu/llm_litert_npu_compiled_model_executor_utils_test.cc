@@ -59,6 +59,7 @@
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
 #include "runtime/executor/npu/llm_litert_npu_rope.h"
 #include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "tflite/schema/schema_generated.h"  // from @litert
 
@@ -237,6 +238,168 @@ TEST_F(ExecutorUtilsTest, ApplyGreedySamplingCrossVerify) {
                                 ApplyGreedySampling(buffer, use_neon));
     EXPECT_EQ(sample_idx, 1) << "use_neon=" << use_neon;
   }
+}
+
+TEST_F(ExecutorUtilsTest, IsGreedySamplingClassifiesSamplerParameters) {
+  proto::SamplerParameters unspecified;
+  EXPECT_TRUE(IsGreedySampling(unspecified));
+
+  proto::SamplerParameters greedy;
+  greedy.set_type(proto::SamplerParameters::GREEDY);
+  EXPECT_TRUE(IsGreedySampling(greedy));
+
+  proto::SamplerParameters top_k_one;
+  top_k_one.set_type(proto::SamplerParameters::TOP_K);
+  top_k_one.set_k(1);
+  top_k_one.set_temperature(1.0f);
+  EXPECT_TRUE(IsGreedySampling(top_k_one));
+
+  proto::SamplerParameters zero_temp;
+  zero_temp.set_type(proto::SamplerParameters::TOP_P);
+  zero_temp.set_k(10);
+  zero_temp.set_p(0.9f);
+  zero_temp.set_temperature(0.0f);
+  EXPECT_TRUE(IsGreedySampling(zero_temp));
+
+  proto::SamplerParameters stochastic;
+  stochastic.set_type(proto::SamplerParameters::TOP_P);
+  stochastic.set_k(4);
+  stochastic.set_p(0.95f);
+  stochastic.set_temperature(0.8f);
+  EXPECT_FALSE(IsGreedySampling(stochastic));
+
+  proto::SamplerParameters invalid_k;
+  invalid_k.set_type(proto::SamplerParameters::TOP_K);
+  invalid_k.set_k(0);
+  invalid_k.set_temperature(1.0f);
+  EXPECT_FALSE(IsGreedySampling(invalid_k));
+}
+
+TEST_F(ExecutorUtilsTest, ApplySamplingGreedyFastPathDoesNotAdvanceRng) {
+  std::vector<float> data = {0.1f, 2.5f, 0.4f, -1.0f};
+  TensorBuffer buffer = CreateTensorBuffer(data, ElementType::Float32);
+
+  proto::SamplerParameters greedy;
+  greedy.set_type(proto::SamplerParameters::GREEDY);
+  std::shared_ptr<std::default_random_engine> rng =
+      std::make_shared<std::default_random_engine>(123);
+  std::default_random_engine expected_rng(123);
+
+  ASSERT_OK_AND_ASSIGN(int token_id,
+                       ApplySampling(buffer, greedy, rng, /*scale=*/1.0f,
+                                     /*zero_point=*/0, /*use_neon=*/false));
+  EXPECT_EQ(token_id, 1);
+  // Greedy fast path leaves RNG untouched.
+  EXPECT_EQ((*rng)(), expected_rng());
+}
+
+TEST_F(ExecutorUtilsTest, ApplySamplingStochasticFloat32IsSeedReproducible) {
+  // Four balanced candidates; k = 40 > vocab_size = 4 also exercises k
+  // clamping.
+  std::vector<float> logits = {1.0f, 1.0f, 1.0f, 1.0f};
+  TensorBuffer buffer = CreateTensorBuffer(logits, ElementType::Float32);
+
+  proto::SamplerParameters params;
+  params.set_type(proto::SamplerParameters::TOP_K);
+  params.set_k(40);
+  params.set_temperature(1.0f);
+  params.set_seed(42);
+
+  auto draw_sequence = [&](uint32_t seed) {
+    proto::SamplerParameters seeded = params;
+    seeded.set_seed(seed);
+    std::shared_ptr<std::default_random_engine> rng;
+    std::vector<int> tokens;
+    for (int step = 0; step < 32; ++step) {
+      absl::StatusOr<int> id =
+          ApplySampling(buffer, seeded, rng, /*scale=*/1.0f, /*zero_point=*/0,
+                        /*use_neon=*/false);
+      ABSL_CHECK_OK(id);
+      tokens.push_back(*id);
+    }
+    return tokens;
+  };
+
+  std::vector<int> seq_seed_42_a = draw_sequence(42);
+  std::vector<int> seq_seed_42_b = draw_sequence(42);
+  std::vector<int> seq_seed_99 = draw_sequence(99);
+
+  EXPECT_EQ(seq_seed_42_a, seq_seed_42_b);
+  EXPECT_NE(seq_seed_42_a, seq_seed_99);
+  // Verify multiple distinct tokens were sampled (not collapsed to greedy).
+  std::vector<int> unique_tokens = seq_seed_42_a;
+  std::sort(unique_tokens.begin(), unique_tokens.end());
+  unique_tokens.erase(std::unique(unique_tokens.begin(), unique_tokens.end()),
+                      unique_tokens.end());
+  EXPECT_GT(unique_tokens.size(), 1);
+}
+
+TEST_F(ExecutorUtilsTest, ApplySamplingDequantizesInt16AndInt8Logits) {
+  // Dequantized values with scale = 0.5, zero_point = 10:
+  // idx 0: 0.5 * (10 - 10) = 0.0
+  // idx 1: 0.5 * (50 - 10) = 20.0 (dominant within top-2)
+  // idx 2: 0.5 * (48 - 10) = 19.0 (second candidate in top-2)
+  // idx 3: 0.5 * (-30 - 10) = -20.0 (excluded by k = 2)
+  proto::SamplerParameters params;
+  params.set_type(proto::SamplerParameters::TOP_P);
+  params.set_k(2);
+  params.set_p(1.0f);
+  params.set_temperature(1.0f);
+  params.set_seed(7);
+
+  std::vector<int16_t> int16_logits = {10, 50, 48, -30};
+  TensorBuffer int16_buf = CreateTensorBuffer(int16_logits, ElementType::Int16);
+  std::vector<int8_t> int8_logits = {10, 50, 48, -30};
+  TensorBuffer int8_buf = CreateTensorBuffer(int8_logits, ElementType::Int8);
+
+  std::shared_ptr<std::default_random_engine> rng16;
+  std::shared_ptr<std::default_random_engine> rng8;
+  bool saw_idx_1 = false;
+  bool saw_idx_2 = false;
+  for (int step = 0; step < 32; ++step) {
+    ASSERT_OK_AND_ASSIGN(int id16,
+                         ApplySampling(int16_buf, params, rng16, /*scale=*/0.5f,
+                                       /*zero_point=*/10, /*use_neon=*/false));
+    ASSERT_OK_AND_ASSIGN(int id8,
+                         ApplySampling(int8_buf, params, rng8, /*scale=*/0.5f,
+                                       /*zero_point=*/10, /*use_neon=*/false));
+    EXPECT_EQ(id16, id8);
+    EXPECT_TRUE(id16 == 1 || id16 == 2) << "Unexpected token " << id16;
+    saw_idx_1 |= (id16 == 1);
+    saw_idx_2 |= (id16 == 2);
+  }
+  EXPECT_TRUE(saw_idx_1);
+  EXPECT_TRUE(saw_idx_2);
+}
+
+TEST_F(ExecutorUtilsTest, ApplySamplingRejectsInvalidParamsAndUnsupportedType) {
+  std::vector<float> logits = {1.0f, 2.0f};
+  TensorBuffer float_buf = CreateTensorBuffer(logits, ElementType::Float32);
+  std::shared_ptr<std::default_random_engine> rng;
+
+  proto::SamplerParameters bad_k;
+  bad_k.set_type(proto::SamplerParameters::TOP_K);
+  bad_k.set_k(0);
+  bad_k.set_temperature(1.0f);
+  EXPECT_THAT(ApplySampling(float_buf, bad_k, rng, 1.0f, 0, false),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  proto::SamplerParameters bad_temp;
+  bad_temp.set_type(proto::SamplerParameters::TOP_P);
+  bad_temp.set_k(2);
+  bad_temp.set_p(0.9f);
+  bad_temp.set_temperature(-0.5f);
+  EXPECT_THAT(ApplySampling(float_buf, bad_temp, rng, 1.0f, 0, false),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  std::vector<int32_t> int32_logits = {1, 2};
+  TensorBuffer int32_buf = CreateTensorBuffer(int32_logits, ElementType::Int32);
+  proto::SamplerParameters valid_top_k;
+  valid_top_k.set_type(proto::SamplerParameters::TOP_K);
+  valid_top_k.set_k(2);
+  valid_top_k.set_temperature(1.0f);
+  EXPECT_THAT(ApplySampling(int32_buf, valid_top_k, rng, 1.0f, 0, false),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 #if defined(__x86_64__) || defined(_M_X64)
@@ -2074,6 +2237,83 @@ TEST_F(LlmLiteRtNpuCloneContextTest,
   for (int i = kNumElems; i < kNumElems * 2; ++i) {
     EXPECT_EQ(read_lock->second[i], kGuardCanary) << "Guard clobbered at " << i;
   }
+}
+
+TEST_F(LlmLiteRtNpuCloneContextTest,
+       ContextLifecyclePreservesAndResetsSamplerParamsAndRng) {
+  NpuContextGroup group;
+  group.context_size = 4;
+  std::vector<NpuContextGroup> groups;
+  groups.push_back(std::move(group));
+  std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor =
+      MakeExecutor(std::move(groups), {4}, /*current_step=*/0);
+
+  proto::SamplerParameters stochastic_params;
+  stochastic_params.set_type(proto::SamplerParameters::TOP_P);
+  stochastic_params.set_k(10);
+  stochastic_params.set_p(0.9f);
+  stochastic_params.set_temperature(0.8f);
+  stochastic_params.set_seed(42);
+
+  RuntimeConfig session_a_config;
+  session_a_config.sampler_params = stochastic_params;
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<LlmContext> session_a_ctx,
+      executor->CreateNewContext(/*lora_id=*/std::nullopt, session_a_config));
+  ASSERT_NE(session_a_ctx->runtime_state().rand_gen, nullptr);
+
+  // Restore stochastic session A and verify GetRuntimeConfig / GetRuntimeState.
+  ASSERT_OK(executor->RestoreContext(std::move(session_a_ctx)));
+  ASSERT_OK_AND_ASSIGN(RuntimeConfig active_cfg, executor->GetRuntimeConfig());
+  ASSERT_TRUE(active_cfg.sampler_params.has_value());
+  EXPECT_EQ(active_cfg.sampler_params->type(), proto::SamplerParameters::TOP_P);
+  EXPECT_EQ(active_cfg.sampler_params->k(), 10);
+  EXPECT_EQ(active_cfg.sampler_params->seed(), 42);
+  ASSERT_OK_AND_ASSIGN(RuntimeState state_before, executor->GetRuntimeState());
+  ASSERT_NE(state_before.rand_gen, nullptr);
+
+  // Create and restore default greedy session B (sampler_params = nullopt).
+  // Stale stochastic sampler_params from session A must NOT leak into B.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<LlmContext> session_b_ctx,
+      executor->CreateNewContext(/*lora_id=*/std::nullopt, RuntimeConfig{}));
+  ASSERT_OK(executor->RestoreContext(std::move(session_b_ctx)));
+  ASSERT_OK_AND_ASSIGN(RuntimeConfig b_cfg, executor->GetRuntimeConfig());
+  EXPECT_FALSE(b_cfg.sampler_params.has_value());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmContext> b_clone,
+                       executor->CloneContext());
+  EXPECT_FALSE(b_clone->runtime_config().sampler_params.has_value());
+
+  // UpdateRuntimeState (used when ResourceManager switches between clones)
+  // updates step and RNG independently.
+  RuntimeState clone_state;
+  clone_state.current_step = 2;
+  clone_state.rand_gen = std::make_shared<std::default_random_engine>(99);
+  ASSERT_OK(executor->UpdateRuntimeState(clone_state));
+  ASSERT_OK_AND_ASSIGN(int step, executor->GetCurrentStep());
+  EXPECT_EQ(step, 2);
+  ASSERT_OK_AND_ASSIGN(RuntimeState updated_state, executor->GetRuntimeState());
+  ASSERT_NE(updated_state.rand_gen, nullptr);
+  // Mutating the returned copy's RNG must not mutate the executor's RNG.
+  std::default_random_engine expected_rng(99);
+  (void)(*updated_state.rand_gen)();
+  ASSERT_OK_AND_ASSIGN(RuntimeState fresh_state, executor->GetRuntimeState());
+  EXPECT_EQ((*fresh_state.rand_gen)(), expected_rng());
+
+  // UpdateRuntimeConfig reseeds RNG when seed changes, and resets to greedy
+  // when sampler_params is cleared.
+  stochastic_params.set_seed(77);
+  RuntimeConfig updated_cfg;
+  updated_cfg.sampler_params = stochastic_params;
+  ASSERT_OK(executor->UpdateRuntimeConfig(updated_cfg));
+  ASSERT_OK_AND_ASSIGN(RuntimeState reseeded_state,
+                       executor->GetRuntimeState());
+  std::default_random_engine expected_seed_77(77);
+  EXPECT_EQ((*reseeded_state.rand_gen)(), expected_seed_77());
+
+  ASSERT_OK(executor->UpdateRuntimeConfig(RuntimeConfig{}));
+  ASSERT_OK_AND_ASSIGN(RuntimeConfig cleared_cfg, executor->GetRuntimeConfig());
+  EXPECT_FALSE(cleared_cfg.sampler_params.has_value());
 }
 
 }  // namespace
