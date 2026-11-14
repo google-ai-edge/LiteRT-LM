@@ -34,3 +34,14 @@ model family.
         `<turn|>`.
     -   Hugging Face: Uses a condition based on the presence of `tool_responses`
         and `content`.
+
+4.  **Tool Response Start (`<|tool_response>`)**:
+
+    -   `chat_template.jinja` / `chat_template_e2b_e4b.jinja`: Ends a model
+        message with tool calls with `<|tool_response>`, and the first tool
+        response that follows omits it. Decoding stops on `<|tool_response>` and
+        keeps it in the KV cache, so rendering it with the tool response would
+        prefill it twice. A full conversation renders the same text as Hugging
+        Face.
+    -   Hugging Face: Renders `<|tool_response>` at the start of every tool
+        response.

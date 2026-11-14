@@ -811,17 +811,16 @@ TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithToolCalls) {
   ASSERT_OK_AND_ASSIGN(const std::string rendered_prompt,
                        prompt_template.Apply(template_input));
 
-  // Compare to the expected prompt.
-  //
-  // Note: The template currently terminates this turn with "<turn|>" instead of
-  // "<|tool_response>".
+  // Compare to the expected prompt. The turn ends with the "<|tool_response>"
+  // stop token, which decoding keeps in the KV cache.
   EXPECT_EQ(
       rendered_prompt,
       "<|turn>user\n"
       "How is the weather in Paris and London?<turn|>\n"
       "<|turn>model\n"
       "<|tool_call>call:get_weather{location:<|\"|>Paris<|\"|>}<tool_call|>"
-      "<|tool_call>call:get_weather{location:<|\"|>London<|\"|>}<tool_call|>");
+      "<|tool_call>call:get_weather{location:<|\"|>London<|\"|>}<tool_call|>"
+      "<|tool_response>");
 }
 
 TEST_P(Gemma4RenderTemplateTest, RenderTemplateWithToolResponses) {

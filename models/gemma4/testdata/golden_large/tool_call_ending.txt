@@ -3,4 +3,4 @@
 <|turn>user
 What is the weather in London and Paris?<turn|>
 <|turn>model
-<|tool_call>call:get_weather{location:<|"|>London<|"|>}<tool_call|><|tool_call>call:get_weather{location:<|"|>Paris<|"|>}<tool_call|>
+<|tool_call>call:get_weather{location:<|"|>London<|"|>}<tool_call|><|tool_call>call:get_weather{location:<|"|>Paris<|"|>}<tool_call|><|tool_response>

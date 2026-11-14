@@ -5821,10 +5821,12 @@ TEST(AppendMessageTest, Gemma4SyncPrefillPrefaceOnInitAndAlternateRoles) {
       Message{{"role", "model"}, {"content", " The message is ended."}},
       {.has_pending_message = true}));
 
-  // Append the 5th message.
+  // Append the 5th message. When appending, the template cannot see the
+  // previous message, so it assumes that a new tool message follows a model
+  // message with tool calls, which already ends with `<|tool_response>`.
   absl::string_view expected_prefill_5 =
       "<turn|>\n"
-      "<|tool_response>response:tool_name{"
+      "response:tool_name{"
       "location:<|\"|>Paris<|\"|>,"
       "temperature:20,"
       "unit:<|\"|>C<|\"|>,"
