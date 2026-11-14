@@ -415,5 +415,58 @@ TEST(DataUtilsTest, FormatToolsArray_CallbackErrorPropagated) {
   EXPECT_THAT(status.message(), testing::HasSubstr("Tool format error"));
 }
 
+TEST(DataUtilsTest, EscapeAndUnescapeMultimodalDelimiters_RoundTripsText) {
+  constexpr absl::string_view kRegex =
+      R"regex((<start_of_image>|<\|image\|>|<start_of_audio>|<\|audio\|>))regex";
+  ordered_json messages = ordered_json::array({
+      {{"role", "user"},
+       {"content",
+        ordered_json::array({
+            {{"type", "text"},
+             {"text",
+              "Literal <start_of_audio>, <|image|>, and "
+              "<<__litert_mm_esc__:4142>> plus <<__LITERT_MM_ESC__:4344>>"}},
+            {{"type", "image"}, {"path", "/tmp/img.png"}},
+            {{"type", "text"}, {"text", "split <start_of_"}},
+            {{"type", "text"}, {"text", "audio> across parts"}},
+        })}},
+  });
+
+  EXPECT_TRUE(NeedsMultimodalDelimiterEscaping(messages, kRegex));
+  EscapeMultimodalDelimitersInJson(messages, kRegex);
+
+  // Real media item must remain untouched.
+  EXPECT_EQ(messages[0]["content"][1]["type"], "image");
+  EXPECT_EQ(messages[0]["content"][1]["path"], "/tmp/img.png");
+
+  const std::string escaped0 =
+      messages[0]["content"][0]["text"].get<std::string>();
+  EXPECT_THAT(escaped0, testing::Not(testing::HasSubstr("<start_of_audio>")));
+  EXPECT_THAT(escaped0, testing::Not(testing::HasSubstr("<|image|>")));
+  EXPECT_EQ(UnescapeMultimodalDelimiters(escaped0),
+            "Literal <start_of_audio>, <|image|>, and "
+            "<<__litert_mm_esc__:4142>> plus <<__LITERT_MM_ESC__:4344>>");
+
+  const std::string joined_split =
+      messages[0]["content"][2]["text"].get<std::string>() +
+      messages[0]["content"][3]["text"].get<std::string>();
+  EXPECT_THAT(joined_split,
+              testing::Not(testing::HasSubstr("<start_of_audio>")));
+  EXPECT_EQ(UnescapeMultimodalDelimiters(joined_split),
+            "split <start_of_audio> across parts");
+
+  // Simulate Jinja `| upper` on an escaped string.
+  ordered_json schema_val = "<start_of_audio>";
+  EscapeMultimodalDelimitersInJson(schema_val, kRegex,
+                                   /*skip_media_items=*/false);
+  std::string upper_escaped = schema_val.get<std::string>();
+  for (char& c : upper_escaped) {
+    if (c >= 'a' && c <= 'z') {
+      c = static_cast<char>(c - 'a' + 'A');
+    }
+  }
+  EXPECT_EQ(UnescapeMultimodalDelimiters(upper_escaped), "<START_OF_AUDIO>");
+}
+
 }  // namespace
 }  // namespace litert::lm

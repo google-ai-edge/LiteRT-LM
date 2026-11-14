@@ -229,14 +229,17 @@ absl::StatusOr<ordered_json> Gemma3DataProcessor::MessageToTemplateInput(
   return template_input;
 }
 
+absl::string_view Gemma3DataProcessor::MultimodalDelimiterRegex() const {
+  return "(<start_of_image>|<image_soft_token>|<start_of_audio>|<audio_soft_"
+         "token>)";
+}
+
 absl::StatusOr<std::vector<InputData>>
 Gemma3DataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt, const ordered_json& messages,
     const Gemma3DataProcessorArguments& args) const {
   MultimodalPromptProcessingConfig multi_config{
-      .delimiter_regex =
-          "(<start_of_image>|<image_soft_token>|<start_of_audio>|<audio_soft_"
-          "token>)",
+      .delimiter_regex = std::string(MultimodalDelimiterRegex()),
       .image_token_regex = "(<start_of_image>|<image_soft_token>)",
       .audio_token_regex = "(<start_of_audio>|<audio_soft_token>)",
       .boi_token = config_.boi_token,

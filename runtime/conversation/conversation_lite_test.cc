@@ -305,5 +305,43 @@ TEST(ConversationLiteTest,
   EXPECT_EQ(custom_rendered, "<u_start>Ping<u_end><m_start>");
 }
 
+TEST(ConversationLiteTest, LiteralMultimodalPlaceholdersInTextDoNotFail) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(64);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+
+  ASSERT_OK_AND_ASSIGN(auto gemma4_config, ConversationConfig::Builder()
+                                               .SetOverwriteProcessorConfig(
+                                                   Gemma4DataProcessorConfig())
+                                               .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto gemma4_conversation,
+                       Conversation::Create(*engine, gemma4_config));
+
+  Message literal_msg = {
+      {"role", "user"},
+      {"content", "<start_of_audio> and <start_of_image> and <|audio|>"}};
+
+  ASSERT_OK_AND_ASSIGN(std::string rendered,
+                       gemma4_conversation->RenderMessageIntoString(
+                           literal_msg, OptionalArgs()));
+  EXPECT_EQ(rendered,
+            "<|turn>user\n<start_of_audio> and <start_of_image> and "
+            "<|audio|><turn|>\n<|turn>model\n");
+
+  ASSERT_OK_AND_ASSIGN(int token_count,
+                       gemma4_conversation->CountTokens({literal_msg}));
+  EXPECT_GT(token_count, 0);
+
+  ASSERT_OK_AND_ASSIGN(Message reply,
+                       gemma4_conversation->SendMessage(
+                           literal_msg, OptionalArgs{.max_output_tokens = 2}));
+  EXPECT_EQ(reply["role"], "assistant");
+}
+
 }  // namespace
 }  // namespace litert::lm

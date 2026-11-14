@@ -6238,5 +6238,218 @@ TEST(ConversationAsyncLifecycleTest,
   EXPECT_TRUE(conv2_done.WaitForNotificationWithTimeout(absl::Seconds(5)));
 }
 
+TEST(ConversationMultimodalEscapingTest,
+     Gemma4LiteralMediaPlaceholdersAndRealImageDoNotCollide) {
+  auto mock_session = std::make_unique<MockSession>();
+  MockSession* mock_session_ptr = mock_session.get();
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.SetStartTokenId(0);
+  session_config.GetMutableStopTokenIds().push_back({1});
+  *session_config.GetMutableLlmModelType().mutable_gemma4() = {};
+  session_config.SetApplyPromptTemplateInSession(false);
+  EXPECT_CALL(*mock_session_ptr, GetSessionConfig())
+      .WillRepeatedly(testing::ReturnRef(session_config));
+  EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+      .WillRepeatedly(Return(absl::OkStatus()));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto tokenizer,
+      SentencePieceTokenizer::CreateFromFile(
+          (std::filesystem::path(::testing::SrcDir()) / kTestTokenizerPath)
+              .string()));
+
+  auto mock_engine = std::make_unique<MockEngine>();
+  EXPECT_CALL(*mock_engine, CreateSession(testing::_))
+      .WillOnce(Return(std::move(mock_session)));
+  EXPECT_CALL(*mock_engine, GetTokenizer())
+      .WillRepeatedly(testing::ReturnRef(*tokenizer));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  EXPECT_CALL(*mock_engine, GetEngineSettings())
+      .WillRepeatedly(testing::ReturnRef(engine_settings));
+
+  const std::string template_text =
+      ReadFile(GetTestdataPath(kGemma4TemplatePath));
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config)
+          .SetOverwritePromptTemplate(PromptTemplate(template_text))
+          .SetOverwriteProcessorConfig(Gemma4DataProcessorConfig())
+          .SetFilterChannelContentFromKvCache(false)
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  // 1. CountTokens on literal `<start_of_audio>`, `<start_of_image>`,
+  // `<|audio|>`, and `<|image|>` with no media attachments must succeed.
+  Message text_only_msg = {
+      {"role", "user"},
+      {"content", "<start_of_audio> <start_of_image> <|audio|> <|image|>"},
+  };
+  ASSERT_OK_AND_ASSIGN(int token_count,
+                       conversation->CountTokens({text_only_msg}));
+  EXPECT_GT(token_count, 0);
+
+  // 2. SendMessage with literal placeholder strings preserves the exact text in
+  // the session prefill without failing ProcessMultimodalPrompt.
+  std::vector<std::string> prefilled_texts;
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .WillRepeatedly(
+          [&prefilled_texts](
+              const std::vector<InputData>& contents,
+              absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+            std::string combined;
+            for (const auto& item : contents) {
+              if (std::holds_alternative<InputText>(item)) {
+                auto raw = std::get<InputText>(item).GetRawTextString();
+                if (raw.ok()) {
+                  combined += std::string(*raw);
+                }
+              } else if (std::holds_alternative<InputImage>(item)) {
+                combined += "[IMAGE]";
+              } else if (std::holds_alternative<InputImageEnd>(item)) {
+                combined += "[IMAGE_END]";
+              }
+            }
+            prefilled_texts.push_back(std::move(combined));
+            callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .WillRepeatedly(
+          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+             const DecodeConfig&) {
+            callback(Responses(TaskState::kProcessing, {"ok"}));
+            callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+
+  ASSERT_OK_AND_ASSIGN(Message reply1,
+                       conversation->SendMessage(text_only_msg));
+  EXPECT_EQ(reply1["role"], "assistant");
+  ASSERT_EQ(prefilled_texts.size(), 1);
+  EXPECT_THAT(
+      prefilled_texts[0],
+      HasSubstr("<start_of_audio> <start_of_image> <|audio|> <|image|>"));
+
+  // 3. Mixed turn: literal `<start_of_image>` and `<start_of_audio>` text PLUS
+  // one real image attachment must splice ONLY the real image while keeping the
+  // literal strings as InputText.
+  Message mixed_msg = {
+      {"role", "user"},
+      {"content",
+       nlohmann::ordered_json::array({
+           {{"type", "text"},
+            {"text", "Explain <start_of_image> and <start_of_audio>: "}},
+           {{"type", "image"}, {"path", GetTestdataPath(kTestImageFilePath)}},
+           {{"type", "text"}, {"text", " and <|image|>"}},
+       })},
+  };
+  ASSERT_OK_AND_ASSIGN(Message reply2, conversation->SendMessage(mixed_msg));
+  EXPECT_EQ(reply2["role"], "assistant");
+  ASSERT_EQ(prefilled_texts.size(), 2);
+  EXPECT_THAT(prefilled_texts[1],
+              HasSubstr("Explain <start_of_image> and <start_of_audio>:"));
+  EXPECT_THAT(prefilled_texts[1], HasSubstr("[IMAGE][IMAGE_END]"));
+  EXPECT_THAT(prefilled_texts[1], HasSubstr("and <|image|>"));
+}
+
+TEST(ConversationMultimodalEscapingTest,
+     FullHistoryMultiTurnPreservesPrefixWithLiteralPlaceholders) {
+  auto mock_session = std::make_unique<MockSession>();
+  MockSession* mock_session_ptr = mock_session.get();
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.SetStartTokenId(0);
+  session_config.GetMutableStopTokenIds().push_back({1});
+  *session_config.GetMutableLlmModelType().mutable_gemma3n() = {};
+  session_config.SetApplyPromptTemplateInSession(false);
+  EXPECT_CALL(*mock_session_ptr, GetSessionConfig())
+      .WillRepeatedly(testing::ReturnRef(session_config));
+  EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+      .WillRepeatedly(Return(absl::OkStatus()));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto tokenizer,
+      SentencePieceTokenizer::CreateFromFile(
+          (std::filesystem::path(::testing::SrcDir()) / kTestTokenizerPath)
+              .string()));
+
+  auto mock_engine = std::make_unique<MockEngine>();
+  EXPECT_CALL(*mock_engine, CreateSession(testing::_))
+      .WillOnce(Return(std::move(mock_session)));
+  EXPECT_CALL(*mock_engine, GetTokenizer())
+      .WillRepeatedly(testing::ReturnRef(*tokenizer));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  EXPECT_CALL(*mock_engine, GetEngineSettings())
+      .WillRepeatedly(testing::ReturnRef(engine_settings));
+
+  const std::string template_text =
+      ReadFile(GetTestdataPath(kGemma3TemplatePath));
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config)
+          .SetOverwritePromptTemplate(PromptTemplate(template_text))
+          .SetFilterChannelContentFromKvCache(false)
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  std::vector<std::string> prefilled_texts;
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .WillRepeatedly(
+          [&prefilled_texts](
+              const std::vector<InputData>& contents,
+              absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
+            std::string combined;
+            for (const auto& item : contents) {
+              if (std::holds_alternative<InputText>(item)) {
+                auto raw = std::get<InputText>(item).GetRawTextString();
+                if (raw.ok()) {
+                  combined += std::string(*raw);
+                }
+              }
+            }
+            prefilled_texts.push_back(std::move(combined));
+            callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .WillRepeatedly(
+          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+             const DecodeConfig&) {
+            callback(
+                Responses(TaskState::kProcessing, {"Echo <audio_soft_token>"}));
+            callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+
+  // Turn 1 has literal `<start_of_audio>` and `<image_soft_token>`, and the
+  // assistant response also contains `<audio_soft_token>`.
+  ASSERT_OK(conversation->SendMessage(
+      {{"role", "user"},
+       {"content", "Turn 1 <start_of_audio> <image_soft_token>"}}));
+
+  // Turn 2 exercises `old_tmpl_input` vs `new_tmpl_input` prefix subtraction in
+  // `GetSingleTurnTextFromFullHistory` and `GetPrefillTextForMessages`.
+  Message turn2 = {{"role", "user"},
+                   {"content", "Turn 2 <start_of_image> <audio_soft_token>"}};
+  ASSERT_OK_AND_ASSIGN(int turn2_tokens, conversation->CountTokens({turn2}));
+  EXPECT_GT(turn2_tokens, 0);
+
+  ASSERT_OK(conversation->SendMessage(turn2));
+  ASSERT_EQ(prefilled_texts.size(), 2);
+  EXPECT_THAT(prefilled_texts[0],
+              HasSubstr("Turn 1 <start_of_audio> <image_soft_token>"));
+  EXPECT_THAT(prefilled_texts[1],
+              HasSubstr("Turn 2 <start_of_image> <audio_soft_token>"));
+}
+
 }  // namespace
 }  // namespace litert::lm

@@ -214,14 +214,17 @@ Gemma4DataProcessor::Create(Gemma4DataProcessorConfig config,
       std::move(channel_start_token), std::move(channel_end_token)));
 }
 
+absl::string_view Gemma4DataProcessor::MultimodalDelimiterRegex() const {
+  return R"regex((<start_of_image>|<\|image\|>|<start_of_audio>|<\|audio\|>))regex";
+}
+
 absl::StatusOr<std::vector<InputData>>
 Gemma4DataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt,
     const nlohmann::ordered_json& messages,
     const Gemma4DataProcessorArguments& args) const {
   MultimodalPromptProcessingConfig multi_config{
-      .delimiter_regex =
-          R"regex((<start_of_image>|<\|image\|>|<start_of_audio>|<\|audio\|>))regex",
+      .delimiter_regex = std::string(MultimodalDelimiterRegex()),
       .image_token_regex = R"regex((<start_of_image>|<\|image\|>))regex",
       .audio_token_regex = R"regex((<start_of_audio>|<\|audio\|>))regex",
       .boi_token = config_.boi_token,

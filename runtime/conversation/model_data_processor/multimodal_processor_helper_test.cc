@@ -25,9 +25,11 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/test_utils.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/test_utils.h"  // NOLINT
@@ -620,6 +622,46 @@ TEST_F(MultimodalProcessorHelperTest, DryRunAudioFallsBackToFullPreprocessing) {
       audio_preprocessor_->Preprocess(InputAudio(ReadFile(audio_path))));
   EXPECT_THAT(dry_run,
               ElementsAre(HasInputAudio(&expected_audio), HasInputAudioEnd()));
+}
+
+TEST_F(MultimodalProcessorHelperTest,
+       EscapedDelimitersInTextDoNotTriggerMediaPlaceholders) {
+  std::string image_path = GetImageTestdataPath("apple.bmp");
+  json messages = json::array(
+      {{{"role", "user"},
+        {"content",
+         {{{"type", "text"},
+           {"text", "What do <audio> and <img> mean in this picture? "}},
+          {{"type", "image"}, {"path", image_path}},
+          {{"type", "text"}, {"text", " End with <audio>."}}}}}});
+
+  json escaped_messages = messages;
+  EscapeMultimodalDelimitersInJson(escaped_messages, "(<img>|<audio>)");
+  const std::string prompt = absl::StrCat(
+      escaped_messages[0]["content"][0]["text"].get<std::string>(), "<img>",
+      escaped_messages[0]["content"][2]["text"].get<std::string>());
+
+  MultimodalPromptProcessingConfig config = {
+      .delimiter_regex = "(<img>|<audio>)",
+      .image_token_regex = "<img>",
+      .audio_token_regex = "<audio>",
+      .boi_token = "<boi>",
+      .add_image_end = true,
+  };
+  ImagePreprocessParameter image_params;
+  image_params.SetTargetDimensions(Dimensions({1, 224, 224, 3}));
+
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<InputData> result,
+      ProcessMultimodalPrompt(prompt, messages, image_preprocessor_.get(),
+                              audio_preprocessor_.get(), config, image_params));
+
+  InputText expected_prefix(
+      "What do <audio> and <img> mean in this picture? <boi>");
+  InputText expected_suffix(" End with <audio>.");
+  EXPECT_THAT(result,
+              ElementsAre(HasInputText(&expected_prefix), testing::_,
+                          HasInputImageEnd(), HasInputText(&expected_suffix)));
 }
 
 }  // namespace

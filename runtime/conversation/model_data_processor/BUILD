@@ -71,6 +71,7 @@ cc_library(
         "//runtime/conversation:io_types",
         "//runtime/util:litert_status_util",
         "//runtime/util:memory_mapped_file",
+        "@com_googlesource_code_re2//:re2",
     ],
 )
 
@@ -134,11 +135,13 @@ cc_test(
         "//support/preprocessor/testdata",
     ],
     deps = [
+        ":data_utils",
         ":multimodal_processor_helper",
         ":processor_test_utils",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/strings",
         "@nlohmann_json//:json",
         "@litert//litert/cc:litert_layout",
         "@litert//litert/cc:litert_tensor_buffer",
@@ -430,6 +433,7 @@ cc_library(
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
         "@litert//litert/cc:litert_layout",
         "//runtime/conversation:io_types",

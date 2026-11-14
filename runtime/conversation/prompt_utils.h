@@ -16,10 +16,12 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_PROMPT_UTILS_H_
 
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/io_types.h"
@@ -72,6 +74,18 @@ absl::StatusOr<SingleTurnTemplateRenderResult> RenderSingleTurnTemplate(
 // Strips blobs from PromptTemplateInput to avoid copying/formatting large data
 // during template rendering. The input is modified in-place.
 void StripBlobsFromTemplateInput(PromptTemplateInput& input);
+
+// Returns true if `input` contains any non-media string (or adjacent text item
+// boundary) that must be escaped for `delimiter_regex` before template
+// rendering.
+bool NeedsMultimodalDelimiterEscapingInTemplateInput(
+    const PromptTemplateInput& input, absl::string_view delimiter_regex);
+
+// Escapes occurrences of `delimiter_regex` in non-media strings of `input`
+// in-place so literal placeholder text is not mistaken for media slots by
+// multimodal data processors.
+void EscapeMultimodalDelimitersInTemplateInput(
+    PromptTemplateInput& input, absl::string_view delimiter_regex);
 
 }  // namespace litert::lm
 

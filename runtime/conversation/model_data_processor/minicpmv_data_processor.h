@@ -54,6 +54,8 @@ class MiniCpmVDataProcessor
     return config_;
   }
 
+  absl::string_view MultimodalDelimiterRegex() const override;
+
  private:
   MiniCpmVDataProcessor(MiniCpmVDataProcessorConfig config,
                         std::unique_ptr<ImagePreprocessor> image_preprocessor)

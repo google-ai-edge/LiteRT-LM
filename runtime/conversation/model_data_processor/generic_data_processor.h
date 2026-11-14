@@ -69,6 +69,13 @@ class GenericDataProcessor
                : absl::string_view();
   }
 
+  absl::string_view MultimodalDelimiterRegex() const override {
+    return config_.multimodal.has_value()
+               ? absl::string_view(
+                     config_.multimodal->processing_config.delimiter_regex)
+               : absl::string_view();
+  }
+
  private:
   explicit GenericDataProcessor(
       GenericDataProcessorConfig config, std::optional<Preface> preface,
