@@ -250,6 +250,12 @@ std::ostream& operator<<(std::ostream& os, const LlmExecutorSettings& config) {
     os << "litert_dispatch_lib_dir: " << config.GetLitertDispatchLibDir()
        << "\n";
   }
+  if (config.GetLitertCompilerLibDir().empty()) {
+    os << "litert_compiler_lib_dir: Not set\n";
+  } else {
+    os << "litert_compiler_lib_dir: " << config.GetLitertCompilerLibDir()
+       << "\n";
+  }
   os << "model_assets: " << config.GetModelAssets() << "\n";
   if (config.GetAdvancedSettings().has_value()) {
     os << "advanced_settings: " << *config.GetAdvancedSettings() << "\n";

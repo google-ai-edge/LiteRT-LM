@@ -156,19 +156,24 @@ void PopulateNpuOptions(
       } else {
         ABSL_VLOG(1) << "Setting dispatch library path: " << library_dir;
       }
-
-      env_options.push_back(::litert::EnvironmentOptions::Option{
-          ::litert::EnvironmentOptions::Tag::kCompilerPluginLibraryDir,
-          library_dir.c_str()});
-      if (from_settings) {
-        ABSL_VLOG(1) << "Setting compiler plugin library path from "
-                        "main_executor_settings: "
-                     << library_dir;
-      } else {
-        ABSL_VLOG(1) << "Setting compiler plugin library path: " << library_dir;
-      }
     } else {
       ABSL_VLOG(1) << "No valid library path provided.";
+    }
+
+    // LiteRT JIT-compiles any model without NPU bytecode once a compiler
+    // plugin directory is set, so only set it when it is requested explicitly.
+    const std::string& compiler_library_dir =
+        main_executor_settings.GetLitertCompilerLibDir();
+    if (!compiler_library_dir.empty()) {
+      env_options.push_back(::litert::EnvironmentOptions::Option{
+          ::litert::EnvironmentOptions::Tag::kCompilerPluginLibraryDir,
+          compiler_library_dir.c_str()});
+      ABSL_VLOG(1) << "Setting compiler plugin library path: "
+                   << compiler_library_dir;
+    } else {
+      ABSL_LOG(INFO) << "No compiler library dir set. Models that are not "
+                        "compiled ahead of time are not JIT-compiled for the "
+                        "NPU and run on the CPU.";
     }
   }
 #endif

@@ -242,6 +242,7 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--share_constant_tensors=<true|false>] "
            "[--num_iterations=<num_iterations>] "
            "[--litert_dispatch_lib_dir=<litert_dispatch_lib_dir>] "
+           "[--litert_compiler_lib_dir=<litert_compiler_lib_dir>] "
            "[--sampler_handles_input=<true|false>] "
            "[--disable_cache=<true|false>] "
            "[--disable_weight_cache=<true|false>] "
@@ -345,6 +346,8 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.num_iterations = absl::GetFlag(FLAGS_num_iterations);
   settings.litert_dispatch_lib_dir =
       absl::GetFlag(FLAGS_litert_dispatch_lib_dir);
+  settings.litert_compiler_lib_dir =
+      absl::GetFlag(FLAGS_litert_compiler_lib_dir);
   settings.sampler_handles_input = absl::GetFlag(FLAGS_sampler_handles_input);
   settings.conv_type =
       absl::GetFlag(FLAGS_conv_type) == "float"  ? litert::lm::ConvType::kFloat

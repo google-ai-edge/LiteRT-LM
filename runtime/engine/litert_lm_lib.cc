@@ -920,6 +920,10 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
     engine_settings.GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
         settings.litert_dispatch_lib_dir);
   }
+  if (!settings.litert_compiler_lib_dir.empty()) {
+    engine_settings.GetMutableMainExecutorSettings().SetLitertCompilerLibDir(
+        settings.litert_compiler_lib_dir);
+  }
   if (!settings.selected_signatures.empty()) {
     engine_settings.GetMutableMainExecutorSettings().SetSelectedSignatures(
         settings.selected_signatures);

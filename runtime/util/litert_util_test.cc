@@ -262,15 +262,12 @@ TEST(LiteRtUtilTest, CreatetEnvironment_CPUGPUFirst_ExcludesNPUOptions) {
 #if !defined(LITERT_DISABLE_NPU)
   ASSERT_TRUE(npu_dispatch_lib_status.HasValue())
       << "kDispatchLibraryDir was not initialized when NPU was used second.";
-  ASSERT_TRUE(npu_compiler_plugin_lib_status.HasValue())
-      << "kCompilerPluginLibraryDir was not initialized when NPU was used "
-         "second.";
+  ASSERT_FALSE(npu_compiler_plugin_lib_status.HasValue())
+      << "kCompilerPluginLibraryDir must only be set from the compiler "
+         "library dir.";
 
   auto npu_dispatch_lib_dir = std::get<const char*>(*npu_dispatch_lib_status);
   EXPECT_EQ(std::string(npu_dispatch_lib_dir), expected_path);
-  auto npu_compiler_plugin_lib_dir =
-      std::get<const char*>(*npu_compiler_plugin_lib_status);
-  EXPECT_EQ(std::string(npu_compiler_plugin_lib_dir), expected_path);
 #else
   ASSERT_FALSE(npu_dispatch_lib_status.HasValue());
   ASSERT_FALSE(npu_compiler_plugin_lib_status.HasValue());
@@ -312,16 +309,78 @@ TEST(LiteRtUtilTest, GetEnvironment_NPUFirst_IncludesNPUOptions) {
 
   auto compiler_plugin_lib_status =
       options.GetOption(EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
-  ASSERT_TRUE(compiler_plugin_lib_status.HasValue())
-      << "kCompilerPluginLibraryDir was not initialized when NPU was used "
-         "first.";
-
-  auto compiler_plugin_lib_dir =
-      std::get<const char*>(*compiler_plugin_lib_status);
-  EXPECT_EQ(std::string(compiler_plugin_lib_dir), expected_path);
+  ASSERT_FALSE(compiler_plugin_lib_status.HasValue())
+      << "kCompilerPluginLibraryDir must only be set from the compiler "
+         "library dir.";
 #else
   ASSERT_FALSE(dispatch_lib_status.HasValue());
 #endif
+}
+
+TEST(LiteRtUtilTest,
+     CreateEnvironment_NpuWithCompilerLibDir_SetsCompilerPlugin) {
+  std::string task_path =
+      (std::filesystem::path(::testing::SrcDir()) /
+       "google3/runtime/testdata/"
+       "test_lm_new_metadata.task")
+          .string();
+  auto model_assets = ModelAssets::Create(task_path);
+  ASSERT_OK(model_assets);
+
+  auto npu_settings =
+      EngineSettings::CreateDefault(*model_assets, Backend::NPU);
+  ASSERT_OK(npu_settings);
+  npu_settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
+      "/custom/dispatch/dir");
+  npu_settings->GetMutableMainExecutorSettings().SetLitertCompilerLibDir(
+      "/custom/compiler/dir");
+
+  auto env_status = CreateEnvironment(*npu_settings, nullptr);
+  ASSERT_OK(env_status);
+
+  auto options_status = env_status->env.GetOptions();
+  ASSERT_TRUE(options_status.HasValue());
+  auto dispatch_lib_status =
+      options_status->GetOption(EnvironmentOptions::Tag::kDispatchLibraryDir);
+  auto compiler_plugin_lib_status = options_status->GetOption(
+      EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
+#if !defined(LITERT_DISABLE_NPU)
+  ASSERT_TRUE(dispatch_lib_status.HasValue());
+  EXPECT_EQ(std::string(std::get<const char*>(*dispatch_lib_status)),
+            "/custom/dispatch/dir");
+  ASSERT_TRUE(compiler_plugin_lib_status.HasValue());
+  EXPECT_EQ(std::string(std::get<const char*>(*compiler_plugin_lib_status)),
+            "/custom/compiler/dir");
+#else
+  ASSERT_FALSE(dispatch_lib_status.HasValue());
+  ASSERT_FALSE(compiler_plugin_lib_status.HasValue());
+#endif
+}
+
+TEST(LiteRtUtilTest, CreateEnvironment_CpuWithCompilerLibDir_IgnoresIt) {
+  std::string task_path =
+      (std::filesystem::path(::testing::SrcDir()) /
+       "google3/runtime/testdata/"
+       "test_lm_new_metadata.task")
+          .string();
+  auto model_assets = ModelAssets::Create(task_path);
+  ASSERT_OK(model_assets);
+
+  auto cpu_settings =
+      EngineSettings::CreateDefault(*model_assets, Backend::CPU);
+  ASSERT_OK(cpu_settings);
+  cpu_settings->GetMutableMainExecutorSettings().SetLitertCompilerLibDir(
+      "/custom/compiler/dir");
+
+  FakeModelResources fake_resources;
+  auto env_status = CreateEnvironment(*cpu_settings, &fake_resources);
+  ASSERT_OK(env_status);
+
+  auto options_status = env_status->env.GetOptions();
+  ASSERT_TRUE(options_status.HasValue());
+  auto compiler_plugin_lib_status = options_status->GetOption(
+      EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
+  EXPECT_FALSE(compiler_plugin_lib_status.HasValue());
 }
 
 TEST(LiteRtUtilTest,
@@ -441,10 +500,9 @@ TEST(LiteRtUtilTest,
 
   auto compiler_plugin_lib =
       options.GetOption(EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
-  ASSERT_TRUE(compiler_plugin_lib.HasValue());
-
-  auto compiler_plugin_lib_dir = std::get<const char*>(*compiler_plugin_lib);
-  EXPECT_EQ(std::string(compiler_plugin_lib_dir), expected_path);
+  ASSERT_FALSE(compiler_plugin_lib.HasValue())
+      << "kCompilerPluginLibraryDir must only be set from the compiler "
+         "library dir.";
 #else
   ASSERT_FALSE(dispatch_lib.HasValue());
 #endif
@@ -501,13 +559,10 @@ TEST(LiteRtUtilTest,
       npu_options.GetOption(EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
 #if !defined(LITERT_DISABLE_NPU)
   ASSERT_TRUE(npu_dispatch_lib.HasValue());
-  ASSERT_TRUE(npu_compiler_plugin_lib.HasValue());
+  ASSERT_FALSE(npu_compiler_plugin_lib.HasValue());
 
   auto npu_dispatch_lib_dir = std::get<const char*>(*npu_dispatch_lib);
   EXPECT_EQ(std::string(npu_dispatch_lib_dir), expected_path);
-  auto npu_compiler_plugin_lib_dir =
-      std::get<const char*>(*npu_compiler_plugin_lib);
-  EXPECT_EQ(std::string(npu_compiler_plugin_lib_dir), expected_path);
 #else
   ASSERT_FALSE(npu_dispatch_lib.HasValue());
   ASSERT_FALSE(npu_compiler_plugin_lib.HasValue());

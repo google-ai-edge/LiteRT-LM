@@ -163,6 +163,10 @@ ABSL_FLAG(std::string, litert_dispatch_lib_dir, "",
           "Directory of the LiteRT dispatch library. If not set, the runtime "
           "will look for the library in the path defined as the environment "
           "variables.");
+ABSL_FLAG(std::string, litert_compiler_lib_dir, "",
+          "Directory of the LiteRT compiler plugin library. If set, models "
+          "that are not compiled ahead of time are JIT-compiled for the NPU. "
+          "If not set, they run on the CPU.");
 ABSL_FLAG(bool, sampler_handles_input, true,
           "If true and the sampler supports, the sampler manipulates decode "
           "input tensors including tokens, positions, and mask.");

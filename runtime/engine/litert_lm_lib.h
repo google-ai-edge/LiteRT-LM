@@ -146,6 +146,7 @@ struct LiteRtLmSettings {
   bool use_session = false;
   int num_iterations = 1;
   std::string litert_dispatch_lib_dir = "";
+  std::string litert_compiler_lib_dir = "";
   bool sampler_handles_input = true;
   ConvType conv_type = ConvType::kAuto;
   bool cache_compiled_shaders_only = false;
