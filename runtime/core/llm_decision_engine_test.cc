@@ -21,7 +21,6 @@
 #include <initializer_list>
 #include <limits>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -325,8 +324,7 @@ class ScriptedScoringFakeEngine : public Engine {
     }
 
     absl::StatusOr<std::unique_ptr<SessionInterface>> Clone() override {
-      auto clone =
-          std::make_unique<FakeSession>(parent_, session_id_, config_);
+      auto clone = std::make_unique<FakeSession>(parent_, session_id_, config_);
       clone->tokens_ = tokens_;
       clone->is_clone_ = true;
       ++parent_.clones_created_;
@@ -354,10 +352,9 @@ class ScriptedScoringFakeEngine : public Engine {
       }
       const std::vector<float>& logits =
           parent_.prompt_logits_[parent_.prompt_index_];
-      ABSL_ASSIGN_OR_RETURN(
-          std::vector<int> ids,
-          const_cast<support::Tokenizer&>(*parent_.tokenizer_)
-              .TextToTokenIds(target_text[0]));
+      ABSL_ASSIGN_OR_RETURN(std::vector<int> ids,
+                            const_cast<support::Tokenizer&>(*parent_.tokenizer_)
+                                .TextToTokenIds(target_text[0]));
       if (ids.size() != 1 || ids[0] < 0 ||
           static_cast<size_t>(ids[0]) >= logits.size()) {
         return absl::InvalidArgumentError("Expected one in-vocab token.");
@@ -420,32 +417,74 @@ std::vector<InputData> MakeTextContents(
   return contents;
 }
 
+// Returns the probabilities of `answer` in option order: `[P(false), P(true)]`
+// for noul, and the choice or level probabilities otherwise.
+std::vector<float> Probabilities(const DecisionAnswer& answer) {
+  if (const auto* noul = std::get_if<NoulAnswer>(&answer.type)) {
+    return {1.0f - noul->noul, noul->noul};
+  }
+  if (const auto* choice = std::get_if<ChoiceAnswer>(&answer.type)) {
+    std::vector<float> probs;
+    for (const ChoiceAnswer::Probability& p : choice->probabilities) {
+      probs.push_back(p.probability);
+    }
+    return probs;
+  }
+  return std::get<ScoreAnswer>(answer.type).probabilities;
+}
+
+// Returns the answer: "true" / "false" for noul, the option ID for choice,
+// and the most likely level for score.
+std::string Selected(const DecisionAnswer& answer) {
+  if (const auto* noul = std::get_if<NoulAnswer>(&answer.type)) {
+    return noul->value ? "true" : "false";
+  }
+  if (const auto* choice = std::get_if<ChoiceAnswer>(&answer.type)) {
+    return choice->choice;
+  }
+  return absl::StrCat(std::get<ScoreAnswer>(answer.type).most_likely_level);
+}
+
+// Returns `noul` for noul answers and `score` for score answers.
+float ExpectedValue(const DecisionAnswer& answer) {
+  if (const auto* noul = std::get_if<NoulAnswer>(&answer.type)) {
+    return noul->noul;
+  }
+  return std::get<ScoreAnswer>(answer.type).score;
+}
+
 void ExpectValidResponse(absl::Span<const DecisionQuestion> questions,
                          const DecisionResponse& response) {
-  ASSERT_EQ(response.results.size(), questions.size());
+  ASSERT_EQ(response.answers.size(), questions.size());
   for (size_t i = 0; i < questions.size(); ++i) {
     const DecisionQuestion& q = questions[i];
-    const DecisionResult& r = response.results[i];
-    EXPECT_EQ(r.id, q.id);
-    ASSERT_GE(r.probabilities.size(), 2u);
+    const DecisionAnswer& a = response.answers[i];
+    EXPECT_EQ(a.id, q.id);
+    // The answer type matches the question type.
+    EXPECT_EQ(a.type.index(), q.type.index());
+    const std::vector<float> probs = Probabilities(a);
+    ASSERT_GE(probs.size(), 2u);
     float sum = 0.0f;
-    bool found_selected = false;
-    for (const DecisionOptionProbability& p : r.probabilities) {
-      EXPECT_GE(p.probability, 0.0f);
-      EXPECT_LE(p.probability, 1.0f);
-      sum += p.probability;
-      if (p.key == r.selected_key) {
-        found_selected = true;
-      }
+    for (float p : probs) {
+      EXPECT_GE(p, 0.0f);
+      EXPECT_LE(p, 1.0f);
+      sum += p;
     }
     EXPECT_NEAR(sum, 1.0f, 1e-3f);
-    EXPECT_TRUE(found_selected);
-    EXPECT_GE(r.confidence, 0.0f);
-    EXPECT_LE(r.confidence, 1.0f);
-    if (q.type == DecisionQuestionType::kChoice) {
-      EXPECT_FALSE(r.expected_score.has_value());
+    // `confidence` is the probability of the answer.
+    EXPECT_FLOAT_EQ(a.confidence,
+                    *std::max_element(probs.begin(), probs.end()));
+    if (const auto* choice = std::get_if<ChoiceAnswer>(&a.type)) {
+      const auto& criteria = std::get<ChoiceQuestion>(q.type).criteria;
+      ASSERT_EQ(choice->probabilities.size(), criteria.size());
+      for (size_t k = 0; k < criteria.size(); ++k) {
+        EXPECT_EQ(choice->probabilities[k].id, criteria[k].id);
+      }
+    } else if (const auto* score = std::get_if<ScoreAnswer>(&a.type)) {
+      EXPECT_FLOAT_EQ(probs[score->most_likely_level], a.confidence);
     } else {
-      EXPECT_TRUE(r.expected_score.has_value());
+      const NoulAnswer& noul = std::get<NoulAnswer>(a.type);
+      EXPECT_EQ(noul.value, noul.noul >= 0.5f);
     }
   }
 }
@@ -470,51 +509,74 @@ TEST(LlmDecisionEngineTest, RejectsInvalidQuestions) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmDecisionEngine> engine,
                        LlmDecisionEngine::Create(*fake_engine));
   auto decide = [&](std::vector<DecisionQuestion> questions) {
-    return engine->Decide({.contents = MakeTextContents({"Hello"}),
+    return engine->Decide({.input = MakeTextContents({"Hello"}),
                            .questions = std::move(questions)});
   };
 
   EXPECT_THAT(decide({}), StatusIs(absl::StatusCode::kInvalidArgument));
-  EXPECT_THAT(decide({{.id = "", .type = DecisionQuestionType::kBoolean}}),
+  EXPECT_THAT(decide({{.id = "", .instructions = "Yes?"}}),
               StatusIs(absl::StatusCode::kInvalidArgument));
-  EXPECT_THAT(decide({{.id = "q1",
-                       .type = DecisionQuestionType::kChoice,
-                       .prompt = "Pick one",
-                       .options = {{.key = "only_one"}}}}),
+  EXPECT_THAT(decide({{.id = "has space", .instructions = "Yes?"}}),
               StatusIs(absl::StatusCode::kInvalidArgument));
-  // `kScore` questions must list at least 2 levels; there is no default scale.
-  EXPECT_THAT(decide({{.id = "s0",
-                       .type = DecisionQuestionType::kScore,
-                       .prompt = "Rate it"}}),
+  EXPECT_THAT(decide({{.id = "bang!", .instructions = "Yes?"}}),
               StatusIs(absl::StatusCode::kInvalidArgument));
-  EXPECT_THAT(decide({{.id = "s1",
-                       .type = DecisionQuestionType::kScore,
-                       .prompt = "Rate it",
-                       .options = {{.key = "1"}}}}),
+  EXPECT_THAT(decide({{.id = std::string(65, 'a'), .instructions = "Yes?"}}),
               StatusIs(absl::StatusCode::kInvalidArgument));
-  // `kBoolean` questions take 0 or exactly 2 options.
+  EXPECT_THAT(decide({{.id = "q0", .instructions = " "}}),
+              StatusIs(absl::StatusCode::kInvalidArgument));
   EXPECT_THAT(
-      decide({{.id = "b3",
-               .type = DecisionQuestionType::kBoolean,
-               .prompt = "Yes?",
-               .options = {{.key = "no"}, {.key = "maybe"}, {.key = "yes"}}}}),
+      decide({{.id = "q1",
+               .instructions = "Pick one",
+               .type = ChoiceQuestion{.criteria = {{.id = "only_one"}}}}}),
       StatusIs(absl::StatusCode::kInvalidArgument));
+  // `kScore` questions must list at least 2 levels; there is no default scale.
+  EXPECT_THAT(
+      decide(
+          {{.id = "s0", .instructions = "Rate it", .type = ScoreQuestion{}}}),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(decide({{.id = "s1",
+                       .instructions = "Rate it",
+                       .type = ScoreQuestion{.criteria = {"1"}}}}),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  // Option IDs must be unique, non-empty and without edge whitespace; level
+  // descriptions must be non-empty.
+  EXPECT_THAT(
+      decide(
+          {{.id = "c",
+            .instructions = "Pick one",
+            .type = ChoiceQuestion{.criteria = {{.id = "a"}, {.id = "a"}}}}}),
+      StatusIs(absl::StatusCode::kInvalidArgument, HasSubstr("duplicate")));
+  EXPECT_THAT(
+      decide(
+          {{.id = "c",
+            .instructions = "Pick one",
+            .type = ChoiceQuestion{.criteria = {{.id = "a"}, {.id = " b"}}}}}),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(decide({{.id = "s",
+                       .instructions = "Rate it",
+                       .type = ScoreQuestion{.criteria = {"low", ""}}}}),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  // The request temperature must be finite and positive.
+  EXPECT_THAT(engine->Decide({.input = MakeTextContents({"Hello"}),
+                              .questions = {{.id = "q", .instructions = "Q?"}},
+                              .temperature = 0.0f}),
+              StatusIs(absl::StatusCode::kInvalidArgument));
   EXPECT_THAT(
       decide({
-          {.id = "dup", .type = DecisionQuestionType::kBoolean, .prompt = "Q1"},
-          {.id = "dup", .type = DecisionQuestionType::kBoolean, .prompt = "Q2"},
+          {.id = "dup", .instructions = "Q1", .type = NoulQuestion{}},
+          {.id = "dup", .instructions = "Q2", .type = NoulQuestion{}},
       }),
       StatusIs(absl::StatusCode::kInvalidArgument, HasSubstr("Duplicate")));
 
-  std::vector<DecisionOption> too_many(27);
+  std::vector<ChoiceQuestion::Criterion> too_many(27);
   for (int i = 0; i < 27; ++i) {
-    too_many[i].key = absl::StrCat("opt_", i);
+    too_many[i].id = absl::StrCat("opt_", i);
   }
-  EXPECT_THAT(decide({{.id = "big",
-                       .type = DecisionQuestionType::kChoice,
-                       .prompt = "Pick one",
-                       .options = std::move(too_many)}}),
-              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(
+      decide({{.id = "big",
+               .instructions = "Pick one",
+               .type = ChoiceQuestion{.criteria = std::move(too_many)}}}),
+      StatusIs(absl::StatusCode::kUnimplemented));
   // Nothing was prefilled for invalid requests.
   EXPECT_EQ(fake_engine->sessions_created(), 0);
 }
@@ -527,7 +589,7 @@ TEST(LlmDecisionEngineTest,
   // scored.
   // Question 0 (kBoolean): " A" ("false") = 1.0, " B" ("true") = 3.0.
   // Question 1 (kChoice, 3 options): " B" is the most likely label.
-  // Question 2 (kScore, keys 0 / 5 / 10): concentrated on " C" ("10").
+  // Question 2 (kScore, levels 0 / 5 / 10): concentrated on " C" (level 2).
   auto fake_engine = std::make_shared<ScriptedScoringFakeEngine>(
       MakeLetterMockTokenizer(),
       std::vector<std::vector<float>>{
@@ -544,21 +606,21 @@ TEST(LlmDecisionEngineTest,
 
   const std::vector<DecisionQuestion> questions = {
       {.id = "refund",
-       .type = DecisionQuestionType::kBoolean,
-       .prompt = "Does the customer request a refund?"},
+       .instructions = "Does the customer request a refund?",
+       .type = NoulQuestion{}},
       {.id = "dept",
-       .type = DecisionQuestionType::kChoice,
-       .prompt = "Which department owns this ticket?",
-       .options = {{.key = "sales"}, {.key = "billing"}, {.key = "shipping"}}},
+       .instructions = "Which department owns this ticket?",
+       .type = ChoiceQuestion{.criteria = {{.id = "sales"},
+                                           {.id = "billing"},
+                                           {.id = "shipping"}}}},
       {.id = "urgency",
-       .type = DecisionQuestionType::kScore,
-       .prompt = "Rate urgency from 0 to 10.",
-       .options = {{.key = "0"}, {.key = "5"}, {.key = "10"}}},
+       .instructions = "Rate urgency from 0 to 10.",
+       .type = ScoreQuestion{.criteria = {"0", "5", "10"}}},
   };
 
   ASSERT_OK_AND_ASSIGN(
       DecisionResponse response,
-      engine->Decide({.contents = MakeTextContents(
+      engine->Decide({.input = MakeTextContents(
                           {"Customer message: I was charged twice for my order "
                            "and need an immediate refund."}),
                       .questions = questions}));
@@ -567,25 +629,25 @@ TEST(LlmDecisionEngineTest,
   constexpr double kGemma4Temperature = 3.5;
   const float expected_p_true =
       static_cast<float>(1.0 / (1.0 + std::exp(-2.0 / kGemma4Temperature)));
-  EXPECT_EQ(response.results[0].selected_key, "true");
-  EXPECT_THAT(*response.results[0].expected_score,
+  EXPECT_EQ(Selected(response.answers[0]), "true");
+  EXPECT_THAT(ExpectedValue(response.answers[0]),
               FloatNear(expected_p_true, kTolerance));
 
   // With the "Answer:" prefix only " B" (41) is scored, not "B" (11).
-  EXPECT_EQ(response.results[1].selected_key, "billing");
+  EXPECT_EQ(Selected(response.answers[1]), "billing");
   const double b_mass = std::exp(2.0 / kGemma4Temperature);
   const float expected_billing_p =
       static_cast<float>(b_mass / (1.0 + b_mass + 1.0));
-  EXPECT_THAT(response.results[1].probabilities[1].probability,
+  EXPECT_THAT(Probabilities(response.answers[1])[1],
               FloatNear(expected_billing_p, kTolerance));
 
-  // `expected_score` is the mean level index in [0, 2]; the keys are only
-  // identifiers.
-  EXPECT_EQ(response.results[2].selected_key, "10");
+  // `score` is the mean level index in [0, 2]; level descriptions are not
+  // parsed as numbers.
+  EXPECT_EQ(Selected(response.answers[2]), "2");
   const double c_mass = std::exp(13.0 / kGemma4Temperature);
   const float expected_level =
       static_cast<float>((1.0 + 2.0 * c_mass) / (2.0 + c_mass));
-  EXPECT_THAT(*response.results[2].expected_score,
+  EXPECT_THAT(ExpectedValue(response.answers[2]),
               FloatNear(expected_level, kTolerance));
 
   // Shared prefix: 1 session created, 1 shared-prefix prefill from step 0 and
@@ -606,8 +668,8 @@ TEST(LlmDecisionEngineTest,
   EXPECT_EQ(fake_engine->clones_created(), 2 + 3 + 3);
 }
 
-TEST(LlmDecisionEngineTest, BooleanWithCustomOptionsAndVerbalScoreLevels) {
-  // Question 0 (kBoolean, options [no, yes]): " A" = 0.0, " B" = 2.0.
+TEST(LlmDecisionEngineTest, NoulWithDescriptionsAndVerbalScoreLevels) {
+  // Question 0 (noul with descriptions): " A" (false) = 0.0, " B" (true) = 2.0.
   // Question 1 (kScore, verbal levels poor / fair / good): concentrated on
   // " C" ("good").
   auto fake_engine = std::make_shared<ScriptedScoringFakeEngine>(
@@ -622,32 +684,31 @@ TEST(LlmDecisionEngineTest, BooleanWithCustomOptionsAndVerbalScoreLevels) {
 
   const std::vector<DecisionQuestion> questions = {
       {.id = "refund",
-       .type = DecisionQuestionType::kBoolean,
-       .prompt = "Does the customer request a refund?",
-       .options = {{.key = "no"}, {.key = "yes"}}},
+       .instructions = "Does the customer request a refund?",
+       .type = NoulQuestion{.true_description = "Asks for a refund",
+                            .false_description = "Does not ask for one"}},
       {.id = "quality",
-       .type = DecisionQuestionType::kScore,
-       .prompt = "How good is the reply?",
-       .options = {{.key = "poor"}, {.key = "fair"}, {.key = "good"}}},
+       .instructions = "How good is the reply?",
+       .type = ScoreQuestion{.criteria = {"poor", "fair", "good"}}},
   };
   ASSERT_OK_AND_ASSIGN(
       DecisionResponse response,
-      engine->Decide({.contents = MakeTextContents({"I want my money back."}),
+      engine->Decide({.input = MakeTextContents({"I want my money back."}),
                       .questions = questions}));
   ExpectValidResponse(questions, response);
 
-  // `expected_score` of a boolean question is the probability of the second
-  // (positive) option.
+  // `noul` is P(true); the descriptions are shown to the model as the options.
   const float expected_p_yes = static_cast<float>(1.0 / (1.0 + std::exp(-2.0)));
-  EXPECT_EQ(response.results[0].selected_key, "yes");
-  EXPECT_THAT(*response.results[0].expected_score,
+  EXPECT_EQ(Selected(response.answers[0]), "true");
+  EXPECT_THAT(ExpectedValue(response.answers[0]),
               FloatNear(expected_p_yes, kTolerance));
 
   // Verbal levels are weighted by their 0-based index, so the expected score
   // is in [0, 2] and close to 2 ("good").
-  EXPECT_EQ(response.results[1].selected_key, "good");
-  EXPECT_GT(*response.results[1].expected_score, 1.99f);
-  EXPECT_LE(*response.results[1].expected_score, 2.0f);
+  const ScoreAnswer& quality = std::get<ScoreAnswer>(response.answers[1].type);
+  EXPECT_EQ(quality.most_likely_level, 2);
+  EXPECT_GT(quality.score, 1.99f);
+  EXPECT_LE(quality.score, 2.0f);
 }
 
 // Two boolean questions whose first label is clearly preferred: "true" for
@@ -659,8 +720,8 @@ std::vector<std::vector<float>> TwoBooleanQuestionLogits() {
 
 const std::vector<DecisionQuestion>& TwoBooleanQuestions() {
   static const auto* const kQuestions = new std::vector<DecisionQuestion>{
-      {.id = "q1", .type = DecisionQuestionType::kBoolean, .prompt = "First?"},
-      {.id = "q2", .type = DecisionQuestionType::kBoolean, .prompt = "Second?"},
+      {.id = "q1", .instructions = "First?", .type = NoulQuestion{}},
+      {.id = "q2", .instructions = "Second?", .type = NoulQuestion{}},
   };
   return *kQuestions;
 }
@@ -672,11 +733,11 @@ TEST(LlmDecisionEngineTest, ModelsWithoutStepRewindUseFreshSessionPerBranch) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmDecisionEngine> engine,
                        LlmDecisionEngine::Create(*fake_engine));
   ASSERT_OK_AND_ASSIGN(DecisionResponse response,
-                       engine->Decide({.contents = MakeTextContents({"Hello"}),
+                       engine->Decide({.input = MakeTextContents({"Hello"}),
                                        .questions = TwoBooleanQuestions()}));
   ExpectValidResponse(TwoBooleanQuestions(), response);
-  EXPECT_EQ(response.results[0].selected_key, "true");
-  EXPECT_EQ(response.results[1].selected_key, "false");
+  EXPECT_EQ(Selected(response.answers[0]), "true");
+  EXPECT_EQ(Selected(response.answers[1]), "false");
   EXPECT_EQ(fake_engine->sessions_created(), 2);
   ASSERT_THAT(fake_engine->prefill_records(), SizeIs(2));
   EXPECT_EQ(fake_engine->prefill_records()[0].start_step, 0);
@@ -696,26 +757,26 @@ TEST(LlmDecisionEngineTest, RawStringJinjaTemplateAndErrorPaths) {
                        LlmDecisionEngine::Create(*fake_engine));
 
   const std::vector<DecisionQuestion> questions = {
-      {.id = "q", .type = DecisionQuestionType::kBoolean, .prompt = "Urgent?"}};
+      {.id = "q", .instructions = "Urgent?", .type = NoulQuestion{}}};
   ASSERT_OK_AND_ASSIGN(DecisionResponse response,
-                       engine->Decide({.contents = MakeTextContents({"Urgent"}),
+                       engine->Decide({.input = MakeTextContents({"Urgent"}),
                                        .questions = questions}));
-  EXPECT_EQ(response.results[0].selected_key, "true");
+  EXPECT_EQ(Selected(response.answers[0]), "true");
 
   // Multimodal input returns UnimplementedError.
   std::vector<InputData> image_contents;
   image_contents.push_back(InputImage("raw_bytes"));
-  EXPECT_THAT(engine->Decide({.contents = std::move(image_contents),
-                              .questions = questions}),
+  EXPECT_THAT(engine->Decide(
+                  {.input = std::move(image_contents), .questions = questions}),
               StatusIs(absl::StatusCode::kUnimplemented));
 
   // A prefill that ends cancelled or failed is reported, not scored.
   fake_engine->SetPrefillTaskState(TaskState::kCancelled);
-  EXPECT_THAT(engine->Decide({.contents = MakeTextContents({"Urgent"}),
+  EXPECT_THAT(engine->Decide({.input = MakeTextContents({"Urgent"}),
                               .questions = questions}),
               StatusIs(absl::StatusCode::kCancelled));
   fake_engine->SetPrefillTaskState(TaskState::kFailed);
-  EXPECT_THAT(engine->Decide({.contents = MakeTextContents({"Urgent"}),
+  EXPECT_THAT(engine->Decide({.input = MakeTextContents({"Urgent"}),
                               .questions = questions}),
               StatusIs(absl::StatusCode::kInternal));
   fake_engine->SetPrefillTaskState(TaskState::kDone);
@@ -723,7 +784,7 @@ TEST(LlmDecisionEngineTest, RawStringJinjaTemplateAndErrorPaths) {
   // State-entry capacity error maps to ResourceExhaustedError.
   fake_engine->SetPrefillError(
       absl::FailedPreconditionError("Insufficient KV cache state entries."));
-  EXPECT_THAT(engine->Decide({.contents = MakeTextContents({"Urgent"}),
+  EXPECT_THAT(engine->Decide({.input = MakeTextContents({"Urgent"}),
                               .questions = questions}),
               StatusIs(absl::StatusCode::kResourceExhausted,
                        HasSubstr("does not fit in the context")));
@@ -738,9 +799,9 @@ TEST(LlmDecisionEngineTest, VocabularyRangeAndUnmappedLetterErrors) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmDecisionEngine> engine1,
                        LlmDecisionEngine::Create(*small_vocab_engine));
   const std::vector<DecisionQuestion> q = {
-      {.id = "q", .type = DecisionQuestionType::kBoolean, .prompt = "Yes?"}};
+      {.id = "q", .instructions = "Yes?", .type = NoulQuestion{}}};
   EXPECT_THAT(
-      engine1->Decide({.contents = MakeTextContents({"Hi"}), .questions = q}),
+      engine1->Decide({.input = MakeTextContents({"Hi"}), .questions = q}),
       StatusIs(absl::StatusCode::kOutOfRange));
 
   // Multi-token split for 'B' returns FailedPreconditionError.
@@ -762,7 +823,7 @@ TEST(LlmDecisionEngineTest, VocabularyRangeAndUnmappedLetterErrors) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmDecisionEngine> engine2,
                        LlmDecisionEngine::Create(*unmapped_engine));
   EXPECT_THAT(
-      engine2->Decide({.contents = MakeTextContents({"Hi"}), .questions = q}),
+      engine2->Decide({.input = MakeTextContents({"Hi"}), .questions = q}),
       StatusIs(absl::StatusCode::kFailedPrecondition,
                HasSubstr("Choice label 'B'")));
 }
@@ -775,17 +836,14 @@ TEST(LlmDecisionEngineTest, RealModelCreateFromSettingsAndSharedEngine) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmDecisionEngine> standalone_decision,
                        LlmDecisionEngine::Create(settings));
   const std::vector<DecisionQuestion> questions = {
-      {.id = "urgent",
-       .type = DecisionQuestionType::kBoolean,
-       .prompt = "Urgent?"},
+      {.id = "urgent", .instructions = "Urgent?", .type = NoulQuestion{}},
       {.id = "route",
-       .type = DecisionQuestionType::kChoice,
-       .prompt = "Route?",
-       .options = {{.key = "a"}, {.key = "b"}}},
+       .instructions = "Route?",
+       .type = ChoiceQuestion{.criteria = {{.id = "a"}, {.id = "b"}}}},
   };
   ASSERT_OK_AND_ASSIGN(DecisionResponse standalone_resp,
                        standalone_decision->Decide(
-                           {.contents = MakeTextContents({"Order delayed."}),
+                           {.input = MakeTextContents({"Order delayed."}),
                             .questions = questions}));
   ExpectValidResponse(questions, standalone_resp);
 
@@ -805,16 +863,18 @@ TEST(LlmDecisionEngineTest, RealModelCreateFromSettingsAndSharedEngine) {
 
   ASSERT_OK_AND_ASSIGN(
       DecisionResponse shared_resp,
-      shared_decision->Decide({.contents = MakeTextContents({"Order delayed."}),
+      shared_decision->Decide({.input = MakeTextContents({"Order delayed."}),
                                .questions = questions}));
   ExpectValidResponse(questions, shared_resp);
   for (size_t i = 0; i < questions.size(); ++i) {
-    EXPECT_EQ(shared_resp.results[i].selected_key,
-              standalone_resp.results[i].selected_key);
-    for (size_t j = 0; j < shared_resp.results[i].probabilities.size(); ++j) {
-      EXPECT_NEAR(shared_resp.results[i].probabilities[j].probability,
-                  standalone_resp.results[i].probabilities[j].probability,
-                  1e-5f);
+    EXPECT_EQ(Selected(shared_resp.answers[i]),
+              Selected(standalone_resp.answers[i]));
+    const std::vector<float> shared_probs =
+        Probabilities(shared_resp.answers[i]);
+    const std::vector<float> standalone_probs =
+        Probabilities(standalone_resp.answers[i]);
+    for (size_t j = 0; j < shared_probs.size(); ++j) {
+      EXPECT_NEAR(shared_probs[j], standalone_probs[j], 1e-5f);
     }
   }
 
@@ -836,11 +896,11 @@ TEST(LlmDecisionEngineTest, SuffixPrefillCapacityErrorFallsBackToFreshSession) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmDecisionEngine> engine,
                        LlmDecisionEngine::Create(*fake_engine));
   ASSERT_OK_AND_ASSIGN(DecisionResponse response,
-                       engine->Decide({.contents = MakeTextContents({"Hello"}),
+                       engine->Decide({.input = MakeTextContents({"Hello"}),
                                        .questions = TwoBooleanQuestions()}));
   ExpectValidResponse(TwoBooleanQuestions(), response);
-  EXPECT_EQ(response.results[0].selected_key, "true");
-  EXPECT_EQ(response.results[1].selected_key, "false");
+  EXPECT_EQ(Selected(response.answers[0]), "true");
+  EXPECT_EQ(Selected(response.answers[1]), "false");
   // The shared-prefix session plus one fresh session per question.
   EXPECT_EQ(fake_engine->sessions_created(), 3);
 }
@@ -856,11 +916,11 @@ TEST(LlmDecisionEngineTest, RewindErrorFallsBackToFreshSession) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmDecisionEngine> engine,
                        LlmDecisionEngine::Create(*fake_engine));
   ASSERT_OK_AND_ASSIGN(DecisionResponse response,
-                       engine->Decide({.contents = MakeTextContents({"Hello"}),
+                       engine->Decide({.input = MakeTextContents({"Hello"}),
                                        .questions = TwoBooleanQuestions()}));
   ExpectValidResponse(TwoBooleanQuestions(), response);
-  EXPECT_EQ(response.results[0].selected_key, "true");
-  EXPECT_EQ(response.results[1].selected_key, "false");
+  EXPECT_EQ(Selected(response.answers[0]), "true");
+  EXPECT_EQ(Selected(response.answers[1]), "false");
   // The first question reuses the prefix session; the second needs a rewind,
   // which fails, so it uses a fresh session.
   EXPECT_EQ(fake_engine->sessions_created(), 2);
@@ -877,12 +937,11 @@ TEST(LlmDecisionEngineTest, PromptLongerThanContextIsInvalidArgument) {
   for (int i = 0; i < 200; ++i) {
     absl::StrAppend(&long_text, "word", i, " ");
   }
-  EXPECT_THAT(
-      engine->Decide({.contents = MakeTextContents({long_text}),
-                      .questions = {{.id = "q",
-                                     .type = DecisionQuestionType::kBoolean,
-                                     .prompt = "Urgent?"}}}),
-      StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(engine->Decide({.input = MakeTextContents({long_text}),
+                              .questions = {{.id = "q",
+                                             .instructions = "Urgent?",
+                                             .type = NoulQuestion{}}}}),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(LlmDecisionEngineTest, StripsLeadingBosStringEmittedByJinjaTemplate) {
@@ -894,15 +953,57 @@ TEST(LlmDecisionEngineTest, StripsLeadingBosStringEmittedByJinjaTemplate) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmDecisionEngine> engine,
                        LlmDecisionEngine::Create(*fake_engine));
   ASSERT_OK(engine->Decide(
-      {.contents = MakeTextContents({"Hello"}),
-       .questions = {{.id = "q",
-                      .type = DecisionQuestionType::kBoolean,
-                      .prompt = "Urgent?"}}}));
+      {.input = MakeTextContents({"Hello"}),
+       .questions = {
+           {.id = "q", .instructions = "Urgent?", .type = NoulQuestion{}}}}));
   ASSERT_THAT(fake_engine->prefill_records(), SizeIs(1));
   const std::vector<int>& tokens = fake_engine->prefill_records()[0].tokens;
   ASSERT_GE(tokens.size(), 2u);
   EXPECT_EQ(tokens[0], 2);
   EXPECT_NE(tokens[1], 2);
+}
+
+TEST(LlmDecisionEngineTest, AcceptsQuestionIdsWithUnderscoreAndHyphen) {
+  auto fake_engine = std::make_shared<ScriptedScoringFakeEngine>(
+      MakeLetterMockTokenizer(),
+      std::vector<std::vector<float>>{
+          MakeLogitsVector(100, {{40, 0.0f}, {41, 1.0f}})});
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmDecisionEngine> engine,
+                       LlmDecisionEngine::Create(*fake_engine));
+  const std::string id(64, 'a');
+  const std::vector<DecisionQuestion> questions = {
+      {.id = "Ab_9-" + id.substr(5), .instructions = "Urgent?"}};
+  ASSERT_OK_AND_ASSIGN(DecisionResponse response,
+                       engine->Decide({.input = MakeTextContents({"Hello"}),
+                                       .questions = questions}));
+  ExpectValidResponse(questions, response);
+}
+
+TEST(LlmDecisionEngineTest, RequestTemperatureOverridesModelTemperature) {
+  // A Gemma 4 model (calibrated temperature 3.5); the request asks for 1.0.
+  // " A" (false) = 1.0, " B" (true) = 0.0.
+  auto fake_engine = std::make_shared<ScriptedScoringFakeEngine>(
+      MakeLetterMockTokenizer(),
+      std::vector<std::vector<float>>{
+          MakeLogitsVector(100, {{40, 1.0f}, {41, 0.0f}})},
+      MakeFakeEngineSettings(kSimpleChatTemplate, /*start_token_id=*/2,
+                             /*gemma4=*/true));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmDecisionEngine> engine,
+                       LlmDecisionEngine::Create(*fake_engine));
+  const std::vector<DecisionQuestion> questions = {
+      {.id = "q", .instructions = "Urgent?", .type = NoulQuestion{}}};
+  ASSERT_OK_AND_ASSIGN(DecisionResponse response,
+                       engine->Decide({.input = MakeTextContents({"Hello"}),
+                                       .questions = questions,
+                                       .temperature = 1.0f}));
+  ExpectValidResponse(questions, response);
+  const NoulAnswer& noul = std::get<NoulAnswer>(response.answers[0].type);
+  const float expected_p_false =
+      static_cast<float>(1.0 / (1.0 + std::exp(-1.0)));
+  EXPECT_FALSE(noul.value);
+  EXPECT_THAT(noul.noul, FloatNear(1.0f - expected_p_false, kTolerance));
+  EXPECT_THAT(response.answers[0].confidence,
+              FloatNear(expected_p_false, kTolerance));
 }
 
 }  // namespace

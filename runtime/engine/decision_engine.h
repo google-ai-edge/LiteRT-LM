@@ -17,6 +17,7 @@
 
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -24,145 +25,162 @@
 
 namespace litert::lm {
 
-// Canonical type of a decision question.
-enum class DecisionQuestionType {
-  // Binary yes/no judgment (calibrated probability of "true"/"yes" in
-  // [0.0, 1.0]).
-  kBoolean,
-  // Categorical selection among K >= 2 unordered options.
-  kChoice,
-  // Ordinal rating across K >= 2 ordered levels.
-  kScore,
-};
-
-// One candidate option (for `kChoice`) or rating criterion level (for
-// `kScore`).
-struct DecisionOption {
-  // Unique identifier returned in `DecisionResult::selected_key` (e.g.,
-  // "billing", "true", "5").
-  std::string key;
-  // Optional natural-language description or rubric criterion explaining this
-  // option to the model.
-  std::string description;
-};
-
-// A typed decision question evaluated against `DecisionRequest::contents`.
-struct DecisionQuestion {
-  // Unique question identifier within the request.
-  std::string id;
-  // Question type (`kBoolean`, `kChoice`, or `kScore`).
-  DecisionQuestionType type = DecisionQuestionType::kChoice;
-  // Natural-language question, statement, or rating instructions to evaluate.
-  std::string prompt;
-  // Candidate options or rating criteria:
-  // - `kBoolean`: empty (defaults to ["false", "true"]) or 2 options
-  //   [no, yes].
-  // - `kChoice`: at least 2 options.
-  // - `kScore`: at least 2 ordered levels from lowest to highest.
-  // At most 26 options are supported: each option is labeled with one letter
-  // `A`..`Z` in the prompt and scored as a single token.
-  std::vector<DecisionOption> options;
-};
-
-// Request passed to `DecisionEngine::Decide`.
-struct DecisionRequest {
-  // Input contents / state to evaluate (e.g., text or serialized JSON state;
-  // aligned with `EmbeddingEngine::ComputeEmbedding` and
-  // `SessionInterface::RunPrefill`). Only `InputText` is supported for now;
-  // image and audio inputs return `Unimplemented`.
-  std::vector<InputData> contents;
-  // One or more typed questions evaluated over `contents`.
-  std::vector<DecisionQuestion> questions;
-};
-
-// Calibrated probability of one option in `DecisionResult`.
-struct DecisionOptionProbability {
-  std::string key;
-  float probability = 0.0f;
-};
-
-// Calibrated decision result for one `DecisionQuestion`.
-struct DecisionResult {
-  // Matches `DecisionQuestion::id`.
-  std::string id;
-  // Key of the winning option ("false"/"true" for default `kBoolean`).
-  std::string selected_key;
-  // Full probability distribution over all options (sums to 1.0).
-  std::vector<DecisionOptionProbability> probabilities;
-  // Probability-weighted expected value:
-  // - `kBoolean`: P("true") in [0.0, 1.0] (0/1 Bernoulli expectation).
-  // - `kScore`: probability-weighted mean level index sum_i p_i * i in
-  //   [0, K-1], where i is the 0-based position of the level in `options`.
-  //   Option keys are only identifiers and do not affect the value.
-  // - `kChoice`: `std::nullopt`.
-  std::optional<float> expected_score = std::nullopt;
-  // Normalized Shannon certainty `1 - H(p) / log(K)` in [0.0, 1.0].
-  float confidence = 0.0f;
-};
-
-// Response returned by `DecisionEngine::Decide`.
-struct DecisionResponse {
-  // One result per question in `request.questions`, in the same order.
-  std::vector<DecisionResult> results;
-};
-
-// Interface for typed, calibrated multi-question decision making.
+// Decision API: typed questions about one shared input, answered with
+// calibrated probabilities instead of generated text.
 //
-// `DecisionEngine` evaluates one or more typed questions (`kBoolean`,
-// `kChoice`, `kScore`) over `request.contents` (`std::vector<InputData>`) and
-// returns a calibrated probability for every option. Implementations are
-// created by their own factories, e.g. `LlmDecisionEngine::Create` in
+// The concepts and field names follow the Gemini Decisions API, so its
+// requests and responses map onto these types field by field. Questions and
+// answers are ordered vectors with an `id` (instead of maps keyed by ID), and
+// the question and answer types are `std::variant`s.
+
+// A true / false question.
+struct NoulQuestion {
+  // Optional descriptions of when the answer is true and when it is false,
+  // shown to the model as the two options.
+  std::string true_description;
+  std::string false_description;
+};
+
+// A single-select question over mutually exclusive options.
+struct ChoiceQuestion {
+  struct Criterion {
+    // Option ID, returned in `ChoiceAnswer`. Non-empty, at most 128 bytes, no
+    // control characters and no leading or trailing whitespace.
+    std::string id;
+    // Optional description shown to the model instead of `id`.
+    std::string description;
+  };
+  // 2 to 26 options with unique IDs, shown to the model in this order (labeled
+  // `A`..`Z`).
+  std::vector<Criterion> criteria;
+};
+
+// A rubric question over ordered levels.
+struct ScoreQuestion {
+  // 2 to 26 non-empty level descriptions, from the lowest level to the
+  // highest. Level `i` (0-based) has the value `i`.
+  std::vector<std::string> criteria;
+};
+
+struct DecisionQuestion {
+  // Unique within the request: 1 to 64 characters in `[A-Za-z0-9_-]`.
+  std::string id;
+  // The question, guidelines or rubric to evaluate against the input.
+  // Required.
+  std::string instructions;
+  // The question type and its criteria.
+  std::variant<NoulQuestion, ChoiceQuestion, ScoreQuestion> type;
+};
+
+struct DecisionRequest {
+  // Shared input, evaluated once for all questions and treated as data, not
+  // as instructions. Only `InputText` is supported for now; image and audio
+  // inputs return `Unimplemented`.
+  std::vector<InputData> input;
+  // 1 to 1000 questions about `input`.
+  std::vector<DecisionQuestion> questions;
+  // Optional softmax temperature (finite, > 0) for all questions:
+  // `p_i = softmax(log_likelihood_i / temperature)`. If unset, the
+  // implementation uses its calibrated temperature for the model.
+  std::optional<float> temperature;
+};
+
+// Answer to a `NoulQuestion`.
+struct NoulAnswer {
+  // `noul >= 0.5`.
+  bool value = false;
+  // Calibrated probability that the answer is true, in [0, 1].
+  float noul = 0.0f;
+};
+
+// Answer to a `ChoiceQuestion`.
+struct ChoiceAnswer {
+  struct Probability {
+    // `ChoiceQuestion::Criterion::id`.
+    std::string id;
+    float probability = 0.0f;
+  };
+  // ID of the most likely option (the first one on ties).
+  std::string choice;
+  // Calibrated probability of each option, in `ChoiceQuestion::criteria`
+  // order; sums to 1.
+  std::vector<Probability> probabilities;
+};
+
+// Answer to a `ScoreQuestion`.
+struct ScoreAnswer {
+  // Expected level `sum_k k * probabilities[k]`, in [0, K-1].
+  float score = 0.0f;
+  // Most likely level (the lowest one on ties).
+  int most_likely_level = 0;
+  // Calibrated probability of each level, indexed by level; sums to 1.
+  std::vector<float> probabilities;
+};
+
+struct DecisionAnswer {
+  // `DecisionQuestion::id` of the question answered.
+  std::string id;
+  // Calibrated probability of the answer: `max(noul, 1 - noul)` for noul
+  // questions, and the probability of `choice` or `most_likely_level`
+  // otherwise.
+  float confidence = 0.0f;
+  // Type-specific answer, matching the question type.
+  std::variant<NoulAnswer, ChoiceAnswer, ScoreAnswer> type;
+};
+
+struct DecisionResponse {
+  // One answer per question, in the order of `DecisionRequest::questions`.
+  std::vector<DecisionAnswer> answers;
+};
+
+// Interface for decision engines. Implementations are created by their own
+// factories, e.g. `LlmDecisionEngine::Create` in
 // `runtime/core/llm_decision_engine.h`, which scores the options with an LLM.
 //
-// Example query & response:
+// Example:
 // ```cpp
-// std::vector<InputData> contents;
-// contents.push_back(InputText(
+// std::vector<InputData> input;
+// input.push_back(InputText(
 //     R"({"title": "Battery died after two weeks", )"
 //     R"("review": "Sound is great, but stopped charging."})"));
 // DecisionRequest request{
-//     .contents = std::move(contents),
+//     .input = std::move(input),
 //     .questions = {
 //         {.id = "defect",
-//          .type = DecisionQuestionType::kBoolean,
-//          .prompt = "Does the review report a product defect?"},
+//          .instructions = "Does the review report a product defect?",
+//          .type = NoulQuestion{}},
 //         {.id = "sentiment",
-//          .type = DecisionQuestionType::kChoice,
-//          .prompt = "What is the overall sentiment of the review?",
-//          .options = {{"positive", "Mostly satisfied"},
-//                      {"mixed", "Praise and complaints in one review"},
-//                      {"negative", "Mostly dissatisfied"}}},
+//          .instructions = "What is the overall sentiment of the review?",
+//          .type = ChoiceQuestion{
+//              .criteria = {{"positive", "Mostly satisfied"},
+//                           {"mixed", "Praise and complaints in one review"},
+//                           {"negative", "Mostly dissatisfied"}}}},
 //         {.id = "severity",
-//          .type = DecisionQuestionType::kScore,
-//          .prompt = "How severe is the reported problem?",
-//          .options = {{"1", "Cosmetic"},
-//                      {"2", "Inconvenient"},
-//                      {"3", "Product unusable"}}},
+//          .instructions = "How severe is the reported problem?",
+//          .type = ScoreQuestion{
+//              .criteria = {"Cosmetic", "Inconvenient", "Product unusable"}}},
 //     },
 // };
 // ASSIGN_OR_RETURN(DecisionResponse response, engine->Decide(request));
 //
-// // response.results[0] ("defect", kBoolean):
-// //   selected_key = "true", expected_score = 0.99f (P(true)),
-// //   confidence = 0.92f, probabilities = {{"false", 0.01f}, {"true", 0.99f}}
-// //
-// // response.results[1] ("sentiment", kChoice):
-// //   selected_key = "mixed", expected_score = std::nullopt,
-// //   confidence = 0.78f,
-// //   probabilities = {{"positive", 0.03f}, {"mixed", 0.91f},
-// //                    {"negative", 0.06f}}
-// //
-// // response.results[2] ("severity", kScore):
-// //   selected_key = "3", expected_score = 1.85f (mean level index),
-// //   confidence = 0.74f,
-// //   probabilities = {{"1", 0.02f}, {"2", 0.11f}, {"3", 0.87f}}
+// // answers[0]: confidence = 0.97f, NoulAnswer{.value = true, .noul = 0.97f}
+// // answers[1]: confidence = 0.91f,
+// //   ChoiceAnswer{.choice = "mixed",
+// //                .probabilities = {{"positive", 0.03f}, {"mixed", 0.91f},
+// //                                  {"negative", 0.06f}}}
+// // answers[2]: confidence = 0.87f,
+// //   ScoreAnswer{.score = 1.85f, .most_likely_level = 2,
+// //               .probabilities = {0.02f, 0.11f, 0.87f}}
+// if (const auto* sentiment =
+//         std::get_if<ChoiceAnswer>(&response.answers[1].type)) {
+//   ...
+// }
 // ```
 class DecisionEngine {
  public:
   virtual ~DecisionEngine() = default;
 
-  // Evaluates `request.questions` about `request.contents` and returns
-  // calibrated probability distributions and expected scores for each question.
+  // Answers `request.questions` about `request.input`.
   virtual absl::StatusOr<DecisionResponse> Decide(
       const DecisionRequest& request) = 0;
 };

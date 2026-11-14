@@ -62,7 +62,8 @@ struct LlmDecisionModelConfig;
 //      is `" A"` after the assistant prefix (`"Answer:"`), or `"A"` if there is
 //      no prefix.
 //   4. A temperature-scaled softmax over the labels gives the option
-//      probabilities, `selected_key`, `expected_score` and `confidence`.
+//      probabilities, the typed answer and its `confidence`. The temperature
+//      is `DecisionRequest::temperature` if set, else calibrated per model.
 //
 // Thread-safe: concurrent calls to `Decide()` are serialized by `mutex_`.
 class LlmDecisionEngine : public DecisionEngine {
