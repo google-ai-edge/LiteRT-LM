@@ -403,7 +403,9 @@ Conversation::GetSingleTurnTextFromSingleTurnTemplate(
           config_.prefill_preface_on_init() ? JsonPreface() : preface_, message,
           prompt_template_,
           /*current_is_appending_message=*/is_appending_message_,
-          /*append_message=*/optional_args.has_pending_message, extra_context));
+          /*append_message=*/optional_args.has_pending_message &&
+              !optional_args.close_turn_on_prefill,
+          extra_context));
   is_appending_message_ = result.is_appending_message;
   return result.text;
 }
@@ -473,7 +475,8 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnText(
     return absl::InvalidArgumentError("Message must be a JSON object.");
   }
   if (!prompt_template_.GetCapabilities().supports_single_turn &&
-      optional_args.has_pending_message) {
+      optional_args.has_pending_message &&
+      !optional_args.close_turn_on_prefill) {
     return absl::InvalidArgumentError(
         "The prompt template does not support single turn template, but "
         "has_pending_message is true. `has_pending_message` is only valid for "
@@ -694,7 +697,7 @@ absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
   bool appending = false;
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
-    appending = is_appending_message_;
+    appending = is_appending_message_ || optional_args.has_pending_message;
   }
 
   absl::Status status = SendMessageAsync(
@@ -755,12 +758,22 @@ absl::Status Conversation::SendMessageAsync(
       ValidateVisualTokenBudgetForEngine(optional_args, engine_));
 
   bool prev_is_appending_message = false;
+  bool was_history_empty_initial = false;
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
     prev_is_appending_message = is_appending_message_;
+    was_history_empty_initial = history_.empty();
   }
-  ABSL_ASSIGN_OR_RETURN(std::string single_turn_text,
-                        GetSingleTurnText(message, optional_args));
+  const bool is_decode_only_after_closed_turn =
+      !optional_args.has_pending_message && !prev_is_appending_message &&
+      !was_history_empty_initial && message.is_object() &&
+      message.contains("content") && message["content"].is_string() &&
+      message["content"].get<std::string>().empty();
+  std::string single_turn_text;
+  if (!is_decode_only_after_closed_turn) {
+    ABSL_ASSIGN_OR_RETURN(single_turn_text,
+                          GetSingleTurnText(message, optional_args));
+  }
   auto open_channel_name =
       GetOpenChannelName(single_turn_text, config_.GetChannels());
 
@@ -769,13 +782,19 @@ absl::Status Conversation::SendMessageAsync(
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
     was_history_empty = history_.empty();
-    history_.push_back(message);
+    if (!is_decode_only_after_closed_turn) {
+      history_.push_back(message);
+    }
     is_appending_message = is_appending_message_;
   }
 
   // Removes the messages of this turn from the history, e.g. when the turn is
   // cancelled or its input could not be prefilled.
-  auto remove_turn_from_history = [this, prev_is_appending_message]() {
+  auto remove_turn_from_history = [this, prev_is_appending_message,
+                                   is_decode_only_after_closed_turn]() {
+    if (is_decode_only_after_closed_turn) {
+      return;
+    }
     absl::MutexLock lock(history_mutex_);
     if (!history_.empty()) {
       history_.pop_back();
@@ -807,30 +826,33 @@ absl::Status Conversation::SendMessageAsync(
     checkpoint_after_user_prefill_ = false;
   }
 
-  nlohmann::ordered_json messages_for_conversion;
-  if (was_history_empty && !config_.prefill_preface_on_init()) {
-    if (std::holds_alternative<JsonPreface>(preface_)) {
-      const auto& json_preface = std::get<JsonPreface>(preface_);
-      if (json_preface.messages.is_array()) {
-        messages_for_conversion = json_preface.messages;
-      } else {
-        messages_for_conversion =
-            nlohmann::ordered_json::array({json_preface.messages});
+  std::vector<InputData> session_inputs;
+  if (!is_decode_only_after_closed_turn) {
+    nlohmann::ordered_json messages_for_conversion;
+    if (was_history_empty && !config_.prefill_preface_on_init()) {
+      if (std::holds_alternative<JsonPreface>(preface_)) {
+        const auto& json_preface = std::get<JsonPreface>(preface_);
+        if (json_preface.messages.is_array()) {
+          messages_for_conversion = json_preface.messages;
+        } else {
+          messages_for_conversion =
+              nlohmann::ordered_json::array({json_preface.messages});
+        }
       }
     }
-  }
-  if (messages_for_conversion.is_array()) {
-    messages_for_conversion.push_back(message);
-  } else {
-    messages_for_conversion = nlohmann::ordered_json::array({message});
+    if (messages_for_conversion.is_array()) {
+      messages_for_conversion.push_back(message);
+    } else {
+      messages_for_conversion = nlohmann::ordered_json::array({message});
+    }
+
+    ABSL_ASSIGN_OR_RETURN(session_inputs,
+                          model_data_processor_->ToInputDataVector(
+                              single_turn_text, messages_for_conversion,
+                              optional_args.args.value_or(std::monostate())));
   }
 
-  ABSL_ASSIGN_OR_RETURN(auto session_inputs,
-                        model_data_processor_->ToInputDataVector(
-                            single_turn_text, messages_for_conversion,
-                            optional_args.args.value_or(std::monostate())));
-
-  if (is_appending_message) {
+  if (is_appending_message || optional_args.has_pending_message) {
     if (session_inputs.empty()) {
       user_callback(Message());
       return absl::OkStatus();
@@ -970,6 +992,21 @@ absl::Status Conversation::SendMessageAsync(
               config_.stream_tool_calls_channel_name()));
 
   if (session_inputs.empty()) {
+    if (config_.filter_channel_content_from_kv_cache() &&
+        !open_channel_name.has_value()) {
+      ABSL_RETURN_IF_ERROR(session_->WaitUntilDone());
+      auto save_status =
+          config_.enable_rewinding()
+              ? session_->SaveCheckpoint(kChannelContentCheckpoint)
+              : session_->SaveContext(kChannelContentCheckpoint);
+      if (!save_status.ok()) {
+        (*internal_callback)(save_status);
+        return absl::OkStatus();
+      }
+      absl::MutexLock lock(history_mutex_);
+      checkpoint_message_index_ = history_.size();
+      checkpoint_after_user_prefill_ = true;
+    }
     auto decode_task_controller = session_->RunDecodeAsync(
         [callback = internal_callback](absl::StatusOr<Responses> responses) {
           (*callback)(responses);
