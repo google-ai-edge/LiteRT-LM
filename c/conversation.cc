@@ -87,11 +87,9 @@ absl::StatusOr<nlohmann::json> ParseMessageJson(
 std::optional<litert::lm::DataProcessorArguments> GetDataProcessorArguments(
     const litert::lm::Conversation* conversation,
     const int visual_token_budget) {
-  bool is_gemma4 = conversation->GetConfig()
-                       .GetSessionConfig()
-                       .GetLlmModelType()
-                       .has_gemma4();
-  if (is_gemma4) {
+  const auto& llm_model_type =
+      conversation->GetConfig().GetSessionConfig().GetLlmModelType();
+  if (llm_model_type.has_gemma4()) {
     return litert::lm::Gemma4DataProcessorArguments{.visual_token_budget =
                                                         visual_token_budget};
   }

@@ -64,6 +64,7 @@ cc_test(
         "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/proto:embedding_model_type_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:llm_model_type_cc_proto",
         "//schema/core:litertlm_header",
         "//schema/core:litertlm_header_schema",
         "//support/util:test_utils",

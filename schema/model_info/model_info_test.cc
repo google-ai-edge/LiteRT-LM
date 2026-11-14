@@ -37,6 +37,7 @@
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/embedding_model_type.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/llm_model_type.pb.h"
 #include "schema/core/litertlm_header.h"
 #include "schema/core/litertlm_header_schema_generated.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep

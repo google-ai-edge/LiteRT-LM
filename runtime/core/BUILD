@@ -63,6 +63,31 @@ cc_library(
     ],
 )
 
+cc_test(
+    name = "engine_vision_utils_test",
+    srcs = ["engine_vision_utils_test.cc"],
+    deps = [
+        ":engine_vision_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@flatbuffers//:runtime_cc",
+        "@litert//litert/cc:litert_buffer_ref",
+        "@litert//litert/cc:litert_model",
+        "//runtime/components:model_resources",
+        "//runtime/engine:engine_settings",
+        "//runtime/executor:executor_settings_base",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/util:scoped_file",
+        "//runtime/util:test_utils",
+        "@litert//tflite/schema:schema_fbs",
+    ],
+)
+
 ENGINE_IMPL_BASE_DEPS = [
     ":audio_session_advanced",
     ":engine_vision_utils",

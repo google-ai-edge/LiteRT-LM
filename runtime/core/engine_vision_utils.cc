@@ -76,10 +76,18 @@ absl::Status MaybeSelectVisionSignatures(
           absl::StrCat("max_vision_tokens_per_image must be positive, got: ",
                        max_vision_tokens_per_image));
     }
+    if (!model_resources.HasTFLiteModel(
+            proto::LlmMetadata::TF_LITE_VISION_ENCODER)) {
+      return absl::OkStatus();
+    }
     if (GetVisionTokensPerImageFromMetadata(llm_metadata).has_value()) {
       vision_token_limit = max_vision_tokens_per_image;
     }
   } else {
+    if (!model_resources.HasTFLiteModel(
+            proto::LlmMetadata::TF_LITE_VISION_ENCODER)) {
+      return absl::OkStatus();
+    }
     vision_token_limit = GetVisionTokensPerImageFromMetadata(llm_metadata);
     if (vision_token_limit.has_value() && *vision_token_limit > 0) {
       engine_settings.SetMaxVisionTokensPerImage(*vision_token_limit);

@@ -320,9 +320,11 @@ absl::StatusOr<DataProcessorConfig> CreateDataProcessorConfigFromLlmModelType(
     const proto::LlmModelType& model_type,
     const std::optional<proto::ToolCallConfig>& tool_call_config,
     const std::vector<Channel>& channels) {
-  if (tool_call_config.has_value() && !model_type.has_generic_model()) {
+  if (tool_call_config.has_value() && !model_type.has_generic_model()
+  ) {
     return absl::InvalidArgumentError(
-        "tool_call_config is only supported for generic_model.");
+        "tool_call_config is only supported for generic_model"
+        ".");
   }
   switch (model_type.model_type_case()) {
     case proto::LlmModelType::kGemma3:

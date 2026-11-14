@@ -346,6 +346,7 @@ cc_test(
         ":lfm2_data_processor_config",
         ":model_data_processor",
         ":model_data_processor_factory",
+        ":model_data_processor_factory_common",
         ":qwen3_data_processor_config",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",

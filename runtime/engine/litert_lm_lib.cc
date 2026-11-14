@@ -298,12 +298,13 @@ absl::StatusOr<Message> RunSingleTurnConversation(
   if (settings.max_output_tokens > 0) {
     optional_args.max_output_tokens = settings.max_output_tokens;
   }
-  if (settings.visual_token_budget > 0 && conversation->GetConfig()
-                                              .GetSessionConfig()
-                                              .GetLlmModelType()
-                                              .has_gemma4()) {
-    optional_args.args = Gemma4DataProcessorArguments{
-        .visual_token_budget = settings.visual_token_budget};
+  if (settings.visual_token_budget > 0) {
+    const auto& llm_model_type =
+        conversation->GetConfig().GetSessionConfig().GetLlmModelType();
+    if (llm_model_type.has_gemma4()) {
+      optional_args.args = Gemma4DataProcessorArguments{
+          .visual_token_budget = settings.visual_token_budget};
+    }
   }
 
   // Skip printing the output when using fake prefill tokens.
@@ -389,12 +390,13 @@ absl::Status RunMultiTurnConversation(const LiteRtLmSettings& settings,
     if (settings.max_output_tokens > 0) {
       optional_args.max_output_tokens = settings.max_output_tokens;
     }
-    if (settings.visual_token_budget > 0 && conversation->GetConfig()
-                                                .GetSessionConfig()
-                                                .GetLlmModelType()
-                                                .has_gemma4()) {
-      optional_args.args = Gemma4DataProcessorArguments{
-          .visual_token_budget = settings.visual_token_budget};
+    if (settings.visual_token_budget > 0) {
+      const auto& llm_model_type =
+          conversation->GetConfig().GetSessionConfig().GetLlmModelType();
+      if (llm_model_type.has_gemma4()) {
+        optional_args.args = Gemma4DataProcessorArguments{
+            .visual_token_budget = settings.visual_token_budget};
+      }
     }
 
     if (settings.async) {
