@@ -240,6 +240,7 @@ cc_test(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@flatbuffers",
         "//runtime/components:model_resources",
         "//runtime/engine:engine_factory",
         "//runtime/engine:engine_interface",
@@ -253,6 +254,10 @@ cc_test(
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
+        "//schema/core:litertlm_header",
+        "//schema/core:litertlm_header_schema",
+        "//schema/core:litertlm_read",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 
@@ -276,6 +281,7 @@ cc_test(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@flatbuffers",
         "//runtime/components:model_resources",
         "//runtime/engine:engine_factory",
         "//runtime/engine:engine_interface",
@@ -289,6 +295,10 @@ cc_test(
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
+        "//schema/core:litertlm_header",
+        "//schema/core:litertlm_header_schema",
+        "//schema/core:litertlm_read",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 
@@ -312,6 +322,7 @@ cc_test(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@flatbuffers",
         "//runtime/components:model_resources",
         "//runtime/engine:engine_factory",
         "//runtime/engine:engine_interface",
@@ -325,6 +336,10 @@ cc_test(
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
+        "//schema/core:litertlm_header",
+        "//schema/core:litertlm_header_schema",
+        "//schema/core:litertlm_read",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 
