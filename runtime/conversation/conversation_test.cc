@@ -627,6 +627,29 @@ TEST_P(ConversationTest, CountTokens) {
   EXPECT_GT(next_multi_tokens, next_tokens);
 }
 
+TEST_P(ConversationTest, DeleteDebugCapturesWaitsForActiveTasks) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(50);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+  ASSERT_OK_AND_ASSIGN(auto config,
+                       ConversationConfig::Builder().Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*engine, config));
+  EXPECT_OK(conversation->DeleteDebugCaptures());
+
+  // Deleting right after an async turn starts waits for its tasks to finish
+  // instead of failing with FailedPreconditionError.
+  Message user_message = {{"role", "user"}, {"content", "Hello"}};
+  ASSERT_OK(conversation->SendMessageAsync(
+      user_message, [](absl::StatusOr<Message> message) {}));
+  EXPECT_OK(conversation->DeleteDebugCaptures());
+}
+
 TEST_P(ConversationTest, CountTokensWithPreface) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create(GetTestdataPath(kTestLlmPath)));

@@ -1810,6 +1810,31 @@ TEST_F(SessionAdvancedTest, RunDecodeAsyncWithCancellationWithInternalSampler) {
   EXPECT_EQ(task_state, TaskState::kCancelled);
 }
 
+TEST_F(SessionAdvancedTest, DeleteDebugCapturesSucceedsWithoutDebugger) {
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
+  EXPECT_OK(session->DeleteDebugCaptures());
+}
+
+TEST_F(SessionAdvancedTest, DeleteDebugCapturesFailsWhileTaskIsActive) {
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
+  fake_executor_->SetDecodeDelay(absl::Milliseconds(100));
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+  EXPECT_OK(session->RunPrefill(inputs));
+  absl::Status status;
+  TaskState task_state = TaskState::kUnknown;
+  std::vector<std::string> texts;
+  ASSERT_OK_AND_ASSIGN(auto task_controller,
+                       session->RunDecodeAsync(CreateStreamingTestCallback(
+                           status, task_state, texts)));
+
+  EXPECT_THAT(session->DeleteDebugCaptures(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+
+  EXPECT_OK(task_controller->WaitUntilDone(absl::Seconds(10)));
+  EXPECT_OK(session->DeleteDebugCaptures());
+}
+
 TEST_F(SessionAdvancedTest, RunDecodeAsyncWithCancellationWithExternalSampler) {
   // Configure the executor to have a delay to simulate a long-running task.
   auto fake_executor = CreateFakeLlmExecutor(

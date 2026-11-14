@@ -677,9 +677,9 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
     jint max_vision_tokens_per_image, jint activation_data_type,
     jobject enable_ynnpack, jobject speculative_decoding_mode,
     jobject speculative_lenience, jobject gpu_use_ir_model,
-    jobject enable_neon_for_npu_greedy_sampling,
-    jobject use_hw_masking_for_npu, jobject use_hw_cache_update_for_npu,
-    jobject use_hw_ple_for_npu) {
+    jobject enable_neon_for_npu_greedy_sampling, jobject use_hw_masking_for_npu,
+    jobject use_hw_cache_update_for_npu, jobject use_hw_ple_for_npu,
+    jobject enable_debugger) {
   const char* model_path_chars = env->GetStringUTFChars(model_path, nullptr);
   std::string model_path_str(model_path_chars);
   env->ReleaseStringUTFChars(model_path, model_path_chars);
@@ -878,6 +878,13 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCreateEngine)(
         GetOptionalBoolean(env, use_hw_ple_for_npu);
     settings->GetMutableMainExecutorSettings().SetBackendConfig(*npu_config);
   }
+
+  if (std::optional<bool> enable_debugger_opt =
+          GetOptionalBoolean(env, enable_debugger);
+      enable_debugger_opt.has_value()) {
+    settings->SetEnableDebugger(*enable_debugger_opt);
+  }
+
   auto engine = EngineFactory::CreateDefault(*settings);
   if (!engine.ok()) {
     ThrowLiteRtLmJniException(
@@ -1153,6 +1160,30 @@ LITERTLM_JNIEXPORT jlong JNICALL JNI_METHOD(nativeCloneSession)(
   return reinterpret_cast<jlong>(cloned_session->release());
 }
 
+LITERTLM_JNIEXPORT jstring JNICALL JNI_METHOD(nativeGetSessionDebugInfo)(
+    JNIEnv* env, jclass thiz, jlong session_pointer) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  std::optional<litert::lm::SessionDebugInfo> debug_info =
+      session->GetSessionDebugInfo();
+  if (!debug_info.has_value()) {
+    return nullptr;
+  }
+  return NewStringStandardUTF(env, debug_info->capture_dir);
+}
+
+LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeDeleteSessionDebugCaptures)(
+    JNIEnv* env, jclass thiz, jlong session_pointer) {
+  Engine::Session* session =
+      reinterpret_cast<Engine::Session*>(session_pointer);
+  if (const absl::Status status = session->DeleteDebugCaptures();
+      !status.ok()) {
+    ThrowLiteRtLmJniException(
+        env, absl::StrCat("Failed to delete session debug captures: ",
+                          status.ToString()));
+  }
+}
+
 LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeRunPrefill)(
     JNIEnv* env, jclass thiz, jlong session_pointer, jobjectArray input_data) {
   Engine::Session* session =
@@ -1338,6 +1369,32 @@ JNI_METHOD(nativeConversationGetBenchmarkInfo)(JNIEnv* env, jclass thiz,
   }
 
   return CreateBenchmarkInfoJni(env, *benchmark_info);
+}
+
+LITERTLM_JNIEXPORT jstring JNICALL
+JNI_METHOD(nativeConversationGetSessionDebugInfo)(JNIEnv* env, jclass thiz,
+                                                  jlong conversation_pointer) {
+  Conversation* conversation =
+      reinterpret_cast<Conversation*>(conversation_pointer);
+  std::optional<litert::lm::SessionDebugInfo> debug_info =
+      conversation->GetSessionDebugInfo();
+  if (!debug_info.has_value()) {
+    return nullptr;
+  }
+  return NewStringStandardUTF(env, debug_info->capture_dir);
+}
+
+LITERTLM_JNIEXPORT void JNICALL
+JNI_METHOD(nativeConversationDeleteDebugCaptures)(JNIEnv* env, jclass thiz,
+                                                  jlong conversation_pointer) {
+  Conversation* conversation =
+      reinterpret_cast<Conversation*>(conversation_pointer);
+  if (const absl::Status status = conversation->DeleteDebugCaptures();
+      !status.ok()) {
+    ThrowLiteRtLmJniException(
+        env, absl::StrCat("Failed to delete conversation debug captures: ",
+                          status.ToString()));
+  }
 }
 
 LITERTLM_JNIEXPORT jint JNICALL JNI_METHOD(nativeConversationGetTokenCount)(

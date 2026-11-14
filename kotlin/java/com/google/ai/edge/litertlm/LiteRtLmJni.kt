@@ -62,6 +62,8 @@ internal object LiteRtLmJni {
    * @param useHwMaskingForNpu Whether to use handwritten masking for NPU.
    * @param useHwCacheUpdateForNpu Whether to use handwritten KV-cache update for NPU.
    * @param useHwPleForNpu Whether to use handwritten PLE for NPU.
+   * @param enableDebugger Whether to enable the AI Edge Debugger for the engine. When null, use the
+   *   engine's default.
    * @return A pointer to the native engine instance.
    */
   external fun nativeCreateEngine(
@@ -89,6 +91,7 @@ internal object LiteRtLmJni {
     useHwMaskingForNpu: Boolean? = null,
     useHwCacheUpdateForNpu: Boolean? = null,
     useHwPleForNpu: Boolean? = null,
+    enableDebugger: Boolean? = null,
   ): Long
 
   /**
@@ -193,6 +196,24 @@ internal object LiteRtLmJni {
    * @throws LiteRtLmJniException if the underlying native method fails.
    */
   external fun nativeCloneSession(sessionPointer: Long): Long
+
+  /**
+   * Gets the relative capture directory for the session, or `null` if debugging is disabled or
+   * unsupported.
+   *
+   * @param sessionPointer A pointer to the native session instance.
+   * @return The relative capture directory path, or `null`.
+   */
+  external fun nativeGetSessionDebugInfo(sessionPointer: Long): String?
+
+  /**
+   * Deletes all AI Edge Debugger captures of the session while keeping it open for subsequent
+   * turns.
+   *
+   * @param sessionPointer A pointer to the native session instance.
+   * @throws LiteRtLmJniException if the session has active tasks, or if deletion fails.
+   */
+  external fun nativeDeleteSessionDebugCaptures(sessionPointer: Long)
 
   /**
    * Runs the prefill step for the given input data.
@@ -424,6 +445,24 @@ internal object LiteRtLmJni {
    * @throws LiteRtLmJniException if the underlying native method fails.
    */
   external fun nativeConversationGetBenchmarkInfo(conversationPointer: Long): BenchmarkInfo
+
+  /**
+   * Gets the relative capture directory for the conversation's session, or `null` if debugging is
+   * disabled or unsupported.
+   *
+   * @param conversationPointer A pointer to the native conversation instance.
+   * @return The relative capture directory path, or `null`.
+   */
+  external fun nativeConversationGetSessionDebugInfo(conversationPointer: Long): String?
+
+  /**
+   * Deletes all AI Edge Debugger captures of the conversation's session while keeping it open for
+   * subsequent turns, after waiting for in-flight tasks to finish.
+   *
+   * @param conversationPointer A pointer to the native conversation instance.
+   * @throws LiteRtLmJniException if deletion fails.
+   */
+  external fun nativeConversationDeleteDebugCaptures(conversationPointer: Long)
 
   /**
    * Gets the number of tokens in the conversation KV Cache.
