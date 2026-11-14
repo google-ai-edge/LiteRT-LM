@@ -387,6 +387,54 @@ cc_test(
 )
 
 cc_library(
+    name = "model_data_provider",
+    hdrs = ["model_data_provider.h"],
+    deps = [
+        "@com_google_absl//absl/status:statusor",
+        "//runtime/executor/gpu_artisan/utils:model_data",
+    ],
+)
+
+cc_library(
+    name = "model_resources_litert_lm_google",
+    srcs = ["model_resources_litert_lm_google.cc"],
+    hdrs = ["model_resources_litert_lm_google.h"],
+    deps = [
+        ":model_data_provider",
+        ":model_resources_litert_lm",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@litert//litert/cc:litert_buffer_ref",
+        "//runtime/executor/gpu_artisan/utils:model_data",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/util:litert_lm_loader",
+        "//runtime/util:litert_status_util",
+        "//schema/core:litertlm_header_schema",
+        "@litert//tflite:framework",
+    ],
+)
+
+cc_test(
+    name = "model_resources_litert_lm_google_test",
+    srcs = ["model_resources_litert_lm_google_test.cc"],
+    deps = [
+        ":model_resources_litert_lm_google",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:string_view",
+        "@flatbuffers//:runtime_cc",
+        "//runtime/executor/gpu_artisan/proto:llm_params_cc_proto",
+        "//runtime/util:litert_lm_loader",
+        "//runtime/util:memory_mapped_file",
+        "//runtime/util:scoped_file",
+        "//runtime/util:test_utils",
+        "//schema/core:litertlm_header_schema",
+        "@litert//tflite/schema:schema_fbs",
+    ],
+)
+
+cc_library(
     name = "model_resources",
     srcs = ["model_resources.cc"],
     hdrs = ["model_resources.h"],
