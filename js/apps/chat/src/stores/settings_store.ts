@@ -210,6 +210,72 @@ export function isGpuOnlyTextModel(
   return /-gpu\.litertlm$/i.test(cleanPath);
 }
 
+/**
+ * Practical model size threshold (1.5 GB decimal) at or above which loading
+ * text weights into 32-bit WASM linear memory on CPU is likely to fail.
+ */
+export const CPU_TEXT_WASM_WARNING_BYTES = 1.5e9;
+
+const SIZE_UNIT_MULTIPLIERS: Readonly<Record<string, number>> = {
+  'B': 1,
+  'KB': 1e3,
+  'MB': 1e6,
+  'GB': 1e9,
+  'TB': 1e12,
+  'KIB': 1024,
+  'MIB': 1024 ** 2,
+  'GIB': 1024 ** 3,
+};
+
+/** Parses a human-readable model size (e.g. `'2.3 GB'`, `'850 MB'`) to bytes. */
+export function parseModelSizeBytes(sizeLabel: string|undefined): number|null {
+  if (!sizeLabel) return null;
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB)\s*$/i.exec(
+      sizeLabel);
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value < 0) return null;
+  const mult = SIZE_UNIT_MULTIPLIERS[match[2]!.toUpperCase()];
+  return mult ? Math.round(value * mult) : null;
+}
+
+/**
+ * Returns the known byte size of `modelPath` from `cachedSizeBytes` or its
+ * `CustomModel.size` metadata, or `null` when unknown.
+ */
+export function getKnownModelSizeBytes(
+    modelPath: string,
+    models?: Partial<Pick<Settings, 'customModels'|'localDirModels'>>,
+    cachedSizeBytes?: number): number|null {
+  if (cachedSizeBytes !== undefined && Number.isFinite(cachedSizeBytes) &&
+      cachedSizeBytes > 0) {
+    return cachedSizeBytes;
+  }
+  const matched = findModel(models ?? {}, modelPath);
+  return parseModelSizeBytes(matched?.size);
+}
+
+/**
+ * Returns a non-blocking warning message when a non-`-gpu.litertlm` model's
+ * known size is at or above the ~1.5 GB practical WASM memory limit, or `null`
+ * when smaller, unknown, or WebGPU-only (`-gpu.litertlm`).
+ */
+export function getCpuTextMemoryWarning(
+    modelPath: string,
+    models?: Partial<Pick<Settings, 'customModels'|'localDirModels'>>,
+    cachedSizeBytes?: number): string|null {
+  if (isGpuOnlyTextModel(modelPath, models)) {
+    return null;
+  }
+  const bytes = getKnownModelSizeBytes(modelPath, models, cachedSizeBytes);
+  if (bytes === null || bytes < CPU_TEXT_WASM_WARNING_BYTES) {
+    return null;
+  }
+  const matched = findModel(models ?? {}, modelPath);
+  const sizeLabel = matched?.size?.trim() || `${(bytes / 1e9).toFixed(2)} GB`;
+  return `${sizeLabel} may not fit in WASM memory (~1.5 GB practical limit); loading may fail.`;
+}
+
 /** Modalities with their own experimental backend and precision settings. */
 export const MODALITIES = ['text', 'vision', 'audio'] as const;
 
