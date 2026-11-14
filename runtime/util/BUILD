@@ -772,6 +772,19 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "read_data_fn_util",
+    srcs = ["read_data_fn_util.cc"],
+    hdrs = ["read_data_fn_util.h"],
+    deps = [
+        ":data_stream",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+        "//runtime/executor/gpu_artisan/utils:model_data",
+    ],
+)
+
 cc_test(
     name = "metrics_util_test",
     srcs = ["metrics_util_test.cc"],
@@ -784,5 +797,17 @@ cc_test(
         "//runtime/engine:litert_lm_lib",
         "//runtime/proto:engine_cc_proto",
         "//runtime/proto:litert_lm_metrics_cc_proto",
+    ],
+)
+
+cc_test(
+    name = "read_data_fn_util_test",
+    srcs = ["read_data_fn_util_test.cc"],
+    deps = [
+        ":data_stream",
+        ":read_data_fn_util",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "//runtime/executor/gpu_artisan/utils:model_data",
     ],
 )
