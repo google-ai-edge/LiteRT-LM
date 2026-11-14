@@ -280,6 +280,8 @@ absl::StatusOr<std::unique_ptr<Constraint>> CreateRegexConstraint(
                               .constraint_string = constraint_regex});
 }
 
+}  // namespace
+
 absl::StatusOr<Message> RunSingleTurnConversation(
     const json& content_list, const LiteRtLmSettings& settings,
     litert::lm::Engine* engine, Conversation* conversation) {
@@ -306,50 +308,74 @@ absl::StatusOr<Message> RunSingleTurnConversation(
         .visual_token_budget = settings.visual_token_budget};
   }
 
-  // Skip printing the output when using fake prefill tokens.
-  bool should_print_output = settings.benchmark_prefill_tokens == 0;
-  if (settings.async) {
-    auto callback_state = std::make_shared<AsyncMessageCallbackState>();
-    absl::AnyInvocable<void(absl::StatusOr<Message>)> print_message_callback =
-        should_print_output
-            ? CreatePrintMessageCallback(callback_state)
-            : absl::AnyInvocable<void(absl::StatusOr<Message>)>(
-                  [callback_state](absl::StatusOr<Message> message) {
-                    if (!message.ok()) {
-                      callback_state->RecordError(message.status());
-                    }
-                  });
-    ABSL_RETURN_IF_ERROR(conversation->SendMessageAsync(
-        json::object({{"role", "user"}, {"content", content_list}}),
-        std::move(print_message_callback), std::move(optional_args)));
-    if (absl::Status wait_status = engine->WaitUntilDone(kWaitUntilDoneTimeout);
-        !wait_status.ok()) {
-      conversation->CancelProcess();
-      return wait_status;
+  auto send_message = [&](const json& content, OptionalArgs args,
+                          bool allow_printing) -> absl::StatusOr<Message> {
+    const Message user_message =
+        json::object({{"role", "user"}, {"content", content}});
+    // Skip printing the output when using fake prefill tokens.
+    const bool should_print_output =
+        allow_printing && settings.benchmark_prefill_tokens == 0;
+    if (settings.async) {
+      auto callback_state = std::make_shared<AsyncMessageCallbackState>();
+      absl::AnyInvocable<void(absl::StatusOr<Message>)> callback =
+          should_print_output
+              ? CreatePrintMessageCallback(callback_state)
+              : absl::AnyInvocable<void(absl::StatusOr<Message>)>(
+                    [callback_state](absl::StatusOr<Message> message) {
+                      if (!message.ok()) {
+                        callback_state->RecordError(message.status());
+                      }
+                    });
+      ABSL_RETURN_IF_ERROR(conversation->SendMessageAsync(
+          user_message, std::move(callback), std::move(args)));
+      if (absl::Status wait_status =
+              engine->WaitUntilDone(kWaitUntilDoneTimeout);
+          !wait_status.ok()) {
+        conversation->CancelProcess();
+        return wait_status;
+      }
+      ABSL_RETURN_IF_ERROR(callback_state->GetStatus());
+      if (!allow_printing) {
+        return Message();
+      }
+      ABSL_RETURN_IF_ERROR(
+          CheckExpectedOutput(callback_state->GetCapturedOutput(), settings));
+      const auto history = conversation->GetHistory();
+      if (history.empty()) {
+        return absl::InternalError(
+            "Conversation history is empty after SendMessageAsync.");
+      }
+      return history.back();
     }
-    ABSL_RETURN_IF_ERROR(callback_state->GetStatus());
-    ABSL_RETURN_IF_ERROR(
-        CheckExpectedOutput(callback_state->GetCapturedOutput(), settings));
-    const auto history = conversation->GetHistory();
-    if (history.empty()) {
-      return absl::InternalError(
-          "Conversation history is empty after SendMessageAsync.");
-    }
-    return history.back();
-  } else {
     ABSL_ASSIGN_OR_RETURN(
         auto model_message,
-        conversation->SendMessage(
-            json::object({{"role", "user"}, {"content", content_list}}),
-            std::move(optional_args)));
+        conversation->SendMessage(user_message, std::move(args)));
+    if (!allow_printing) {
+      return model_message;
+    }
     if (should_print_output) {
       ABSL_RETURN_IF_ERROR(PrintMessage(model_message, captured_output, nullptr,
                                         /*streaming=*/false));
     }
     ABSL_RETURN_IF_ERROR(CheckExpectedOutput(captured_output.str(), settings));
     return model_message;
+  };
+
+  for (int chunk = 0; chunk < settings.benchmark_append_chunks; ++chunk) {
+    OptionalArgs append_args;
+    append_args.has_pending_message = true;
+    append_args.args = optional_args.args;
+    ABSL_RETURN_IF_ERROR(
+        send_message(content_list, std::move(append_args),
+                     /*allow_printing=*/false)
+            .status());
   }
+  return send_message(
+      settings.benchmark_append_chunks > 0 ? json("") : content_list,
+      std::move(optional_args), /*allow_printing=*/true);
 }
+
+namespace {
 
 absl::Status RunMultiTurnConversation(const LiteRtLmSettings& settings,
                                       litert::lm::Engine* engine,
@@ -521,6 +547,8 @@ absl::StatusOr<std::vector<litert::lm::ScorerOutput>> RunScoreText(
   return scorer_outputs;
 }
 
+}  // namespace
+
 void LogBenchmarkInfo(const litert::lm::BenchmarkInfo& benchmark_info,
                       const LiteRtLmSettings& settings) {
   if (!settings.log_sink_file.has_value()) {
@@ -550,6 +578,10 @@ void LogBenchmarkInfo(const litert::lm::BenchmarkInfo& benchmark_info,
         !settings.audio_backend->empty()) {
       absl::StrAppend(&extra_flags, ",audio_backend=", *settings.audio_backend);
     }
+    if (settings.benchmark_append_chunks > 0) {
+      absl::StrAppend(&extra_flags,
+                      ",append_chunks=", settings.benchmark_append_chunks);
+    }
     ABSL_LOG(INFO) << absl::StrFormat(
         "Benchmark flags: "
         "benchmark_prefill_tokens=%d,benchmark_decode_tokens=%d,backend=%s%s",
@@ -570,12 +602,16 @@ void LogBenchmarkInfo(const litert::lm::BenchmarkInfo& benchmark_info,
       ABSL_LOG(INFO) << absl::StrFormat(
           "Prefill speed turn %d: %.2f tk/s", i,
           benchmark_info.GetPrefillTokensPerSec(i));
+    }
+    for (int i = 0; i < benchmark_info.GetTotalDecodeTurns(); ++i) {
       ABSL_LOG(INFO) << absl::StrFormat(
           "Decode speed turn %d: %.2f tk/s", i,
           benchmark_info.GetDecodeTokensPerSec(i));
     }
   }
 }
+
+namespace {
 
 // Logs the peak accelerator memory usage: the headline total, the per-category
 // breakdown and the largest individual allocations.
@@ -1092,6 +1128,21 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
                    << engine_settings.GetAudioExecutorSettings().value();
   } else {
     ABSL_LOG(INFO) << "audio_executor_settings: not set";
+  }
+
+  if (settings.benchmark_append_chunks < 0) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("benchmark_append_chunks must be >= 0, but got ",
+                     settings.benchmark_append_chunks, "."));
+  }
+  if (settings.benchmark_append_chunks > 0 &&
+      (!settings.benchmark || settings.use_session || settings.multi_turns ||
+       settings.input_prompt.empty() ||
+       (settings.score_target_text.has_value() &&
+        !settings.score_target_text->empty()))) {
+    return absl::InvalidArgumentError(
+        "benchmark_append_chunks requires --benchmark=true and a non-empty "
+        "--input_prompt with single-turn Conversation execution.");
   }
 
   if (settings.benchmark) {
