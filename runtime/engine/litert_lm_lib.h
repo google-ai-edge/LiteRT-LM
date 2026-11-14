@@ -104,6 +104,10 @@ struct LiteRtLmSettings {
   bool enable_debugger = false;
   int benchmark_prefill_tokens = 0;
   int benchmark_decode_tokens = 0;
+  // Number of user message chunks appended with `has_pending_message = true`
+  // before closing the turn with an empty message (`has_pending_message =
+  // false`) and decoding once. `0` runs the standard single-message path.
+  int benchmark_append_chunks = 0;
   bool async = true;
   // Reports the peak host memory of the process. On supported devices, the
   // accelerator memory may also be reported.
@@ -234,6 +238,11 @@ struct AggregatedLitertLmMetrics {
 // the average of the two middle values.
 AggregatedLitertLmMetrics ComputeMedianMetrics(
     const std::vector<LitertLmMetrics>& metrics);
+
+// Logs single-iteration benchmark metrics to INFO (and any registered log
+// sinks, e.g. when `settings.log_sink_file` is set).
+void LogBenchmarkInfo(const BenchmarkInfo& benchmark_info,
+                      const LiteRtLmSettings& settings);
 
 // Builds the content list from the input data.
 absl::StatusOr<nlohmann::json> BuildContentList(

@@ -521,6 +521,8 @@ absl::StatusOr<std::vector<litert::lm::ScorerOutput>> RunScoreText(
   return scorer_outputs;
 }
 
+}  // namespace
+
 void LogBenchmarkInfo(const litert::lm::BenchmarkInfo& benchmark_info,
                       const LiteRtLmSettings& settings) {
   if (!settings.log_sink_file.has_value()) {
@@ -550,6 +552,10 @@ void LogBenchmarkInfo(const litert::lm::BenchmarkInfo& benchmark_info,
         !settings.audio_backend->empty()) {
       absl::StrAppend(&extra_flags, ",audio_backend=", *settings.audio_backend);
     }
+    if (settings.benchmark_append_chunks > 0) {
+      absl::StrAppend(&extra_flags,
+                      ",append_chunks=", settings.benchmark_append_chunks);
+    }
     ABSL_LOG(INFO) << absl::StrFormat(
         "Benchmark flags: "
         "benchmark_prefill_tokens=%d,benchmark_decode_tokens=%d,backend=%s%s",
@@ -570,12 +576,16 @@ void LogBenchmarkInfo(const litert::lm::BenchmarkInfo& benchmark_info,
       ABSL_LOG(INFO) << absl::StrFormat(
           "Prefill speed turn %d: %.2f tk/s", i,
           benchmark_info.GetPrefillTokensPerSec(i));
+    }
+    for (int i = 0; i < benchmark_info.GetTotalDecodeTurns(); ++i) {
       ABSL_LOG(INFO) << absl::StrFormat(
           "Decode speed turn %d: %.2f tk/s", i,
           benchmark_info.GetDecodeTokensPerSec(i));
     }
   }
 }
+
+namespace {
 
 // Logs the peak accelerator memory usage: the headline total, the per-category
 // breakdown and the largest individual allocations.
@@ -1094,6 +1104,21 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
     ABSL_LOG(INFO) << "audio_executor_settings: not set";
   }
 
+  if (settings.benchmark_append_chunks < 0) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("benchmark_append_chunks must be >= 0, but got ",
+                     settings.benchmark_append_chunks, "."));
+  }
+  if (settings.benchmark_append_chunks > 0 &&
+      (!settings.benchmark || settings.use_session || settings.multi_turns ||
+       settings.input_prompt.empty() ||
+       (settings.score_target_text.has_value() &&
+        !settings.score_target_text->empty()))) {
+    return absl::InvalidArgumentError(
+        "benchmark_append_chunks requires --benchmark=true and a non-empty "
+        "--input_prompt with single-turn Conversation execution.");
+  }
+
   if (settings.benchmark) {
     if (settings.multi_turns && settings.async) {
       // TODO(b/483699181) - Support benchmarking for multi-turns and async.
@@ -1420,7 +1445,10 @@ absl::Status RunLiteRtLm(const LiteRtLmSettings& settings,
                                 .Build(*engine));
       ABSL_ASSIGN_OR_RETURN(conversation,
                             Conversation::Create(*engine, conversation_config));
-      if (settings.multi_turns) {
+      if (settings.benchmark_append_chunks > 0) {
+        return absl::UnimplementedError(
+            "Multi-prefill Conversation benchmark is not yet implemented.");
+      } else if (settings.multi_turns) {
         ABSL_LOG(INFO) << "Running multi-turns conversation";
         ABSL_RETURN_IF_ERROR(RunMultiTurnConversation(settings, engine.get(),
                                                       conversation.get()));
