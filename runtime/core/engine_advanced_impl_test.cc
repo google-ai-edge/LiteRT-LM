@@ -40,9 +40,16 @@
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 #ifdef ENGINE_ADVANCED
+#include <cstdint>
+
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "runtime/executor/executor_backend_registry.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/util/file_data_stream.h"
+#include "schema/core/litertlm_header.h"
+#include "schema/core/litertlm_header_schema_generated.h"
+#include "schema/core/litertlm_read.h"
+#include "tflite/schema/schema_generated.h"  // from @litert
 #endif
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -572,6 +579,199 @@ TEST(EngineTest, CreateEngine_StreamedModelLoading) {
   ASSERT_OK(responses);
   EXPECT_EQ(responses->GetTexts().size(), 1);
   EXPECT_FALSE(responses->GetTexts()[0].empty());
+}
+
+// Rewrites `test_lm_external_weights.litertlm` to `output_path` with its legacy
+// `"weights.bin"` external buffer group renamed to `kModelWeightGroupName`
+// (`"tflite_weights"`), matching what `litert-lm pack` produces today.
+absl::Status CreateExternalWeightsTestModel(
+    const std::filesystem::path& output_path) {
+  const auto src_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_external_weights.litertlm";
+
+  schema::LitertlmHeader header;
+  ABSL_RETURN_IF_ERROR(
+      schema::ReadHeaderFromLiteRTLM(src_path.string(), &header));
+  RET_CHECK(header.metadata != nullptr);
+  RET_CHECK(header.metadata->section_metadata() != nullptr);
+  const auto* objects = header.metadata->section_metadata()->objects();
+  RET_CHECK(objects != nullptr);
+
+  std::vector<const schema::SectionObject*> sorted_sections(objects->begin(),
+                                                            objects->end());
+  std::sort(sorted_sections.begin(), sorted_sections.end(),
+            [](const schema::SectionObject* a, const schema::SectionObject* b) {
+              return a->begin_offset() < b->begin_offset();
+            });
+
+  std::ifstream in(src_path.string(), std::ios::binary);
+  RET_CHECK(in.is_open());
+
+  struct RepackedSection {
+    schema::AnySectionDataType data_type;
+    bool has_prefill_decode_model_type = false;
+    std::vector<uint8_t> bytes;
+  };
+  std::vector<RepackedSection> repacked_sections;
+  repacked_sections.reserve(sorted_sections.size());
+
+  for (const schema::SectionObject* sec : sorted_sections) {
+    const uint64_t size = sec->end_offset() - sec->begin_offset();
+    std::vector<uint8_t> sec_bytes(size);
+    in.seekg(sec->begin_offset());
+    in.read(reinterpret_cast<char*>(sec_bytes.data()), size);
+    RET_CHECK(in.good());
+
+    const bool is_model_or_weights =
+        sec->data_type() == schema::AnySectionDataType_TFLiteModel ||
+        sec->data_type() == schema::AnySectionDataType_TFLiteWeights;
+    if (sec->data_type() == schema::AnySectionDataType_TFLiteModel) {
+      std::unique_ptr<tflite::ModelT> model =
+          tflite::UnPackModel(sec_bytes.data());
+      RET_CHECK(model != nullptr);
+      for (auto& group : model->external_buffer_groups) {
+        if (group != nullptr && group->name == "weights.bin") {
+          group->name = std::string(kModelWeightGroupName);
+        }
+      }
+      flatbuffers::FlatBufferBuilder model_fbb;
+      tflite::FinishModelBuffer(model_fbb,
+                                tflite::Model::Pack(model_fbb, model.get()));
+      sec_bytes.assign(model_fbb.GetBufferPointer(),
+                       model_fbb.GetBufferPointer() + model_fbb.GetSize());
+    }
+    repacked_sections.push_back(RepackedSection{
+        .data_type = sec->data_type(),
+        .has_prefill_decode_model_type = is_model_or_weights,
+        .bytes = std::move(sec_bytes),
+    });
+  }
+
+  constexpr uint64_t kBlockAlignment = 16384;
+  auto align_up = [](uint64_t offset) {
+    return (offset + kBlockAlignment - 1) & ~(kBlockAlignment - 1);
+  };
+
+  flatbuffers::FlatBufferBuilder header_fbb;
+  std::vector<flatbuffers::Offset<schema::SectionObject>> fb_sections;
+  uint64_t current_offset = kBlockAlignment;
+  std::vector<uint64_t> section_offsets;
+  for (const RepackedSection& sec : repacked_sections) {
+    current_offset = align_up(current_offset);
+    section_offsets.push_back(current_offset);
+    flatbuffers::Offset<
+        flatbuffers::Vector<flatbuffers::Offset<schema::KeyValuePair>>>
+        items_offset = 0;
+    if (sec.has_prefill_decode_model_type) {
+      const std::string model_type_val = "tf_lite_prefill_decode";
+      auto kv =
+          schema::CreateKeyValuePair(header_fbb, "model_type", model_type_val);
+      items_offset = header_fbb.CreateVector(
+          std::vector<flatbuffers::Offset<schema::KeyValuePair>>{kv});
+    }
+    fb_sections.push_back(schema::CreateSectionObject(
+        header_fbb, items_offset, current_offset,
+        current_offset + sec.bytes.size(), sec.data_type));
+    current_offset += sec.bytes.size();
+  }
+  auto section_metadata = schema::CreateSectionMetadata(
+      header_fbb, header_fbb.CreateVector(fb_sections));
+  auto metadata =
+      schema::CreateLiteRTLMMetaData(header_fbb, 0, section_metadata);
+  header_fbb.Finish(metadata);
+
+  const uint64_t header_end_offset = 32 + header_fbb.GetSize();
+  RET_CHECK_LE(header_end_offset, kBlockAlignment);
+
+  std::ofstream out(output_path.string(), std::ios::binary);
+  RET_CHECK(out.is_open());
+  out.write("LITERTLM", 8);
+  const uint32_t major = 1;
+  const uint32_t minor = 5;
+  const uint32_t patch = 0;
+  const uint32_t padding = 0;
+  out.write(reinterpret_cast<const char*>(&major), sizeof(major));
+  out.write(reinterpret_cast<const char*>(&minor), sizeof(minor));
+  out.write(reinterpret_cast<const char*>(&patch), sizeof(patch));
+  out.write(reinterpret_cast<const char*>(&padding), sizeof(padding));
+  out.write(reinterpret_cast<const char*>(&header_end_offset),
+            sizeof(header_end_offset));
+  out.write(reinterpret_cast<const char*>(header_fbb.GetBufferPointer()),
+            header_fbb.GetSize());
+
+  uint64_t pos = header_end_offset;
+  for (size_t i = 0; i < repacked_sections.size(); ++i) {
+    if (section_offsets[i] > pos) {
+      std::vector<char> zeros(section_offsets[i] - pos, 0);
+      out.write(zeros.data(), zeros.size());
+      pos = section_offsets[i];
+    }
+    out.write(reinterpret_cast<const char*>(repacked_sections[i].bytes.data()),
+              repacked_sections[i].bytes.size());
+    pos += repacked_sections[i].bytes.size();
+  }
+  out.flush();
+  RET_CHECK(out.good());
+  return absl::OkStatus();
+}
+
+// Regression test: on the CPU backend, the main model's external weights must
+// be read into host memory rather than left as a weights stream, which only the
+// GPU backends can consume.
+TEST(EngineTest,
+     CreateEngine_StreamedModelLoading_ExternalWeightsOnCpuMatchesFileBacked) {
+  const auto model_path =
+      std::filesystem::path(::testing::TempDir()) /
+      absl::StrCat("test_lm_tflite_weights_", std::rand(), ".litertlm");
+  absl::Cleanup remove_model = [&model_path] {
+    std::filesystem::remove_all(model_path);
+  };
+  ASSERT_OK(CreateExternalWeightsTestModel(model_path));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets file_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings file_settings,
+      EngineSettings::CreateDefault(std::move(file_assets), Backend::CPU));
+  file_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(kMaxNumTokens);
+  file_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Engine> file_engine,
+                       CreateEngine(std::move(file_settings)));
+
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<FileDataStream> file_stream,
+                       FileDataStream::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(ModelAssets streamed_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings streamed_settings,
+      EngineSettings::CreateDefault(std::move(streamed_assets), Backend::CPU));
+  streamed_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  streamed_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Engine> streamed_engine,
+                       CreateEngine(std::move(streamed_settings)));
+
+  std::vector<InputData> file_inputs;
+  file_inputs.emplace_back(InputText("Hello world!"));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Engine::Session> file_session,
+      file_engine->CreateSession(SessionConfig::CreateDefault()));
+  ASSERT_OK(file_session->RunPrefill(file_inputs));
+  ASSERT_OK_AND_ASSIGN(Responses file_responses, file_session->RunDecode());
+
+  std::vector<InputData> streamed_inputs;
+  streamed_inputs.emplace_back(InputText("Hello world!"));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Engine::Session> streamed_session,
+      streamed_engine->CreateSession(SessionConfig::CreateDefault()));
+  ASSERT_OK(streamed_session->RunPrefill(streamed_inputs));
+  ASSERT_OK_AND_ASSIGN(Responses streamed_responses,
+                       streamed_session->RunDecode());
+
+  ASSERT_EQ(streamed_responses.GetTexts().size(), 1);
+  EXPECT_FALSE(streamed_responses.GetTexts()[0].empty());
+  EXPECT_EQ(streamed_responses.GetTexts(), file_responses.GetTexts());
 }
 
 TEST(EngineTest, CreateEngine_StreamedModelLoading_EnableDebuggerDisabled) {
