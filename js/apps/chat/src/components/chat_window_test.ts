@@ -1015,7 +1015,13 @@ describe('litert-chat-window', () => {
          });
     });
 
-    describe('modality disabling', () => {
+    describe('Modality disabling and composer cleanliness', () => {
+      it('does not render Get code controls inside the chat composer', () => {
+        expect(element.shadowRoot!.querySelector('#btn-get-code')).toBeNull();
+        expect(element.shadowRoot!.querySelector('#composer-code-popover'))
+            .toBeNull();
+      });
+
       it('disables camera, mic, and media attach buttons with explanations when Vision and/or Audio are off',
          async () => {
            const addMediaBtn =

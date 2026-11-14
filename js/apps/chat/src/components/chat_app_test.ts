@@ -22,6 +22,7 @@ import {LocalDirectoryService} from '../stores/local_directory_service.js';
 import {ModelLoaderService} from '../stores/model_loader_service.js';
 import {MODELS, SettingsStore} from '../stores/settings_store.js';
 import {LitertLmChatApp} from './chat_app.js';
+import {CODE_VARIANT_STORAGE_KEY, LitertCodeDialog} from './code_snippet_dialog.js';
 import {CustomDropdown} from './custom_dropdown.js';
 
 interface TestableChatApp {
@@ -630,6 +631,8 @@ describe('litert-lm-chat-app', () => {
          const header = element.shadowRoot!.querySelector('header')!;
          const learnMoreBtn = element.shadowRoot!.querySelector(
                                   '#btn-toggle-learn-more') as HTMLButtonElement;
+         const codeBtn = element.shadowRoot!.querySelector(
+                             '#btn-get-code') as HTMLButtonElement;
          const themeBtn = element.shadowRoot!.querySelector(
                               '#btn-toggle-theme') as HTMLButtonElement;
          learnMoreBtn.click();
@@ -637,10 +640,27 @@ describe('litert-lm-chat-app', () => {
          expect(element.isLearnMoreOpen).toBeTrue();
          expect(header.hasAttribute('inert')).toBeFalse();
          expect(learnMoreBtn.hasAttribute('inert')).toBeFalse();
+         expect(codeBtn.hasAttribute('inert')).toBeTrue();
          expect(themeBtn.hasAttribute('inert')).toBeTrue();
          learnMoreBtn.click();
          await element.updateComplete;
          expect(element.isLearnMoreOpen).toBeFalse();
+
+         // In WCO mode, #btn-get-code stays interactive to toggle the code
+         // dialog closed while the backdrop offsets below the titlebar.
+         codeBtn.click();
+         await element.updateComplete;
+         expect(element.isCodeDialogOpen).toBeTrue();
+         const codeBackdrop = element.shadowRoot!.querySelector(
+                                  '#code-dialog-backdrop') as HTMLElement;
+         expect(codeBackdrop.getBoundingClientRect().top).toBe(46);
+         expect(header.hasAttribute('inert')).toBeFalse();
+         expect(codeBtn.hasAttribute('inert')).toBeFalse();
+         expect(learnMoreBtn.hasAttribute('inert')).toBeTrue();
+         expect(themeBtn.hasAttribute('inert')).toBeTrue();
+         codeBtn.click();
+         await element.updateComplete;
+         expect(element.isCodeDialogOpen).toBeFalse();
 
          // In WCO mode, confirmation backdrop offsets below the titlebar height.
          const confirmPromise = mockState.confirmHandler!({
@@ -747,5 +767,181 @@ describe('litert-lm-chat-app', () => {
          expect(element.shadowRoot!.querySelector('#offline-status-pill'))
              .toBeNull();
        }
+     });
+
+  it('opens Get code dialog from header with live @litert-lm/core snippet, npm/HTML tabs, Copy, Tab trap, and Escape focus restoration',
+     async () => {
+       window.localStorage.removeItem(CODE_VARIANT_STORAGE_KEY);
+       mockSettings.selectedModelPath = MODELS[0]!.path;
+       mockSettings.samplerType = 'top_k';
+       mockSettings.topK = 40;
+       mockSettings.temperature = 0.7;
+       mockSettings.visionBackend = 'off';
+       element.requestUpdate();
+       await element.updateComplete;
+
+       // Chat composer must no longer render #btn-get-code.
+       const chatWindow =
+           element.shadowRoot!.querySelector('litert-chat-window')!;
+       await chatWindow.updateComplete;
+       expect(chatWindow.shadowRoot!.querySelector('#btn-get-code')).toBeNull();
+
+       const codeBtn = element.shadowRoot!.querySelector<HTMLButtonElement>(
+           'header .header-actions #btn-get-code')!;
+       expect(codeBtn).toBeTruthy();
+       expect(codeBtn.textContent?.trim()).toBe('Get Code');
+       expect(codeBtn.getAttribute('aria-label')).toBe('Get Code');
+       expect(codeBtn.getAttribute('aria-expanded')).toBe('false');
+
+       codeBtn.click();
+       await element.updateComplete;
+       const dialogHost = element.shadowRoot!.querySelector<LitertCodeDialog>(
+           'litert-code-dialog')!;
+       expect(dialogHost).toBeTruthy();
+       await dialogHost.updateComplete;
+       await new Promise(resolve => requestAnimationFrame(resolve));
+
+       expect(element.isCodeDialogOpen).toBeTrue();
+       expect(codeBtn.getAttribute('aria-expanded')).toBe('true');
+
+       const dialog = dialogHost.shadowRoot!.querySelector<HTMLElement>(
+           '#code-snippet-dialog')!;
+       expect(dialog).toBeTruthy();
+       expect(dialog.getAttribute('role')).toBe('dialog');
+       expect(dialog.getAttribute('aria-modal')).toBe('true');
+       expect(dialog.getAttribute('aria-describedby')).toBe('code-dialog-desc');
+       expect(dialog.querySelector('#code-dialog-desc')?.textContent?.trim())
+           .toBe('Generated from your current model and chat settings.');
+
+       const preText =
+           dialog.querySelector('.code-popover-pre')!.textContent ?? '';
+       expect(preText).toContain(`model: '${MODELS[0]!.path}'`);
+       expect(preText).toContain('max_top_k: 40');
+       expect(preText).toContain('use_autosized_ringbuffers: true');
+       expect(preText).toContain('type: SamplerType.TOP_K');
+       expect(preText).toContain('audioBackend: Backend.GPU');
+       expect(preText).not.toContain('visionBackend');
+       expect(preText).toContain(
+           '// Disables image cache allocation (defaults to 4)\n    maxNumImages: 0,');
+
+       // Live settings updates reflect immediately while dialog is open.
+       mockSettings.temperature = 0.25;
+       dialogHost.requestUpdate();
+       await dialogHost.updateComplete;
+       expect(dialog.querySelector('.code-popover-pre')!.textContent)
+           .toContain('temperature: 0.25');
+
+       // Default npm tab + npm footer hint (no unreleased warning banner).
+       const npmTab =
+           dialog.querySelector<HTMLButtonElement>('#tab-code-npm')!;
+       const htmlTab =
+           dialog.querySelector<HTMLButtonElement>('#tab-code-html')!;
+       expect(npmTab.getAttribute('aria-selected')).toBe('true');
+       expect(htmlTab.getAttribute('aria-selected')).toBe('false');
+       expect(dialog.querySelector('#code-popover-unreleased-note')).toBeNull();
+       expect(dialog.querySelector('.code-popover-install')?.textContent)
+           .toContain('npm i @litert-lm/core');
+
+       // Focus starts on Copy code button and copies npm snippet.
+       const copyBtn =
+           dialog.querySelector<HTMLButtonElement>('#btn-copy-model-code')!;
+       expect(dialogHost.shadowRoot!.activeElement).toBe(copyBtn);
+
+       copyBtn.click();
+       await new Promise(resolve => setTimeout(resolve, 0));
+       await dialogHost.updateComplete;
+       expect(copyBtn.textContent).toContain('Copied');
+       expect(mockClipboardWriteText.calls.mostRecent().args[0])
+           .toContain('import {');
+
+       // Keyboard ArrowRight switches to HTML variant, updates footer & copy
+       // payload, and persists selection in storage across re-opens.
+       npmTab.focus();
+       npmTab.dispatchEvent(new KeyboardEvent(
+           'keydown', {key: 'ArrowRight', bubbles: true, cancelable: true}));
+       await dialogHost.updateComplete;
+       expect(htmlTab.getAttribute('aria-selected')).toBe('true');
+       expect(npmTab.getAttribute('aria-selected')).toBe('false');
+       expect(dialogHost.shadowRoot!.activeElement).toBe(htmlTab);
+       const htmlPreText =
+           dialog.querySelector('.code-popover-pre')!.textContent ?? '';
+       expect(htmlPreText).toContain('<!DOCTYPE html>');
+       expect(htmlPreText).toContain('<script type="importmap">');
+       expect(dialog.querySelector('.code-popover-install')?.textContent)
+           .toContain('Save as .html');
+
+       copyBtn.click();
+       await new Promise(resolve => setTimeout(resolve, 0));
+       await dialogHost.updateComplete;
+       expect(mockClipboardWriteText.calls.mostRecent().args[0])
+           .toContain('<!DOCTYPE html>');
+
+       // Tab wraps within the dialog across shadow boundaries.
+       const docsLink = dialog.querySelector<HTMLAnchorElement>(
+           '.code-popover-docs-link')!;
+       docsLink.focus();
+       docsLink.dispatchEvent(new KeyboardEvent(
+           'keydown', {key: 'Tab', bubbles: true, composed: true}));
+       expect(dialogHost.shadowRoot!.activeElement).toBe(copyBtn);
+
+       // '/' shortcut is ignored while the code dialog is open.
+       const slashEvent = new KeyboardEvent(
+           'keydown', {key: '/', bubbles: true, cancelable: true});
+       window.dispatchEvent(slashEvent);
+       expect(slashEvent.defaultPrevented).toBeFalse();
+
+       // Escape closes the dialog and restores focus to #btn-get-code.
+       dialog.dispatchEvent(new KeyboardEvent(
+           'keydown',
+           {key: 'Escape', bubbles: true, composed: true, cancelable: true}));
+       await element.updateComplete;
+       expect(element.isCodeDialogOpen).toBeFalse();
+       expect(element.shadowRoot!.querySelector('litert-code-dialog'))
+           .toBeNull();
+       expect(element.shadowRoot!.activeElement).toBe(codeBtn);
+
+       // Re-opening remembers the HTML variant from storage.
+       codeBtn.click();
+       await element.updateComplete;
+       const reopened = element.shadowRoot!.querySelector<LitertCodeDialog>(
+           'litert-code-dialog')!;
+       await reopened.updateComplete;
+       expect(reopened.shadowRoot!.querySelector('#tab-code-html')
+                  ?.getAttribute('aria-selected'))
+           .toBe('true');
+
+       // Clicking backdrop closes the dialog and restores focus.
+       const backdrop = element.shadowRoot!.querySelector<HTMLElement>(
+           '#code-dialog-backdrop')!;
+       backdrop.click();
+       await element.updateComplete;
+       expect(element.isCodeDialogOpen).toBeFalse();
+       expect(element.shadowRoot!.activeElement).toBe(codeBtn);
+
+       window.localStorage.removeItem(CODE_VARIANT_STORAGE_KEY);
+     });
+
+  it('maintains mutual exclusion between Get code dialog and Learn More drawer',
+     async () => {
+       const codeBtn = element.shadowRoot!.querySelector<HTMLButtonElement>(
+           '#btn-get-code')!;
+       const learnMoreBtn =
+           element.shadowRoot!.querySelector<HTMLButtonElement>(
+               '#btn-toggle-learn-more')!;
+
+       learnMoreBtn.click();
+       await element.updateComplete;
+       expect(element.isLearnMoreOpen).toBeTrue();
+       expect(element.isCodeDialogOpen).toBeFalse();
+
+       codeBtn.click();
+       await element.updateComplete;
+       expect(element.isCodeDialogOpen).toBeTrue();
+       expect(element.isLearnMoreOpen).toBeFalse();
+
+       learnMoreBtn.click();
+       await element.updateComplete;
+       expect(element.isLearnMoreOpen).toBeTrue();
+       expect(element.isCodeDialogOpen).toBeFalse();
      });
 });
