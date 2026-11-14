@@ -723,6 +723,20 @@ class Conversation {
     return std::nullopt;
   }
 
+  // Deletes all AI Edge Debugger captures of this conversation's underlying
+  // session while keeping the conversation open for subsequent turns. Waits for
+  // in-flight tasks of the session (including a background KV-cache refill
+  // after channel content filtering) to finish before deleting. Succeeds
+  // without doing anything when the debugger is not enabled. Must not be called
+  // from within `SendMessageAsync` callbacks.
+  absl::Status DeleteDebugCaptures() {
+    if (session_ == nullptr) {
+      return absl::FailedPreconditionError("Session is not available.");
+    }
+    ABSL_RETURN_IF_ERROR(session_->WaitUntilDone());
+    return session_->DeleteDebugCaptures();
+  }
+
  private:
   explicit Conversation(
       Engine& engine, std::unique_ptr<Engine::Session> session,

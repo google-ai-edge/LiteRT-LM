@@ -58,6 +58,23 @@ LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_enable_debugger(
   return kLiteRtLmStatusOk;
 }
 
+LiteRtLmStatusCode litert_lm_experimental_session_delete_debug_captures(
+    LiteRtLmSession* session) {
+  if (!IsValidSession(session)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  return litert::lm::c::ToCStatus(session->session->DeleteDebugCaptures());
+}
+
+LiteRtLmStatusCode litert_lm_experimental_conversation_delete_debug_captures(
+    LiteRtLmConversation* conversation) {
+  if (!IsValidConversation(conversation)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  return litert::lm::c::ToCStatus(
+      conversation->conversation->DeleteDebugCaptures());
+}
+
 LiteRtLmStatusCode litert_lm_experimental_session_get_debug_info(
     LiteRtLmSession* session, LiteRtLmSessionDebugInfo** out_debug_info) {
   LITERT_LM_C_RETURN_IF_NULL(out_debug_info);

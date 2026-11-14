@@ -366,6 +366,15 @@ class SessionInterface {
     return std::nullopt;
   }
 
+  // Deletes all AI Edge Debugger captures of this session while keeping the
+  // session open. Call it between turns to keep only the latest captures, since
+  // captures grow over long sessions, or before closing the session so that its
+  // user-derived captures and empty capture directory are removed. Fails with
+  // FailedPreconditionError while the session has active tasks. Succeeds
+  // without doing anything when the debugger is not enabled or not supported by
+  // the session. Must not be called from inside a task callback.
+  virtual absl::Status DeleteDebugCaptures() { return absl::OkStatus(); }
+
   // Returns the LiteRT environment associated with this session, if available.
   // The returned pointer is non-owning and guaranteed valid as long as the
   // parent Engine is alive.
