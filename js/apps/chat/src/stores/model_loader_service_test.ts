@@ -17,7 +17,7 @@
 import {ActivationDataType, Backend, Engine, getOrLoadGlobalLiteRtLm, LiteRtLm, ResolvedModelInput, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
 import {EngineFake} from '@litert-lm/core/testing';
 
-import {getModelKey, ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
+import {formatModelLoadError, getModelKey, ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
 import {SettingsStore} from './settings_store.js';
 
 /** Returns a fake cache that has a 3-byte model. */
@@ -875,6 +875,32 @@ describe('ModelLoaderService', () => {
          await load();
          callArgs = createEngine.calls.mostRecent().args[0];
          expect(callArgs.backend).toBeUndefined();
+         expect(callArgs.mainExecutorSettings?.maxNumImages).toBe(8);
+
+         // Turning Vision and/or Audio off omits their backends, activation
+         // precisions, and maxNumImages, and triggers needsModelReload.
+         settingsStore.visionBackend = 'off';
+         settingsStore.visionPrecision = 'fp16';
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeTrue();
+         await load();
+         callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.visionBackend).toBeUndefined();
+         expect(callArgs.visionActivationDataType).toBeUndefined();
+         expect(callArgs.mainExecutorSettings?.maxNumImages).toBeUndefined();
+         expect(callArgs.audioBackend).toBe(Backend.GPU);
+
+         settingsStore.audioBackend = 'off';
+         settingsStore.audioPrecision = 'fp32';
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeTrue();
+         await load();
+         callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.visionBackend).toBeUndefined();
+         expect(callArgs.audioBackend).toBeUndefined();
+         expect(callArgs.audioActivationDataType).toBeUndefined();
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeFalse();
        });
   });
 
@@ -896,5 +922,35 @@ describe('ModelLoaderService', () => {
       expect(warnSpy).toHaveBeenCalledTimes(1);
       expect(warnSpy).toHaveBeenCalledWith('Some legitimate warning message');
     });
+  });
+
+  describe('formatModelLoadError', () => {
+    it('surfaces actionable WebGPU / smaller-model guidance on CPU OOM or WASM trap without raw stack traces',
+       () => {
+         settingsStore.selectedModelPath =
+             'https://example.com/large-standard.litertlm';
+         settingsStore.textBackend = 'cpu';
+
+         const oomErr = new Error(
+             'RuntimeError: Aborted(OOM)\n    at wasm://wasm/00a1b2:0x1234\n    at Engine.create');
+         const oomMsg = formatModelLoadError(oomErr, settingsStore);
+         expect(oomMsg).toContain('out of WASM memory on CPU');
+         expect(oomMsg).toContain('Switch backend to GPU');
+         expect(oomMsg).toContain('smaller model');
+         expect(oomMsg).not.toContain('wasm://');
+
+         const trapErr = new Error(
+             'unreachable\n    at wasm://wasm/00a1b2:0x9999');
+         trapErr.name = 'RuntimeError';
+         const trapMsg = formatModelLoadError(trapErr, settingsStore);
+         expect(trapMsg).toContain('WASM aborted while loading on CPU');
+         expect(trapMsg).toContain('Switch backend to GPU');
+         expect(trapMsg).not.toContain('wasm://');
+
+         // Non-OOM errors keep their concise first-line reason.
+         const otherErr = new Error('HTTP 403 Forbidden\n    at fetch');
+         expect(formatModelLoadError(otherErr, settingsStore))
+             .toBe('Failed to load model: HTTP 403 Forbidden');
+       });
   });
 });

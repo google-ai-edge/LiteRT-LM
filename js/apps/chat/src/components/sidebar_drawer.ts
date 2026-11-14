@@ -19,7 +19,7 @@ import {customElement, property, state} from 'lit/decorators.js';
 
 import {LlmChatStateController} from '../state_controller.js';
 import {getModelKey} from '../stores/model_loader_service.js';
-import {getModalityConfigs, getNonDefaultBackendSummary, isGpuOnlyTextModel, Modality, MODALITIES, PartialSettingsSchema, Settings, SettingsGroup} from '../stores/settings_store.js';
+import {getCpuTextMemoryWarning, getKnownModelSizeBytes, getModalityConfigs, getNonDefaultBackendSummary, isGpuOnlyTextModel, Modality, MODALITIES, PartialSettingsSchema, Settings, SettingsGroup} from '../stores/settings_store.js';
 import {CHAT_TOOLS} from '../stores/tools.js';
 import {sharedStyles} from '../styles/shared_styles.js';
 
@@ -649,9 +649,7 @@ export class LitertSidebar extends LitElement {
       }
 
       .experimental-note {
-        height: 36px;
         min-height: 36px;
-        max-height: 36px;
         box-sizing: border-box;
         padding: 5px 8px;
         border-radius: 7px;
@@ -662,7 +660,12 @@ export class LitertSidebar extends LitElement {
         color: var(--text-muted, #94a3b8);
         display: flex;
         align-items: center;
-        overflow: hidden;
+      }
+
+      .experimental-note.warning {
+        background-color: color-mix(in srgb, var(--warning, #fbbf24) 10%, var(--bg-card, #171c26));
+        border-color: color-mix(in srgb, var(--warning, #fbbf24) 45%, var(--border, #262f40));
+        color: var(--warning-text, #fbbf24);
       }
 
       .experimental-note .nowrap {
@@ -1533,6 +1536,7 @@ export class LitertSidebar extends LitElement {
     const overrides = MODALITIES.flatMap(modality => {
       const {backend, precision} = configs[modality];
       const prefix = modality[0].toUpperCase();
+      if (backend === 'off') return [`${prefix}:Off`];
       if (backend === 'cpu') return [`${prefix}:CPU`];
       if (precision !== 'default') {
         return [`${prefix}:${precision.toUpperCase()}`];
@@ -1553,27 +1557,52 @@ export class LitertSidebar extends LitElement {
     const gpuOnlyText =
         isGpuOnlyTextModel(settings.selectedModelPath, settings);
     const configs = getModalityConfigs(settings);
+    const cachedSizeBytes = this.state.modelLoader.cachedModels?.get(
+        getModelKey(settings.selectedModelPath));
+    const knownSizeBytes = getKnownModelSizeBytes(
+        settings.selectedModelPath, settings, cachedSizeBytes);
+    const cpuMemoryWarning = getCpuTextMemoryWarning(
+        settings.selectedModelPath, settings, cachedSizeBytes);
+    const showCpuMemoryWarning =
+        !gpuOnlyText && configs.text.backend === 'cpu' &&
+        Boolean(cpuMemoryWarning);
 
     const textBackendReason =
-        'This model\'s text decoder is WebGPU-only (-gpu.litertlm). Load a standard .litertlm (<1.5 GB) to run Text on CPU.';
+        'This model uses a WebGPU-only text decoder (-gpu.litertlm). Choose a standard .litertlm model to try CPU.';
     const cpuPrecisionReason =
         'CPU backend always executes in FP32 / native graph precision.';
+    const offPrecisionReason =
+        'Turn this modality on (GPU or CPU) to configure activation precision.';
 
+    const anyModalityOff =
+        configs.vision.backend === 'off' || configs.audio.backend === 'off';
     const noteContent = gpuOnlyText ? html`
-          <span>This model's text is <span class="nowrap">WebGPU-only</span>. CPU text needs a standard <span class="nowrap">.litertlm</span> (<span class="nowrap">&lt;1.5 GB</span>).</span>
+          <span>This model's text is <span class="nowrap">WebGPU-only</span> (<span class="nowrap">-gpu.litertlm</span>). Use a standard <span class="nowrap">.litertlm</span> for CPU.</span>
+        ` : showCpuMemoryWarning ? html`
+          <span>${cpuMemoryWarning}</span>
+        ` : configs.text.backend === 'cpu' && knownSizeBytes === null ? html`
+          <span>Text CPU runs in WASM (FP32). May not fit in WASM memory (<span class="nowrap">~1.5 GB</span> practical limit); loading may fail.</span>
         ` : configs.text.backend === 'cpu' ? html`
-          <span>Text CPU runs in WASM (FP32) for standard <span class="nowrap">.litertlm</span> models (<span class="nowrap">&lt;1.5 GB</span>).</span>
+          <span>Text CPU runs in WASM (FP32; <span class="nowrap">~1.5 GB</span> practical WASM memory limit).</span>
+        ` : anyModalityOff ? html`
+          <span>Off modalities skip weight loading to save memory. GPU defaults: Text FP16, Vision/Audio FP32.</span>
         ` : (configs.vision.backend === 'cpu' || configs.audio.backend === 'cpu') ? html`
           <span>CPU modalities run in WASM (FP32). GPU defaults: Text FP16, Vision/Audio FP32.</span>
         ` : html`
-          <span>Experimental overrides. GPU defaults: Text FP16, Vision &amp; Audio FP32.</span>
+          <span>Experimental overrides. Set Vision or Audio to Off to skip loading weights.</span>
         `;
 
     const renderRow = (modality: Modality, label: string,
                        defaultPrecision: string) => {
       const {backend, precision} = configs[modality];
       const backendLocked = modality === 'text' && gpuOnlyText;
+      const canTurnOff = modality !== 'text';
+      const isOff = backend === 'off';
       const onCpu = backend === 'cpu';
+      const backendTitle = backendLocked ?
+          textBackendReason :
+          (modality === 'text' && cpuMemoryWarning ? cpuMemoryWarning :
+                                                     nothing);
       return html`
           <div class="exp-row">
             <span class="exp-modality-label">${label}</span>
@@ -1582,7 +1611,7 @@ export class LitertSidebar extends LitElement {
               aria-label="${label} backend"
               .value=${backend}
               ?disabled=${backendLocked}
-              title=${backendLocked ? textBackendReason : nothing}
+              title=${backendTitle}
               aria-describedby=${
           modality === 'text' ? 'experimental-note' : nothing}
               @change=${(e: Event) =>
@@ -1590,19 +1619,24 @@ export class LitertSidebar extends LitElement {
             >
               <option value="gpu">GPU</option>
               <option value="cpu">CPU</option>
+              ${canTurnOff ? html`<option value="off">Off</option>` : nothing}
             </select>
             <select
               id="${modality}-precision"
               aria-label="${label} precision"
-              .value=${onCpu ? 'fp32' : precision}
-              ?disabled=${onCpu}
-              title=${onCpu ? cpuPrecisionReason : nothing}
+              .value=${isOff ? 'off' : (onCpu ? 'fp32' : precision)}
+              ?disabled=${isOff || onCpu}
+              title=${
+          isOff ? offPrecisionReason :
+                  (onCpu ? cpuPrecisionReason : nothing)}
               aria-describedby=${
-          modality === 'text' || onCpu ? 'experimental-note' : nothing}
+          modality === 'text' || onCpu || isOff ? 'experimental-note' : nothing}
               @change=${(e: Event) =>
           this.handleSettingInput(e, `${modality}Precision`)}
             >
-              ${onCpu ? html`
+              ${isOff ? html`
+                <option value="off">Off</option>
+              ` : onCpu ? html`
                 <option value="fp32">FP32 (CPU)</option>
               ` : html`
                 <option value="default">Default (${defaultPrecision})</option>
@@ -1633,7 +1667,10 @@ export class LitertSidebar extends LitElement {
           ${renderRow('audio', 'Audio', 'FP32')}
         </div>
 
-        <div id="experimental-note" class="experimental-note">
+        <div
+          id="experimental-note"
+          class="experimental-note ${showCpuMemoryWarning ? 'warning' : ''}"
+        >
           ${noteContent}
         </div>
 

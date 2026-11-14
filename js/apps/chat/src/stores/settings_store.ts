@@ -27,11 +27,18 @@ export const CustomModelSchema = z.object({
 /** Type for custom model stored in the file system. */
 export type CustomModel = z.infer<typeof CustomModelSchema>;
 
-/** Compute backend choice for a model modality in experimental settings. */
+/** Compute backend choice for the text modality (`'gpu'` or `'cpu'`). */
 export const ModalityBackendSchema = z.enum(['gpu', 'cpu']);
 
 /** Compute backend choice (`'gpu'` or `'cpu'`). */
 export type ModalityBackend = z.infer<typeof ModalityBackendSchema>;
+
+/** Compute backend choice for optional modalities (`'gpu'`, `'cpu'`, or `'off'`). */
+export const OptionalModalityBackendSchema = z.enum(['gpu', 'cpu', 'off']);
+
+/** Compute backend choice for Vision and Audio (`'gpu'`, `'cpu'`, or `'off'`). */
+export type OptionalModalityBackend =
+    z.infer<typeof OptionalModalityBackendSchema>;
 
 /** Activation precision override for GPU modalities. */
 export const ActivationPrecisionSchema = z.enum(['default', 'fp16', 'fp32']);
@@ -58,8 +65,8 @@ export const SettingsSchema = z.object({
   /** Names of the tools in `CHAT_TOOLS` that the model can't use. */
   disabledTools: z.array(z.string()),
   textBackend: ModalityBackendSchema.default('gpu'),
-  visionBackend: ModalityBackendSchema.default('gpu'),
-  audioBackend: ModalityBackendSchema.default('gpu'),
+  visionBackend: OptionalModalityBackendSchema.default('gpu'),
+  audioBackend: OptionalModalityBackendSchema.default('gpu'),
   textPrecision: ActivationPrecisionSchema.default('default'),
   visionPrecision: ActivationPrecisionSchema.default('default'),
   audioPrecision: ActivationPrecisionSchema.default('default'),
@@ -82,7 +89,7 @@ export type ModelSettings = Pick<
     ExperimentalSettingKey>;
 
 /** The settings in the "Model Config" tab, which can be reset together. */
-const DEFAULT_MODEL_CONFIG = {
+export const DEFAULT_MODEL_CONFIG = {
   contextLength: 4096,
   maxOutputTokens: 2048,
   samplerType: 'greedy',
@@ -94,7 +101,7 @@ const DEFAULT_MODEL_CONFIG = {
 };
 
 /** The settings in the "System Prompt" tab, which can be reset together. */
-const DEFAULT_SYSTEM_PROMPT_CONFIG = {
+export const DEFAULT_SYSTEM_PROMPT_CONFIG = {
   systemPrompt: '',
   disabledTools: [] as string[],
 };
@@ -111,7 +118,8 @@ export const EXPERIMENTAL_SETTING_KEYS = [
 
 type ExperimentalSettingKey = (typeof EXPERIMENTAL_SETTING_KEYS)[number];
 
-const DEFAULT_EXPERIMENTAL_CONFIG: Pick<Settings, ExperimentalSettingKey> = {
+/** Default values for experimental modality backend and precision settings. */
+export const DEFAULT_EXPERIMENTAL_CONFIG: Pick<Settings, ExperimentalSettingKey> = {
   textBackend: 'gpu',
   visionBackend: 'gpu',
   audioBackend: 'gpu',
@@ -210,6 +218,72 @@ export function isGpuOnlyTextModel(
   return /-gpu\.litertlm$/i.test(cleanPath);
 }
 
+/**
+ * Practical model size threshold (1.5 GB decimal) at or above which loading
+ * text weights into 32-bit WASM linear memory on CPU is likely to fail.
+ */
+export const CPU_TEXT_WASM_WARNING_BYTES = 1.5e9;
+
+const SIZE_UNIT_MULTIPLIERS: Readonly<Record<string, number>> = {
+  'B': 1,
+  'KB': 1e3,
+  'MB': 1e6,
+  'GB': 1e9,
+  'TB': 1e12,
+  'KIB': 1024,
+  'MIB': 1024 ** 2,
+  'GIB': 1024 ** 3,
+};
+
+/** Parses a human-readable model size (e.g. `'2.3 GB'`, `'850 MB'`) to bytes. */
+export function parseModelSizeBytes(sizeLabel: string|undefined): number|null {
+  if (!sizeLabel) return null;
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB)\s*$/i.exec(
+      sizeLabel);
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value < 0) return null;
+  const mult = SIZE_UNIT_MULTIPLIERS[match[2]!.toUpperCase()];
+  return mult ? Math.round(value * mult) : null;
+}
+
+/**
+ * Returns the known byte size of `modelPath` from `cachedSizeBytes` or its
+ * `CustomModel.size` metadata, or `null` when unknown.
+ */
+export function getKnownModelSizeBytes(
+    modelPath: string,
+    models?: Partial<Pick<Settings, 'customModels'|'localDirModels'>>,
+    cachedSizeBytes?: number): number|null {
+  if (cachedSizeBytes !== undefined && Number.isFinite(cachedSizeBytes) &&
+      cachedSizeBytes > 0) {
+    return cachedSizeBytes;
+  }
+  const matched = findModel(models ?? {}, modelPath);
+  return parseModelSizeBytes(matched?.size);
+}
+
+/**
+ * Returns a non-blocking warning message when a non-`-gpu.litertlm` model's
+ * known size is at or above the ~1.5 GB practical WASM memory limit, or `null`
+ * when smaller, unknown, or WebGPU-only (`-gpu.litertlm`).
+ */
+export function getCpuTextMemoryWarning(
+    modelPath: string,
+    models?: Partial<Pick<Settings, 'customModels'|'localDirModels'>>,
+    cachedSizeBytes?: number): string|null {
+  if (isGpuOnlyTextModel(modelPath, models)) {
+    return null;
+  }
+  const bytes = getKnownModelSizeBytes(modelPath, models, cachedSizeBytes);
+  if (bytes === null || bytes < CPU_TEXT_WASM_WARNING_BYTES) {
+    return null;
+  }
+  const matched = findModel(models ?? {}, modelPath);
+  const sizeLabel = matched?.size?.trim() || `${(bytes / 1e9).toFixed(2)} GB`;
+  return `${sizeLabel} may not fit in WASM memory (~1.5 GB practical limit); loading may fail.`;
+}
+
 /** Modalities with their own experimental backend and precision settings. */
 export const MODALITIES = ['text', 'vision', 'audio'] as const;
 
@@ -218,8 +292,15 @@ export type Modality = (typeof MODALITIES)[number];
 
 /** The backend and activation precision that a modality runs with. */
 export interface ModalityConfig {
-  backend: ModalityBackend;
+  backend: OptionalModalityBackend;
   precision: ActivationPrecision;
+}
+
+/** Resolved modality configurations across Text, Vision, and Audio. */
+export interface ModalityConfigs {
+  text: {backend: ModalityBackend; precision: ActivationPrecision};
+  vision: ModalityConfig;
+  audio: ModalityConfig;
 }
 
 /**
@@ -227,17 +308,24 @@ export interface ModalityConfig {
  * on GPU for WebGPU-only (`-gpu.litertlm`) models.
  */
 export function getModalityConfigs(
-    settings: Pick<Settings, 'selectedModelPath'|ExperimentalSettingKey>&
-    Partial<Pick<Settings, 'customModels'|'localDirModels'>>):
-    Record<Modality, ModalityConfig> {
-  const gpuOnlyText = isGpuOnlyTextModel(settings.selectedModelPath, settings);
+    settings: Pick<Settings, 'selectedModelPath'>&
+    Partial<Pick<Settings, ExperimentalSettingKey|'customModels'|'localDirModels'>>):
+    ModalityConfigs {
+  const gpuOnlyText =
+      isGpuOnlyTextModel(settings.selectedModelPath ?? '', settings);
   return {
     text: {
-      backend: gpuOnlyText ? 'gpu' : settings.textBackend,
-      precision: settings.textPrecision,
+      backend: gpuOnlyText ? 'gpu' : (settings.textBackend ?? 'gpu'),
+      precision: settings.textPrecision ?? 'default',
     },
-    vision: {backend: settings.visionBackend, precision: settings.visionPrecision},
-    audio: {backend: settings.audioBackend, precision: settings.audioPrecision},
+    vision: {
+      backend: settings.visionBackend ?? 'gpu',
+      precision: settings.visionPrecision ?? 'default',
+    },
+    audio: {
+      backend: settings.audioBackend ?? 'gpu',
+      precision: settings.audioPrecision ?? 'default',
+    },
   };
 }
 
@@ -251,9 +339,9 @@ export function coerceGpuOnlyTextBackend(
   }
 }
 
-/** Summary of non-default modality backend overrides (`WebGPU · CPU` / `CPU`). */
+/** Summary of non-default modality backend or disabled-modality overrides. */
 export interface NonDefaultBackendSummary {
-  label: 'WebGPU · CPU'|'CPU';
+  label: 'WebGPU · CPU'|'CPU'|'Text only'|'No Vision'|'No Audio';
   detail: string;
 }
 
@@ -265,20 +353,42 @@ export function getNonDefaultBackendSummary(
     settings: Parameters<typeof getModalityConfigs>[0]):
     NonDefaultBackendSummary|null {
   const configs = getModalityConfigs(settings);
-  const cpuModalities = MODALITIES.filter(m => configs[m].backend === 'cpu')
-                            .map(m => m[0].toUpperCase() + m.slice(1));
-  if (cpuModalities.length === 0) {
+  const cap = (m: Modality) => m[0].toUpperCase() + m.slice(1);
+  const enabledModalities =
+      MODALITIES.filter(m => configs[m].backend !== 'off');
+  const offModalities =
+      MODALITIES.filter(m => configs[m].backend === 'off').map(cap);
+  const cpuModalities =
+      enabledModalities.filter(m => configs[m].backend === 'cpu').map(cap);
+
+  if (cpuModalities.length === 0 && offModalities.length === 0) {
     return null;
   }
-  if (cpuModalities.length === MODALITIES.length) {
+  if (cpuModalities.length === 0) {
+    if (offModalities.length === 2) {
+      return {
+        label: 'Text only',
+        detail: 'Modalities: Text only on WebGPU (Vision, Audio off)',
+      };
+    }
+    const offName = offModalities[0] as 'Vision' | 'Audio';
+    const onNames = enabledModalities.map(cap).join(', ');
+    return {
+      label: offName === 'Vision' ? 'No Vision' : 'No Audio',
+      detail: `Modalities: ${offName} off (${onNames} on WebGPU)`,
+    };
+  }
+  const offSuffix =
+      offModalities.length > 0 ? `; ${offModalities.join(', ')} off` : '';
+  if (cpuModalities.length === enabledModalities.length) {
     return {
       label: 'CPU',
-      detail: 'Backend: CPU (Text, Vision, Audio in WASM FP32)',
+      detail: `Backend: CPU (${enabledModalities.map(cap).join(', ')} in WASM FP32${offSuffix})`,
     };
   }
   return {
     label: 'WebGPU · CPU',
-    detail: `Backend: WebGPU · CPU (${cpuModalities.join(', ')} on CPU)`,
+    detail: `Backend: WebGPU · CPU (${cpuModalities.join(', ')} on CPU${offSuffix})`,
   };
 }
 
@@ -297,8 +407,10 @@ export class SettingsStore implements Settings {
   systemPrompt = DEFAULT_SYSTEM_PROMPT_CONFIG.systemPrompt;
   disabledTools: string[] = [...DEFAULT_SYSTEM_PROMPT_CONFIG.disabledTools];
   textBackend: ModalityBackend = DEFAULT_EXPERIMENTAL_CONFIG.textBackend;
-  visionBackend: ModalityBackend = DEFAULT_EXPERIMENTAL_CONFIG.visionBackend;
-  audioBackend: ModalityBackend = DEFAULT_EXPERIMENTAL_CONFIG.audioBackend;
+  visionBackend: OptionalModalityBackend =
+      DEFAULT_EXPERIMENTAL_CONFIG.visionBackend;
+  audioBackend: OptionalModalityBackend =
+      DEFAULT_EXPERIMENTAL_CONFIG.audioBackend;
   textPrecision: ActivationPrecision =
       DEFAULT_EXPERIMENTAL_CONFIG.textPrecision;
   visionPrecision: ActivationPrecision =
