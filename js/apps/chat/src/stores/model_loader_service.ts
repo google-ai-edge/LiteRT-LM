@@ -20,16 +20,18 @@ import {teeStream} from '../tee_stream.js';
 
 import {LocalDirectoryService} from './local_directory_service.js';
 import {parseModelReference} from './model_reference.js';
-import {CustomModel, EXPERIMENTAL_SETTING_KEYS, getModalityConfigs, LEGACY_MODEL_PATHS, ModalityBackend, ModalityConfig, ModelSettings} from './settings_store.js';
+import {CustomModel, DEFAULT_MODEL_CONFIG, EXPERIMENTAL_SETTING_KEYS, getModalityConfigs, LEGACY_MODEL_PATHS, MODALITIES, ModalityBackend, ModalityConfig, ModelSettings} from './settings_store.js';
 
-function toBackend({backend}: ModalityConfig): Backend {
+/** Converts a modality's backend setting into `@litert-lm/core`'s `Backend`. */
+export function toOptionalBackend({backend}: ModalityConfig): Backend|undefined {
+  if (backend === 'off') return undefined;
   return backend === 'cpu' ? Backend.CPU : Backend.GPU;
 }
 
 /** Returns the activation precision override, which only applies on GPU. */
-function toActivationDataType({backend, precision}: ModalityConfig):
+export function toActivationDataType({backend, precision}: ModalityConfig):
     ActivationDataType|undefined {
-  if (backend === 'cpu' || precision === 'default') return undefined;
+  if (backend !== 'gpu' || precision === 'default') return undefined;
   return precision === 'fp32' ? ActivationDataType.FLOAT32 :
                                 ActivationDataType.FLOAT16;
 }
@@ -39,11 +41,95 @@ const SUPPRESSED_WARNING_PATTERNS = [
   /tasks\.cc:.*Failed to get (?:prefill|decode) profile summary: UNIMPLEMENTED: GetProfileSummary not implemented for backend: GpuArtisan/,
 ];
 
+const WASM_OOM_ERROR_PATTERN =
+    /out of memory|\boom\b|cannot enlarge memory|cannot allocate|allocation failed|bad_alloc|array buffer allocation|invalid (?:typed )?array (?:buffer )?length|resource_exhausted|failed to (?:allocate|reserve) memory/i;
+
+const WASM_ABORT_TRAP_PATTERN =
+    /\b(?:RuntimeError:\s*)?(?:Aborted\([^)]*\)|unreachable|memory access out of bounds)\b/i;
+
+/**
+ * Formats an error thrown while loading or compiling a model into an actionable
+ * status message without dumping raw multi-line WASM stack traces.
+ */
+export function formatModelLoadError(
+    err: unknown,
+    settings: ModelSettings&
+    Partial<Pick<{customModels: CustomModel[]; localDirModels: CustomModel[]},
+                 'customModels'|'localDirModels'>>): string {
+  const error = err as {name?: string; message?: string} | null | undefined;
+  if (error?.name === 'AbortError') {
+    return 'Model download cancelled by user.';
+  }
+  const rawMessage = (typeof error?.message === 'string' && error.message) ?
+      error.message :
+      String(err);
+  const firstLine = rawMessage.split('\n')[0]!.trim();
+  const modalities = getModalityConfigs(settings);
+  const usesCpu = MODALITIES.some(m => modalities[m].backend === 'cpu');
+
+  if (WASM_OOM_ERROR_PATTERN.test(rawMessage)) {
+    if (usesCpu) {
+      return 'Failed to load model: out of WASM memory on CPU. Switch backend to GPU in Experimental settings or try a smaller model (~1.5 GB or less).';
+    }
+    return 'Failed to load model: out of memory. Close other tabs or try a smaller model.';
+  }
+  if (usesCpu &&
+      (error?.name === 'RuntimeError' ||
+       WASM_ABORT_TRAP_PATTERN.test(rawMessage))) {
+    return 'Failed to load model: WASM aborted while loading on CPU (likely out of WASM memory). Switch backend to GPU in Experimental settings or try a smaller model (~1.5 GB or less).';
+  }
+  return `Failed to load model: ${firstLine || rawMessage}`;
+}
+
 /**
  * Maximum number of images in a conversation. Artisan models reserve GPU memory
  * for this many images' embeddings when the model is loaded.
  */
-const MAX_NUM_IMAGES = 8;
+export const MAX_NUM_IMAGES = 8;
+
+/** Engine options derived from `ModelSettings` for `Engine.create()`. */
+export interface UserEngineOptions {
+  backend?: Backend;
+  activationDataType?: ActivationDataType;
+  maxNumTokens: number;
+  maxNumImages?: number;
+  maxTopK: number;
+  visionBackend?: Backend;
+  visionActivationDataType?: ActivationDataType;
+  audioBackend?: Backend;
+  audioActivationDataType?: ActivationDataType;
+  speculativeDecodingConfig?: {mode: SpeculativeDecodingMode};
+}
+
+/**
+ * Derives `@litert-lm/core` `Engine.create()` options from the user's current
+ * settings. Shared with the code snippet generator so the two cannot drift.
+ */
+export function getUserEngineOptions(
+    settings: ModelSettings&
+    Partial<Pick<{customModels: CustomModel[]; localDirModels: CustomModel[]},
+                 'customModels'|'localDirModels'>>): UserEngineOptions {
+  const modalities = getModalityConfigs(settings);
+  const useCpuText = modalities.text.backend === 'cpu';
+  const visionEnabled = modalities.vision.backend !== 'off';
+  const contextLength =
+      settings.contextLength ?? DEFAULT_MODEL_CONFIG.contextLength;
+  const topK = settings.topK ?? DEFAULT_MODEL_CONFIG.topK;
+  return {
+    backend: useCpuText ? Backend.CPU : undefined,
+    activationDataType: toActivationDataType(modalities.text),
+    maxNumTokens: contextLength,
+    maxNumImages: !useCpuText && visionEnabled ? MAX_NUM_IMAGES : undefined,
+    maxTopK: Math.max(1, topK),
+    visionBackend: toOptionalBackend(modalities.vision),
+    visionActivationDataType: toActivationDataType(modalities.vision),
+    audioBackend: toOptionalBackend(modalities.audio),
+    audioActivationDataType: toActivationDataType(modalities.audio),
+    speculativeDecodingConfig: settings.enableSpeculativeDecoding ?
+        {mode: SpeculativeDecodingMode.ADAPTIVE} :
+        undefined,
+  };
+}
 
 /**
  * Returns a model's key in `ModelLoaderService.cachedModels`,
@@ -477,48 +563,58 @@ export class ModelLoaderService {
 
       this.updateStatus(`Compiling Model (${modelFilename})...`);
 
+      const engineOpts = getUserEngineOptions(settings);
       this.engine = await this.createEngine({
         model: modelInput,
         // Without a backend, Engine.create() picks GPU or GPU_ARTISAN.
-        ...(useCpuText ? {backend: Backend.CPU} : {}),
-        activationDataType: toActivationDataType(modalities.text),
+        ...(engineOpts.backend !== undefined ? {backend: engineOpts.backend} :
+                                               {}),
+        activationDataType: engineOpts.activationDataType,
         mainExecutorSettings: useCpuText ? {
-          maxNumTokens: settings.contextLength,
+          maxNumTokens: engineOpts.maxNumTokens,
         } : {
-          maxNumTokens: settings.contextLength,
+          maxNumTokens: engineOpts.maxNumTokens,
           // Artisan (GPU_ARTISAN) models reserve GPU memory for the embeddings
           // of this many images per conversation up front, and can't take
-          // images if it's unset.
-          maxNumImages: MAX_NUM_IMAGES,
+          // images if it's unset. Omit when Vision is turned off.
+          ...(engineOpts.maxNumImages !== undefined ?
+                  {maxNumImages: engineOpts.maxNumImages} :
+                  {}),
           backendConfig: {
             num_output_candidates: 1,
             wait_for_weight_uploads: true,
             num_decode_steps_per_sync: 3,
             sequence_batch_size: 0,
             supported_lora_ranks: [] as number[],
-            max_top_k: Math.max(1, settings.topK),
+            max_top_k: engineOpts.maxTopK,
             enable_decode_logits: false,
             enable_external_embeddings: false,
             use_submodel: false,
             use_autosized_ringbuffers: true,
           } as GpuArtisanConfig,
         },
-        // Always enable image input. On web, only one vision signature is
-        // loaded by default to fit in the wasm heap.
-        visionBackend: toBackend(modalities.vision),
-        visionActivationDataType: toActivationDataType(modalities.vision),
-        // Always enable audio input. On GPU, the audio encoder's weights are
-        // released from the wasm heap after they are uploaded.
-        audioBackend: toBackend(modalities.audio),
-        audioActivationDataType: toActivationDataType(modalities.audio),
+        ...(engineOpts.visionBackend !== undefined ?
+                {visionBackend: engineOpts.visionBackend} :
+                {}),
+        ...(engineOpts.visionActivationDataType !== undefined ? {
+          visionActivationDataType: engineOpts.visionActivationDataType,
+        } :
+                                                                {}),
+        ...(engineOpts.audioBackend !== undefined ?
+                {audioBackend: engineOpts.audioBackend} :
+                {}),
+        ...(engineOpts.audioActivationDataType !== undefined ? {
+          audioActivationDataType: engineOpts.audioActivationDataType,
+        } :
+                                                               {}),
         // The drafter can only be loaded when the engine is created, so this
         // can't be changed per session. ADAPTIVE only speculates while it's
         // faster than decoding normally. Models without a drafter can't use
         // speculative decoding.
-        ...(settings.enableSpeculativeDecoding ? {
-          speculativeDecodingConfig: {mode: SpeculativeDecodingMode.ADAPTIVE}
+        ...(engineOpts.speculativeDecodingConfig ? {
+          speculativeDecodingConfig: engineOpts.speculativeDecodingConfig,
         } :
-                                     {}),
+                                                   {}),
         benchmarkEnabled: true
       });
 
@@ -540,12 +636,7 @@ export class ModelLoaderService {
       this.downloadProgresses.delete(modelKey);
       this.downloadSpeeds.delete(modelKey);
 
-      const error = err as Error;
-      if (error.name === 'AbortError') {
-        this.updateStatus('Model download cancelled by user.');
-      } else {
-        this.updateStatus(`Failed to load model: ${error.message || error}`);
-      }
+      this.updateStatus(formatModelLoadError(err, settings));
       this.updateCallback();
     } finally {
       this.downloadAbortController = null;

@@ -643,13 +643,17 @@ export function renderModelDropdownItems(
     <div class="dropdown-footer-section">
       ${(() => {
         const backendOverride = getNonDefaultBackendSummary(state.settings);
+        const overrideHeading =
+            backendOverride?.detail.startsWith('Modalities:') ?
+            'Modalities:' :
+            'Backend override:';
         return backendOverride ? html`
           <div
             id="${idPrefix}-backend-note"
             class="dropdown-footer-row backend-override-bar"
             title=${backendOverride.detail}
           >
-            <span>Backend override:</span>
+            <span>${overrideHeading}</span>
             <span class="cache-bar-value">${backendOverride.label}</span>
           </div>
         ` : nothing;
