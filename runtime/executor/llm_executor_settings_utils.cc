@@ -77,7 +77,7 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
   LITERT_RETURN_IF_ERROR(
       litert::gated_delta_net::RegisterGatedDeltaNetCustomOps(
           compilation_options));
-  std::string cache_path = executor_settings.GetCacheDir();
+  [[maybe_unused]] std::string cache_path = executor_settings.GetCacheDir();
 
   switch (executor_settings.GetBackend()) {
     case Backend::GPU: {
