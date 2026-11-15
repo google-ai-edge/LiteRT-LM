@@ -34,8 +34,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
+  gate:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/check-pr-state.yml
+
   presubmit:
+    needs: gate
+    if: needs.gate.outputs.should_skip != 'true'
     name: "Presubmit-Mac"
     runs-on: macos-latest
     permissions:
@@ -51,9 +61,13 @@ jobs:
                          (github.event_name == 'workflow_dispatch' && inputs.REFRESH_CACHE) }}
     steps:
       - name: Checkout code.
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           lfs: true
+          persist-credentials: false
+
+      - name: Install pytest
+        run: python3 -m pip install --break-system-packages pytest==8.3.4
 
       - name : Set up cache keys.
         id: cache-keys
@@ -77,7 +91,7 @@ jobs:
       - name: Restore bazel cache if cache is not being refreshed.
         id: bazel-cache
         if: env.REFRESH_CACHE != 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/bazel
           key: ${{ steps.cache-keys.outputs.CACHE_KEY }}
@@ -102,12 +116,16 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           mkdir -p ./models
-          echo "Downloading model from Hugging Face..."
-          curl -L --retry 5 -f \
-            -H "Authorization: Bearer $HF_TOKEN" \
-            -o ${{ env.MODEL_PATH }} \
-            "${{ env.MODEL_URL }}"
-          ls -lh ${{ env.MODEL_PATH }}
+          if [ -z "$HF_TOKEN" ]; then
+            echo "Warning: HF_TOKEN is empty (unauthenticated external PR or missing secret). Skipping gated model download on macOS..."
+            exit 0
+          fi
+          echo "Downloading model across Hugging Face..."
+          curl --http1.1 -L -C - --retry 5 --retry-delay 3 --retry-all-errors -f \
+            --oauth2-bearer "$HF_TOKEN" \
+            -o ${MODEL_PATH} \
+            "${MODEL_URL}"
+          ls -lh ${MODEL_PATH}
 
       - name: Install Rust
         run: |
@@ -115,15 +133,38 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
 
+      - name: Run bazel build on MacOS for release (static linking).
+        run: |
+          bazel build --disk_cache=~/.cache/bazel \
+            --repository_cache=~/.cache/bazel/repo \
+            --config=macos_arm64 \
+            -c opt \
+            //runtime/engine:litert_lm_main
+
+      - name: Check if litert_lm_main does not link libLiteRt.dylib
+        run: |
+          ! otool -L bazel-bin/runtime/engine/litert_lm_main | grep libLiteRt.dylib
+
+      - name: Update litert_lm_main prebuilt for MacOS if new version tag is pushed.
+        if: github.ref_type == 'tag'
+        run: |
+          mkdir -p litert_lm_macos_arm64
+          cp bazel-bin/runtime/engine/litert_lm_main litert_lm_macos_arm64/litert_lm_main
+          cp prebuilt/macos_arm64/libGemmaModelConstraintProvider.dylib litert_lm_macos_arm64/
+          tar -czvf litert_lm_macos_arm64.tar.gz -C litert_lm_macos_arm64 .
+
+          cp bazel-bin/runtime/engine/litert_lm_main litert_lm_main.macos_arm64
+          gh release upload ${GITHUB_REF_NAME} litert_lm_main.macos_arm64 --clobber
+          gh release upload ${GITHUB_REF_NAME} prebuilt/macos_arm64/libGemmaModelConstraintProvider.dylib --clobber
+          gh release upload ${GITHUB_REF_NAME} litert_lm_macos_arm64.tar.gz --clobber
+
       - name: Run bazel build on MacOS with dynamic linking.
         run: |
           bazel build --disk_cache=~/.cache/bazel \
             --repository_cache=~/.cache/bazel/repo \
             --config=macos_arm64 \
             -c opt \
-            --define=litert_link_capi_so=true \
             --define=litert_runtime_link_mode=dynamic \
-            --define=resolve_symbols_in_exec=false \
             //runtime/engine:litert_lm_main
 
       - name: Run bazel test on MacOS.
@@ -132,26 +173,19 @@ jobs:
             --repository_cache=~/.cache/bazel/repo \
             --config=macos_arm64 \
             -c opt \
-            --define=litert_link_capi_so=true \
             --define=litert_runtime_link_mode=dynamic \
-            --define=resolve_symbols_in_exec=false \
             --test_output=errors \
             //runtime/... \
             //schema/... \
             //c/...
 
-      - name: Update litert_lm_main prebuilt for MacOS if new version tag is pushed.
-        if: github.ref_type == 'tag'
-        run: |
-          cp bazel-bin/runtime/engine/litert_lm_main litert_lm_main.macos_arm64
-          gh release upload ${GITHUB_REF_NAME} litert_lm_main.macos_arm64 --clobber
-
-
-      - name: Install pytest
-        run: python3 -m pip install --break-system-packages pytest==8.3.4
-
       - name: Run pytest
-        run: pytest tools/pytest/ --model-path=${{ env.MODEL_PATH }} --build-system=bazel
+        run: |
+          if [ -f "${MODEL_PATH}" ]; then
+            pytest tools/pytest/ --backend=cpu --model-path=${MODEL_PATH} --build-system=bazel
+          else
+            echo "Skipping pytest on macOS because model file ${MODEL_PATH} is not downloaded (unauthenticated PR)."
+          fi
 
       # TODO(totero): Re-enable this step once the bug is fixed.
       # - name: Run bazel build for iOS Simulator.
@@ -167,7 +201,6 @@ jobs:
       #       -c opt \
       #       --define=litert_link_capi_so=true \
       #       --define=litert_runtime_link_mode=dynamic \
-      #       --define=resolve_symbols_in_exec=false \
       #       //runtime/engine:litert_lm_main
 
       # - name: Update litert_lm_main prebuilt for iOS Simulator if new version tag is pushed.
@@ -184,7 +217,7 @@ jobs:
           STEPS_CACHE_KEYS_OUTPUTS_CACHE_KEY: ${{ steps.cache-keys.outputs.CACHE_KEY }}
 
       - name: Save bazel cache if it's new or being refreshed.
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: env.REFRESH_CACHE == 'true'
         with:
           path: ~/.cache/bazel

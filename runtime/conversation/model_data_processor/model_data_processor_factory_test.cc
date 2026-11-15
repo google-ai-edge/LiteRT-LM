@@ -19,12 +19,14 @@
 #include <optional>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl  // IWYU pragma: keep
+#include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/fastvlm_data_processor_config.h"
@@ -32,9 +34,12 @@
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/lfm2_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
+#include "runtime/conversation/model_data_processor/model_data_processor_factory_common.h"
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -79,6 +84,85 @@ TEST_F(ModelDataProcessorFactoryTest, CreateGenericModelDataProcessor) {
 
   EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
                                            Gemma3DataProcessorArguments()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(ModelDataProcessorFactoryTest,
+       CreateGenericModelDataProcessorWithToolCallConfig) {
+  proto::LlmModelType llm_model_type;
+  llm_model_type.mutable_generic_model();
+  proto::ToolCallConfig tool_call_config;
+  tool_call_config.set_fence_start("<tool_call>");
+  tool_call_config.set_fence_end("</tool_call>");
+  tool_call_config.mutable_regex_syntax()->set_tool_call_regex(
+      R"((?s)<function=([^>]+)>(.*?)</function>)");
+  tool_call_config.mutable_regex_syntax()->set_argument_regex(
+      R"((?s)<parameter=([^>]+)>\s*(.*?)\s*</parameter>)");
+
+  ASSERT_OK_AND_ASSIGN(auto config, CreateDataProcessorConfigFromLlmModelType(
+                                        llm_model_type, tool_call_config));
+  ASSERT_TRUE(std::holds_alternative<GenericDataProcessorConfig>(config));
+  const auto& generic_config = std::get<GenericDataProcessorConfig>(config);
+  ASSERT_TRUE(generic_config.tool_call_config.has_value());
+  EXPECT_EQ(generic_config.tool_call_config->fence_start(), "<tool_call>");
+  EXPECT_EQ(generic_config.tool_call_config->fence_end(), "</tool_call>");
+  EXPECT_TRUE(generic_config.tool_call_config->has_regex_syntax());
+  EXPECT_EQ(generic_config.tool_call_config->regex_syntax().tool_call_regex(),
+            R"((?s)<function=([^>]+)>(.*?)</function>)");
+  EXPECT_EQ(generic_config.tool_call_config->regex_syntax().argument_regex(),
+            R"((?s)<parameter=([^>]+)>\s*(.*?)\s*</parameter>)");
+
+  Preface preface = JsonPreface{
+      .tools = nlohmann::ordered_json::parse(
+          R"json([{"type": "function", "function": {"name": "get_weather"}}])json")};
+  ASSERT_OK_AND_ASSIGN(auto processor,
+                       CreateModelDataProcessor(config, preface));
+  ASSERT_OK_AND_ASSIGN(
+      const Message message,
+      processor->ToMessage(
+          Responses(
+              TaskState::kProcessing,
+              {"<tool_call>\n<function=get_weather>\n<parameter=location>\n"
+               "Paris\n</parameter>\n</function>\n</tool_call>"}),
+          GenericDataProcessorArguments()));
+  EXPECT_EQ(message, nlohmann::ordered_json::parse(R"json({
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "get_weather",
+                    "arguments": {
+                      "location": "Paris"
+                    }
+                  }
+                }
+              ]
+            })json"));
+}
+
+TEST_F(ModelDataProcessorFactoryTest, ToolCallConfigValidation) {
+  proto::ToolCallConfig valid_tool_call_config;
+  valid_tool_call_config.set_fence_start("<tool_call>");
+  valid_tool_call_config.set_fence_end("</tool_call>");
+  valid_tool_call_config.mutable_regex_syntax()->set_tool_call_regex(
+      R"((?s)<function=([^>]+)>(.*?)</function>)");
+
+  // Rejects tool_call_config on non-generic_model.
+  proto::LlmModelType gemma3_model_type;
+  gemma3_model_type.mutable_gemma3();
+  EXPECT_THAT(CreateDataProcessorConfigFromLlmModelType(gemma3_model_type,
+                                                        valid_tool_call_config),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // Rejects invalid tool_call_config on generic_model.
+  proto::LlmModelType generic_model_type;
+  generic_model_type.mutable_generic_model();
+  proto::ToolCallConfig invalid_tool_call_config;
+  invalid_tool_call_config.set_fence_start("<tool_call>");
+  invalid_tool_call_config.set_fence_end("</tool_call>");
+  EXPECT_THAT(CreateDataProcessorConfigFromLlmModelType(
+                  generic_model_type, invalid_tool_call_config),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
@@ -205,10 +289,17 @@ TEST_F(ModelDataProcessorFactoryTest, CreateFunctionGemmaDataProcessor) {
   ASSERT_OK(tokenizer);
 
   proto::LlmModelType llm_model_type;
-  llm_model_type.mutable_function_gemma();
+  auto* function_gemma = llm_model_type.mutable_function_gemma();
+  function_gemma->set_open_quote("<<");
+  function_gemma->set_close_quote(">>");
+  function_gemma->set_function_response_start("<resp>");
   ASSERT_OK_AND_ASSIGN(
       auto config, CreateDataProcessorConfigFromLlmModelType(llm_model_type));
   ASSERT_TRUE(std::holds_alternative<FunctionGemmaDataProcessorConfig>(config));
+  const auto& fg_config = std::get<FunctionGemmaDataProcessorConfig>(config);
+  EXPECT_EQ(fg_config.open_quote, "<<");
+  EXPECT_EQ(fg_config.close_quote, ">>");
+  EXPECT_EQ(fg_config.function_response_start, "<resp>");
   ASSERT_OK_AND_ASSIGN(
       auto processor,
       CreateModelDataProcessor(config, /*preface=*/std::nullopt,
@@ -256,6 +347,29 @@ TEST_F(ModelDataProcessorFactoryTest, CreateGemma4DataProcessor) {
   EXPECT_EQ(gemma4_config.max_num_patches, 1280);
   EXPECT_EQ(gemma4_config.patch_width, 8);
   EXPECT_EQ(gemma4_config.patch_height, 8);
+  // Without channels, the tool call constraints don't accept a channel.
+  EXPECT_THAT(gemma4_config.channel_start, testing::IsEmpty());
+  EXPECT_THAT(gemma4_config.channel_end, testing::IsEmpty());
+}
+
+// The channel that the model may open at the start of its turn comes from the
+// channels, e.g. in the model metadata. The first one is the thinking channel.
+TEST_F(ModelDataProcessorFactoryTest, CreateGemma4DataProcessorConfigChannels) {
+  proto::LlmModelType llm_model_type;
+  llm_model_type.mutable_gemma4();
+  const std::vector<Channel> channels = {
+      {.channel_name = "thought",
+       .start = "<|channel>thought\n",
+       .end = "<channel|>"},
+      {.channel_name = "other", .start = "<other>", .end = "</other>"}};
+  ASSERT_OK_AND_ASSIGN(auto config,
+                       CreateDataProcessorConfigFromLlmModelType(
+                           llm_model_type, /*tool_call_config=*/std::nullopt,
+                           channels));
+  ASSERT_TRUE(std::holds_alternative<Gemma4DataProcessorConfig>(config));
+  const auto& gemma4_config = std::get<Gemma4DataProcessorConfig>(config);
+  EXPECT_EQ(gemma4_config.channel_start, "<|channel>thought\n");
+  EXPECT_EQ(gemma4_config.channel_end, "<channel|>");
 }
 
 TEST_F(ModelDataProcessorFactoryTest, CreateFastVlmDataProcessor) {
@@ -278,6 +392,52 @@ TEST_F(ModelDataProcessorFactoryTest, CreateFastVlmDataProcessor) {
   auto fastvlm_config = std::get<FastVlmDataProcessorConfig>(config);
   EXPECT_EQ(fastvlm_config.image_tensor_height, 1024);
   EXPECT_EQ(fastvlm_config.image_tensor_width, 1024);
+}
+
+TEST_F(ModelDataProcessorFactoryTest, CreateLfm2DataProcessor) {
+  proto::LlmModelType llm_model_type;
+  llm_model_type.mutable_lfm2();
+  ASSERT_OK_AND_ASSIGN(
+      auto config, CreateDataProcessorConfigFromLlmModelType(llm_model_type));
+  ASSERT_TRUE(std::holds_alternative<Lfm2DataProcessorConfig>(config));
+  ASSERT_OK_AND_ASSIGN(auto processor, CreateModelDataProcessor(config));
+  EXPECT_OK(processor->ToInputDataVector("test prompt", {},
+                                         Lfm2DataProcessorArguments()));
+  EXPECT_THAT(processor->ToInputDataVector("test prompt", {},
+                                           GenericDataProcessorArguments()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  EXPECT_OK(
+      processor->ToMessage(Responses(TaskState::kProcessing, {"test response"}),
+                           Lfm2DataProcessorArguments()));
+
+  auto lfm2_config = std::get<Lfm2DataProcessorConfig>(config);
+  EXPECT_EQ(lfm2_config.patch_width, 16);
+  EXPECT_EQ(lfm2_config.patch_height, 16);
+}
+
+TEST_F(ModelDataProcessorFactoryTest,
+       UnregisteredProcessorReturnsUnimplemented) {
+  ModelDataProcessorRegistry empty_registry;
+  DataProcessorConfig config = GenericDataProcessorConfig();
+  EXPECT_THAT(empty_registry.Create(config, /*preface=*/std::nullopt,
+                                    /*tokenizer=*/nullptr,
+                                    /*stop_token_ids=*/{},
+                                    /*enable_constrained_decoding=*/false),
+              StatusIs(absl::StatusCode::kUnimplemented));
+
+  ASSERT_OK(CreateModelDataProcessor(config));
+  struct DummyGenericDataProcessor {
+    static absl::StatusOr<std::unique_ptr<ModelDataProcessor>> Create(
+        const GenericDataProcessorConfig&) {
+      return absl::UnimplementedError("dummy");
+    }
+  };
+  // Duplicate registration for the same ConfigT should return false and not
+  // overwrite the existing creator.
+  EXPECT_FALSE(
+      (ModelDataProcessorRegistry::Instance()
+           .Register<DummyGenericDataProcessor, GenericDataProcessorConfig>()));
 }
 
 }  // namespace

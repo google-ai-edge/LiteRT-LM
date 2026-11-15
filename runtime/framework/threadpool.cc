@@ -38,12 +38,12 @@ ThreadPool::ThreadPool(const std::string& name_prefix, size_t max_num_threads,
     : name_prefix_(name_prefix),
       max_num_threads_(max_num_threads == 0 ? 1 : max_num_threads),
       thread_options_(std::move(thread_options)) {
-  ABSL_LOG(INFO) << "ThreadPool '" << name_prefix_ << "': Running up to "
-                 << max_num_threads_ << " threads.";
+  ABSL_VLOG(1) << "ThreadPool '" << name_prefix_ << "': Running up to "
+               << max_num_threads_ << " threads.";
 }
 
 ThreadPool::~ThreadPool() {
-  ABSL_LOG(INFO) << "ThreadPool '" << name_prefix_ << "': Shutting down...";
+  ABSL_VLOG(1) << "ThreadPool '" << name_prefix_ << "': Shutting down...";
 
   std::vector<std::unique_ptr<WorkerThread>> threads_to_join;
   {
@@ -72,7 +72,7 @@ ThreadPool::~ThreadPool() {
                       << " during shutdown.";
     }
   }
-  ABSL_LOG(INFO) << "ThreadPool '" << name_prefix_ << "': Shutdown complete.";
+  ABSL_VLOG(1) << "ThreadPool '" << name_prefix_ << "': Shutdown complete.";
 }
 
 absl::Status ThreadPool::Schedule(absl::AnyInvocable<void() &&> callback) {
@@ -93,9 +93,9 @@ absl::Status ThreadPool::Schedule(absl::AnyInvocable<void() &&> callback) {
       auto thread = WorkerThread::Create(this, name_prefix_);
       if (thread.ok()) {
         threads_.push_back(std::move(*thread));
-        ABSL_LOG(INFO) << "ThreadPool '" << name_prefix_
-                       << "': Created a worker thread since all " << num_threads
-                       << " worker threads are (supposed to be) busy.";
+        ABSL_VLOG(1) << "ThreadPool '" << name_prefix_
+                     << "': Created a worker thread since all " << num_threads
+                     << " worker threads are (supposed to be) busy.";
       } else if (num_threads == 0) {
         ABSL_LOG(ERROR) << "ThreadPool '" << name_prefix_
                         << "': Failed to create the first worker thread: "
@@ -168,8 +168,8 @@ void ThreadPool::RunWorker() {
                         << "': Theoretical invariant violation: Worker "
                            "thread woke up with no tasks but not stopped.";
       }
-      ABSL_LOG(INFO) << "ThreadPool '" << name_prefix_
-                     << "': Worker thread stopped.";
+      ABSL_VLOG(1) << "ThreadPool '" << name_prefix_
+                   << "': Worker thread stopped.";
       return;
     }
 

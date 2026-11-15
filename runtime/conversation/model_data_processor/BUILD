@@ -14,6 +14,10 @@
 
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
+load(
+    "//runtime/conversation/model_data_processor:gemma_data_processor.bzl",
+    "gemma_data_processor_libraries",
+)
 
 package(
     default_hdrs_check = "strict",
@@ -22,12 +26,15 @@ package(
     ],
 )
 
-# Pass --define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 to disable FST constraints.
-config_setting(
+# Pass --define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 or
+# --//build_config:enable_fst_constraints=false
+# to disable FST constraints. The Gemma 3, Gemma 4 and FunctionGemma processors
+# then build their tool call constraints with LLGuidance instead of the legacy
+# FST constraint provider.
+# TODO(b/574011343): Make LLGuidance the default once it is validated.
+alias(
     name = "litert_lm_fst_constraints_disabled",
-    define_values = {
-        "LITERT_LM_FST_CONSTRAINTS_DISABLED": "1",
-    },
+    actual = "//build_config:disable_fst_constraints",
 )
 
 cc_library(
@@ -41,6 +48,9 @@ cc_library(
         ":gemma3_data_processor_config",
         ":gemma4_data_processor_config",
         ":generic_data_processor_config",
+        ":lfm2_data_processor_config",
+        ":minicpm5_data_processor_config",
+        ":minicpmv_data_processor_config",
         ":qwen3_data_processor_config",
     ],
 )
@@ -50,10 +60,16 @@ cc_library(
     srcs = ["data_utils.cc"],
     hdrs = ["data_utils.h"],
     deps = [
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
+        "//runtime/components/tool_use:parser_utils_hdrs",
+        "//runtime/conversation:io_types",
+        "//runtime/util:litert_status_util",
         "//runtime/util:memory_mapped_file",
     ],
 )
@@ -65,8 +81,11 @@ cc_test(
         ":data_utils",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
+        "//runtime/components/tool_use:parser_utils",
+        "//runtime/conversation:io_types",
         "//runtime/util:memory_mapped_file",
         "//runtime/util:test_utils",
     ],
@@ -99,11 +118,11 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@nlohmann_json//:json",
-        "@litert//support/preprocessor:audio_preprocessor",
-        "@litert//support/preprocessor:image_preprocessor",
         "//runtime/engine:io_types",
         "//runtime/util:litert_status_util",
         "//runtime/util:memory_mapped_file",
+        "//support/preprocessor:audio_preprocessor",
+        "//support/preprocessor:image_preprocessor",
         "@com_googlesource_code_re2//:re2",
     ],
 )
@@ -112,7 +131,7 @@ cc_test(
     name = "multimodal_processor_helper_test",
     srcs = ["multimodal_processor_helper_test.cc"],
     data = [
-        "@litert//support/preprocessor/testdata",
+        "//support/preprocessor/testdata",
     ],
     deps = [
         ":multimodal_processor_helper",
@@ -122,12 +141,14 @@ cc_test(
         "@com_google_absl//absl/status:status_matchers",
         "@nlohmann_json//:json",
         "@litert//litert/cc:litert_layout",
-        "@litert//support/preprocessor:audio_preprocessor",
-        "@litert//support/preprocessor:audio_preprocessor_miniaudio",
-        "@litert//support/preprocessor:image_preprocessor",
-        "@litert//support/preprocessor:image_preprocessor_impl",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//runtime/components/tool_use:parser_utils_lite",
         "//runtime/engine:io_types",
         "//runtime/util:test_utils",
+        "//support/preprocessor:audio_preprocessor",
+        "//support/preprocessor:audio_preprocessor_miniaudio",
+        "//support/preprocessor:image_preprocessor",
+        "//support/preprocessor:image_preprocessor_impl",
     ],
 )
 
@@ -150,8 +171,9 @@ cc_library(
     ],
     deps = [
         ":multimodal_processor_helper",
-        "@litert//support/preprocessor:audio_preprocessor",
-        "@litert//support/preprocessor:image_preprocessor",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//support/preprocessor:audio_preprocessor",
+        "//support/preprocessor:image_preprocessor",
     ],
 )
 
@@ -170,57 +192,143 @@ cc_library(
 )
 
 cc_library(
+    name = "lfm2_data_processor_config",
+    hdrs = [
+        "lfm2_data_processor_config.h",
+    ],
+)
+
+cc_library(
     name = "model_data_processor",
     hdrs = ["model_data_processor.h"],
     deps = [
         ":config_registry",
+        ":data_utils",
+        "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
-        "@litert//support/preprocessor:audio_preprocessor",
-        "@litert//support/preprocessor:audio_preprocessor_miniaudio",
-        "@litert//support/preprocessor:image_preprocessor",
-        "@litert//support/preprocessor:stb_image_preprocessor",
-        "@litert//support/tokenizer",
-        "@litert//support/tokenizer:sentencepiece_tokenizer",
-        "//runtime/components:prompt_template",
-        "//runtime/components/logits_processor/constrained_decoding:constraint",
+        "//runtime/components/constrained_decoding:constraint",
+        "//runtime/components/constrained_decoding:tool_choice",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
+        "//support/preprocessor:audio_preprocessor",
+        "//support/preprocessor:audio_preprocessor_miniaudio",
+        "//support/preprocessor:image_preprocessor",
+        "//support/preprocessor:stb_image_preprocessor",
+        "//support/tokenizer",
+        "//support/tokenizer:sentencepiece_tokenizer",
     ],
 )
+
+cc_library(
+    name = "model_data_processor_factory_common",
+    srcs = ["model_data_processor_factory_common.cc"],
+    hdrs = ["model_data_processor_factory_common.h"],
+    deps = [
+        ":config_registry",
+        ":gemma3_data_processor_config",
+        ":gemma4_data_processor_config",
+        ":generic_data_processor",
+        ":generic_data_processor_config",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@litert//litert/cc:litert_layout",
+        "//runtime/conversation:io_types",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//runtime/proto:llm_model_type_cc_proto",
+        "//runtime/proto:token_cc_proto",
+        "//support/preprocessor:audio_preprocessor",
+        "//support/preprocessor:image_preprocessor",
+    ],
+)
+
+MODEL_DATA_PROCESSOR_FACTORY_COMMON_DEPS = [
+    ":config_registry",
+    ":fastvlm_data_processor_config",
+    ":function_gemma_data_processor_config",
+    ":gemma3_data_processor_config",
+    ":gemma4_data_processor_config",
+    ":generic_data_processor",
+    ":generic_data_processor_config",
+    ":lfm2_data_processor_config",
+    ":minicpm5_data_processor_config",
+    ":minicpmv_data_processor_config",
+    ":model_data_processor",
+    ":model_data_processor_factory_common",
+    ":qwen3_data_processor_config",
+    "@com_google_absl//absl/base",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:status_macros",
+    "@com_google_absl//absl/status:statusor",
+    "//runtime/conversation:io_types",
+    "//runtime/proto:llm_metadata_cc_proto",
+    "//runtime/proto:llm_model_type_cc_proto",
+    "//support/tokenizer",
+]
 
 cc_library(
     name = "model_data_processor_factory",
     srcs = ["model_data_processor_factory.cc"],
     hdrs = ["model_data_processor_factory.h"],
+    deps = MODEL_DATA_PROCESSOR_FACTORY_COMMON_DEPS + select({
+        "//build_config:enable_gemma_processors_setting": [
+            ":function_gemma_data_processor",
+            ":gemma3_data_processor",
+            ":gemma4_data_processor",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//build_config:enable_qwen_processor_setting": [
+            ":qwen3_data_processor",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//build_config:enable_fastvlm_processor_setting": [
+            ":fastvlm_data_processor",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//build_config:enable_lfm2_processor_setting": [
+            ":lfm2_data_processor",
+        ],
+        "//conditions:default": [],
+    }) + select({
+        "//build_config:enable_minicpm_processor_setting": [
+            ":minicpm5_data_processor",
+            ":minicpmv_data_processor",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+# Lightweight factory that links only Gemma3DataProcessor (lite),
+# Gemma4DataProcessor (lite), TinyGemmaDataProcessor, and GenericDataProcessor,
+# excluding non-Gemma model processors, FST constrained decoding, and ANTLR
+# Rust tool-use parsers.
+cc_library(
+    name = "model_data_processor_factory_lite",
+    srcs = ["model_data_processor_factory_lite.cc"],
+    hdrs = ["model_data_processor_factory.h"],
     deps = [
         ":config_registry",
-        ":fastvlm_data_processor",
-        ":fastvlm_data_processor_config",
-        ":function_gemma_data_processor",
-        ":function_gemma_data_processor_config",
-        ":gemma3_data_processor",
         ":gemma3_data_processor_config",
-        ":gemma4_data_processor",
+        ":gemma3_data_processor_lite",
         ":gemma4_data_processor_config",
+        ":gemma4_data_processor_lite",
         ":generic_data_processor",
         ":generic_data_processor_config",
         ":model_data_processor",
-        ":qwen3_data_processor",
-        ":qwen3_data_processor_config",
-        "@com_google_absl//absl/log:absl_log",
+        ":model_data_processor_factory_common",
+        "@com_google_absl//absl/base",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
-        "@litert//support/tokenizer",
-        "//runtime/components:prompt_template",
         "//runtime/conversation:io_types",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:llm_model_type_cc_proto",
-        "//runtime/proto:token_cc_proto",
-        "//runtime/util:litert_status_util",
     ],
 )
 
@@ -235,15 +343,19 @@ cc_test(
         ":gemma3_data_processor_config",
         ":gemma4_data_processor_config",
         ":generic_data_processor_config",
+        ":lfm2_data_processor_config",
         ":model_data_processor",
         ":model_data_processor_factory",
+        ":model_data_processor_factory_common",
         ":qwen3_data_processor_config",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/status:statusor",
+        "@nlohmann_json//:json",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/proto:llm_model_type_cc_proto",
         "//runtime/util:test_utils",
     ],
@@ -254,6 +366,7 @@ cc_library(
     srcs = ["generic_data_processor.cc"],
     hdrs = ["generic_data_processor.h"],
     deps = [
+        ":data_utils",
         ":generic_data_processor_config",
         ":model_data_processor",
         ":multimodal_processor_helper",
@@ -262,15 +375,17 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
-        "@litert//support/preprocessor:audio_preprocessor",
-        "@litert//support/preprocessor:image_preprocessor",
-        "@litert//support/util:io_types",
-        "//runtime/components:prompt_template",
+        "//runtime/components/tool_use:parser_utils_hdrs",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
-        "//runtime/util:litert_status_util",
+        "//runtime/proto:llm_metadata_cc_proto",
+        "//support/preprocessor:audio_preprocessor",
+        "//support/preprocessor:image_preprocessor",
+        "//support/util:io_types",
+        "@com_googlesource_code_re2//:re2",
     ],
 )
 
@@ -278,7 +393,8 @@ cc_test(
     name = "generic_data_processor_test",
     srcs = ["generic_data_processor_test.cc"],
     data = [
-        "@litert//support/preprocessor/testdata",
+        "//runtime/components/testdata",
+        "//support/preprocessor/testdata",
     ],
     deps = [
         ":generic_data_processor",
@@ -289,12 +405,15 @@ cc_test(
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
         "@litert//litert/cc:litert_layout",
-        "@litert//support/preprocessor:audio_preprocessor",
-        "@litert//support/preprocessor:audio_preprocessor_miniaudio",
-        "@litert//support/preprocessor:image_preprocessor",
         "//runtime/components:prompt_template",
+        "//runtime/components/preprocessor:audio_preprocessor",
+        "//runtime/components/preprocessor:audio_preprocessor_miniaudio",
+        "//runtime/components/preprocessor:image_preprocessor",
+        "//runtime/components/tool_use:parser_utils_lite",  # buildcleaner: keep
         "//runtime/conversation:io_types",
+        "//runtime/conversation:prompt_utils",
         "//runtime/engine:io_types",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/util:test_utils",
     ],
 )
@@ -303,25 +422,20 @@ cc_library(
     name = "fastvlm_data_processor",
     srcs = ["fastvlm_data_processor.cc"],
     hdrs = ["fastvlm_data_processor.h"],
+    defines = ["ENABLE_FASTVLM_DATA_PROCESSOR"],
     deps = [
-        ":data_utils",
         ":fastvlm_data_processor_config",
         ":model_data_processor",
         ":multimodal_processor_helper",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
         "@litert//litert/cc:litert_layout",
-        "@litert//support/preprocessor:image_preprocessor",
-        "@litert//support/preprocessor:stb_image_preprocessor",
-        "//runtime/components:prompt_template",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
-        "//runtime/util:litert_status_util",
-        "//runtime/util:memory_mapped_file",
-        "@com_googlesource_code_re2//:re2",
+        "//support/preprocessor:image_preprocessor",
+        "//support/preprocessor:stb_image_preprocessor",
     ],
 )
 
@@ -329,20 +443,117 @@ cc_library(
     name = "qwen3_data_processor",
     srcs = ["qwen3_data_processor.cc"],
     hdrs = ["qwen3_data_processor.h"],
+    defines = ["ENABLE_QWEN3_DATA_PROCESSOR"],
     deps = [
+        ":data_utils",
         ":model_data_processor",
         ":qwen3_data_processor_config",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
         "//runtime/components/tool_use:parser_utils",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
+    ],
+)
+
+cc_library(
+    name = "minicpm5_data_processor_config",
+    hdrs = ["minicpm5_data_processor_config.h"],
+)
+
+cc_library(
+    name = "minicpm5_data_processor",
+    srcs = ["minicpm5_data_processor.cc"],
+    hdrs = ["minicpm5_data_processor.h"],
+    defines = ["ENABLE_MINICPM5_DATA_PROCESSOR"],
+    deps = [
+        ":minicpm5_data_processor_config",
+        ":model_data_processor",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+        "//runtime/conversation:io_types",
+        "//runtime/engine:io_types",
+        "@com_googlesource_code_re2//:re2",
+    ],
+)
+
+cc_test(
+    name = "minicpm5_data_processor_test",
+    srcs = ["minicpm5_data_processor_test.cc"],
+    data = [
+        "//models/minicpm5:chat_template.jinja",
+    ],
+    deps = [
+        ":minicpm5_data_processor",
+        ":minicpm5_data_processor_config",
+        ":processor_test_utils",
+        "@com_google_googletest//:gtest_main",
+        "@nlohmann_json//:json",
+        "//runtime/components:prompt_template",
+        "//runtime/components/tool_use:parser_utils_lite",
+        "//runtime/conversation:io_types",
+        "//runtime/engine:io_types",
+        "//runtime/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "minicpmv_data_processor_config",
+    hdrs = ["minicpmv_data_processor_config.h"],
+)
+
+cc_library(
+    name = "minicpmv_data_processor",
+    srcs = ["minicpmv_data_processor.cc"],
+    hdrs = ["minicpmv_data_processor.h"],
+    defines = ["ENABLE_MINICPMV_DATA_PROCESSOR"],
+    deps = [
+        ":data_utils",
+        ":minicpmv_data_processor_config",
+        ":model_data_processor",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@nlohmann_json//:json",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//runtime/components/preprocessor:image_preprocessor",
+        "//runtime/components/preprocessor:minicpmv_image_preprocess",
+        "//runtime/conversation:io_types",
+        "//runtime/engine:io_types",
+        "//runtime/util:convert_tensor_buffer",
         "//runtime/util:litert_status_util",
+        "//runtime/util:memory_mapped_file",
+    ],
+)
+
+cc_test(
+    name = "minicpmv_data_processor_test",
+    srcs = ["minicpmv_data_processor_test.cc"],
+    deps = [
+        ":minicpmv_data_processor",
+        ":minicpmv_data_processor_config",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/strings",
+        "@nlohmann_json//:json",
+        "//runtime/components/preprocessor:minicpmv_image_preprocess",
+        "//runtime/components/tool_use:parser_utils_lite",
+        "//runtime/conversation:io_types",
+        "//runtime/engine:io_types",
+        "//runtime/util:test_utils",
     ],
 )
 
@@ -361,74 +572,109 @@ cc_test(
 )
 
 cc_library(
-    name = "gemma3_data_processor",
-    srcs = ["gemma3_data_processor.cc"],
-    hdrs = ["gemma3_data_processor.h"],
-    defines = select({
-        ":litert_lm_fst_constraints_disabled": ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
-        "//conditions:default": [],
-    }),
+    name = "lfm2_data_processor",
+    srcs = ["lfm2_data_processor.cc"],
+    hdrs = ["lfm2_data_processor.h"],
+    defines = ["ENABLE_LFM2_DATA_PROCESSOR"],
     deps = [
         ":data_utils",
-        ":gemma3_data_processor_config",
+        ":lfm2_data_processor_config",
         ":model_data_processor",
         ":multimodal_processor_helper",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
         "@litert//litert/cc:litert_layout",
-        "@litert//support/preprocessor:audio_preprocessor",
-        "@litert//support/preprocessor:audio_preprocessor_miniaudio",
-        "@litert//support/preprocessor:image_preprocessor",
-        "@litert//support/preprocessor:image_preprocessor_impl",
-        "@litert//support/tokenizer",
-        "@litert//support/tokenizer:sentencepiece_tokenizer",
-        "//runtime/components:prompt_template",
-        "//runtime/components/logits_processor/constrained_decoding:constraint",
+        "//runtime/components/constrained_decoding:constraint",
         "//runtime/components/tool_use:parser_utils",
-        "//runtime/components/tool_use:python_tool_format_utils",
         "//runtime/conversation:io_types",
-        "//runtime/conversation:prompt_utils",
         "//runtime/engine:io_types",
-        "//runtime/util:litert_status_util",
-        "//runtime/util:memory_mapped_file",
-        "@com_googlesource_code_re2//:re2",
-        "@sentencepiece//:sentencepiece_model_cc_proto",
-    ] + select({
-        ":litert_lm_fst_constraints_disabled": [],
-        "//conditions:default": [
-            "//runtime/components/logits_processor/constrained_decoding:gemma_model_constraint_provider_lib",
-        ],
-    }),
+        "//support/preprocessor:image_preprocessor",
+        "//support/preprocessor:stb_image_preprocessor",
+    ],
+)
+
+cc_test(
+    name = "lfm2_data_processor_test",
+    srcs = ["lfm2_data_processor_test.cc"],
+    deps = [
+        ":lfm2_data_processor",
+        ":lfm2_data_processor_config",
+        "@com_google_googletest//:gtest_main",
+        "@nlohmann_json//:json",
+        "//runtime/conversation:io_types",
+        "//runtime/engine:io_types",
+        "//runtime/util:test_utils",
+    ],
+)
+
+GEMMA3_DATA_PROCESSOR_COMMON_DEPS = [
+    ":data_utils",
+    ":gemma3_data_processor_config",
+    ":generic_data_processor_config",
+    ":model_data_processor",
+    ":multimodal_processor_helper",
+    "@com_google_absl//absl/log:absl_log",
+    "@com_google_absl//absl/memory",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:status_macros",
+    "@com_google_absl//absl/status:statusor",
+    "@com_google_absl//absl/strings",
+    "@com_google_absl//absl/strings:string_view",
+    "@nlohmann_json//:json",
+    "@litert//litert/cc:litert_layout",
+    "//runtime/components/constrained_decoding:constraint",
+    "//runtime/components/constrained_decoding:constraint_provider",
+    "//runtime/components/constrained_decoding:tool_choice",
+    "//runtime/components/tool_use:python_tool_format_utils",
+    "//runtime/conversation:io_types",
+    "//runtime/engine:io_types",
+    "//runtime/util:litert_status_util",
+    "//runtime/util:memory_mapped_file",
+    "//support/preprocessor:audio_preprocessor",
+    "//support/preprocessor:audio_preprocessor_miniaudio",
+    "//support/preprocessor:image_preprocessor",
+    "//support/preprocessor:image_preprocessor_impl",
+    "//support/tokenizer",
+    "@com_googlesource_code_re2//:re2",
+    "@sentencepiece//:sentencepiece_model_cc_proto",
+]
+
+gemma_data_processor_libraries(
+    name = "gemma3_data_processor",
+    srcs = ["gemma3_data_processor.cc"],
+    hdrs = ["gemma3_data_processor.h"],
+    common_deps = GEMMA3_DATA_PROCESSOR_COMMON_DEPS,
+    enable_define = "ENABLE_GEMMA3_DATA_PROCESSOR",
 )
 
 cc_test(
     name = "gemma3_data_processor_test",
     srcs = ["gemma3_data_processor_test.cc"],
     data = [
-        "@litert//support/preprocessor/testdata",
         "//runtime/components/testdata",
+        "//support/preprocessor/testdata",
     ],
     deps = [
         ":gemma3_data_processor",
         ":gemma3_data_processor_config",
+        ":model_data_processor",
         ":processor_test_utils",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
         "@nlohmann_json//:json",
         "@litert//litert/cc:litert_layout",
-        "@litert//support/preprocessor:audio_preprocessor_miniaudio",
-        "@litert//support/preprocessor:image_preprocessor",
         "//runtime/components:prompt_template",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
-        "//runtime/util:convert_tensor_buffer",
         "//runtime/util:test_utils",
+        "//support/preprocessor:audio_preprocessor_miniaudio",
+        "//support/preprocessor:image_preprocessor",
+        "//support/tokenizer",
     ],
 )
 
@@ -436,11 +682,12 @@ cc_library(
     name = "function_gemma_data_processor",
     srcs = ["function_gemma_data_processor.cc"],
     hdrs = ["function_gemma_data_processor.h"],
-    defines = select({
-        ":litert_lm_fst_constraints_disabled": ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
-        "//conditions:default": [],
+    defines = ["ENABLE_FUNCTION_GEMMA_DATA_PROCESSOR"] + select({
+        ":litert_lm_fst_constraints_disabled": [],
+        "//conditions:default": ["LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS"],
     }),
     deps = [
+        ":data_utils",
         ":function_gemma_data_processor_config",
         ":model_data_processor",
         "@com_google_absl//absl/log:absl_log",
@@ -451,19 +698,24 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
-        "@litert//support/tokenizer",
-        "@litert//support/tokenizer:sentencepiece_tokenizer",
-        "//runtime/components/logits_processor/constrained_decoding:constraint",
+        "//runtime/components/constrained_decoding:constraint",
+        "//runtime/components/constrained_decoding:constraint_provider",
+        "//runtime/components/constrained_decoding:tool_choice",
         "//runtime/components/tool_use:fc_tool_format_utils",
         "//runtime/components/tool_use:parser_utils",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
         "//runtime/util:litert_status_util",
+        "//support/tokenizer",
         "@sentencepiece//:sentencepiece_model_cc_proto",
     ] + select({
-        ":litert_lm_fst_constraints_disabled": [],
+        ":litert_lm_fst_constraints_disabled": [
+            "//runtime/components/constrained_decoding:llg_constraint_config",
+            "//runtime/components/constrained_decoding:llg_constraint_provider_or_noop",
+            "//runtime/components/constrained_decoding:llguidance_schema_utils",
+        ],
         "//conditions:default": [
-            "//runtime/components/logits_processor/constrained_decoding:gemma_model_constraint_provider_lib",
+            "//runtime/components/constrained_decoding:gemma_model_constraint_provider_lib",
         ],
     }),
 )
@@ -478,15 +730,18 @@ cc_test(
     deps = [
         ":function_gemma_data_processor",
         ":function_gemma_data_processor_config",
+        ":model_data_processor",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
         "@nlohmann_json//:json",
         "//runtime/components:prompt_template",
         "//runtime/conversation:io_types",
         "//runtime/engine:io_types",
         "//runtime/util:test_utils",
+        "//support/tokenizer",
     ],
 )
 
@@ -495,48 +750,50 @@ cc_library(
     hdrs = ["gemma4_data_processor_config.h"],
 )
 
-cc_library(
+GEMMA4_DATA_PROCESSOR_COMMON_DEPS = [
+    ":data_utils",
+    ":gemma4_data_processor_config",
+    ":model_data_processor",
+    ":multimodal_processor_helper",
+    "@com_google_absl//absl/log:absl_log",
+    "@com_google_absl//absl/memory",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:status_macros",
+    "@com_google_absl//absl/status:statusor",
+    "@com_google_absl//absl/strings",
+    "@com_google_absl//absl/strings:string_view",
+    "@nlohmann_json//:json",
+    "//runtime/components/constrained_decoding:constraint",
+    "//runtime/components/constrained_decoding:constraint_provider",
+    "//runtime/components/constrained_decoding:tool_choice",
+    "//runtime/conversation:io_types",
+    "//runtime/engine:io_types",
+    "//runtime/util:litert_status_util",
+    "//runtime/util:memory_mapped_file",
+    "//support/preprocessor:audio_preprocessor",
+    "//support/preprocessor:audio_preprocessor_miniaudio",
+    "//support/preprocessor:image_preprocessor",
+    "//support/preprocessor:stb_image_preprocessor",
+    "//support/tokenizer",
+    "@com_googlesource_code_re2//:re2",
+    "@sentencepiece//:sentencepiece_model_cc_proto",
+]
+
+gemma_data_processor_libraries(
     name = "gemma4_data_processor",
     srcs = ["gemma4_data_processor.cc"],
     hdrs = ["gemma4_data_processor.h"],
-    defines = select({
-        ":litert_lm_fst_constraints_disabled": ["LITERT_LM_FST_CONSTRAINTS_DISABLED"],
-        "//conditions:default": [],
-    }),
+    common_deps = GEMMA4_DATA_PROCESSOR_COMMON_DEPS,
+    enable_define = "ENABLE_GEMMA4_DATA_PROCESSOR",
+)
+
+# Convenience bundle of lightweight Gemma data processors (Gemma3, Gemma4, and
+# TinyGemma) with FST constrained decoding and ANTLR Rust tool-use parsers
+# excluded.
+cc_library(
+    name = "gemma_data_processors_lite",
     deps = [
-        ":data_utils",
-        ":gemma4_data_processor_config",
-        ":model_data_processor",
-        ":multimodal_processor_helper",
-        "@com_google_absl//absl/log:absl_log",
-        "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:status_macros",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:string_view",
-        "@nlohmann_json//:json",
-        "@litert//support/preprocessor:audio_preprocessor",
-        "@litert//support/preprocessor:audio_preprocessor_miniaudio",
-        "@litert//support/preprocessor:image_preprocessor",
-        "@litert//support/preprocessor:stb_image_preprocessor",
-        "@litert//support/tokenizer",
-        "@litert//support/tokenizer:sentencepiece_tokenizer",
-        "//runtime/components:prompt_template",
-        "//runtime/components/logits_processor/constrained_decoding:constraint",
-        "//runtime/components/tool_use:fc_tool_format_utils",
-        "//runtime/components/tool_use:parser_utils",
-        "//runtime/conversation:io_types",
-        "//runtime/conversation:prompt_utils",
-        "//runtime/engine:io_types",
-        "//runtime/util:litert_status_util",
-        "//runtime/util:memory_mapped_file",
-        "@com_googlesource_code_re2//:re2",
-        "@sentencepiece//:sentencepiece_model_cc_proto",
-    ] + select({
-        ":litert_lm_fst_constraints_disabled": [],
-        "//conditions:default": [
-            "//runtime/components/logits_processor/constrained_decoding:gemma_model_constraint_provider_lib",
-        ],
-    }),
+        ":gemma3_data_processor_lite",
+        ":gemma4_data_processor_lite",
+    ],
 )

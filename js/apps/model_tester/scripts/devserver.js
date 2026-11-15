@@ -30,7 +30,9 @@ let ctx = await esbuild.context({
 
 // The return value tells us where esbuild's local server is. It might
 // not be 3000 if that port was busy.
-let { host, port } = await ctx.serve({ servedir: 'dist', port: 3000});
+let { hosts, port } =
+    await ctx.serve({ servedir: 'dist', host: '127.0.0.1', port: 3000 });
+const host = hosts[0];
 
 // Then start a proxy server on port 8000
 http.createServer((req, res) => {

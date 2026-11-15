@@ -22,7 +22,6 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "runtime/util/external_file.pb.h"
 
 namespace litert::lm {
 
@@ -39,13 +38,6 @@ struct OffsetAndSize {
 // by this function are only guaranteed to stay valid while `data` is alive.
 absl::StatusOr<absl::flat_hash_map<std::string, OffsetAndSize>>
 ExtractFilesfromZipFile(absl::string_view data);
-
-// Set the ExternalFile object by file_content in memory. By default,
-// `is_copy=false` which means to set `file_pointer_meta` in ExternalFile which
-// is the pointer points to location of a file in memory. Otherwise, if
-// `is_copy=true`, copy the memory into `file_content` in ExternalFile.
-void SetExternalFile(absl::string_view file_content,
-                     proto::ExternalFile* model_file, bool is_copy = false);
 
 }  // namespace litert::lm
 

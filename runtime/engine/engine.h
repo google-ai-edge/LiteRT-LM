@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_ENGINE_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/base/attributes.h"  // from @com_google_absl
@@ -23,11 +24,15 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "runtime/components/model_resources.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/proto/llm_metadata.pb.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -162,23 +167,30 @@ class SessionInterface {
       const DecodeConfig& decode_config) = 0;
 
   // Scores the target text after the prefill process is done. This function
-  // will only run the decode process to fetch the decode output logits, which
-  // is used to calculate the target text's score and update the model memory
-  // using the target_text tokens.
-  // This function should be called after the prefill process is done.
-  // - target_text: The target text to score.
+  // only runs decode steps to fetch the output logits that are used to
+  // calculate the score of each target text.
+  // Every call changes the model memory: it consumes the pending input token,
+  // and for a multi-token target it also writes every target token except the
+  // last one. Rewind the session (for example to a checkpoint) before running
+  // further prefill or decode on it.
+  // - target_text: The target text to score. Pass one target text, or several
+  //   target texts that are each a single token; any other list returns
+  //   kInvalidArgument. Several targets are all scored from the logits of one
+  //   decode step and need a session with one output candidate.
   // - store_token_lengths: Whether to store the token lengths of the target
   //   texts in `Responses`.
-  // - returns: This function returns the score associated with the target
-  // text after the model has been prefilled. The returned score is the sum of
-  // the negative log probability of seeing the target text during decode.
+  // - returns: This function returns the score associated with each target
+  // text, in the order of `target_text`. Each score is the log likelihood of
+  // the target text given the prefilled context: the sum of the log
+  // probabilities of its tokens.
   virtual absl::StatusOr<Responses> RunTextScoring(
       const std::vector<absl::string_view>& target_text,
       bool store_token_lengths) = 0;
 
   // Similar to the above RunTextScoring function, but this is a not blocking
   // call and the function will return right away. The processing status will
-  // be signaled through the callback.
+  // be signaled through the callback. The same rules for `target_text` apply,
+  // and an invalid `target_text` is rejected before any work is queued.
   // - target_text: The target text to score.
   // - callback: Callback to receive the scoring results.
   // - store_token_lengths: Whether to store the token lengths of the target
@@ -257,8 +269,11 @@ class SessionInterface {
   virtual absl::StatusOr<BenchmarkInfo*> GetMutableBenchmarkInfo() = 0;
 
   // Cancels the ongoing inference process. Note that if this function is
-  // called, the inference process will return with a kCancelled error. The
-  // session could still be used after afterwards.
+  // called, the inference process will return with a kCancelled error.
+  //
+  // NOTE: Reusing the session after calling CancelProcess() is neither
+  // recommended nor supported. Calling CancelProcess() leaves the session
+  // state poisoned, and subsequent operations may fail or behave incorrectly.
   virtual void CancelProcess() {
     ABSL_LOG(FATAL) << "CancelProcess is not implemented.";
   }
@@ -316,6 +331,22 @@ class SessionInterface {
     return absl::UnimplementedError("RewindToCheckpoint not implemented.");
   }
 
+  // Save the current step and processed context with the name `label`. You can
+  // later restore to this context using `RestoreContext(label)`.
+  // Saved contexts are single-use and are consumed upon restore.
+  // If the label already exists, it will be overwritten.
+  virtual absl::Status SaveContext(absl::string_view label) {
+    return absl::UnimplementedError("SaveContext not implemented.");
+  }
+
+  // Restores the session to the given saved context, restoring and consuming
+  // the processed context. The saved context itself and any checkpoints after
+  // the restored step will be removed. Returns an error if the label does not
+  // exist.
+  virtual absl::Status RestoreContext(absl::string_view label) {
+    return absl::UnimplementedError("RestoreContext not implemented.");
+  }
+
   // Rewinds the session to a specific step number.
   virtual absl::Status RewindToStep(int step) {
     return absl::UnimplementedError("RewindToStep not implemented.");
@@ -328,6 +359,19 @@ class SessionInterface {
 
   // Get the reference to the session config for the session.
   virtual const SessionConfig& GetSessionConfig() const = 0;
+
+  // Returns the debug info for the session, or nullopt if unsupported
+  // or debugger is disabled.
+  virtual std::optional<SessionDebugInfo> GetSessionDebugInfo() const {
+    return std::nullopt;
+  }
+
+  // Returns the LiteRT environment associated with this session, if available.
+  // The returned pointer is non-owning and guaranteed valid as long as the
+  // parent Engine is alive.
+  virtual absl::StatusOr<const Environment*> GetEnvironment() const {
+    return absl::UnimplementedError("GetEnvironment is not implemented.");
+  }
 };
 
 // EngineT is the templated interface for the LLM runtime.
@@ -364,6 +408,19 @@ class EngineT {
   // Get the reference to the tokenizer for the engine.
   virtual const support::Tokenizer& GetTokenizer() const = 0;
 
+  // Get the reference to the tokenizer for the engine for a specific model
+  // type. Defaults to GetTokenizer() for kTfLitePrefillDecode.
+  virtual absl::StatusOr<const support::Tokenizer*> GetTokenizer(
+      proto::LlmMetadata::TfLiteModelType model_type) const {
+    if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
+      return &GetTokenizer();
+    }
+    return absl::UnimplementedError(
+        absl::StrCat("GetTokenizer for model type ",
+                     proto::LlmMetadata::TfLiteModelType_Name(model_type),
+                     " is not implemented."));
+  }
+
   // Get the audio model properties for the session. This is only available
   // if the engine is created with audio modality enabled.
   virtual absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
@@ -373,6 +430,33 @@ class EngineT {
   // if the engine is created with vision modality enabled.
   virtual absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       const = 0;
+
+  // Updates whether to enable Metal residency set on GPU at runtime.
+  //
+  // To configure this setting during initialization, configure
+  // AdvancedSettings::gpu_enable_metal_residency_set in EngineSettings before
+  // creating the engine.
+  //
+  // When enabled on Apple platforms (macOS and iOS with Metal GPU backend),
+  // this uses Apple's MTLResidencySet API to ensure model weights and
+  // allocations remain resident in GPU memory, preventing memory swapping and
+  // reducing allocation overhead.
+  //
+  // This setting is only supported on Apple platforms (macOS / iOS) with the
+  // GPU backend. On other platforms (e.g. Linux, Android, Windows) or non-GPU
+  // backends, this setting has no effect and is safely ignored.
+  virtual absl::Status UpdateGpuEnableMetalResidencySet(
+      bool enable_metal_residency_set) {
+    return absl::UnimplementedError(
+        "UpdateGpuEnableMetalResidencySet not implemented.");
+  }
+
+  // Returns the LiteRT environment managed by the engine.
+  // The returned pointer is non-owning and guaranteed valid for the lifetime
+  // of this engine.
+  virtual absl::StatusOr<const Environment*> GetEnvironment() const {
+    return absl::UnimplementedError("GetEnvironment is not implemented.");
+  }
 
   // Default timeout duration for the engine/session processes.
   static constexpr absl::Duration kDefaultTimeout = absl::Minutes(10);

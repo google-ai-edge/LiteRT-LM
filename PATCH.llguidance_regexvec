@@ -1,6 +1,7 @@
 --- src/earley/regexvec.rs
 +++ src/earley/regexvec.rs
-@@ -675,6 +675,6 @@
+@@ -700,7 +700,7 @@
+         // if lst.len() == 0 {
          //     return StateID::DEAD;
          // }
 -        assert!(lst.len().is_multiple_of(2));

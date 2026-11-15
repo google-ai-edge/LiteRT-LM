@@ -14,12 +14,11 @@
 
 message(STATUS "[LiteRTLM] Executing native XNNPACK path neutralization...")
 
-if(DEFINED xnnpack_SOURCE_DIR AND EXISTS "${xnnpack_SOURCE_DIR}")
+if(DEFINED LITERTLM_XNNPACK_SRC_DIR AND EXISTS "${LITERTLM_XNNPACK_SRC_DIR}")
     file(GLOB_RECURSE _xnnpack_files LIST_DIRECTORIES false 
         "${xnnpack_SOURCE_DIR}/CMakeLists.txt"
         "${xnnpack_SOURCE_DIR}/*.cmake"
     )
-
     foreach(_f IN LISTS _xnnpack_files)
         file(READ "${_f}" _content)
         if(_content MATCHES "flatbuffers-flatc/bin/flatc")

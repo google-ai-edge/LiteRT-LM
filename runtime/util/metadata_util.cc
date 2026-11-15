@@ -31,7 +31,7 @@ absl::StatusOr<proto::LlmMetadata> ExtractOrConvertLlmMetadata(
       !llm_metadata.has_start_token()) {
       return absl::InvalidArgumentError("Failed to parse LlmMetadata.");
   }
-  ABSL_LOG(INFO) << "The llm metadata: " << llm_metadata.DebugString();
+  ABSL_VLOG(1) << "The llm metadata: " << llm_metadata.DebugString();
   return llm_metadata;
 }
 

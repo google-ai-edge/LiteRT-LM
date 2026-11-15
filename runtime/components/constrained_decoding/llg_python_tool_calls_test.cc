@@ -1,0 +1,1747 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "runtime/components/constrained_decoding/llg_python_tool_calls.h"
+
+#include <memory>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/escaping.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/constrained_decoding/bitmap.h"
+#include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/llg_constraint_config.h"
+#include "runtime/components/constrained_decoding/llg_constraint_provider.h"
+#include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
+#include "runtime/util/status_macros.h"
+#include "support/tokenizer/tokenizer.h"
+
+namespace litert::lm {
+
+using Tokenizer = ::litert::support::Tokenizer;
+using TokenizerType = ::litert::support::TokenizerType;
+using TokenIds = ::litert::support::TokenIds;
+
+namespace {
+
+struct TokenDef {
+  std::string text;
+  int id;
+  bool is_control;
+};
+
+class SimpleTokenizer : public Tokenizer {
+ public:
+  static constexpr int kPadId = 0;
+  static constexpr int kEosId = 1;
+  static constexpr int kVocabSize = 600;
+
+  SimpleTokenizer() {
+    for (int i = 0; i < 256; ++i) {
+      char c = static_cast<char>(i);
+      if (c != '<' && c != '>') {
+        vocab_[std::string(1, c)] = i;
+        id_to_piece_[i] = std::string(1, c);
+      }
+    }
+
+    const std::vector<TokenDef> token_defs = {
+        {"<pad>", kPadId, true},
+        {"<eos>", kEosId, true},
+        {"<div>", 505, false},
+        {"</div>", 506, false},
+    };
+
+    for (const auto& def : token_defs) {
+      vocab_[def.text] = def.id;
+      id_to_piece_[def.id] = def.text;
+      if (def.is_control) {
+        control_token_texts_.insert(def.text);
+      }
+    }
+  }
+
+  TokenizerType GetTokenizerType() const override {
+    return TokenizerType::kSentencePiece;
+  }
+
+  absl::StatusOr<TokenIds> TextToTokenIds(absl::string_view text) override {
+    TokenIds ids;
+    absl::string_view remaining_text = text;
+
+    while (!remaining_text.empty()) {
+      int best_match_len = 0;
+      int token_id = -1;
+
+      for (int len = remaining_text.length(); len >= 1; --len) {
+        absl::string_view prefix = remaining_text.substr(0, len);
+        auto it = vocab_.find(prefix);
+        if (it != vocab_.end()) {
+          best_match_len = len;
+          token_id = it->second;
+          break;
+        }
+      }
+
+      if (token_id != -1) {
+        ids.push_back(token_id);
+        remaining_text.remove_prefix(best_match_len);
+      } else {
+        return absl::InternalError(
+            absl::StrCat("Failed to tokenize at: ", remaining_text));
+      }
+    }
+    return ids;
+  }
+
+  absl::StatusOr<int> TokenToId(absl::string_view token) override {
+    auto it = vocab_.find(token);
+    if (it != vocab_.end()) {
+      return it->second;
+    }
+    return absl::NotFoundError(absl::StrCat("Token not found: ", token));
+  }
+
+  absl::StatusOr<std::string> TokenIdsToText(
+      absl::Span<const int> ids, bool skip_special_tokens) override {
+    std::string text;
+    for (int id : ids) {
+      auto it = id_to_piece_.find(id);
+      if (it != id_to_piece_.end()) {
+        text += it->second;
+      } else {
+        return absl::InternalError(absl::StrCat("Unknown token ID: ", id));
+      }
+    }
+    return text;
+  }
+
+  std::vector<std::string> GetTokens() const override {
+    std::vector<std::string> tokens(kVocabSize);
+    for (int i = 0; i < tokens.size(); ++i) {
+      tokens[i] = "[UNUSED_" + std::to_string(i) + "]";
+    }
+
+    for (const auto& pair : id_to_piece_) {
+      int id = pair.first;
+      if (id >= 0 && id < kVocabSize) {
+        const std::string& token_str = pair.second;
+        if (control_token_texts_.count(token_str)) {
+          tokens[id] = "\xff" + token_str;
+        } else {
+          tokens[id] = token_str;
+        }
+      }
+    }
+    return tokens;
+  }
+
+  int GetVocabSize() const override { return kVocabSize; }
+
+ private:
+  absl::flat_hash_map<std::string, int> vocab_;
+  absl::flat_hash_map<int, std::string> id_to_piece_;
+  std::set<std::string> control_token_texts_;
+};
+
+class LlgPythonToolCallsTest : public testing::Test {
+ protected:
+  SimpleTokenizer tokenizer_;
+  LlGuidanceConfig config_{.eos_ids = {1}};
+
+  LlgConstraintsOptions GetDefaultPythonOptions(LlgConstraintMode mode) {
+    LlgConstraintsOptions options;
+    options.funcall_format = FuncallFormat::kPython;
+    options.code_fence_start = "```tool_code\n";
+    options.code_fence_end = "\n```";
+    options.open_quote = "\"";
+    options.close_quote = "\"";
+    options.constraint_mode = mode;
+    return options;
+  }
+
+  absl::StatusOr<bool> AcceptsInternal(Constraint& constraint,
+                                       absl::string_view text) {
+    ABSL_ASSIGN_OR_RETURN(TokenIds ids, tokenizer_.TextToTokenIds(text));
+    auto state = constraint.Start();
+    for (int i = 0; i < ids.size(); ++i) {
+      int id = ids[i];
+      ABSL_ASSIGN_OR_RETURN(auto bitmap, constraint.ComputeBitmap(*state));
+
+      if (!bitmap->Get(id)) {
+        return false;
+      }
+      ABSL_ASSIGN_OR_RETURN(state, constraint.ComputeNext(*state, id));
+    }
+    ABSL_ASSIGN_OR_RETURN(auto final_bitmap, constraint.ComputeBitmap(*state));
+    return final_bitmap->Get(config_.eos_ids[0]);
+  }
+
+  void AssertAccepts(Constraint& constraint, absl::string_view text) {
+    auto accepts_or = AcceptsInternal(constraint, text);
+    if (!accepts_or.ok()) {
+      ADD_FAILURE() << "AcceptsInternal failed for text: \"" << text
+                    << "\"\nStatus: " << accepts_or.status();
+      return;
+    }
+    if (!*accepts_or) {
+      ADD_FAILURE() << "Constraint failed to ACCEPT text: \""
+                    << absl::Utf8SafeCEscape(text) << "\"";
+    }
+  }
+
+  void AssertRejects(Constraint& constraint, absl::string_view text) {
+    auto accepts_or = AcceptsInternal(constraint, text);
+    if (!accepts_or.ok() || !*accepts_or) return;
+    if (*accepts_or) {
+      ADD_FAILURE() << "Constraint failed to REJECT text: \""
+                    << absl::Utf8SafeCEscape(text) << "\"";
+    }
+  }
+
+  std::unique_ptr<Constraint> CreateConstraint(
+      const nlohmann::ordered_json& tools,
+      const LlgConstraintsOptions& options) {
+    auto provider_or = LlgConstraintProvider::Create(tokenizer_, config_);
+    if (!provider_or.ok()) {
+      ADD_FAILURE() << "Failed to create provider: " << provider_or.status();
+      return nullptr;
+    }
+    auto provider = std::move(*provider_or);
+
+    auto res = CreateLarkGrammarForPythonToolCalls(tools, options);
+    if (!res.ok()) {
+      ADD_FAILURE() << "Failed to create grammar: " << res.status();
+      return nullptr;
+    }
+    auto constraint_or = provider->CreateConstraint(
+        LlGuidanceConstraintArg{.constraint_type = LlgConstraintType::kLark,
+                                .constraint_string = *res});
+    if (!constraint_or.ok()) {
+      ADD_FAILURE() << "Failed to create constraint: "
+                    << constraint_or.status();
+      return nullptr;
+    }
+    return std::move(*constraint_or);
+  }
+};
+
+TEST_F(LlgPythonToolCallsTest, PythonFunctionCalls) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["celsius", "fahrenheit"]
+        }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View",unit="celsius")
+```)");
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="SF")
+get_weather(location="LA", unit="fahrenheit")
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonTextAndFunctionCalls) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kTextAndOrFunctionCalls);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Accepts text then function call.
+  AssertAccepts(*constraint,
+                R"(I will get the weather for Mountain View.
+```tool_code
+get_weather(location="Mountain View")
+```)");
+
+  // Accepts only text.
+  AssertAccepts(*constraint, "Just some text.");
+
+  // Accepts only function call.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View")
+```)");
+}
+
+// "none": the answer can't contain the tool_code fence, and it can't be empty
+// or only whitespace. Text that only looks like a call isn't one, since only
+// the fence starts a call.
+TEST_F(LlgPythonToolCallsTest, TextOnlyRejectsCodeFence) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultPythonOptions(LlgConstraintMode::kTextOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, "I can't check the weather right now.");
+  AssertAccepts(*constraint, "The get_weather tool can tell you.");
+  AssertAccepts(*constraint, R"(get_weather(location="Paris"))");
+  AssertAccepts(*constraint, "\nI can't check the weather right now.");
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_weather(location="Paris")
+```)");
+  AssertRejects(*constraint, "");
+  AssertRejects(*constraint, "\n");
+}
+
+// Gemma 3 uses this mode by default. The tool_code fence is plain text, so a
+// malformed call inside a tool_code block must not be accepted as free text.
+TEST_F(LlgPythonToolCallsTest, PythonTextAndFunctionCallsRejectsMalformedCall) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kTextAndOrFunctionCalls);
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  // Rejects an unknown function.
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_time()
+```)");
+
+  // Rejects an unknown parameter.
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_weather(city="Paris")
+```)");
+
+  // Rejects a malformed call after leading text.
+  AssertRejects(*constraint,
+                R"(Let me check.
+```tool_code
+get_weather(location=)
+```)");
+
+  // Rejects a tool_code block that is never closed.
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_weather(location="Paris"))");
+
+  // Accepts text after a call.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Paris")
+```
+It is sunny.)");
+
+  // Accepts multiple blocks with text in between.
+  AssertAccepts(*constraint,
+                R"(First Paris.
+```tool_code
+get_weather(location="Paris")
+```
+Then Rome.
+```tool_code
+get_weather(location="Rome")
+```)");
+
+  // Accepts code blocks that are not tool calls as text.
+  AssertAccepts(*constraint,
+                R"(Here is some code:
+```python
+print("hello")
+```)");
+}
+
+// The code fence is matched literally, even if it has regex characters. As a
+// regex, "[TOOL_CALLS]" would match any one of its letters, so text like "OK"
+// would be rejected.
+TEST_F(LlgPythonToolCallsTest, TextAndFunctionCallsMatchCodeFenceLiterally) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kTextAndOrFunctionCalls);
+  options.code_fence_start = "[TOOL_CALLS]";
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, "OK, it's sunny.");
+  AssertAccepts(*constraint, R"(OK.[TOOL_CALLS]get_weather(location="Paris")
+```)");
+  AssertRejects(*constraint, "OK.[TOOL_CALLS]Paris is sunny.");
+}
+
+// LLGuidance accepts every escape in the code fence, and the fence still
+// matches literally.
+TEST_F(LlgPythonToolCallsTest, TextOnlyEscapesEveryRegexCharacterInCodeFence) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::parse(R"json([
+    {"name": "get_weather"}
+  ])json");
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kTextOnly);
+  options.code_fence_start = "\\/.^$|?*+()[]{}#&-~\r\t\n";
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, "Plain text.");
+  AssertRejects(*constraint, absl::StrCat("Text ", options.code_fence_start));
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonQuotes) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Accepts arguments with single quotes.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location='Mountain View')
+```)");
+
+  // Accepts arguments with double quotes.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View")
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonFlexibleWhitespace) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" },
+        "unit": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Accepts whitespace between symbols.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather( location = "MV" , unit = "C" )
+```)");
+
+  // Accepts minimal whitespace.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="MV",unit="C" )
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonParameterNameConstraint) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["celsius", "fahrenheit"]
+        }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Accept valid parameters.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View")
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View", unit="celsius")
+```)");
+
+  // Reject unexpected parameter name.
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View", extra="data")
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonNoParameters) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_time"
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Accept valid call.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_time()
+```)");
+
+  // Reject call with unexpected parameters.
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_time(timezone="PST")
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonRequiredParameter) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string"
+        }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Accept with required parameter.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View")
+```)");
+
+  // Reject missing required parameter.
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_weather()
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonOptionalParameter) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "ping",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "timeout": { "type": "integer" }
+      }
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Valid without optional parameter.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+ping()
+```)");
+
+  // Valid with optional parameter.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+ping(timeout=5)
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonEnumParameters) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "set_device_state",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": ["on", "off"]
+        }
+      },
+      "required": ["device", "state"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Accept valid enum value.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_device_state(device="light", state="on")
+```)");
+
+  // Reject invalid enum value.
+  AssertRejects(*constraint,
+                R"(```tool_code
+set_device_state(device="light", state="dimmed")
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonRequiredParametersStrictOrder) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "set_timer",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "duration": {
+          "type": "integer"
+        },
+        "sound": {
+          "type": "boolean"
+        }
+      },
+      "required": ["sound", "duration"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Accept valid order: sound then duration
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_timer(sound=True, duration=10)
+```)");
+
+  // Reject invalid order: duration then sound
+  AssertRejects(*constraint,
+                R"(```tool_code
+set_timer(duration=10, sound=True)
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonRequiredParametersBeforeOptional) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "set_timer",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "duration": {
+          "type": "integer"
+        },
+        "sound": {
+          "type": "boolean"
+        }
+      },
+      "required": ["duration"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Accept valid order (required parameter first).
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_timer(duration=10, sound=True)
+```)");
+
+  // Reject optional parameter before required parameter.
+  AssertRejects(*constraint,
+                R"(```tool_code
+set_timer(sound=True, duration=10)
+```)");
+}
+
+// "integer" and "number" are distinct JSON Schema types and must map to
+// distinct grammar rules. GetRuleForType is shared with the FC grammar, so
+// both grammars have to define INTEGER; these cases would fail if only one
+// did.
+TEST_F(LlgPythonToolCallsTest, PythonIntegerParametersRejectFloats) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "set_timer",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "duration": {
+          "type": "integer"
+        }
+      },
+      "required": ["duration"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_timer(duration=10)
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_timer(duration=0)
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_timer(duration=-5)
+```)");
+
+  AssertRejects(*constraint,
+                R"(```tool_code
+set_timer(duration=10.5)
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+set_timer(duration=10.0)
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+set_timer(duration=1e3)
+```)");
+}
+
+// Guards the other direction: tightening "integer" must not also tighten
+// "number".
+TEST_F(LlgPythonToolCallsTest, PythonNumberParametersStillAcceptFloats) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "set_temperature",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "celsius": {
+          "type": "number"
+        }
+      },
+      "required": ["celsius"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_temperature(celsius=21.5)
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_temperature(celsius=21)
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+set_temperature(celsius=2.15e1)
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonOptionalParametersFlexibleOrder) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "search",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "filter": { "type": "string" }
+      }
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Valid calls with optional parameters in different order.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+search(query="cat", filter="images")
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+search(filter="images", query="cat")
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonDuplicateOptionalParametersAllowed) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "search",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "filter": { "type": "string" }
+      },
+      "required": ["query"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Valid calls with optional duplicate
+  AssertAccepts(*constraint,
+                R"(```tool_code
+search(query="cat", filter="images", filter="videos")
+```)");
+
+  // Invalid (duplicate required parameter)
+  AssertRejects(*constraint,
+                R"(```tool_code
+search(query="cat", query="dog")
+```)");
+
+  // Invalid (optional before required)
+  AssertRejects(*constraint,
+                R"(```tool_code
+search(filter="images", query="cat")
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonMultipleFunctionCallsDifferentTools) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string"
+        }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_time"
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Accept multiple different function calls
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View")
+get_time()
+```)");
+
+  // Accept multiple same function calls
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_time()
+get_time()
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonRequiredAndOptionalArguments) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" },
+        "unit": { "type": "string" },
+        "fake": { "type": "string" }
+      },
+      "required": ["location", "unit"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Accepts tool calls with only required arguments.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="MV",unit="C")
+```)");
+
+  // Accepts tool calls with required and optional arguments.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="MV",unit="C",fake="yes")
+```)");
+
+  // Rejects tool calls with missing required arguments.
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_weather(location="MV")
+```)");
+
+  // Rejects wrong order for required arguments.
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_weather(unit="C",location="MV")
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonArgumentTypes) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "complex_tool",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "str": { "type": "string" },
+        "num": { "type": "number" },
+        "int": { "type": "integer" },
+        "bool": { "type": "boolean" },
+        "list": { "type": "array", "items": { "type": "string" } },
+        "dict": { "type": "object", "additionalProperties": { "type": "string" } },
+        "null_val": { "type": "null" }
+      },
+      "required": ["str", "num", "int", "bool", "list", "dict", "null_val"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Accepts all supported types.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+complex_tool(str="abc",num=1.2,int=3,bool=True,list=["a","b"],dict={"k":"v"},null_val=None)
+```)");
+
+  // Accepts types with alternative syntax.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+complex_tool(str='abc',num=-1,int=0,bool=False,list=[],dict={},null_val=None)
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonOptionalNone) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" },
+        "unit": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  // Optional parameter can be None.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="MV",unit=None)
+```)");
+
+  // Required parameter cannot be None.
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_weather(location=None)
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonNestedStructures) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "nested_tool",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "nested_arr": {
+          "type": "array",
+          "items": { "type": "array", "items": { "type": "integer" } }
+        },
+        "nested_obj": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["rectangle", "ellipse"]
+              },
+              "width": { "type": "number" }
+            },
+            "required": ["type"]
+          }
+        }
+      }
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+nested_tool(nested_arr=[[1,2],[3]], nested_obj={"a":{"b":"c"}}, elements=[{"type":"ellipse","width":10}])
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+nested_tool(nested_arr=[["bad"]])
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+nested_tool(nested_obj={"a":{"b":123}})
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+nested_tool(elements=[{"type":"circle"}])
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+nested_tool(elements=[{"width":10}])
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonEscapedStrings) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "say_it",
+    "parameters": {
+      "type": "object",
+      "properties": { "text": { "type": "string" } }
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+say_it(text="He said \"Hello\"")
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, PythonNullValue) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" },
+        "unit": { "type": ["string", "null"] }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+
+  auto constraint = CreateConstraint(tools, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="MV", unit=None)
+```)");
+
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": ["string", "null"] }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools2 = nlohmann::ordered_json::array({tool2});
+  auto constraint2 = CreateConstraint(
+      tools2, GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(*constraint2,
+                R"(```tool_code
+get_weather(location=None)
+```)");
+  AssertRejects(*constraint2,
+                R"(```tool_code
+get_weather()
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, OneOfPropertyConstraint) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "selection",
+    "description": "Select an element",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "bounds": {
+          "one_of": [
+            { "type": "string" },
+            { "type": "number" }
+          ]
+        }
+      },
+      "required": ["bounds"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+  auto constraint = CreateConstraint(tools, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+selection(bounds="top_left")
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+selection(bounds=42)
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+selection(bounds=True)
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, OneOfCamelCasePropertyConstraint) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "selection",
+    "description": "Select an element",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "bounds": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" }
+          ]
+        }
+      },
+      "required": ["bounds"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+  auto constraint = CreateConstraint(tools, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+selection(bounds="top_left")
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+selection(bounds=42)
+```)");
+  AssertRejects(*constraint,
+                R"(```tool_code
+selection(bounds=True)
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, OneOfToolsObjectWrapper) {
+  nlohmann::ordered_json tools_obj = nlohmann::ordered_json::parse(R"json({
+    "oneOf": [
+      {
+        "name": "get_time"
+      }
+    ]
+  })json");
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+  auto constraint = CreateConstraint(tools_obj, options);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_time()
+```)");
+}
+
+class LlgPythonToolNameTest : public LlgPythonToolCallsTest,
+                              public testing::WithParamInterface<std::string> {
+};
+
+TEST_P(LlgPythonToolNameTest, AcceptsValidToolName) {
+  const std::string& tool_name = GetParam();
+  nlohmann::ordered_json tool = {
+      {"name", tool_name},
+      {"parameters",
+       {{"type", "object"},
+        {"properties",
+         {{"zipCode", {{"type", "integer"}}}, {"_unit", {{"type", "string"}}}}},
+        {"required", {"zipCode"}}}}};
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, absl::StrCat("```tool_code\n", tool_name,
+                                          "(zipCode=94043)\n```"));
+  AssertAccepts(*constraint, absl::StrCat("```tool_code\n", tool_name,
+                                          "(zipCode=94043, _unit=\"C\")\n```"));
+  AssertRejects(*constraint, "```tool_code\nother_tool(zipCode=94043)\n```");
+}
+
+INSTANTIATE_TEST_SUITE_P(ToolNamesWithCapitalsAndPrefixes,
+                         LlgPythonToolNameTest,
+                         testing::Values("f0_Get_weather", "getWeather",
+                                         "Get_weather", "_0_get_weather",
+                                         "0_get_weather", "__get_weather",
+                                         "get-weather", "get.weather", "dict"));
+
+TEST_F(LlgPythonToolCallsTest, CaseSensitiveToolNamesCoexist) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_Weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "zip_code": { "type": "integer" }
+      },
+      "required": ["zip_code"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View")
+```)");
+  AssertAccepts(*constraint,
+                 R"(```tool_code
+get_Weather(zip_code=94043)
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, AllowedFunctionsWithFunctionCallsOnlyMode) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+  options.allowed_function_names = {"get_weather"};
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  // Allowed function is accepted.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Tokyo")
+```)");
+
+  // Non-allowed function is rejected.
+  AssertRejects(*constraint,
+                R"(```tool_code
+find_movies(genre="Action")
+```)");
+
+  // Text only is rejected in FunctionCallsOnly mode.
+  AssertRejects(*constraint, "Just plain text.");
+}
+
+TEST_F(LlgPythonToolCallsTest, FunctionCallsRequired) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsRequired);
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  // Pure text without tool calls is rejected.
+  AssertRejects(*constraint, "Just plain text without any tool call.");
+
+  // Unlike FunctionCallsOnly, the turn can't end without a call.
+  AssertRejects(*constraint, "");
+
+  // A tool call block without any call is rejected too.
+  AssertRejects(*constraint, "```tool_code\n\n```");
+
+  // Tool call without surrounding text is accepted.
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View")
+```)");
+
+  // Tool call preceded by text is rejected in call-first mode.
+  AssertRejects(*constraint,
+                R"(I will check the weather.
+```tool_code
+get_weather(location="Mountain View")
+```)");
+
+  // Tool call followed by text is rejected.
+  AssertRejects(*constraint,
+                R"(```tool_code
+get_weather(location="Mountain View")
+```
+Let me know if you need anything else.)");
+}
+
+TEST_F(LlgPythonToolCallsTest, AllowedFunctionNamesRestrictsChoices) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tool3 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_time",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "timezone": { "type": "string" }
+      },
+      "required": ["timezone"]
+    }
+  })json");
+  nlohmann::ordered_json tools =
+      nlohmann::ordered_json::array({tool1, tool2, tool3});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsRequired);
+  options.allowed_function_names = {"get_weather", "get_time"};
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Tokyo")
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_time(timezone="UTC")
+```)");
+
+  AssertRejects(*constraint,
+                R"(```tool_code
+find_movies(genre="Action")
+```)");
+  AssertRejects(*constraint, "");
+}
+
+TEST_F(LlgPythonToolCallsTest, AllowedFunctionNamesEmptyAllowsAll) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+  options.allowed_function_names = {};
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Tokyo")
+```)");
+  AssertAccepts(*constraint,
+                R"(```tool_code
+find_movies(genre="Action")
+```)");
+}
+
+TEST_F(LlgPythonToolCallsTest, AllowedFunctionNotFoundReturnsError) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather"
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly);
+  options.allowed_function_names = {"non_existent_tool"};
+
+  auto result = CreateLarkGrammarForPythonToolCalls(tools, options);
+  EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_THAT(result.status().message(),
+              testing::HasSubstr("not found in provided tools"));
+}
+
+TEST_F(LlgPythonToolCallsTest, FunctionCallsRequiredEmptyToolsReturnsError) {
+  nlohmann::ordered_json empty_tools = nlohmann::ordered_json::array();
+
+  LlgConstraintsOptions options =
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsRequired);
+
+  auto result = CreateLarkGrammarForPythonToolCalls(empty_tools, options);
+  EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_THAT(
+      result.status().message(),
+      testing::HasSubstr("No tools provided for FunctionCallsRequired"));
+}
+
+TEST_F(LlgPythonToolCallsTest, FunctionCallsOnlyCanEndTurnWithoutCall) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  auto constraint = CreateConstraint(
+      nlohmann::ordered_json::array({tool}),
+      GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint,
+                R"(```tool_code
+get_weather(location="Tokyo")
+```)");
+  // Like FST's FUNCTION_CALL_ONLY mode, the model can end its turn without a
+  // call, e.g. after the tool responses.
+  AssertAccepts(*constraint, "");
+  AssertRejects(*constraint, "It is sunny in Tokyo.");
+}
+
+// Returns a Python block that calls `tool` with `arguments`.
+std::string PythonCall(absl::string_view tool, absl::string_view arguments) {
+  return absl::StrCat("```tool_code\n", tool, "(", arguments, ")\n```");
+}
+
+// A schema feature: the parameters of a tool "f", arguments that match them,
+// and arguments that don't.
+struct SchemaFeature {
+  std::string name;
+  std::string parameters;
+  std::vector<std::string> accepted;
+  std::vector<std::string> rejected;
+};
+
+// Returns parameters with a required "v" that has the schema `v_schema`.
+std::string RequiredV(absl::string_view v_schema) {
+  return absl::StrCat(R"({"properties": {"v": )", v_schema,
+                      R"(}, "required": ["v"]})");
+}
+
+// Every new or otherwise untested schema feature has arguments that the grammar
+// must reject, so it can't stop being enforced without a test failing.
+TEST_F(LlgPythonToolCallsTest, EnforcesSchemaFeatures) {
+  const std::vector<SchemaFeature> features = {
+      {.name = "string",
+       .parameters = RequiredV(R"({"type": "string"})"),
+       .accepted = {R"(v="abc")", "v='abc'", R"(v="")"},
+       .rejected = {"v=1", "v=True", "v=None"}},
+      {.name = "number",
+       .parameters = RequiredV(R"({"type": "number"})"),
+       .accepted = {"v=1.5", "v=-2e3"},
+       .rejected = {R"(v="1.5")", "v=True"}},
+      {.name = "boolean",
+       .parameters = RequiredV(R"({"type": "boolean"})"),
+       .accepted = {"v=True", "v=False"},
+       .rejected = {"v=1", "v=true", R"(v="True")"}},
+      {.name = "null",
+       .parameters = RequiredV(R"({"type": "null"})"),
+       .accepted = {"v=None"},
+       .rejected = {"v=0", R"(v="None")"}},
+      {.name = "enum of numbers",
+       .parameters = RequiredV(R"({"enum": [1, 2.5]})"),
+       .accepted = {"v=1", "v=2.5"},
+       .rejected = {"v=3", R"(v="1")"}},
+      {.name = "list of types",
+       .parameters = RequiredV(R"({"type": ["string", "integer"]})"),
+       .accepted = {R"(v="a")", "v=1"},
+       .rejected = {"v=True", "v=1.5"}},
+      {.name = "anyOf",
+       .parameters =
+           RequiredV(R"({"anyOf": [{"type": "integer"}, {"enum": ["auto"]}]})"),
+       .accepted = {"v=3", R"(v="auto")"},
+       .rejected = {R"(v="manual")", "v=True"}},
+      {.name = "nullable",
+       .parameters = RequiredV(R"({"type": "string", "nullable": true})"),
+       .accepted = {R"(v="a")", "v=None"},
+       .rejected = {"v=1"}},
+      {.name = "nested object",
+       .parameters = RequiredV(R"json({
+         "type": "object",
+         "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+         "required": ["x", "y"]
+       })json"),
+       .accepted = {R"(v={"x": 1, "y": 2.5})", "v={'x': 1, 'y': 2}"},
+       .rejected = {R"(v={"x": 1})", R"(v={"x": 1, "y": 2, "z": 3})",
+                    R"(v={"x": "1", "y": 2})", R"(v={"y": 2, "x": 1})"}},
+      {.name = "no additional properties",
+       .parameters =
+           RequiredV(R"({"type": "object", "additionalProperties": false})"),
+       .accepted = {"v={}"},
+       .rejected = {R"(v={"a": 1})"}},
+      {.name = "any object",
+       .parameters = RequiredV(R"({"type": "object"})"),
+       .accepted = {R"(v={"a": [1, "x", None]})"},
+       .rejected = {"v=1", R"(v="x")", "v=[]"}},
+      {.name = "any array",
+       .parameters = RequiredV(R"({"type": "array"})"),
+       .accepted = {R"(v=[1, "x", {"a": True}])"},
+       .rejected = {"v={}", "v=1"}},
+  };
+
+  for (const SchemaFeature& feature : features) {
+    SCOPED_TRACE(feature.name);
+    nlohmann::ordered_json tool;
+    tool["name"] = "f";
+    tool["parameters"] = nlohmann::ordered_json::parse(feature.parameters);
+    nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+    auto constraint = CreateConstraint(
+        tools, GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly));
+    ASSERT_NE(constraint, nullptr);
+    for (const std::string& arguments : feature.accepted) {
+      AssertAccepts(*constraint, PythonCall("f", arguments));
+    }
+    for (const std::string& arguments : feature.rejected) {
+      AssertRejects(*constraint, PythonCall("f", arguments));
+    }
+  }
+}
+
+TEST_F(LlgPythonToolCallsTest, RequiredWithoutPropertiesAndDuplicateRequired) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::parse(R"json([
+    {
+      "name": "no_props",
+      "parameters": {
+        "type": "object",
+        "required": ["a"]
+      }
+    },
+    {
+      "name": "dup_req",
+      "parameters": {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a", "a"]
+      }
+    }
+  ])json");
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultPythonOptions(LlgConstraintMode::kFunctionCallsOnly));
+  ASSERT_NE(constraint, nullptr);
+  AssertAccepts(*constraint, PythonCall("no_props", ""));
+  AssertAccepts(*constraint, PythonCall("dup_req", R"(a="ok")"));
+  AssertRejects(*constraint, PythonCall("dup_req", ""));
+  AssertRejects(*constraint, PythonCall("dup_req", R"(a="x", a="y")"));
+}
+
+}  // namespace
+}  // namespace litert::lm

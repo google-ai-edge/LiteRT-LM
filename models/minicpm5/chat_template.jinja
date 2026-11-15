@@ -1,0 +1,85 @@
+{%- macro format_content(content) -%}
+    {%- for item in content -%}
+        {%- if item['type'] == 'text' -%}
+            {{- item['text'] -}}
+        {%- elif item['type'] == 'tool_response' -%}
+            {%- if item['response'] is mapping or item['response'] is sequence -%}
+                {{- item['response'] | tojson -}}
+            {%- else -%}
+                {{- item['response'] | string -}}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endfor -%}
+{%- endmacro -%}
+
+{%- set is_first_system = messages and messages[0]['role'] == 'system' -%}
+{%- set loop_messages = messages[1:] if is_first_system else messages -%}
+{#- Handle System/Tool Definitions Block -#}
+{%- if tools or is_first_system -%}
+    {{- '<|im_start|>system\n' -}}
+    {%- if is_first_system -%}
+        {{- format_content(messages[0]['content']) -}}
+    {%- endif -%}
+    {%- if tools -%}
+        {%- if is_first_system -%}
+            {{- '\n\n' -}}
+        {%- endif -%}
+        {{- "# Tools\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" -}}
+        {%- for tool in tools -%}
+            {{- '\n' + tool | tojson -}}
+        {%- endfor -%}
+        {{- '\n</tools>\n\nTool usage guidelines:\n- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.\n- When calling a function, return an XML object within <function ... </function> using:\n<function name="function-name"><param name="param-name">param-value</param></function>\n- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param>' -}}
+    {%- endif -%}
+    {{- '<|im_end|>\n' -}}
+{%- endif -%}
+
+{%- for message in loop_messages -%}
+    {%- if message['role'] == 'user' or message['role'] == 'system' -%}
+        {{- '<|im_start|>' + message['role'] + '\n' + format_content(message['content']) + '<|im_end|>\n' -}}
+    {%- elif message['role'] == 'assistant' -%}
+        {%- set content = format_content(message['content']) -%}
+        {{- '<|im_start|>' + message['role'] + '\n' + content -}}
+        {%- if message['tool_calls'] -%}
+            {%- for tool_call in message['tool_calls'] -%}
+                {%- if content or not loop.first -%}
+                    {{- '\n' -}}
+                {%- endif -%}
+                {%- set function = tool_call['function'] if 'function' in tool_call else tool_call -%}
+                {{- '<function name="' + function['name'] + '">' -}}
+                {%- if function['arguments'] is mapping -%}
+                    {%- for name, value in function['arguments'] | dictsort -%}
+                        {%- set val_str = value | string -%}
+                        {%- if '<' in val_str or '&' in val_str or '\n' in val_str -%}
+                            {{- '<param name="' + name + '"><![CDATA[' + val_str + ']]></param>' -}}
+                        {%- else -%}
+                            {{- '<param name="' + name + '">' + val_str + '</param>' -}}
+                        {%- endif -%}
+                    {%- endfor -%}
+                {%- elif function['arguments'] is string -%}
+                    {{- function['arguments'] -}}
+                {%- endif -%}
+                {{- '</function>' -}}
+            {%- endfor -%}
+        {%- endif -%}
+        {{- '<|im_end|>\n' -}}
+    {%- elif message['role'] == 'tool' -%}
+        {%- if loop.first or loop_messages[loop.index0 - 1]['role'] != 'tool' -%}
+            {{- '<|im_start|>user' -}}
+        {%- endif -%}
+        {%- for item in message['content'] -%}
+            {{- '\n<tool_response>\n' + format_content([item]) + '\n</tool_response>' -}}
+        {%- endfor -%}
+        {%- if loop.last or loop_messages[loop.index0 + 1]['role'] != 'tool' -%}
+            {{- '<|im_end|>\n' -}}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
+
+{%- if add_generation_prompt -%}
+    {{- '<|im_start|>assistant\n' -}}
+    {%- if enable_thinking | default(false) -%}
+        {{- '<think>\n' -}}
+    {%- else -%}
+        {{- '<think>\n\n</think>\n\n' -}}
+    {%- endif -%}
+{%- endif -%}

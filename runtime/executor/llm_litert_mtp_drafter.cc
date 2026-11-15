@@ -20,6 +20,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -34,21 +35,34 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/clock.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "runtime/components/constrained_decoding/constrained_decoder.h"
+#include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
+#include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
-#include "runtime/components/sampler_factory.h"
+#include "runtime/components/sampler_params_util.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/litert/state.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_executor_settings_utils.h"
+#include "runtime/executor/llm_litert_verifier.h"
+#include "runtime/executor/nvidia_mtp_drafter_support.h"
+#include "runtime/executor/state_interface.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"
 
@@ -64,17 +78,14 @@ constexpr bool kEnableMtpDrafterLogs = false;
 constexpr absl::string_view kVerifySignatureRunner = "verify";
 
 absl::StatusOr<std::unique_ptr<Sampler>> CreateGreedySampler(
-    Environment& env, Backend backend, int output_heads, int sequence_size,
-    int vocab_size, std::optional<ActivationDataType> activation_data_type) {
-  proto::SamplerParameters sampler_params;
-  sampler_params.set_type(proto::SamplerParameters::TOP_P);
-  sampler_params.set_k(1);
-  sampler_params.set_p(0.0f);
-  sampler_params.set_temperature(1.0f);
-  sampler_params.set_seed(0);
-  return CreateSampler(backend, output_heads, std::move(sampler_params),
-                       env.Get(), sequence_size, vocab_size,
-                       activation_data_type);
+    const Environment& env, Backend backend, int output_heads,
+    int sequence_size, int vocab_size,
+    std::optional<ActivationDataType> activation_data_type) {
+  // On NVIDIA's TensorRT-RTX backend (Backend::NPU) the argmax runs on the
+  // device next to the logits; elsewhere this is CreateSampler().
+  return CreateMtpGreedySampler(backend, output_heads, GreedySamplerParams(),
+                                env, sequence_size, vocab_size,
+                                activation_data_type);
 }
 
 absl::Status ConcatenateEmbeddingsAndActivations(
@@ -130,12 +141,7 @@ absl::Status ConcatenateEmbeddingsAndActivationsFromVerifierBuffer(
   return absl::OkStatus();
 }
 
-absl::StatusOr<int> GetVocabSizeFromLogitsTensor(TensorBuffer& logits_tensor) {
-  LITERT_ASSIGN_OR_RETURN(auto logits_tensor_type, logits_tensor.TensorType());
-  RET_CHECK_EQ(logits_tensor_type.Layout().Dimensions().size(), 3);
-  // logits tensor shape is [batch, seq, vocab].
-  return logits_tensor_type.Layout().Dimensions()[2];
-}
+}  // namespace
 
 absl::Status UpdateCompilationOptions(
     const LlmExecutorSettings& executor_settings,
@@ -150,7 +156,8 @@ absl::Status UpdateCompilationOptions(
       gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
       break;
     }
-    case Backend::CPU: {
+    case Backend::CPU:
+    case Backend::NPU: {
       break;
     }
     default:
@@ -160,14 +167,11 @@ absl::Status UpdateCompilationOptions(
 
   return absl::OkStatus();
 }
-
-}  // namespace
-
 LlmLiteRtMtpDrafter::~LlmLiteRtMtpDrafter() {
-  ABSL_LOG(INFO) << "Num drafted tokens: " << num_drafted_tokens_;
-  ABSL_LOG(INFO) << "Num verified tokens: " << num_verified_tokens_;
+  ABSL_VLOG(1) << "Num drafted tokens: " << num_drafted_tokens_;
+  ABSL_VLOG(1) << "Num verified tokens: " << num_verified_tokens_;
   if (num_drafted_tokens_ > 0) {
-    ABSL_LOG(INFO) << "Success rate: "
+    ABSL_LOG(INFO) << "MTP Drafter - Success rate: "
                    << static_cast<double>(num_verified_tokens_) /
                           num_drafted_tokens_;
   }
@@ -178,32 +182,63 @@ LlmLiteRtMtpDrafter::Create(
     Environment& env, ModelResources& resources,
     const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
     EmbeddingLookupManager& embedding_manager,
-    std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager) {
+    std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
+    const proto::ExecutorMetadata* executor_metadata,
+    LlmLiteRtVerifier::PassRunner verify_pass_runner) {
   ActivationDataType activation_data_type =
       executor_settings.GetActivationDataType().value_or(
           ActivationDataType::FLOAT16);
-
-  auto cache_suffix = std::string(ExecutorSettingsBase::kMtpDrafterCacheSuffix);
+  auto cache_suffix = std::string(ExecutorSettingsBase::GetCacheModelName(
+      ExecutorSettingsBase::CacheModel::kMtpDrafter));
   ABSL_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, activation_data_type,
                                /*signatures=*/std::nullopt,
-                               /*cache_suffix=*/cache_suffix));
+                               /*cache_suffix=*/cache_suffix, &resources));
   ABSL_RETURN_IF_ERROR(
       UpdateCompilationOptions(executor_settings, compilation_options));
-  ABSL_ASSIGN_OR_RETURN(auto model,
-                        resources.GetTFLiteModel(ModelType::kTfLiteMtpDrafter));
+  ABSL_RETURN_IF_ERROR(SetExternalWeightOptions(
+      resources, proto::LlmMetadata::TF_LITE_MTP_DRAFTER, compilation_options));
+  ABSL_ASSIGN_OR_RETURN(
+      auto model,
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_MTP_DRAFTER));
+  ABSL_RETURN_IF_ERROR(AddNvidiaSharedValueCacheOptions(
+      executor_settings.GetBackend(), *model, base_model, compilation_options));
   LITERT_ASSIGN_OR_RETURN(
       auto compiled_model,
       CompiledModel::Create(env, model->Get(), compilation_options));
+  ABSL_ASSIGN_OR_RETURN(
+      auto base_model_desc,
+      resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+
+  return Create(env, std::move(compiled_model), executor_settings, base_model,
+                *base_model_desc, embedding_manager, ple_manager,
+                executor_metadata, std::move(verify_pass_runner));
+}
+
+absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>>
+LlmLiteRtMtpDrafter::Create(
+    Environment& env, CompiledModel mtp_drafter_model,
+    const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
+    const Model& base_model_desc, EmbeddingLookupManager& embedding_manager,
+    std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
+    const proto::ExecutorMetadata* executor_metadata,
+    LlmLiteRtVerifier::PassRunner verify_pass_runner) {
+  ActivationDataType activation_data_type =
+      executor_settings.GetActivationDataType().value_or(
+          ActivationDataType::FLOAT16);
+  const Backend backend = executor_settings.GetBackend();
+  bool use_fp16_precision = backend == Backend::GPU &&
+                            activation_data_type == ActivationDataType::FLOAT16;
 
   absl::flat_hash_map<absl::string_view, TensorBuffer>
       mtp_drafter_input_buffers;
   absl::flat_hash_map<absl::string_view, TensorBuffer>
       mtp_drafter_output_buffers;
   std::vector<std::string> kv_cache_input_names;
-  LITERT_ASSIGN_OR_RETURN(SimpleSignature drafter_signature,
-                          compiled_model.GetSignature(/*signature_index=*/0));
+  LITERT_ASSIGN_OR_RETURN(
+      SimpleSignature drafter_signature,
+      mtp_drafter_model.GetSignature(/*signature_index=*/0));
   {
     for (absl::string_view input_name : drafter_signature.InputNames()) {
       if (absl::StartsWith(input_name, "kv_cache_")) {
@@ -212,86 +247,147 @@ LlmLiteRtMtpDrafter::Create(
       }
 
       LITERT_ASSIGN_OR_RETURN(auto input_buffer,
-                              compiled_model.CreateInputBuffer(
+                              mtp_drafter_model.CreateInputBuffer(
                                   drafter_signature.Key(), input_name));
-      mtp_drafter_input_buffers[input_name] = std::move(input_buffer);
+      mtp_drafter_input_buffers.insert_or_assign(input_name,
+                                                 std::move(input_buffer));
     }
 
-    for (absl::string_view output_name : drafter_signature.OutputNames()) {
-      LITERT_ASSIGN_OR_RETURN(auto output_buffer,
-                              compiled_model.CreateOutputBuffer(
-                                  drafter_signature.Key(), output_name));
-      mtp_drafter_output_buffers[output_name] = std::move(output_buffer);
+    for (size_t i = 0; i < drafter_signature.OutputNames().size(); ++i) {
+      absl::string_view output_name = drafter_signature.OutputNames()[i];
+      if (output_name == "logits" && use_fp16_precision) {
+        LITERT_ASSIGN_OR_RETURN(
+            auto output_buffer,
+            CreateFP16OutputBuffer(env, mtp_drafter_model,
+                                   /*signature_index=*/0, output_name, i));
+        mtp_drafter_output_buffers.insert_or_assign(output_name,
+                                                    std::move(output_buffer));
+      } else {
+        LITERT_ASSIGN_OR_RETURN(auto output_buffer,
+                                mtp_drafter_model.CreateOutputBuffer(
+                                    drafter_signature.Key(), output_name));
+        mtp_drafter_output_buffers.insert_or_assign(output_name,
+                                                    std::move(output_buffer));
+      }
     }
   }
 
-  LITERT_ASSIGN_OR_RETURN(SimpleSignature verify_signature,
-                          base_model.FindSignature(kVerifySignatureRunner));
-  absl::flat_hash_map<absl::string_view, TensorBuffer> verifier_input_buffers;
-  absl::flat_hash_map<absl::string_view, TensorBuffer> verifier_output_buffers;
-  int num_draft_steps;
-  {
-    for (absl::string_view input_name : verify_signature.InputNames()) {
-      if (absl::StrContains(input_name, "kv")) {
-        continue;
-      }
-      LITERT_ASSIGN_OR_RETURN(
-          auto input_buffer,
-          base_model.CreateInputBuffer(verify_signature.Key(), input_name));
-      verifier_input_buffers[input_name] = std::move(input_buffer);
-    }
-    for (absl::string_view output_name : verify_signature.OutputNames()) {
-      if (absl::StrContains(output_name, "kv")) {
-        continue;
-      }
-      LITERT_ASSIGN_OR_RETURN(
-          auto output_buffer,
-          base_model.CreateOutputBuffer(verify_signature.Key(), output_name));
-      verifier_output_buffers[output_name] = std::move(output_buffer);
-    }
-
-    LITERT_ASSIGN_OR_RETURN(auto input_pos_tensor_type,
-                            verify_signature.InputTensorType("input_pos"));
-    // Expecred shape: [T = G + 1] where G is the number of draft steps
-    const auto& input_pos_dims = input_pos_tensor_type.Layout().Dimensions();
-    num_draft_steps = input_pos_dims[0] - 1;
-  }
-
-  LITERT_ASSIGN_OR_RETURN(
-      int vocab_size,
-      GetVocabSizeFromLogitsTensor(verifier_output_buffers["logits"]));
-
-  ABSL_ASSIGN_OR_RETURN(auto drafter_sampler,
-                        CreateGreedySampler(env, executor_settings.GetBackend(),
-                                            /*output_heads=*/1,
-                                            /*sequence_size=*/1, vocab_size,
-                                            activation_data_type));
   ABSL_ASSIGN_OR_RETURN(
-      auto verifier_sampler,
-      CreateGreedySampler(env, executor_settings.GetBackend(),
+      std::unique_ptr<LlmLiteRtVerifier> verifier,
+      LlmLiteRtVerifier::Create(
+          env, base_model, kVerifySignatureRunner, executor_settings,
+          &embedding_manager,
+          ple_manager.has_value() ? &ple_manager->get() : nullptr,
+          executor_metadata, std::move(verify_pass_runner)));
+  // The verify pass covers the token before the drafted tokens.
+  const int num_draft_steps = verifier->width() - 1;
+
+  ActivationDataType drafter_logits_data_type;
+  int drafter_vocab_size;
+  {
+    auto drafter_logits = mtp_drafter_output_buffers.find("logits");
+    if (drafter_logits == mtp_drafter_output_buffers.end()) {
+      return absl::InvalidArgumentError("The MTP drafter has no logits.");
+    }
+    LITERT_ASSIGN_OR_RETURN(auto drafter_logits_type,
+                            drafter_logits->second.TensorType());
+    if (drafter_logits_type.ElementType() == ElementType::Float16) {
+      drafter_logits_data_type = ActivationDataType::FLOAT16;
+    } else if (drafter_logits_type.ElementType() == ElementType::Float32) {
+      drafter_logits_data_type = ActivationDataType::FLOAT32;
+    } else {
+      return absl::InvalidArgumentError("Unsupported drafter logits type");
+    }
+    // The drafter logits shape is [batch, seq, vocab].
+    const auto& drafter_logits_dims = drafter_logits_type.Layout().Dimensions();
+    RET_CHECK_EQ(drafter_logits_dims.size(), 3);
+    drafter_vocab_size = drafter_logits_dims[2];
+  }
+  // The drafted tokens are verified by the base model and masked by the same
+  // constraint, so the drafter and the base model must share a vocabulary.
+  if (drafter_vocab_size != verifier->vocab_size()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "The vocabulary size of the MTP drafter (", drafter_vocab_size,
+        ") differs from the base model's (", verifier->vocab_size(), ")."));
+  }
+  if (num_draft_steps < 1) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "MTP drafting needs a verify signature of width 2 or more, got ",
+        verifier->width(), "."));
+  }
+
+  {
+    LITERT_ASSIGN_OR_RETURN(
+        auto drafter_projected_activations_type,
+        drafter_signature.OutputTensorType("projected_activations"));
+    if (drafter_projected_activations_type.ElementType() !=
+        ElementType::Float32) {
+      return absl::InvalidArgumentError(
+          "Unsupported drafter projected activations type: must be float32");
+    }
+  }
+
+  {
+    ABSL_ASSIGN_OR_RETURN(TensorBuffer * verifier_activations,
+                          verifier->GetOutputBuffer("activations"));
+    LITERT_ASSIGN_OR_RETURN(auto verifier_activations_type,
+                            verifier_activations->TensorType());
+    if (verifier_activations_type.ElementType() != ElementType::Float32) {
+      return absl::InvalidArgumentError(
+          "Unsupported verifier activations type: must be float32");
+    }
+  }
+
+  ABSL_ASSIGN_OR_RETURN(
+      auto drafter_sampler,
+      CreateGreedySampler(env, backend,
                           /*output_heads=*/1,
-                          /*sequence_size=*/num_draft_steps + 1, vocab_size,
-                          activation_data_type));
+                          /*sequence_size=*/1, drafter_vocab_size,
+                          drafter_logits_data_type));
 
   LITERT_ASSIGN_OR_RETURN(auto drafter_id_tensor,
                           CreateTensorBuffer<int32_t>({1, 1}));
-  LITERT_ASSIGN_OR_RETURN(
-      auto verifier_id_tensor,
-      CreateTensorBuffer<int32_t>({1, num_draft_steps + 1}));
 
-  auto drafter = absl::WrapUnique(new LlmLiteRtMtpDrafter(
-      std::move(compiled_model), std::move(drafter_signature), base_model,
-      std::move(verify_signature), embedding_manager, ple_manager,
-      std::move(drafter_sampler), std::move(verifier_sampler),
-      std::move(kv_cache_input_names), std::move(mtp_drafter_input_buffers),
-      std::move(mtp_drafter_output_buffers), std::move(verifier_input_buffers),
-      std::move(verifier_output_buffers), num_draft_steps));
+  ABSL_ASSIGN_OR_RETURN(
+      auto drafter_model_signatures,
+      GetModelSignaturesFromInputOutputNames(drafter_signature.InputNames(),
+                                             drafter_signature.OutputNames(),
+                                             /*strict=*/false));
 
-  drafter->drafter_id_tensor_ = std::move(drafter_id_tensor);
-  drafter->verifier_id_tensor_ = std::move(verifier_id_tensor);
+  ABSL_ASSIGN_OR_RETURN(
+      auto drafter_mask_runner,
+      LiteRtLogitMaskRunner::Create(env, GetHwAcceleratorForBackend(backend)));
 
-  return absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>>(
-      std::move(drafter));
+  return absl::WrapUnique(new LlmLiteRtMtpDrafter(
+      std::move(mtp_drafter_model), std::move(drafter_signature), base_model,
+      base_model_desc, embedding_manager, std::move(verifier),
+      std::move(drafter_sampler), std::move(kv_cache_input_names),
+      std::move(mtp_drafter_input_buffers),
+      std::move(mtp_drafter_output_buffers), std::move(drafter_id_tensor),
+      num_draft_steps, std::move(drafter_model_signatures),
+      GetAttentionMaskParams(executor_metadata),
+      std::move(drafter_mask_runner)));
+}
+
+absl::Status LlmLiteRtMtpDrafter::UpdateVerifierSamplerConfig(
+    const proto::SamplerParameters& sampler_params,
+    std::shared_ptr<std::default_random_engine> rand_gen) {
+  ABSL_ASSIGN_OR_RETURN(
+      std::shared_ptr<std::default_random_engine> verifier_rand_gen,
+      verifier_->UpdateSamplerConfig(sampler_params, std::move(rand_gen)));
+  // This is called on every sampler re-sync (e.g. each session switch); the
+  // lenience stream restarts only when the verifier's stream does.
+  lenience_rng_.Update(sampler_params.seed(), verifier_rand_gen);
+  return absl::OkStatus();
+}
+
+absl::Status LlmLiteRtMtpDrafter::SetLenience(float lenience) {
+  if (!(lenience >= 0.0f && lenience <= 1.0f)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Speculative lenience must be in [0, 1], got ", lenience));
+  }
+  lenience_ = lenience;
+  return absl::OkStatus();
 }
 
 absl::Status LlmLiteRtMtpDrafter::PrepareDrafterInputBuffers(
@@ -301,21 +397,34 @@ absl::Status LlmLiteRtMtpDrafter::PrepareDrafterInputBuffers(
     LITERT_ASSIGN_OR_RETURN(
         auto kv_cache_buffer_dup,
         output_kv_cache_buffers.at(kv_cache_input_name).Duplicate());
-    active_drafter_input_buffers_[kv_cache_input_name] =
-        std::move(kv_cache_buffer_dup);
+    active_drafter_input_buffers_.insert_or_assign(
+        kv_cache_input_name, std::move(kv_cache_buffer_dup));
   }
   LITERT_RETURN_IF_ERROR(
       active_drafter_input_buffers_["input_pos"].Write<int32_t>(
           absl::MakeSpan(&position, 1)));
-  ABSL_RETURN_IF_ERROR(
-      InitializeAttentionMask(active_drafter_input_buffers_["mask"],
-                              /*use_fp16_precision=*/false));
-  ABSL_RETURN_IF_ERROR(FillAttentionMask(active_drafter_input_buffers_["mask"],
-                                         /*start_step=*/position,
-                                         /*steps=*/1));
-  if (active_drafter_input_buffers_.contains("param_tensor")) {
+  if (drafter_signatures_.input_attn_mask.has_value()) {
+    auto& mask_buf =
+        active_drafter_input_buffers_[*drafter_signatures_.input_attn_mask];
+    ABSL_RETURN_IF_ERROR(
+        InitializeAndFillAttentionMask(mask_buf, /*is_f16=*/false,
+                                       /*start_timestep=*/position,
+                                       /*steps=*/1, attn_params_.global_type));
+  }
+  if (drafter_signatures_.input_attn_mask_local.has_value()) {
+    auto& mask_buf = active_drafter_input_buffers_[*drafter_signatures_
+                                                        .input_attn_mask_local];
+    ABSL_RETURN_IF_ERROR(InitializeAndFillAttentionMask(
+        mask_buf, /*is_f16=*/false,
+        /*start_timestep=*/position,
+        /*steps=*/1, attn_params_.local_type,
+        /*token_ids=*/std::nullopt, attn_params_.sliding_window_size,
+        RingBufferAttentionMaskMode::kDecode));
+  }
+  if (drafter_signatures_.input_int32_param.has_value()) {
     ABSL_RETURN_IF_ERROR(FillSingleBufferCacheParamTensor(
-        active_drafter_input_buffers_["param_tensor"], position,
+        active_drafter_input_buffers_[*drafter_signatures_.input_int32_param],
+        position,
         /*update_length=*/1));
   }
   return absl::OkStatus();
@@ -329,7 +438,8 @@ absl::Status LlmLiteRtMtpDrafter::PrepareDrafterOutputBuffers() {
 }
 
 absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunDraftingLoop(
-    int token_id, std::optional<TensorBuffer>& activations) {
+    int token_id, std::optional<TensorBuffer>& activations,
+    DraftConstraintStates* constraint_states) {
   std::vector<int> drafted_tokens;
   drafted_tokens.reserve(num_draft_steps_);
   int last_drafted_token_id = token_id;
@@ -337,7 +447,6 @@ absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunDraftingLoop(
   TensorBuffer* activations_ptr =
       activations.has_value() ? &activations.value() : nullptr;
   for (int i = 0; i < num_draft_steps_; ++i) {
-    LITERT_RETURN_IF_ERROR(PrepareDrafterOutputBuffers());
     // Concat and lookup embeddings with previous activations.
     // Embedding lookup has shape [B = 1, T = 1, D = 1536]
     // Drafter output activation has shape [B = 1, T = 1, D = 1536]
@@ -350,141 +459,107 @@ absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunDraftingLoop(
       ABSL_RETURN_IF_ERROR(ConcatenateEmbeddingsAndActivations(
           embedding_vector, *activations_ptr, *drafter_activations_buffer));
     } else {
+      ABSL_ASSIGN_OR_RETURN(TensorBuffer * verifier_activations,
+                            verifier_->GetOutputBuffer("activations"));
       ABSL_RETURN_IF_ERROR(
           ConcatenateEmbeddingsAndActivationsFromVerifierBuffer(
-              embedding_vector, verifier_output_buffers_["activations"],
+              embedding_vector, *verifier_activations,
               last_verified_token_id_idx_, *drafter_activations_buffer));
     }
+    // Only now clear the events of the output buffers: after the first step,
+    // the concatenation above reads the previous step's projected activations,
+    // and its lock waits on their event for the previous step to finish
+    // writing them.
+    LITERT_RETURN_IF_ERROR(PrepareDrafterOutputBuffers());
 
     bool async = true;
     LITERT_RETURN_IF_ERROR(mtp_drafter_model_.RunAsync(
         drafter_signature_.Key(), active_drafter_input_buffers_,
         active_drafter_output_buffers_, async));
 
+    if (constraint_states != nullptr) {
+      ABSL_ASSIGN_OR_RETURN(const LogitMask* mask,
+                            constraint_states->NextMask());
+      ABSL_RETURN_IF_ERROR(drafter_mask_runner_->Apply(
+          active_drafter_output_buffers_["logits"], mask));
+    }
+
+    // The drafter samples greedily, which ignores the uniforms.
+    constexpr float kDrafterUniforms[] = {0.0f};
     ABSL_RETURN_IF_ERROR(drafter_sampler_->SampleToIdAndScoreBuffer(
         active_drafter_output_buffers_["logits"], drafter_id_tensor_,
-        /*scores_tensor=*/nullptr));
+        /*scores_tensor=*/nullptr, kDrafterUniforms));
     LITERT_ASSIGN_OR_RETURN(auto id_vector,
                             CopyFromTensorBuffer<int32_t>(drafter_id_tensor_));
     RET_CHECK_EQ(id_vector.size(), 1);
-    drafted_tokens.push_back(id_vector[0]);
+    int sampled_draft_id = id_vector[0];
+    drafted_tokens.push_back(sampled_draft_id);
 
-    last_drafted_token_id = id_vector[0];
+    if (constraint_states != nullptr) {
+      ABSL_RETURN_IF_ERROR(constraint_states->Append(sampled_draft_id));
+    }
+
+    last_drafted_token_id = sampled_draft_id;
     activations_ptr = &active_drafter_output_buffers_["projected_activations"];
   }
   return drafted_tokens;
 }
 
-absl::Status LlmLiteRtMtpDrafter::PrepareVerifierInputBuffers(
-    int position, int token_id, const std::vector<int>& drafted_tokens,
-    absl::flat_hash_map<absl::string_view, TensorBuffer>&
-        input_kv_cache_buffers) {
-  {
-    LITERT_ASSIGN_OR_RETURN(
-        auto verifier_input_pos_lock_and_addr,
-        TensorBufferScopedLock::Create(verifier_input_buffers_["input_pos"],
-                                       TensorBuffer::LockMode::kWrite));
-    auto* prefill_input_pos_ptr =
-        static_cast<int32_t*>(verifier_input_pos_lock_and_addr.second);
-    for (int i = 0; i < num_draft_steps_ + 1; ++i) {
-      *prefill_input_pos_ptr++ = position + i;
-    }
-  }
-
-  ABSL_RETURN_IF_ERROR(InitializeAttentionMask(verifier_input_buffers_["mask"],
-                                               /*use_fp16_precision=*/false));
-  ABSL_RETURN_IF_ERROR(FillAttentionMask(verifier_input_buffers_["mask"],
-                                         /*start_step=*/position,
-                                         /*steps=*/num_draft_steps_ + 1));
-
-  std::vector<int> drafted_tokens_with_input_token;
-  drafted_tokens_with_input_token.reserve(num_draft_steps_ + 1);
-  drafted_tokens_with_input_token.push_back(token_id);
-  drafted_tokens_with_input_token.insert(drafted_tokens_with_input_token.end(),
-                                         drafted_tokens.begin(),
-                                         drafted_tokens.end());
-  ABSL_RETURN_IF_ERROR(embedding_manager_.LookupPrefill(
-      drafted_tokens_with_input_token, &verifier_input_buffers_["embeddings"],
-      /*offset=*/0));
-  if (ple_manager_.has_value()) {
-    ABSL_RETURN_IF_ERROR(ple_manager_->get().LookupPrefill(
-        drafted_tokens_with_input_token,
-        &verifier_input_buffers_["per_layer_embeddings"],
-        /*offset=*/0));
-  }
-
-  for (const auto& [input_name, input_buffer] : input_kv_cache_buffers) {
-    LITERT_ASSIGN_OR_RETURN(auto input_buffer_dup, input_buffer.Duplicate());
-    active_verifier_input_buffers_[input_name] = std::move(input_buffer_dup);
-  }
-  if (active_verifier_input_buffers_.contains("param_tensor")) {
-    ABSL_RETURN_IF_ERROR(FillSingleBufferCacheParamTensor(
-        active_verifier_input_buffers_["param_tensor"], position,
-        num_draft_steps_ + 1));
-  }
-  return absl::OkStatus();
-}
-
-absl::Status LlmLiteRtMtpDrafter::PrepareVerifierOutputBuffers(
-    absl::flat_hash_map<absl::string_view, TensorBuffer>&
-        output_kv_cache_buffers) {
-  for (const auto& [output_name, output_buffer] : output_kv_cache_buffers) {
-    LITERT_ASSIGN_OR_RETURN(auto output_buffer_dup, output_buffer.Duplicate());
-    active_verifier_output_buffers_[output_name] = std::move(output_buffer_dup);
-  }
-  for (auto& [output_name, output_buffer] : active_verifier_output_buffers_) {
-    LITERT_RETURN_IF_ERROR(output_buffer.ClearEvent());
-  }
-  return absl::OkStatus();
-}
-
-absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunVerification() {
-  bool async = true;
-  LITERT_RETURN_IF_ERROR(base_model_.RunAsync(
-      verify_signature_.Key(), active_verifier_input_buffers_,
-      active_verifier_output_buffers_, async));
-
-  ABSL_RETURN_IF_ERROR(verifier_sampler_->SampleToIdAndScoreBuffer(
-      active_verifier_output_buffers_.at("logits"), verifier_id_tensor_,
-      /*scores_tensor=*/nullptr));
-
-  LITERT_ASSIGN_OR_RETURN(auto id_vector,
-                          CopyFromTensorBuffer<int32_t>(verifier_id_tensor_));
-  RET_CHECK_EQ(id_vector.size(), num_draft_steps_ + 1);
-  return id_vector;
-}
-
 absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
     int position, int token_id, std::optional<TensorBuffer> activations,
-    absl::flat_hash_map<absl::string_view, TensorBuffer>&
-        input_kv_cache_buffers,
-    absl::flat_hash_map<absl::string_view, TensorBuffer>&
-        output_kv_cache_buffers) {
+    StateInterface& state, ConstrainedDecoder* constrained_decoder) {
+  auto* litert_state = dynamic_cast<LitertState*>(&state);
+  RET_CHECK(litert_state != nullptr);
+  LITERT_ASSIGN_OR_RETURN(
+      auto state_buffers,
+      litert_state->GetStateBuffers(base_model_, verifier_->signature_key()));
+
   ABSL_RETURN_IF_ERROR(
-      PrepareDrafterInputBuffers(position - 1, output_kv_cache_buffers));
+      PrepareDrafterInputBuffers(position - 1, state_buffers.output_buffers));
 
-  ABSL_ASSIGN_OR_RETURN(std::vector<int> drafted_tokens,
-                        RunDraftingLoop(token_id, activations));
-
-  ABSL_RETURN_IF_ERROR(PrepareVerifierInputBuffers(
-      position, token_id, drafted_tokens, input_kv_cache_buffers));
-  ABSL_RETURN_IF_ERROR(PrepareVerifierOutputBuffers(output_kv_cache_buffers));
-
-  ABSL_ASSIGN_OR_RETURN(std::vector<int> verifier_id_vector, RunVerification());
-
-  int num_correct_tokens = 0;
-  int bonus_token = -1;
-  for (int i = 0; i < num_draft_steps_; ++i) {
-    last_verified_token_id_idx_ = i;
-    if (verifier_id_vector[i] != drafted_tokens[i]) {
-      bonus_token = verifier_id_vector[i];
-      break;
-    }
-    num_correct_tokens++;
+  // The constraint states along the drafted tokens, which give the masks of
+  // the drafting steps and of the verify pass. Like a decode step, the round
+  // starts by feeding `token_id` to the decoder's state.
+  std::optional<DraftConstraintStates> constraint_states;
+  if (constrained_decoder != nullptr) {
+    const Constraint& constraint = *constrained_decoder->GetConstraint();
+    ABSL_ASSIGN_OR_RETURN(const Constraint::State* decoder_state,
+                          constrained_decoder->GetState(0));
+    ABSL_ASSIGN_OR_RETURN(
+        std::unique_ptr<Constraint::State> start,
+        AdvanceConstraintState(constraint, *decoder_state, token_id));
+    constraint_states.emplace(constraint, std::move(start));
   }
-  if (bonus_token == -1) {
-    last_verified_token_id_idx_ = num_draft_steps_;
-    bonus_token = verifier_id_vector[num_draft_steps_];
+  DraftConstraintStates* constraint_states_ptr =
+      constraint_states.has_value() ? &*constraint_states : nullptr;
+
+  const absl::Time draft_start = absl::Now();
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<int> drafted_tokens,
+      RunDraftingLoop(token_id, activations, constraint_states_ptr));
+  const absl::Duration drafting_time = absl::Now() - draft_start;
+
+  const absl::Time verify_start = absl::Now();
+  std::uniform_real_distribution<double> unit(0.0, 1.0);
+  ABSL_ASSIGN_OR_RETURN(VerifyPassResult pass,
+                        verifier_->Verify(position, token_id, drafted_tokens,
+                                          state_buffers, constraint_states_ptr,
+                                          lenience_, [&](int /*i*/) -> double {
+                                            return unit(lenience_rng_.engine());
+                                          }));
+  const absl::Duration verify_time = absl::Now() - verify_start;
+
+  // The pass takes all the drafted tokens, so it always decodes a bonus token.
+  RET_CHECK(pass.outcome.next_token.has_value());
+  const int num_correct_tokens = pass.outcome.num_accepted;
+  const int bonus_token = *pass.outcome.next_token;
+  last_verified_token_id_idx_ = num_correct_tokens;
+
+  // The decoder follows the accepted draft tokens. The bonus token is the new
+  // pending token, which the next step feeds to it.
+  if (constrained_decoder != nullptr) {
+    ABSL_RETURN_IF_ERROR(
+        constrained_decoder->SetState(0, std::move(pass.constraint_state)));
   }
 
   MTP_DRAFTER_LOG() << "drafted_tokens: "
@@ -493,16 +568,24 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
   MTP_DRAFTER_LOG() << "num_correct_tokens: " << num_correct_tokens;
 
   // The first token comes from the decode output and is always correct.
-  drafted_tokens.resize(num_correct_tokens);
-  drafted_tokens.push_back(bonus_token);
+  std::vector<int> output_tokens = std::move(drafted_tokens);
+  output_tokens.resize(num_correct_tokens);
+  output_tokens.push_back(bonus_token);
   num_drafted_tokens_ += num_draft_steps_;
   num_verified_tokens_ += num_correct_tokens;
+  last_round_stats_ = MtpRoundStats{
+      .drafted_tokens = num_draft_steps_,
+      .accepted_tokens = num_correct_tokens,
+      .emitted_tokens = num_correct_tokens + 1,
+      .lenient_accepted_tokens = pass.outcome.num_lenient_accepted,
+      .drafting_time = drafting_time,
+      .verify_time = verify_time,
+  };
 
-  MTP_DRAFTER_LOG() << "drafter output: "
-                    << absl::StrJoin(drafted_tokens, ", ");
+  MTP_DRAFTER_LOG() << "drafter output: " << absl::StrJoin(output_tokens, ", ");
   MTP_DRAFTER_LOG() << "--------------------------------------------------";
 
-  return std::vector<std::vector<int>>{std::move(drafted_tokens)};
+  return std::vector<std::vector<int>>{std::move(output_tokens)};
 }
 
 }  // namespace litert::lm

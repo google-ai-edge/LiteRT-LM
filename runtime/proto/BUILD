@@ -128,6 +128,26 @@ alias(
 )
 
 tf_proto_library(
+    name = "executor_metadata",
+    srcs = ["executor_metadata.proto"],
+)
+
+alias(
+    name = "executor_metadata_proto",
+    actual = ":executor_metadata",
+)
+
+alias(
+    name = "executor_metadata_cc_proto",
+    actual = ":executor_metadata_cc",
+)
+
+alias(
+    name = "executor_metadata_py_pb2",
+    actual = ":executor_metadata_py_proto",
+)
+
+tf_proto_library(
     name = "litert_lm_metrics",
     srcs = ["litert_lm_metrics.proto"],
     deps = [":engine_proto"],
@@ -146,4 +166,293 @@ alias(
 alias(
     name = "litert_lm_metrics_py_pb2",
     actual = ":litert_lm_metrics_py_proto",
+)
+
+tf_proto_library(
+    name = "embedding_model_type",
+    srcs = ["embedding_model_type.proto"],
+    deps = [":token"],
+)
+
+alias(
+    name = "embedding_model_type_proto",
+    actual = ":embedding_model_type",
+)
+
+alias(
+    name = "embedding_model_type_cc_proto",
+    actual = ":embedding_model_type_cc",
+)
+
+alias(
+    name = "embedding_model_type_py_pb2",
+    actual = ":embedding_model_type_py_proto",
+)
+
+tf_proto_library(
+    name = "embedding_metadata",
+    srcs = ["embedding_metadata.proto"],
+    deps = [
+        ":embedding_model_type",
+        ":token",
+    ],
+)
+
+alias(
+    name = "embedding_metadata_proto",
+    actual = ":embedding_metadata",
+)
+
+alias(
+    name = "embedding_metadata_cc_proto",
+    actual = ":embedding_metadata_cc",
+)
+
+alias(
+    name = "embedding_metadata_py_pb2",
+    actual = ":embedding_metadata_py_proto",
+)
+
+tf_proto_library(
+    name = "text2speech_model_type",
+    srcs = ["text2speech_model_type.proto"],
+)
+
+alias(
+    name = "text2speech_model_type_proto",
+    actual = ":text2speech_model_type",
+)
+
+alias(
+    name = "text2speech_model_type_cc_proto",
+    actual = ":text2speech_model_type_cc",
+)
+
+alias(
+    name = "text2speech_model_type_py_pb2",
+    actual = ":text2speech_model_type_py_proto",
+)
+
+tf_proto_library(
+    name = "text2speech_metadata",
+    srcs = ["text2speech_metadata.proto"],
+    deps = [":text2speech_model_type"],
+)
+
+alias(
+    name = "text2speech_metadata_proto",
+    actual = ":text2speech_metadata",
+)
+
+alias(
+    name = "text2speech_metadata_cc_proto",
+    actual = ":text2speech_metadata_cc",
+)
+
+alias(
+    name = "text2speech_metadata_py_pb2",
+    actual = ":text2speech_metadata_py_proto",
+)
+
+tf_proto_library(
+    name = "text2speech_session_config",
+    srcs = ["text2speech_session_config.proto"],
+)
+
+alias(
+    name = "text2speech_session_config_proto",
+    actual = ":text2speech_session_config",
+)
+
+alias(
+    name = "text2speech_session_config_cc_proto",
+    actual = ":text2speech_session_config_cc",
+)
+
+alias(
+    name = "text2speech_session_config_py_pb2",
+    actual = ":text2speech_session_config_py_proto",
+)
+
+tf_proto_library(
+    name = "speech2text_model_type",
+    srcs = ["speech2text_model_type.proto"],
+)
+
+alias(
+    name = "speech2text_model_type_proto",
+    actual = ":speech2text_model_type",
+)
+
+alias(
+    name = "speech2text_model_type_cc_proto",
+    actual = ":speech2text_model_type_cc",
+)
+
+alias(
+    name = "speech2text_model_type_py_pb2",
+    actual = ":speech2text_model_type_py_proto",
+)
+
+tf_proto_library(
+    name = "speech2text_metadata",
+    srcs = ["speech2text_metadata.proto"],
+    deps = [":speech2text_model_type"],
+)
+
+alias(
+    name = "speech2text_metadata_proto",
+    actual = ":speech2text_metadata",
+)
+
+alias(
+    name = "speech2text_metadata_cc_proto",
+    actual = ":speech2text_metadata_cc",
+)
+
+alias(
+    name = "speech2text_metadata_py_pb2",
+    actual = ":speech2text_metadata_py_proto",
+)
+
+tf_proto_library(
+    name = "speech2text_session_config",
+    srcs = ["speech2text_session_config.proto"],
+)
+
+alias(
+    name = "speech2text_session_config_proto",
+    actual = ":speech2text_session_config",
+)
+
+alias(
+    name = "speech2text_session_config_cc_proto",
+    actual = ":speech2text_session_config_cc",
+)
+
+alias(
+    name = "speech2text_session_config_py_pb2",
+    actual = ":speech2text_session_config_py_proto",
+)
+
+tf_proto_library(
+    name = "image_gen_model_type",
+    srcs = ["image_gen_model_type.proto"],
+)
+
+alias(
+    name = "image_gen_model_type_proto",
+    actual = ":image_gen_model_type",
+)
+
+alias(
+    name = "image_gen_model_type_cc_proto",
+    actual = ":image_gen_model_type_cc",
+)
+
+alias(
+    name = "image_gen_model_type_py_pb2",
+    actual = ":image_gen_model_type_py_proto",
+)
+
+tf_proto_library(
+    name = "text2image_metadata",
+    srcs = ["text2image_metadata.proto"],
+    deps = [":image_gen_model_type"],
+)
+
+alias(
+    name = "text2image_metadata_proto",
+    actual = ":text2image_metadata",
+)
+
+alias(
+    name = "text2image_metadata_cc_proto",
+    actual = ":text2image_metadata_cc",
+)
+
+alias(
+    name = "text2image_metadata_py_pb2",
+    actual = ":text2image_metadata_py_proto",
+)
+
+tf_proto_library(
+    name = "text2image_session_config",
+    srcs = ["text2image_session_config.proto"],
+)
+
+alias(
+    name = "text2image_session_config_proto",
+    actual = ":text2image_session_config",
+)
+
+alias(
+    name = "text2image_session_config_cc_proto",
+    actual = ":text2image_session_config_cc",
+)
+
+alias(
+    name = "text2image_session_config_py_pb2",
+    actual = ":text2image_session_config_py_proto",
+)
+
+tf_proto_library(
+    name = "any2any_model_type",
+    srcs = ["any2any_model_type.proto"],
+)
+
+alias(
+    name = "any2any_model_type_proto",
+    actual = ":any2any_model_type",
+)
+
+alias(
+    name = "any2any_model_type_cc_proto",
+    actual = ":any2any_model_type_cc",
+)
+
+alias(
+    name = "any2any_model_type_py_pb2",
+    actual = ":any2any_model_type_py_proto",
+)
+
+tf_proto_library(
+    name = "any2any_metadata",
+    srcs = ["any2any_metadata.proto"],
+    deps = [":any2any_model_type"],
+)
+
+alias(
+    name = "any2any_metadata_proto",
+    actual = ":any2any_metadata",
+)
+
+alias(
+    name = "any2any_metadata_cc_proto",
+    actual = ":any2any_metadata_cc",
+)
+
+alias(
+    name = "any2any_metadata_py_pb2",
+    actual = ":any2any_metadata_py_proto",
+)
+
+tf_proto_library(
+    name = "any2any_session_config",
+    srcs = ["any2any_session_config.proto"],
+)
+
+alias(
+    name = "any2any_session_config_proto",
+    actual = ":any2any_session_config",
+)
+
+alias(
+    name = "any2any_session_config_cc_proto",
+    actual = ":any2any_session_config_cc",
+)
+
+alias(
+    name = "any2any_session_config_py_pb2",
+    actual = ":any2any_session_config_py_proto",
 )

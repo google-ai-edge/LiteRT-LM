@@ -82,35 +82,179 @@ class CommonTest(parameterized.TestCase):
 
 class CommonInferenceOptionsTest(parameterized.TestCase):
 
-  def test_enable_speculative_decoding_case_insensitive(self):
+  def test_enable_speculative_decoding_removed(self):
+    @click.command()
+    @common.common_inference_options
+    def dummy_cmd(**kwargs):
+      self.assertNotIn('enable_speculative_decoding', kwargs)
+
+    runner = CliRunner()
+
+    result = runner.invoke(dummy_cmd, ['--enable-speculative-decoding', 'true'])
+    self.assertNotEqual(result.exit_code, 0)
+    self.assertIn(
+        "No such option '--enable-speculative-decoding'", result.output
+    )
+
+    result = runner.invoke(dummy_cmd, [])
+    self.assertEqual(result.exit_code, 0, result.output)
+
+  def test_speculative_decoding_options(self):
+    @click.command()
+    @common.common_inference_options
+    def dummy_cmd(**kwargs):
+      click.echo(f"speculative_decoding: {kwargs.get('speculative_decoding')}")
+
+    runner = CliRunner()
+
+    # Flag mode (no value) is "on".
+    result = runner.invoke(dummy_cmd, ['--speculative-decoding'])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('speculative_decoding: on', result.output)
+
+    for value, expected in (
+        ('on', 'on'),
+        ('off', 'off'),
+        ('adaptive', 'adaptive'),
+        ('ADAPTIVE', 'adaptive'),
+    ):
+      result = runner.invoke(dummy_cmd, ['--speculative-decoding', value])
+      self.assertEqual(result.exit_code, 0, value)
+      self.assertIn(f'speculative_decoding: {expected}', result.output)
+      self.assertNotIn('deprecated', result.output)
+
+    # The deprecated true/false values map to on/off and warn.
+    for value, expected in (('true', 'on'), ('FALSE', 'off')):
+      result = runner.invoke(dummy_cmd, ['--speculative-decoding', value])
+      self.assertEqual(result.exit_code, 0, value)
+      self.assertIn(f'speculative_decoding: {expected}', result.output)
+      self.assertIn(
+          "Warning: '--speculative-decoding true/false' is deprecated",
+          result.output,
+      )
+
+    # Not set mode (default is None)
+    result = runner.invoke(dummy_cmd, [])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('speculative_decoding: None', result.output)
+
+    # Invalid value
+    result = runner.invoke(dummy_cmd, ['--speculative-decoding', 'invalid'])
+    self.assertNotEqual(result.exit_code, 0)
+    self.assertIn(
+        "Error: Invalid value for '--speculative-decoding'",
+        result.output,
+    )
+
+  @parameterized.parameters(
+      (None, None),
+      (True, 'on'),
+      (False, 'off'),
+      ('true', 'on'),
+      ('false', 'off'),
+      ('on', 'on'),
+      ('OFF', 'off'),
+      ('adaptive', 'adaptive'),
+  )
+  def test_normalize_speculative_decoding(self, value, expected):
+    self.assertEqual(common.normalize_speculative_decoding(value), expected)
+
+  def test_normalize_speculative_decoding_invalid(self):
+    with self.assertRaises(ValueError):
+      common.normalize_speculative_decoding('always')
+
+  def test_ringbuffers_local_attention_options(self):
     @click.command()
     @common.common_inference_options
     def dummy_cmd(**kwargs):
       click.echo(
-          f"speculative_decoding: {kwargs.get('enable_speculative_decoding')}"
+          f'ringbuffers_local_attention:'
+          f" {kwargs.get('ringbuffers_local_attention')}"
       )
 
     runner = CliRunner()
 
-    # Test lowercase
-    result = runner.invoke(dummy_cmd, ['--enable-speculative-decoding', 'true'])
+    # Flag mode (no value)
+    result = runner.invoke(dummy_cmd, ['--ringbuffers-local-attention'])
     self.assertEqual(result.exit_code, 0)
-    self.assertIn('speculative_decoding: True', result.output)
+    self.assertIn('ringbuffers_local_attention: True', result.output)
 
-    # Test uppercase (verifies case_sensitive=False)
-    result = runner.invoke(dummy_cmd, ['--enable-speculative-decoding', 'TRUE'])
+    # Choice true mode
+    result = runner.invoke(dummy_cmd, ['--ringbuffers-local-attention', 'true'])
     self.assertEqual(result.exit_code, 0)
-    self.assertIn('speculative_decoding: True', result.output)
+    self.assertIn('ringbuffers_local_attention: True', result.output)
 
-    # Test invalid value
+    # Choice false mode
     result = runner.invoke(
-        dummy_cmd, ['--enable-speculative-decoding', 'invalid']
+        dummy_cmd, ['--ringbuffers-local-attention', 'false']
     )
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('ringbuffers_local_attention: False', result.output)
+
+    # Not set mode (default is None)
+    result = runner.invoke(dummy_cmd, [])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('ringbuffers_local_attention: None', result.output)
+
+  def test_gpu_decode_steps_per_sync_options(self):
+    @click.command()
+    @common.common_inference_options
+    def dummy_cmd(**kwargs):
+      val = kwargs.get('gpu_decode_steps_per_sync')
+      click.echo(f'gpu_decode_steps_per_sync: {val}')
+
+    runner = CliRunner()
+
+    # Valid int value
+    result = runner.invoke(dummy_cmd, ['--gpu-decode-steps-per-sync', '4'])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('gpu_decode_steps_per_sync: 4', result.output)
+
+    # Not set mode (default is None)
+    result = runner.invoke(dummy_cmd, [])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('gpu_decode_steps_per_sync: None', result.output)
+
+    # Invalid value (< 1)
+    result = runner.invoke(dummy_cmd, ['--gpu-decode-steps-per-sync', '0'])
     self.assertNotEqual(result.exit_code, 0)
     self.assertIn(
-        "Error: Invalid value for '--enable-speculative-decoding'",
+        "Error: Invalid value for '--gpu-decode-steps-per-sync'",
         result.output,
     )
+
+  def test_enable_ynnpack_options(self):
+    @click.command()
+    @common.common_inference_options
+    def dummy_cmd(**kwargs):
+      click.echo(f"enable_ynnpack: {kwargs.get('enable_ynnpack')}")
+
+    runner = CliRunner()
+
+    # Flag mode (no value)
+    result = runner.invoke(dummy_cmd, ['--enable-ynnpack'])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('enable_ynnpack: True', result.output)
+
+    # Explicit value: true
+    result = runner.invoke(dummy_cmd, ['--enable-ynnpack', 'true'])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('enable_ynnpack: True', result.output)
+
+    # Explicit value: false
+    result = runner.invoke(dummy_cmd, ['--enable-ynnpack', 'false'])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('enable_ynnpack: False', result.output)
+
+    # Not set mode (default is None)
+    result = runner.invoke(dummy_cmd, [])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('enable_ynnpack: None', result.output)
+
+    # Test hidden from --help
+    result = runner.invoke(dummy_cmd, ['--help'])
+    self.assertEqual(result.exit_code, 0)
+    self.assertNotIn('--enable-ynnpack', result.output)
 
 
 if __name__ == '__main__':

@@ -80,7 +80,7 @@ export class AutoToolChat implements ChatInterface {
     }
 
     const activeTools = options.tools || [];
-    for (let t of activeTools) {
+    for (const t of activeTools) {
       let tool: FunctionTool&{execute: ToolExecute};
       if (isWebMcpTool(t)) {
         tool = {...toTool(t), execute: t.execute!};
@@ -125,7 +125,7 @@ export class AutoToolChat implements ChatInterface {
     return this.baseConversation;
   }
 
-  async sendMessage(message: MessageLike|MessageLike[]): Promise<Message> {
+  async sendMessage(message: MessageLike): Promise<Message> {
     if (this.isBusy) {
       throw new Error(BUSY_MESSAGE);
     }
@@ -160,7 +160,7 @@ export class AutoToolChat implements ChatInterface {
     }
   }
 
-  sendMessageStreaming(message: MessageLike|MessageLike[]):
+  sendMessageStreaming(message: MessageLike):
       ReadableStream<Message> {
     if (this.isBusy) {
       throw new Error(BUSY_MESSAGE);

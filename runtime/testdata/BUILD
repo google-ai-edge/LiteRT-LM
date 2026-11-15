@@ -27,8 +27,28 @@ filegroup(
     ),
 )
 
+# Exact checksum fake LMs with verify signatures.
+filegroup(
+    name = "checksum_fake_lm_models",
+    srcs = glob(["checksum_fake_lm*.tflite"]),
+)
+
 exports_files([
+    "dummy_audio_only.litertlm",
     "have_a_wonderful_day.wav",
     "colored_rect_163_586_615_957.jpg",
     "test_lm.litertlm",
+    "test_lm_lora.litertlm",
+    "test_lora_rank32_f16_all_ones.tflite",
+    "test_lora_rank32_f16_all_twos.tflite",
+    "test_embedding.litertlm",
+    "test_embedding_external_weights.litertlm",
+    "test_image_70.png",
+    "test_image_140.png",
+    "test_audio_5s.wav",
+    "test_audio_10s.wav",
+    "embeddinggemma_v2_golden_text.json",
+    "embeddinggemma_v2_golden_image.json",
+    "embeddinggemma_v2_golden_audio.json",
+    "embeddinggemma_v2_golden_multimodal.json",
 ])

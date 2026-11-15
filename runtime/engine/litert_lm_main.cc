@@ -48,7 +48,9 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/status_macros.h"
+#include "runtime/engine/shared_flags.h"
 
 ABSL_FLAG(std::string, backend, "gpu",
           "Executor backend to use for LLM execution (cpu, gpu, etc.)");
@@ -66,6 +68,7 @@ using ::litert::lm::EngineSettings;
 using ::litert::lm::InputData;
 using ::litert::lm::Message;
 using ::litert::lm::ModelAssets;
+using ::litert::lm::OptionalArgs;
 using ::nlohmann::json;
 
 absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateMessageCallback() {
@@ -132,6 +135,32 @@ absl::Status MainHelper(int argc, char** argv) {
   // Enable benchmark by default.
   engine_settings.GetMutableBenchmarkParams() =
       litert::lm::proto::BenchmarkParams();
+  const int visual_token_budget = absl::GetFlag(FLAGS_visual_token_budget);
+  if (visual_token_budget > 0) {
+    engine_settings.SetMaxVisionTokensPerImage(visual_token_budget);
+  }
+  ABSL_ASSIGN_OR_RETURN(auto use_ir_model,
+                        litert::lm::GetUseIrModelFromString(
+                            absl::GetFlag(FLAGS_gpu_use_ir_model)));
+  engine_settings.GetMutableMainExecutorSettings().SetUseIrModel(use_ir_model);
+
+  if (backend == Backend::CPU) {
+    auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();
+    ABSL_ASSIGN_OR_RETURN(
+        auto cpu_settings,
+        executor_settings.MutableBackendConfig<litert::lm::CpuConfig>());
+    const int num_cpu_threads = absl::GetFlag(FLAGS_num_cpu_threads);
+    if (num_cpu_threads > 0) {
+      cpu_settings.number_of_threads = num_cpu_threads;
+    }
+    cpu_settings.enable_ynnpack = absl::GetFlag(FLAGS_enable_ynnpack);
+    executor_settings.SetBackendConfig(cpu_settings);
+  }
+  if (!absl::GetFlag(FLAGS_custom_backend_options).empty()) {
+    ABSL_RETURN_IF_ERROR(engine_settings.GetMutableMainExecutorSettings()
+                             .SetCustomBackendOptionsFromStrings(
+                                 absl::GetFlag(FLAGS_custom_backend_options)));
+  }
 
   // Create the engine.
   ABSL_ASSIGN_OR_RETURN(auto engine, litert::lm::EngineFactory::CreateDefault(
@@ -153,11 +182,18 @@ absl::Status MainHelper(int argc, char** argv) {
   std::cout << "input_prompt: " << input_prompt << std::endl;
   content_list.push_back({{"type", "text"}, {"text", input_prompt}});
 
+  // Limit the number of decoded tokens when --max_output_tokens is positive.
+  OptionalArgs optional_args;
+  const int max_output_tokens = absl::GetFlag(FLAGS_max_output_tokens);
+  if (max_output_tokens > 0) {
+    optional_args.max_output_tokens = max_output_tokens;
+  }
+
   // Send the message and wait for the response, asynchronously log the
   // response.
   ABSL_RETURN_IF_ERROR(conversation->SendMessageAsync(
       json::object({{"role", "user"}, {"content", content_list}}),
-      CreateMessageCallback()));
+      CreateMessageCallback(), std::move(optional_args)));
   ABSL_RETURN_IF_ERROR(engine->WaitUntilDone(absl::Minutes(10)));
 
   // Print the benchmark info.

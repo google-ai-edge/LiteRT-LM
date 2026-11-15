@@ -100,6 +100,10 @@ export class LocalDirectoryService {
   private dirHandle: FileSystemDirectoryHandle | null = null;
   isAuthorized = false;
 
+  get directoryName(): string | null {
+    return this.dirHandle?.name ?? null;
+  }
+
   get isSupported(): boolean {
     return 'showDirectoryPicker' in window;
   }

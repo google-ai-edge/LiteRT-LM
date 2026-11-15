@@ -40,10 +40,6 @@
 #
 # Default build options. These are applied first and unconditionally.
 
-# Shlibs built from the source tree should resolve symbols in the exectuable.
-build --define=resolve_symbols_in_exec=true
-build:windows --define=resolve_symbols_in_exec=false
-
 # Exclude OpenCL from Linux and Windows builds.
 build:linux --copt=-DLITERT_DISABLE_OPENCL_SUPPORT=1
 build:windows --copt=/DLITERT_DISABLE_OPENCL_SUPPORT=1
@@ -85,21 +81,10 @@ build --announce_rc
 # TODO(mihaimaruseac): Document this option or remove if no longer needed
 build --define=grpc_no_ares=true
 
-# See https://github.com/bazelbuild/bazel/issues/7362 for information on what
-# --incompatible_remove_legacy_whole_archive flag does.
-# This flag is set to true in Bazel 1.0 and newer versions. We tried to migrate
-# Tensorflow to the default, however test coverage wasn't enough to catch the
-# errors.
-# There is ongoing work on Bazel team's side to provide support for transitive
-# shared libraries. As part of migrating to transitive shared libraries, we
-# hope to provide a better mechanism for control over symbol exporting, and
-# then tackle this issue again.
-#
-# TODO: Remove the following two lines once TF doesn't depend on Bazel wrapping
-# all library archives in -whole_archive -no_whole_archive.
-build --noincompatible_remove_legacy_whole_archive
-build --features=-force_no_whole_archive
-build --host_features=-force_no_whole_archive
+# Disable legacy whole archive so that cc_binary(..., linkshared = 1) targets
+# do not wrap all transitive static archives (such as Rust's
+# libprofiler_builtins) in -Wl,-whole-archive. See b/469455895.
+build --legacy_whole_archive=0
 
 # TODO(mihaimaruseac): Document this option or remove if no longer needed
 build --enable_platform_specific_config
@@ -162,6 +147,8 @@ build:android_x86_64 --platforms=@org_tensorflow//tensorflow/tools/toolchains/an
 build:android --dynamic_mode=off
 # TODO(belitskiy): Remove once on Clang 20.
 build:android --define=xnn_enable_avxvnniint8=false
+# Ensure OpenCL is not inadvertently disabled when cross-compiling from a Linux host.
+build:android --copt=-ULITERT_DISABLE_OPENCL_SUPPORT
 
 # Sets the default Apple platform to macOS.
 build:macos --apple_platform_type=macos
@@ -188,7 +175,7 @@ build:macos_arm64 --platforms=@build_bazel_apple_support//platforms:darwin_arm64
 build:ios --apple_platform_type=ios
 # build:ios --copt=-fembed-bitcode
 build:ios --copt=-Wno-c++11-narrowing
-build:ios --ios_minimum_os=13.0
+build:ios --ios_minimum_os=15.0
 build:ios_armv7 --config=ios
 build:ios_armv7 --cpu=ios_armv7
 build:ios_armv7 --platforms=@org_tensorflow//tensorflow/tools/toolchains/ios:ios_armv7
@@ -240,9 +227,6 @@ build:nonccl --define=no_nccl_support=true
 build:dynamic_kernels --define=dynamic_loaded_kernels=true
 build:dynamic_kernels --copt=-DAUTOLOAD_DYNAMIC_KERNELS
 
-# Don't trigger --config=<host platform> when cross-compiling.
-build:android --noenable_platform_specific_config
-build:ios --noenable_platform_specific_config
 
 # Suppress all C++ compiler warnings, otherwise build logs become 10s of MBs.
 build:android --copt=-w
@@ -281,6 +265,7 @@ build:release_cpu_linux --repo_env=TF_SYSROOT="/dt9"
 
 # Linux ARM64 specific options
 build:linux_arm64 --copt="-mtune=generic" --copt="-march=armv8-a" --copt="-O3"
+build:linux_arm64 --define=litert_enable_ynnpack=true
 
 # On Windows, `__cplusplus` is wrongly defined without this switch
 # See https://devblogs.microsoft.com/cppblog/msvc-now-correctly-reports-__cplusplus/
@@ -309,6 +294,16 @@ build:windows --host_copt=/d2ReducedOptimizeHugeFunctions
 build:windows --copt=-D_ENABLE_EXTENDED_ALIGNED_STORAGE
 build:windows --host_copt=-D_ENABLE_EXTENDED_ALIGNED_STORAGE
 
+# XNNPACK's AVX512-BF16 GEMM configuration unconditionally references assembly
+# microkernels (`..._asm_amd64_avx512bf16_broadcast`) that are not assembled
+# under MSVC, so enabling the feature here fails to link. XNNPACK enabled it by
+# default for the whole x86 family in
+# https://github.com/google/XNNPACK/commit/0363fd2f2b, and its `x86` config
+# setting matches plain `windows_x86_64` (MSVC) whereas the previous `x86_64`
+# setting only matched the clang-cl, clang and mingw variants. Opt back out to
+# keep the behavior this build had before that change.
+build:windows --define=xnn_enable_avx512bf16=false
+
 # Enable the runfiles symlink tree on Windows. This makes it possible to build
 # the pip package on Windows without an intermediate data-file archive, as the
 # build_pip_package script in its current form (as of Aug 2023) uses the
@@ -328,14 +323,20 @@ build:macos --define=PROTOBUF_INCLUDE_PATH=$(PREFIX)/include
 # TF_SYSTEM_LIBS do not work on windows.
 
 # By default, build TF in C++ 20 mode.
+# Note: Bazel's ObjcCompile action does not inherit --cxxopt, so we explicitly
+# pass -std=c++20 to Objective-C++ (.mm) files on Apple platforms to avoid
+# C++17/C++20 ABI mismatches (e.g., absl::SourceLocation vs std::source_location
+# in absl::StatusBuilder).
 build:android --cxxopt=-std=c++20
 build:android --host_cxxopt=-std=c++20
 build:ios --cxxopt=-std=c++20
 build:ios --host_cxxopt=-std=c++20
+build:ios --per_file_copt=.*\.mm$@-std=c++20
 build:linux --cxxopt=-std=c++20
 build:linux --host_cxxopt=-std=c++20
 build:macos --cxxopt=-std=c++20
 build:macos --host_cxxopt=-std=c++20
+build:macos --per_file_copt=.*\.mm$@-std=c++20
 build:windows --cxxopt=/std:c++20
 build:windows --host_cxxopt=/std:c++20
 
@@ -409,9 +410,6 @@ build:avx_win --copt=/arch:AVX
 build:linux_x86_64 --copt=-mavx2
 build:windows --copt=/arch:AVX2
 
-# Disable whole archive on Windows to avoid symbol conflicts. See b/469455895.
-build:windows --legacy_whole_archive=0
-
 # Enable all targets in XLA
 build:cpu_cross --define=with_cross_compiler_support=true
 
@@ -464,12 +462,12 @@ build --config=litert_prefixes
 # Remove the flag once tf/lite is fully separated from tf.
 build:disable_tf_lite_py --define=disable_tf_lite_py=true
 
-# Config to use a gcs bucket as remote cache.
-build:public_cache --remote_cache="https://storage.googleapis.com/litert-bazel-artifacts" --remote_upload_local_results=false
-
-# Cache pushes are limited to CI system.
+# Config for GitHub Actions CI to use a GCS bucket as remote cache.
 # WARNING: THIS OPTION WONT WORK IF YOU DO NOT HAVE PROPER AUTHENTICATION AND PERMISSIONS
-build:public_cache_push --config=public_cache --remote_upload_local_results=true --google_default_credentials
+build:github_actions_bazel_cache --remote_cache="https://storage.googleapis.com/litert-lm-bazel-cache-us-central1" --google_default_credentials
+# Download all remote cache outputs so local SymlinkActions (e.g. rules_rust .a
+# -> .rlib symlinks) do not point to unmaterialized files when linking locally.
+build:github_actions_bazel_cache --remote_download_all
 
 # BEGIN LITERT REMOTE BUILD EXECUTION OPTIONS
 # WARNING: THESE OPTIONS WONT WORK IF YOU DO NOT HAVE PROPER AUTHENTICATION AND PERMISSIONS

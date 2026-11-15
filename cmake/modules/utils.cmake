@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-# WARNING: Do not use anything macros.cmake in this file.
-
-include_guard(GLOBAL)
+# WARNING: Do not use anything from macros.cmake in this file.
 
 function(verify_install target_name config_path)
     ExternalProject_Add_Step(${target_name} step_verify_install
@@ -122,8 +119,8 @@ endfunction()
 # Usage: kvp_parse_map(ABSL_TARGET_MAP _KEYS _VALS)
 # ==============================================================================
 function(kvp_parse_map MAP_VAR KEYS_OUT VALS_OUT)
-    set(_LOCAL_KEYS "")
-    set(_LOCAL_VALS "")
+    set(_KVP_KEYS "")
+    set(_KVP_VALS "")
 
     foreach(_entry IN ITEMS ${MAP_VAR})
         # Find the delimiter
@@ -143,12 +140,12 @@ function(kvp_parse_map MAP_VAR KEYS_OUT VALS_OUT)
         string(STRIP "${_val}" _val)
 
         # 3. Synchronized storage
-        list(APPEND _LOCAL_KEYS "${_key}")
-        list(APPEND _LOCAL_VALS "${_val}")
+        list(APPEND _KVP_KEYS "${_key}")
+        list(APPEND _KVP_VALS "${_val}")
     endforeach()
 
-    string(JOIN " " _FLAT_KEYS ${_LOCAL_KEYS})
-    string(JOIN " " _FLAT_VALS ${_LOCAL_VALS})
+    string(JOIN " " _FLAT_KEYS ${_KVP_KEYS})
+    string(JOIN " " _FLAT_VALS ${_KVP_VALS})
 
     set(${KEYS_OUT} "${_FLAT_KEYS}" PARENT_SCOPE)
     set(${VALS_OUT} "${_FLAT_VALS}" PARENT_SCOPE)

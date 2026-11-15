@@ -15,10 +15,13 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_SAMPLER_FACTORY_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_SAMPLER_FACTORY_H_
 
+#include <functional>
 #include <memory>
 #include <optional>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/components/sampler.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/sampler_params.pb.h"
@@ -41,7 +44,25 @@ namespace litert::lm {
 //   The created Sampler instance.
 absl::StatusOr<std::unique_ptr<Sampler>> CreateSampler(
     Backend backend, int batch_size, proto::SamplerParameters sampler_params,
-    LiteRtEnvironment env = nullptr,
+    std::optional<std::reference_wrapper<const litert::Environment>> env =
+        std::nullopt,
+    std::optional<int> sequence_size = std::nullopt,
+    std::optional<int> vocab_size = std::nullopt,
+    std::optional<ActivationDataType> activation_data_type = std::nullopt);
+
+// Reconfigures `sampler` with `sampler_params`.
+//
+// GPU samplers fix their top-k capacity at creation. If `sampler_params.k()`
+// exceeds `max_top_k` (the capacity of `sampler`), or `sampler` is null, the
+// sampler is first recreated with `CreateSampler()` (with the remaining
+// arguments) and `max_top_k` is updated. If recreation fails, `sampler` and
+// `max_top_k` are left unchanged.
+// Then `sampler->UpdateConfig()` is called with `batch_size`.
+absl::Status UpdateOrRecreateSampler(
+    std::unique_ptr<Sampler>& sampler, int& max_top_k, Backend backend,
+    int batch_size, const proto::SamplerParameters& sampler_params,
+    std::optional<std::reference_wrapper<const litert::Environment>> env =
+        std::nullopt,
     std::optional<int> sequence_size = std::nullopt,
     std::optional<int> vocab_size = std::nullopt,
     std::optional<ActivationDataType> activation_data_type = std::nullopt);

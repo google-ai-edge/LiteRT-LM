@@ -15,9 +15,11 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_MTP_DRAFTER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_MTP_DRAFTER_H_
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,33 +28,83 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/constrained_decoding/constrained_decoder.h"
+#include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/sampler.h"
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/llm_litert_verifier.h"
+#include "runtime/executor/state_interface.h"
+#include "runtime/proto/sampler_params.pb.h"
 
 namespace litert::lm {
+
+// Statistics of the last successful `LlmLiteRtMtpDrafter::Draft()` call.
+struct MtpRoundStats {
+  // Number of draft steps (γ).
+  int drafted_tokens = 0;
+
+  // Number of drafted tokens accepted by the verifier.
+  int accepted_tokens = 0;
+
+  // Number of tokens emitted: `accepted_tokens` plus the bonus token.
+  int emitted_tokens = 0;
+
+  // Of `accepted_tokens`, the drafts accepted only because of lenience (see
+  // `LlmLiteRtMtpDrafter::SetLenience()`).
+  int lenient_accepted_tokens = 0;
+
+  // Wall time of `RunDraftingLoop()`.
+  absl::Duration drafting_time;
+
+  // Wall time of the verify pass.
+  absl::Duration verify_time;
+};
 
 class LlmLiteRtMtpDrafter {
  public:
   ~LlmLiteRtMtpDrafter();
 
-  // Create an instance of LlmLiteRtMtpDrafter.
+  // Creates an LlmLiteRtMtpDrafter from model resources.
+  //
   // The executor_settings is used to create the MTP drafter model and its
   // sampler.
-  // The base_model is used for verification. The model is expected to have
+  // The base_model is used for verification. The model is expected to have a
   // "verify" signature and be invokable when Draft is called (i.e., not busy).
+  // The verify passes start with `verify_pass_runner`, e.g. the executor's, so
+  // that they run like its other graph runs; see `LlmLiteRtVerifier::Create()`.
   static absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>> Create(
       Environment& env, ModelResources& resources,
       const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
       EmbeddingLookupManager& embedding_manager,
+      std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
+      const proto::ExecutorMetadata* executor_metadata = nullptr,
+      LlmLiteRtVerifier::PassRunner verify_pass_runner = nullptr);
+
+  // Creates an LlmLiteRtMtpDrafter directly from a pre-compiled
+  // litert::CompiledModel.
+  //
+  // This is primarily intended for use with pre-compiled models, where the
+  // caller compiles the model beforehand and constructs the drafter directly.
+  // In this case, the caller will also need to call UpdateCompilationOptions
+  // to ensure that the compilation options are set correctly before compiling
+  // the model themselves.
+  static absl::StatusOr<std::unique_ptr<LlmLiteRtMtpDrafter>> Create(
+      Environment& env, CompiledModel mtp_drafter_model,
+      const LlmExecutorSettings& executor_settings, CompiledModel& base_model,
+      const Model& base_model_desc, EmbeddingLookupManager& embedding_manager,
       std::optional<std::reference_wrapper<EmbeddingLookupManager>>
-          ple_manager);
+          ple_manager = std::nullopt,
+      const proto::ExecutorMetadata* executor_metadata = nullptr,
+      LlmLiteRtVerifier::PassRunner verify_pass_runner = nullptr);
 
   // Draft the next set of tokens using the MTP drafter model.
   // Inputs:
@@ -60,68 +112,83 @@ class LlmLiteRtMtpDrafter {
   //   token_id: The id of the last input token.
   //   activations: Activations corresponding to the token_id. This is only
   //    required for the first invocation of the drafter.
-  //   input_kv_cache_buffers:  The key/value cache buffers for the base model,
-  //    used to draft and start the verification process.
-  //   output_kv_cache_buffers: The key/value cache buffers for the base model,
-  //    used to store the key/value cache for the drafted tokens through
-  //    verification.
+  //   state: The model's runtime KV cache state.
+  //   constrained_decoder: Optional decoder of the constraint to apply during
+  //    drafting and verification. Like a decode step, the round feeds it
+  //    `token_id` first, so its state must be the one `token_id` was sampled
+  //    under, with the mask computed. It leaves the decoder at the state after
+  //    the accepted draft tokens, which the next step feeds the bonus token to.
   // Outputs:
   //   The drafted tokens from the MTP drafter model with the shape:
   //   [batch_size, num_tokens].
   absl::StatusOr<std::vector<std::vector<int>>> Draft(
       int position, int token_id, std::optional<TensorBuffer> activations,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          input_kv_cache_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          output_kv_cache_buffers);
+      StateInterface& state, ConstrainedDecoder* constrained_decoder = nullptr);
+
+  // Reconfigures the verifier sampler to sample from `sampler_params`, with
+  // uniforms drawn from the shared random number generator `rand_gen`
+  // (typically the session sampler's configuration and generator), recreating
+  // the sampler if its top-k capacity is too small. If `rand_gen` is null, the
+  // verifier uses its own generator seeded with `sampler_params.seed()`, which
+  // is only reseeded when the seed changes. The drafter sampler stays greedy,
+  // which keeps the exact-match acceptance lossless with respect to the
+  // verifier's distribution.
+  absl::Status UpdateVerifierSamplerConfig(
+      const proto::SamplerParameters& sampler_params,
+      std::shared_ptr<std::default_random_engine> rand_gen);
+
+  // Sets the lenience factor c in [0, 1] of the acceptance test. With c > 0,
+  // a draft token that the verifier's sample disagrees with is still accepted
+  // with probability c. c = 0 (the default) is exact.
+  // This is a quality/speed trade-off chosen by the caller.
+  absl::Status SetLenience(float lenience);
+  float lenience() const { return lenience_; }
+
+  const MtpRoundStats& last_round_stats() const { return last_round_stats_; }
+
+  // Returns the number of tokens drafted per round (γ). A round verifies
+  // `num_draft_steps() + 1` positions.
+  int num_draft_steps() const { return num_draft_steps_; }
 
  private:
   LlmLiteRtMtpDrafter(
       CompiledModel mtp_drafter_model, SimpleSignature drafter_signature,
-      CompiledModel& base_model, SimpleSignature verify_signature,
+      CompiledModel& base_model, const Model& base_model_desc,
       EmbeddingLookupManager& embedding_manager,
-      std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager,
+      std::unique_ptr<LlmLiteRtVerifier> verifier,
       std::unique_ptr<Sampler> drafter_sampler,
-      std::unique_ptr<Sampler> verifier_sampler,
       std::vector<std::string> kv_cache_input_names,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           drafter_input_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>
           drafter_output_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>
-          verifier_input_buffers,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>
-          verifier_output_buffers,
-      int num_draft_steps)
+      TensorBuffer drafter_id_tensor, int num_draft_steps,
+      ModelSignatures drafter_signatures, AttentionMaskParams attn_params,
+      std::unique_ptr<LiteRtLogitMaskRunner> drafter_mask_runner)
       : mtp_drafter_model_(std::move(mtp_drafter_model)),
         drafter_signature_(std::move(drafter_signature)),
         base_model_(base_model),
-        verify_signature_(std::move(verify_signature)),
+        base_model_desc_(base_model_desc),
         embedding_manager_(embedding_manager),
-        ple_manager_(ple_manager),
+        verifier_(std::move(verifier)),
         drafter_sampler_(std::move(drafter_sampler)),
-        verifier_sampler_(std::move(verifier_sampler)),
         kv_cache_input_names_(std::move(kv_cache_input_names)),
         drafter_input_buffers_(std::move(drafter_input_buffers)),
         drafter_output_buffers_(std::move(drafter_output_buffers)),
-        verifier_input_buffers_(std::move(verifier_input_buffers)),
-        verifier_output_buffers_(std::move(verifier_output_buffers)),
-        num_draft_steps_(num_draft_steps) {
+        drafter_id_tensor_(std::move(drafter_id_tensor)),
+        num_draft_steps_(num_draft_steps),
+        drafter_signatures_(std::move(drafter_signatures)),
+        attn_params_(attn_params),
+        drafter_mask_runner_(std::move(drafter_mask_runner)) {
     for (const auto& [name, buffer] : drafter_input_buffers_) {
       auto expected = buffer.Duplicate();
-      active_drafter_input_buffers_[name] = std::move(expected.Value());
+      active_drafter_input_buffers_.insert_or_assign(
+          name, std::move(expected.Value()));
     }
     for (const auto& [name, buffer] : drafter_output_buffers_) {
       auto expected = buffer.Duplicate();
-      active_drafter_output_buffers_[name] = std::move(expected.Value());
-    }
-    for (const auto& [name, buffer] : verifier_input_buffers_) {
-      auto expected = buffer.Duplicate();
-      active_verifier_input_buffers_[name] = std::move(expected.Value());
-    }
-    for (const auto& [name, buffer] : verifier_output_buffers_) {
-      auto expected = buffer.Duplicate();
-      active_verifier_output_buffers_[name] = std::move(expected.Value());
+      active_drafter_output_buffers_.insert_or_assign(
+          name, std::move(expected.Value()));
     }
   }
 
@@ -131,19 +198,12 @@ class LlmLiteRtMtpDrafter {
 
   absl::Status PrepareDrafterOutputBuffers();
 
+  // Drafts `num_draft_steps_` tokens after `token_id` and returns them. With
+  // `constraint_states`, each drafted token is sampled under its mask and
+  // appended to them.
   absl::StatusOr<std::vector<int>> RunDraftingLoop(
-      int token_id, std::optional<TensorBuffer>& activations);
-
-  absl::Status PrepareVerifierInputBuffers(
-      int position, int token_id, const std::vector<int>& drafted_tokens,
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          input_kv_cache_buffers);
-
-  absl::Status PrepareVerifierOutputBuffers(
-      absl::flat_hash_map<absl::string_view, TensorBuffer>&
-          output_kv_cache_buffers);
-
-  absl::StatusOr<std::vector<int>> RunVerification();
+      int token_id, std::optional<TensorBuffer>& activations,
+      DraftConstraintStates* constraint_states);
 
   // The MTP drafter model.
   CompiledModel mtp_drafter_model_;
@@ -152,15 +212,22 @@ class LlmLiteRtMtpDrafter {
   // The base model, used for verification. The model is owned by the base
   // LiteRtCompiledModelExecutor.
   CompiledModel& base_model_;
-  SimpleSignature verify_signature_;
+  const Model& base_model_desc_;
 
   EmbeddingLookupManager& embedding_manager_;
-  std::optional<std::reference_wrapper<EmbeddingLookupManager>> ple_manager_;
+
+  // Runs the passes of the base model's "verify" signature. Its sampler is
+  // greedy unless reconfigured by `UpdateVerifierSamplerConfig()`.
+  std::unique_ptr<LlmLiteRtVerifier> verifier_;
 
   // Greedy sampler with batch size 1.
   std::unique_ptr<Sampler> drafter_sampler_;
-  // Greedy sampler with batch size G + 1, where G is the number of draft steps.
-  std::unique_ptr<Sampler> verifier_sampler_;
+
+  // The lenience factor of the acceptance test.
+  float lenience_ = 0.0f;
+  // Random number generator of the lenient acceptance test, updated by
+  // `UpdateVerifierSamplerConfig()`.
+  LenienceRandomEngine lenience_rng_;
 
   // The names of the key/value cache input tensors for the MTP drafter model.
   std::vector<std::string> kv_cache_input_names_;
@@ -174,32 +241,20 @@ class LlmLiteRtMtpDrafter {
   //   - projected_logits [batch, sequence_length, hidden_size]
   absl::flat_hash_map<absl::string_view, TensorBuffer> drafter_output_buffers_;
 
-  // Verifier owned buffers.
-  //   - input_position [batch, draft_steps + 1]
-  //   - mask [batch, 1, draft_steps + 1, context]
-  //   - embeddings [batch, draft_steps + 1, hidden_size]
-  //   - per_layer_embeddings [batch, draft_steps + 1, ...]
-  absl::flat_hash_map<absl::string_view, TensorBuffer> verifier_input_buffers_;
-  //   - logits [batch, draft_steps + 1, vocab_size]
-  //   - activations [batch, draft_steps + 1, hidden_size]
-  absl::flat_hash_map<absl::string_view, TensorBuffer> verifier_output_buffers_;
-
   // Cached maps for Run to avoid map creation overhead.
   absl::flat_hash_map<absl::string_view, TensorBuffer>
       active_drafter_input_buffers_;
   absl::flat_hash_map<absl::string_view, TensorBuffer>
       active_drafter_output_buffers_;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      active_verifier_input_buffers_;
-  absl::flat_hash_map<absl::string_view, TensorBuffer>
-      active_verifier_output_buffers_;
 
-  // Pre-allocated temporary tensors for sampling.
+  // Pre-allocated temporary tensor for sampling.
   TensorBuffer drafter_id_tensor_;
-  TensorBuffer verifier_id_tensor_;
 
   // The number of draft steps.
   const int num_draft_steps_;
+
+  // Model signatures for the drafter.
+  ModelSignatures drafter_signatures_;
 
   // The index of the last verified token in the verifier output buffers.
   int last_verified_token_id_idx_ = -1;
@@ -207,11 +262,24 @@ class LlmLiteRtMtpDrafter {
   // Misc statistics for the MTP drafter.
   // The number of tokens drafted by the MTP drafter model, regardless of
   // whether they are verified or not - does not include the bonus token.
-  int num_drafted_tokens_ = 0;
+  int64_t num_drafted_tokens_ = 0;
   // The number of tokens verified by the base model (i.e., accepted) - does not
   // include the bonus token.
-  int num_verified_tokens_ = 0;
+  int64_t num_verified_tokens_ = 0;
+
+  MtpRoundStats last_round_stats_;
+
+  // Attention mask params.
+  AttentionMaskParams attn_params_;
+
+  std::unique_ptr<LiteRtLogitMaskRunner> drafter_mask_runner_;
 };
+
+// Updates existing LiteRT compilation options for the MTP drafter model with
+// external tensor and buffer storage patterns from the executor settings.
+absl::Status UpdateCompilationOptions(
+    const LlmExecutorSettings& executor_settings,
+    litert::Options& compilation_options);
 
 }  // namespace litert::lm
 

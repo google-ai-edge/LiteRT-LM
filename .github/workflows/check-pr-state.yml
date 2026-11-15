@@ -1,0 +1,82 @@
+# Copyright 2026 The ODML Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Reusable workflow to prevent duplicate post-submit CI runs on Copybara merges.
+#
+# Why this is needed:
+# 1. During pre-submit (`presubmit_piper_to_github`), Copybara exports a pending
+#    CL to a GitHub PR branch (`litert_lm_pr_<OCL>`), triggering `pull_request`
+#    CI runs (`opened` or `synchronize`) that report results back to Critique.
+# 2. When the CL is submitted in Piper, Copybara's `postsubmit_piper_to_github`
+#    workflow generates a new Git commit (with the submitted PiperOrigin-RevId
+#    and final timestamp) and executes three Git operations in sequence:
+#      a) Force-pushes the finalized commit to `litert_lm_pr_<OCL>` (`beforePush`)
+#         so GitHub recognizes the PR as Merged rather than closed unmerged.
+#      b) Pushes the finalized commit to `main` (~2 seconds later), which
+#         automatically marks the PR as Merged/Closed.
+#      c) Deletes the `litert_lm_pr_<OCL>` branch (`afterPush`).
+# 3. Because step 2(a) updates the open PR branch ~2 seconds before step 2(b)
+#    merges the PR, GitHub fires a `pull_request` (`synchronize`) webhook event
+#    and GitHub Actions does not automatically cancel `pull_request` runs when
+#    a PR is merged.
+#
+# How this workflow solves it:
+# Before provisioning the heavy build/test runners (`linux-x86-c4-16`,
+# `windows-x86-n2-16`, `macos-latest`), caller workflows run this lightweight
+# gate job on `ubuntu-latest`. On `pull_request` (`synchronize`) events, it
+# waits 5 seconds for step 2(b) to complete if triggered by a Copybara postsubmit
+# merge, then queries the PR state via `gh pr view`. If the PR is no longer
+# `OPEN` (`MERGED` or `CLOSED`), it outputs `should_skip=true` so the heavy
+# `presubmit` job is cleanly skipped.
+
+name: "Check PR State"
+on:
+  workflow_call:
+    outputs:
+      should_skip:
+        description: "Whether the PR is already closed/merged and presubmit should be skipped"
+        value: ${{ jobs.check.outputs.should_skip }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    name: "Check PR State"
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      should_skip: ${{ steps.check.outputs.should_skip }}
+    steps:
+      - name: Check if PR is still open
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$EVENT_ACTION" = "synchronize" ]; then
+            sleep 5
+            PR_STATE=$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json state -q .state)
+            if [ "$PR_STATE" != "OPEN" ]; then
+              echo "PR #$PR_NUMBER is $PR_STATE (Copybara merge). Skipping presubmit."
+              echo "should_skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "should_skip=false" >> "$GITHUB_OUTPUT"

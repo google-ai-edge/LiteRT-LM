@@ -19,7 +19,7 @@ import OSLog
 /// These flags guard experimental APIs that may still undergo significant changes.
 /// To use any experimental flags, first call `ExperimentalFlags.optIntoExperimentalAPIs()`.
 public struct ExperimentalFlags {
-  private static var optedIn = false
+  public private(set) static var optedIn = false
 
   private static let logger = Logger(
     subsystem: "com.google.odml.litertlm.swift",
@@ -126,13 +126,19 @@ public struct ExperimentalFlags {
 
   private static var _enableSpeculativeDecoding: Bool? = nil
 
+  /// The value of the deprecated `enableSpeculativeDecoding`, for the engine to read without a
+  /// deprecation warning.
+  static var legacyEnableSpeculativeDecoding: Bool? { _enableSpeculativeDecoding }
+
   /// Whether to enable speculative decoding.
   ///
-  /// If true, enable speculative decoding; an error will be thrown if the model does not support it.
-  /// If false, disable speculative decoding.
+  /// Deprecated: use `EngineConfig.speculativeDecodingConfig` instead. Read only when that config
+  /// sets no mode: `true` is mode `.on` and `false` is mode `.off`; `nil` leaves the runtime
+  /// default (`.off`).
   ///
   /// Note: This flag is read only when a new [Engine] is created. Changing this value will not
   /// affect any existing [Engine] or [Conversation] instances.
+  @available(*, deprecated, message: "Use EngineConfig.speculativeDecodingConfig instead.")
   public static var enableSpeculativeDecoding: Bool? {
     get { return _enableSpeculativeDecoding }
     set {
@@ -149,14 +155,18 @@ public struct ExperimentalFlags {
   /// The visual token budget.
   ///
   /// The number of visual tokens that the model can generate for a single image. If null, there is
-  /// no budget limit and the engine use as much as needed.
+  /// no budget limit and the engine uses as much as needed.
   ///
   /// Currently, this is only supported by Gemma4. If this flag is set for a non-Gemma4 model, it
-  /// will result in a no-ops. The Gemma4 budget options are 70, 140, 280, 560, or 1120 tokens. See
+  /// will result in a no-op. The Gemma4 budget options are 70, 140, 280, 560, or 1120 tokens. See
   /// https://ai.google.dev/gemma/docs/capabilities/vision#variable-resolution for more details.
   ///
-  /// Note: This flag takes effect immediately and change alter the behaivor of created
-  /// [Conversation].
+  /// Note:
+  /// 1. This flag takes effect immediately and change alter the behavior of created [Conversation].
+  /// 2. If the flag is set before the [Engine] is created, it determines the max visual tokens per
+  ///    image for the [Engine]. For [Conversation] using the same [Engine], if the value is updated
+  ///    after the [Conversation] is created, the value should not be set to a value that exceeds
+  ///    the engine's max visual tokens per image.
   public static var visualTokenBudget: Int32? {
     get { return _visualTokenBudget }
     set {
@@ -165,6 +175,71 @@ public struct ExperimentalFlags {
         return
       }
       _visualTokenBudget = newValue
+    }
+  }
+
+  private static var _filterChannelContentFromKvCache: Bool? = nil
+
+  /// Whether to filter channel content from the KV cache.
+  public static var filterChannelContentFromKvCache: Bool? {
+    get { return _filterChannelContentFromKvCache }
+    set {
+      guard optedIn else {
+        logger.error("LiteRTLM: Must opt into experimental APIs before setting this flag.")
+        return
+      }
+      _filterChannelContentFromKvCache = newValue
+    }
+  }
+
+  private static var _gpuEnableMetalResidencySet: Bool? = nil
+
+  /// Whether to enable Metal residency set on GPU.
+  ///
+  /// If true, the GPU backend will use MTLResidencySet to prevent memory swapping on macOS.
+  public static var gpuEnableMetalResidencySet: Bool? {
+    get { return _gpuEnableMetalResidencySet }
+    set {
+      guard optedIn else {
+        logger.error("LiteRTLM: Must opt into experimental APIs before setting this flag.")
+        return
+      }
+      _gpuEnableMetalResidencySet = newValue
+    }
+  }
+
+  private static var _enableYnnpack: Bool? = nil
+
+  /// Whether YNNPACK should delegate supported CPU operations before XNNPACK.
+  ///
+  /// If nil, use the engine's default. If true, force enable YNNPACK. If false, force disable
+  /// YNNPACK.
+  ///
+  /// Note: This flag is read only when a new [Engine] is initialized or [benchmark] is called.
+  /// Changing this value will not affect any existing [Engine] or [Conversation] instances.
+  ///
+  /// This feature requires build-time flag "--define=litert_enable_ynnpack=true". The release
+  /// version might not have it.
+  public static var enableYnnpack: Bool? {
+    get {
+      if let ynnpack = _enableYnnpack {
+        return ynnpack
+      }
+      let env = ProcessInfo.processInfo.environment
+      if env["ENABLE_YNNPACK"] == "true" || env["enable_ynnpack"] == "true" {
+        return true
+      }
+      if ProcessInfo.processInfo.arguments.contains(where: { $0.contains("enable_ynnpack=true") }) {
+        return true
+      }
+      return nil
+    }
+    set {
+      guard optedIn else {
+        logger.error("LiteRTLM: Must opt into experimental APIs before setting this flag.")
+        return
+      }
+      _enableYnnpack = newValue
     }
   }
 

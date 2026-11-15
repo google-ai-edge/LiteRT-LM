@@ -14,23 +14,53 @@
 
 #include "runtime/executor/llm_executor_settings.h"
 
+#include <cstddef>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/mtp_gating_policy.h"
+#include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/util/logging.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 
 namespace litert::lm {
+namespace {
+
+// Returns the deprecated `AdvancedSettings::enable_speculative_decoding`. This
+// is the only place that reads it, so that the deprecation warning is
+// suppressed once.
+bool LegacyEnableSpeculativeDecoding(const AdvancedSettings& settings) {
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+  return settings.enable_speculative_decoding;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+}
+
+}  // namespace
 
 std::ostream& operator<<(std::ostream& os, const GpuArtisanConfig& config) {
   os << "num_output_candidates: " << config.num_output_candidates << "\n";
@@ -48,6 +78,7 @@ std::ostream& operator<<(std::ostream& os, const GpuArtisanConfig& config) {
   os << "set_enable_host_mapped_pointer: "
      << config.set_enable_host_mapped_pointer << "\n";
   os << "disallow_8bit_convs: " << config.disallow_8bit_convs << "\n";
+  os << "num_draft_tokens: " << config.num_draft_tokens << "\n";
   return os;
 }
 
@@ -60,25 +91,67 @@ std::ostream& operator<<(std::ostream& os, const CpuConfig& config) {
   os << "kv_increment_size: " << config.kv_increment_size << "\n";
   os << "prefill_chunk_size: " << config.prefill_chunk_size << "\n";
   os << "number_of_threads: " << config.number_of_threads << "\n";
+  os << "enable_ynnpack: " << config.enable_ynnpack << "\n";
   return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const NpuConfig& config) {
+  auto print_opt_bool = [](std::optional<bool> val) -> std::string {
+    return val.has_value() ? (*val ? "true" : "false") : "nullopt";
+  };
   os << "enable_neon_for_npu_greedy_sampling: "
-     << config.enable_neon_for_npu_greedy_sampling << "\n";
-  os << "use_hw_masking_for_npu: " << config.use_hw_masking_for_npu << "\n";
-  os << "use_hw_cache_update_for_npu: " << config.use_hw_cache_update_for_npu
+     << print_opt_bool(config.enable_neon_for_npu_greedy_sampling) << "\n";
+  os << "use_hw_masking_for_npu: "
+     << print_opt_bool(config.use_hw_masking_for_npu) << "\n";
+  os << "use_hw_cache_update_for_npu: "
+     << print_opt_bool(config.use_hw_cache_update_for_npu) << "\n";
+  os << "use_hw_ple_for_npu: " << print_opt_bool(config.use_hw_ple_for_npu)
      << "\n";
   os << "enable_npu_debug_logging: " << config.enable_npu_debug_logging << "\n";
   return os;
 }
 
+absl::Status CustomBackendConfig::SetOptionsFromStrings(
+    const std::vector<std::string>& key_value_pairs) {
+  for (absl::string_view entry : key_value_pairs) {
+    entry = absl::StripAsciiWhitespace(entry);
+    if (entry.empty()) {
+      continue;
+    }
+    const size_t eq_pos = entry.find('=');
+    if (eq_pos == absl::string_view::npos) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Invalid custom backend option '", entry,
+                       "': expected 'key=value' format."));
+    }
+    const absl::string_view key =
+        absl::StripAsciiWhitespace(entry.substr(0, eq_pos));
+    const absl::string_view value =
+        absl::StripAsciiWhitespace(entry.substr(eq_pos + 1));
+    if (key.empty()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Invalid custom backend option '", entry,
+                       "': key must not be empty."));
+    }
+    SetOption(key, value);
+  }
+  return absl::OkStatus();
+}
+
+std::ostream& operator<<(std::ostream& os, const CustomBackendConfig& config) {
+  for (const auto& [key, value] : config.options) {
+    os << key << ": " << value << "\n";
+  }
+  return os;
+}
 
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   os << "prefill_batch_sizes: ["
      << absl::StrJoin(settings.prefill_batch_sizes, ", ") << "]\n";
   os << "num_output_candidates: " << settings.num_output_candidates << "\n";
   os << "configure_magic_numbers: " << settings.configure_magic_numbers << "\n";
+  os << "allow_context_length_expansion: "
+     << settings.allow_context_length_expansion << "\n";
   os << "verify_magic_numbers: " << settings.verify_magic_numbers << "\n";
   os << "clear_kv_cache_before_prefill: "
      << settings.clear_kv_cache_before_prefill << "\n";
@@ -86,7 +159,10 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
      << settings.num_logits_to_print_after_decode << "\n";
   os << "gpu_madvise_original_shared_tensors: "
      << settings.gpu_madvise_original_shared_tensors << "\n";
+  os << "gpu_enable_metal_residency_set: "
+     << settings.gpu_enable_metal_residency_set << "\n";
   os << "is_benchmark: " << settings.is_benchmark << "\n";
+  os << "enable_profiling: " << settings.enable_profiling << "\n";
   os << "preferred_device_substr: " << settings.preferred_device_substr << "\n";
   os << "num_threads_to_upload: " << settings.num_threads_to_upload << "\n";
   os << "num_threads_to_compile: " << settings.num_threads_to_compile << "\n";
@@ -117,8 +193,8 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   } else {
     os << "gpu_context_low_priority: Not set\n";
   }
-  os << "enable_speculative_decoding: " << settings.enable_speculative_decoding
-     << "\n";
+  os << "enable_speculative_decoding: "
+     << LegacyEnableSpeculativeDecoding(settings) << "\n";
   os << "disable_delegate_clustering: " << settings.disable_delegate_clustering
      << "\n";
   if (settings.hint_kernel_batch_size.has_value()) {
@@ -127,7 +203,27 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   } else {
     os << "hint_kernel_batch_size: Not set\n";
   }
+  os << "error_on_invalid_sampled_token_id: "
+     << settings.error_on_invalid_sampled_token_id << "\n";
+  if (settings.mtp_gating_config.has_value()) {
+    os << "mtp_gating_config: " << *settings.mtp_gating_config << "\n";
+  } else {
+    os << "mtp_gating_config: Not set\n";
+  }
   return os;
+}
+
+SpeculativeDecodingMode
+LlmExecutorSettings::GetEffectiveSpeculativeDecodingMode() const {
+  if (speculative_decoding_config_.mode.has_value()) {
+    return *speculative_decoding_config_.mode;
+  }
+  // The deprecated `AdvancedSettings::enable_speculative_decoding` is read only
+  // when the config sets no mode.
+  return advanced_settings_.has_value() &&
+                 LegacyEnableSpeculativeDecoding(*advanced_settings_)
+             ? SpeculativeDecodingMode::kOn
+             : SpeculativeDecodingMode::kOff;
 }
 
 std::ostream& operator<<(std::ostream& os, const LlmExecutorSettings& config) {
@@ -141,6 +237,7 @@ std::ostream& operator<<(std::ostream& os, const LlmExecutorSettings& config) {
   os << "activation_data_type: " << config.GetActivationDataType() << "\n";
   os << "max_num_images: " << config.GetMaxNumImages() << "\n";
   os << "lora_rank: " << config.GetLoraRank() << "\n";
+  os << "pad_token_id: " << config.GetPadTokenId() << "\n";
   os << "cache_dir: " << config.GetCacheDir() << "\n";
   if (config.GetScopedCacheFile()) {
     os << "cache_file: " << config.GetScopedCacheFile()->file() << "\n";
@@ -159,6 +256,8 @@ std::ostream& operator<<(std::ostream& os, const LlmExecutorSettings& config) {
   } else {
     os << "advanced_settings: Not set\n";
   }
+  os << "speculative_decoding_config: " << config.GetSpeculativeDecodingConfig()
+     << "\n";
   return os;
 }
 
@@ -173,10 +272,12 @@ absl::StatusOr<LlmExecutorSettings> LlmExecutorSettings::CreateDefault(
     config.prefill_chunk_size = -1;
     config.number_of_threads = 4;
     settings.SetBackendConfig(config);
+  } else if (IsCustomBackend(backend)) {
+    settings.SetBackendConfig(CustomBackendConfig());
   } else if (backend == Backend::GPU) {
     GpuConfig config;
-    // Default max top k to 1 for GPU.
-    config.max_top_k = 1;
+    // Default max top k to 64 for GPU.
+    config.max_top_k = 64;
     settings.SetBackendConfig(config);
   } else if (backend == Backend::NPU) {
     settings.SetBackendConfig(NpuConfig());
@@ -192,8 +293,6 @@ absl::StatusOr<LlmExecutorSettings> LlmExecutorSettings::CreateDefault(
   // from the model assets (but note that for the model or backend which does
   // not support this, an error will be thrown during initialization).
   settings.SetMaxNumTokens(0);
-  // Disable image input by default.
-  settings.SetMaxNumImages(0);
   // Disable LoRA by default.
   settings.SetLoraRank(0);
 
@@ -203,4 +302,102 @@ absl::StatusOr<LlmExecutorSettings> LlmExecutorSettings::CreateDefault(
   return settings;
 }
 
+absl::Status LlmExecutorSettings::SetCustomBackendOption(
+    absl::string_view key, absl::string_view value) {
+  if (!IsCustomBackend(backend_)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Cannot set custom backend option '", key,
+                     "' on non-custom backend: ", GetBackendString(backend_)));
+  }
+  key = absl::StripAsciiWhitespace(key);
+  const size_t dot_pos = key.find('.');
+  if (dot_pos == absl::string_view::npos || dot_pos == 0 ||
+      dot_pos + 1 == key.size()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Invalid custom backend option key '", key,
+        "': expected '<backend>.<option>' format (e.g. '",
+        absl::AsciiStrToLower(GetBackendString(backend_)), ".num_threads')."));
+  }
+  const absl::string_view backend_prefix =
+      absl::StripAsciiWhitespace(key.substr(0, dot_pos));
+  const absl::string_view option_name =
+      absl::StripAsciiWhitespace(key.substr(dot_pos + 1));
+  if (backend_prefix.empty() || option_name.empty()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Invalid custom backend option key '", key,
+        "': expected '<backend>.<option>' format (e.g. '",
+        absl::AsciiStrToLower(GetBackendString(backend_)), ".num_threads')."));
+  }
+  auto option_backend = GetBackendFromString(backend_prefix);
+  if (!option_backend.ok() || *option_backend != backend_) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Custom backend option '", key, "' is for backend '",
+                     backend_prefix, "', which does not match active backend '",
+                     GetBackendString(backend_), "'."));
+  }
+  if (!std::holds_alternative<CustomBackendConfig>(backend_config_)) {
+    backend_config_ = CustomBackendConfig();
+  }
+  std::get<CustomBackendConfig>(backend_config_).SetOption(option_name, value);
+  return absl::OkStatus();
+}
+
+absl::Status LlmExecutorSettings::SetCustomBackendOptionsFromStrings(
+    const std::vector<std::string>& key_value_pairs) {
+  CustomBackendConfig parsed;
+  ABSL_RETURN_IF_ERROR(parsed.SetOptionsFromStrings(key_value_pairs));
+  for (const auto& [key, value] : parsed.options) {
+    ABSL_RETURN_IF_ERROR(SetCustomBackendOption(key, value));
+  }
+  return absl::OkStatus();
+}
+
+std::optional<absl::string_view> LlmExecutorSettings::GetCustomBackendOption(
+    absl::string_view key) const {
+  if (!std::holds_alternative<CustomBackendConfig>(backend_config_)) {
+    return std::nullopt;
+  }
+  const auto& config = std::get<CustomBackendConfig>(backend_config_);
+  key = absl::StripAsciiWhitespace(key);
+  if (auto val = config.GetOption(key); val.has_value()) {
+    return val;
+  }
+  const size_t dot_pos = key.find('.');
+  if (dot_pos != absl::string_view::npos) {
+    auto option_backend = GetBackendFromString(
+        absl::StripAsciiWhitespace(key.substr(0, dot_pos)));
+    if (option_backend.ok() && *option_backend == backend_) {
+      return config.GetOption(
+          absl::StripAsciiWhitespace(key.substr(dot_pos + 1)));
+    }
+  }
+  return std::nullopt;
+}
+
+absl::Status LlmExecutorSettings::ResolveNpuSettings(
+    const proto::LlmNpuExecutorMetadata& metadata) {
+  if (!std::holds_alternative<NpuConfig>(backend_config_)) {
+    return absl::FailedPreconditionError("Backend config is not NpuConfig");
+  }
+  NpuConfig& npu_config = std::get<NpuConfig>(backend_config_);
+  if (!npu_config.enable_neon_for_npu_greedy_sampling.has_value() &&
+      metadata.has_enable_neon_for_npu_greedy_sampling()) {
+    npu_config.enable_neon_for_npu_greedy_sampling =
+        metadata.enable_neon_for_npu_greedy_sampling();
+  }
+  if (!npu_config.use_hw_masking_for_npu.has_value() &&
+      metadata.has_use_hw_masking_for_npu()) {
+    npu_config.use_hw_masking_for_npu = metadata.use_hw_masking_for_npu();
+  }
+  if (!npu_config.use_hw_cache_update_for_npu.has_value() &&
+      metadata.has_use_hw_cache_update_for_npu()) {
+    npu_config.use_hw_cache_update_for_npu =
+        metadata.use_hw_cache_update_for_npu();
+  }
+  if (!npu_config.use_hw_ple_for_npu.has_value() &&
+      metadata.has_use_hw_ple_for_npu()) {
+    npu_config.use_hw_ple_for_npu = metadata.use_hw_ple_for_npu();
+  }
+  return absl::OkStatus();
+}
 }  // namespace litert::lm

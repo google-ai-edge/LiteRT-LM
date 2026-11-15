@@ -2,24 +2,82 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-07-10
-LITERT_REF = "2911db74a14654bd6038deae76177383e54f2cc1"
+# UPDATED = 2026-11-06
+LITERT_REF = "bf49eb62406d15948261a840c9dcd8e4f13b478c"
 
-LITERT_SHA256 = "7aa34abf62f10df571eb3521acde4790dd2885138b4da2ce5a1106e119936f1f"
+LITERT_SHA256 = "f5ee44f21843bc6634c02d20d5abb2e4dc0feb83d702b73b5073f10c008231ba"
 
-TENSORFLOW_REF = "7661ec4773f78d537ddec226a787185dc74f0cdb"
+TENSORFLOW_REF = "faa06da43657488c1f7479289d11d15e03a15ba1"
 
-TENSORFLOW_SHA256 = "3221ed281124b7ada27c2aa46a472f57310d2ac04942fabfe58b7d6f557133c2"
 
-# buildifier: disable=load-on-top
+TENSORFLOW_SHA256 = "aa0de21d364ecc1b15d489d439b426157f717c69c1e4cd9d4c3cd08fa798f8ff"
 
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive", "http_jar")
+ML_DRIFT_COMMIT = "e9229fa80c4a99f1855721aec8282f7f4ce86fe4"
+
+ML_DRIFT_SHA256 = "d485e49eb785ce5c0ee2589e3f5aa1a133c5bb9caa0ca88d8a266e96791eac69"
+
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
+load("//:android_ndk_env.bzl", "check_android_ndk_env", "stub_local_config_android")
+
+# Declared before `rules_shell_dependencies()` and `apple_rules_dependencies()`
+# because those macros also declare `bazel_skylib`, and the first declaration of
+# a repository wins. The pinned TensorFlow expects 1.9.0: its `@rules_cc` uses
+# the `scope` attribute on `bool_flag`, which older bazel_skylib releases do not
+# define. Keep this in sync with the version in TensorFlow's
+# `tensorflow/workspace3.bzl`.
+http_archive(
+    name = "bazel_skylib",
+    sha256 = "3b5b49006181f5f8ff626ef8ddceaa95e9bb8ad294f7b5d7b11ea9f7ddaf8c59",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/bazelbuild/bazel-skylib/releases/download/1.9.0/bazel-skylib-1.9.0.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.9.0/bazel-skylib-1.9.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-skylib/releases/download/1.9.0/bazel-skylib-1.9.0.tar.gz",
+    ],
+)
+
+# Declared before `tf_workspace2()` so that it takes precedence over TensorFlow's
+# `FP16`, whose BUILD file lacks the lowercase `fp16` target that ml_drift
+# depends on (via the `@fp16` -> `@FP16` repo_mapping below). A separate
+# lowercase `fp16` repository must not be declared: it collides with `FP16` in
+# the `external/` directory on case-insensitive filesystems (e.g. Windows).
+http_archive(
+    name = "FP16",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+exports_files(["LICENSE"])
+
+cc_library(
+    name = "FP16",
+    hdrs = glob(["include/**/*.h"]),
+    includes = ["include"],
+    strip_include_prefix = "include",
+)
+
+alias(
+    name = "fp16",
+    actual = ":FP16",
+)
+""",
+    sha256 = "d973501a40c55126b31accc2d9f08d931ec3cc190c0430309a5e341d3c0ce32a",
+    strip_prefix = "FP16-4dfe081cf6bcd15db339cf2680b9281b8451eeb3",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/Maratyszcza/FP16/archive/4dfe081cf6bcd15db339cf2680b9281b8451eeb3.zip",
+        "https://github.com/Maratyszcza/FP16/archive/4dfe081cf6bcd15db339cf2680b9281b8451eeb3.zip",
+    ],
+)
 
 http_archive(
     name = "rules_shell",
     sha256 = "bc61ef94facc78e20a645726f64756e5e285a045037c7a61f65af2941f4c25e1",
     strip_prefix = "rules_shell-0.4.1",
-    url = "https://github.com/bazelbuild/rules_shell/releases/download/v0.4.1/rules_shell-v0.4.1.tar.gz",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/bazelbuild/rules_shell/releases/download/v0.4.1/rules_shell-v0.4.1.tar.gz",
+        "https://github.com/bazelbuild/rules_shell/releases/download/v0.4.1/rules_shell-v0.4.1.tar.gz",
+    ],
 )
 
 load("@rules_shell//shell:repositories.bzl", "rules_shell_dependencies", "rules_shell_toolchains")
@@ -69,14 +127,20 @@ http_archive(
 http_archive(
     name = "build_bazel_apple_support",
     sha256 = "ee20cc5c0bab47065473c8033d462374dd38d172406ecc8de5c8f08487943f2f",
-    url = "https://github.com/bazelbuild/apple_support/releases/download/1.23.1/apple_support.1.23.1.tar.gz",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/apple_support/releases/download/1.23.1/apple_support.1.23.1.tar.gz",
+        "https://github.com/bazelbuild/apple_support/releases/download/1.23.1/apple_support.1.23.1.tar.gz",
+    ],
 )
 
 http_archive(
     name = "bazel_features",
     sha256 = "c26b4e69cf02fea24511a108d158188b9d8174426311aac59ce803a78d107648",
     strip_prefix = "bazel_features-1.43.0",
-    url = "https://github.com/bazel-contrib/bazel_features/releases/download/v1.43.0/bazel_features-v1.43.0.tar.gz",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazel-contrib/bazel_features/releases/download/v1.43.0/bazel_features-v1.43.0.tar.gz",
+        "https://github.com/bazel-contrib/bazel_features/releases/download/v1.43.0/bazel_features-v1.43.0.tar.gz",
+    ],
 )
 
 # Same version that tensorflow uses, but with patches to fix build errors.
@@ -86,20 +150,80 @@ http_archive(
         # Replace @googletest with @com_google_googletest.
         "sed -i -e 's|@googletest|@com_google_googletest|g' absl/*/BUILD* absl/*/*/BUILD* absl/*/*/*/BUILD*",
     ],
-    patches = ["@//:PATCH.abseil"],
+    patches = ["@//third_party/abseil:abseil.patch"],
     sha256 = "6e1aee535473414164bf83e4ebc40240dec71a4701f8a642d906e95bea1aea0c",
     strip_prefix = "abseil-cpp-20260526.0",
-    url = "https://github.com/abseil/abseil-cpp/archive/20260526.0.tar.gz",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/abseil/abseil-cpp/archive/20260526.0.tar.gz",
+        "https://github.com/abseil/abseil-cpp/archive/20260526.0.tar.gz",
+    ],
+)
+
+# Toolchains for ML projects
+# Older version than one tensorflow uses as current tensorflow breaks workspace build.
+# Details: https://github.com/google-ml-infra/rules_ml_toolchain
+http_archive(
+    name = "rules_ml_toolchain",
+    sha256 = "3b05687842427041c65d1bc2f4aeda3a3079557120f5be8c34690087a88c5de5",
+    strip_prefix = "rules_ml_toolchain-2eddbc595cc0bbe650c2640204f66b14f015f1a8",
+    url = "https://github.com/google-ml-infra/rules_ml_toolchain/archive/2eddbc595cc0bbe650c2640204f66b14f015f1a8.tar.gz",
+)
+
+# Kotlin rules (must be declared before tf_workspace to override)
+http_archive(
+    name = "rules_kotlin",
+    sha256 = "e40ccc013f874e063bb64fed0f816b881991cb300bce45085e1204644892c59c",
+    url = "https://github.com/bazel-contrib/rules_kotlin/releases/download/v2.4.10/rules_kotlin-v2.4.10.tar.gz",
+)
+
+# Android rules (must be declared before kotlin_repositories and tf_workspace to override
+# older versions whose com_android_dex and apksig archives lacked sha256 and mirror URLs;
+# pinned to v0.7.2 because v0.7.3+ requires @protobuf_maven for @com_google_protobuf//java/util)
+http_archive(
+    name = "rules_android",
+    patch_cmds = [
+        # Prefer Google's owned Maven mirrors (maven.google.com and GCS Maven Central mirror) before hitting repo1.maven.org.
+        "sed -e '/\"https:\\/\\/maven\\.google\\.com\"/d' -e 's|\"https://repo1.maven.org/maven2\"|\"https://maven.google.com\", \"https://maven-central.storage-download.googleapis.com/maven2\", \"https://repo1.maven.org/maven2\"|g' defs.bzl > defs.bzl.tmp && mv defs.bzl.tmp defs.bzl",
+    ],
+    sha256 = "0da7198c7c8bac7e11e08dca3c434617b8593075858716595672e9aeefbef2a7",
+    strip_prefix = "rules_android-0.7.2",
+    url = "https://github.com/bazelbuild/rules_android/releases/download/v0.7.2/rules_android-v0.7.2.tar.gz",
+)
+
+# Go rules and Gazelle for rules_android (must be declared before tf_workspace to override ancient versions)
+http_archive(
+    name = "io_bazel_rules_go",
+    sha256 = "68af54cb97fbdee5e5e8fe8d210d15a518f9d62abfd71620c3eaff3b26a5ff86",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/bazel-contrib/rules_go/releases/download/v0.59.0/rules_go-v0.59.0.zip",
+        "https://mirror.bazel.build/github.com/bazel-contrib/rules_go/releases/download/v0.59.0/rules_go-v0.59.0.zip",
+        "https://github.com/bazel-contrib/rules_go/releases/download/v0.59.0/rules_go-v0.59.0.zip",
+    ],
+)
+
+http_archive(
+    name = "bazel_gazelle",
+    sha256 = "675114d8b433d0a9f54d81171833be96ebc4113115664b791e6f204d58e93446",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.47.0/bazel-gazelle-v0.47.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.47.0/bazel-gazelle-v0.47.0.tar.gz",
+    ],
 )
 
 # TensorFlow
 http_archive(
     name = "org_tensorflow",
-    patches = ["@//:PATCH.tensorflow"],
+    patches = ["@//third_party/tensorflow:tensorflow.patch"],
     sha256 = TENSORFLOW_SHA256,
     strip_prefix = "tensorflow-" + TENSORFLOW_REF,
     url = "https://github.com/tensorflow/tensorflow/archive/" + TENSORFLOW_REF + ".tar.gz",
 )
+
+# Pre-declare a no-op `@local_config_android` before `tf_workspace1()` so
+# `tf_workspace0()`'s `android_workspace()` never instantiates legacy
+# `native.android_sdk_repository` / `native.android_ndk_repository` rules that
+# conflict with or shadow `@rules_android` and `@rules_android_ndk` below.
+stub_local_config_android(name = "local_config_android")
 
 # Initialize the TensorFlow repository and all dependencies.
 #
@@ -111,14 +235,17 @@ load("@org_tensorflow//tensorflow:workspace3.bzl", "tf_workspace3")
 
 tf_workspace3()
 
-# Toolchains for ML projects
-# Details: https://github.com/google-ml-infra/rules_ml_toolchain
-http_archive(
-    name = "rules_ml_toolchain",
-    sha256 = "9285d90601757838d064a12f51f14374d40064ddc2fa198979908b6bd0f89348",
-    strip_prefix = "rules_ml_toolchain-7f40603f574b95746152332ef3ad5fce63f1768d",
-    url = "https://github.com/google-ml-infra/rules_ml_toolchain/archive/7f40603f574b95746152332ef3ad5fce63f1768d.tar.gz",
-)
+load("@bazel_features//:deps.bzl", "bazel_features_deps")
+
+bazel_features_deps()
+
+load("@rules_cc//cc:extensions.bzl", "compatibility_proxy_repo")
+
+compatibility_proxy_repo()
+
+load("@io_bazel_rules_go//go:deps.bzl", "go_rules_dependencies")
+
+go_rules_dependencies()
 
 load(
     "@rules_ml_toolchain//cc/deps:cc_toolchain_deps.bzl",
@@ -136,12 +263,6 @@ load("@xla//third_party/py:python_init_repositories.bzl", "python_init_repositor
 
 python_init_repositories(
     default_python_version = "system",
-    local_wheel_dist_folder = "dist",
-    local_wheel_inclusion_list = [
-        "tensorflow*",
-        "tf_nightly*",
-    ],
-    local_wheel_workspaces = ["@org_tensorflow//:WORKSPACE"],
     requirements = {
         "3.10": "@org_tensorflow//:requirements_lock_3_10.txt",
         "3.11": "@org_tensorflow//:requirements_lock_3_11.txt",
@@ -180,12 +301,13 @@ load("@rules_jvm_external//:defs.bzl", "maven_install")
 maven_install(
     name = "maven",
     artifacts = [
-        "com.google.code.gson:gson:2.13.2",
-        "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.9.0",
-        "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0",
+        "com.google.code.gson:gson:2.14.0",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.11.0",
+        "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0",
     ],
     repositories = [
         "https://maven.google.com",
+        "https://maven-central.storage-download.googleapis.com/maven2",
         "https://repo1.maven.org/maven2",
     ],
 )
@@ -257,11 +379,6 @@ load(
 nccl_configure(name = "local_config_nccl")
 
 # Kotlin rules
-http_archive(
-    name = "rules_kotlin",
-    sha256 = "13d5b767d697473ced9b55547a18a6ab65ab3fae5440555deee8a44c886b50aa",
-    url = "https://github.com/bazelbuild/rules_kotlin/releases/download/v2.3.20/rules_kotlin-v2.3.20.tar.gz",
-)
 
 load("@rules_kotlin//kotlin:repositories.bzl", "kotlin_repositories")
 
@@ -274,7 +391,7 @@ kt_register_toolchains()  # to use the default toolchain, otherwise see toolchai
 # Rust (for HuggingFace Tokenizers)
 http_archive(
     name = "rules_rust",
-    patches = ["@//:PATCH.rules_rust"],
+    patches = ["@//third_party/rules_rust:rules_rust.patch"],
     sha256 = "53c1bac7ec48f7ce48c4c1c6aa006f27515add2aeb05725937224e6e00ec7cea",
     url = "https://github.com/bazelbuild/rules_rust/releases/download/0.61.0/rules_rust-0.61.0.tar.gz",
 )
@@ -302,6 +419,11 @@ crate_universe_dependencies()
 load("@rules_rust//crate_universe:defs.bzl", "crate", "crates_repository")
 load("@rules_rust//rust/platform:triple_mappings.bzl", "SUPPORTED_PLATFORM_TRIPLES")
 
+# NOTE: llguidance's build file and the llguidance/toktrie patches below live at
+# the repository root rather than under third_party/ with the other dependencies.
+# rules_rust hashes these label strings into the checked-in cargo-bazel-lock.json,
+# so renaming them requires re-pinning the lockfile with
+# `CARGO_BAZEL_REPIN=1 bazel sync --only=crate_index`.
 crates_repository(
     name = "crate_index",
     annotations = {
@@ -313,7 +435,6 @@ crates_repository(
                     "@//:PATCH.llguidance_regexvec",
                     "@//:PATCH.llguidance_numeric",
                     "@//:PATCH.llguidance_grammar",
-                    "@//:PATCH.llguidance_parser",
                     "@//:PATCH.llguidance_perf",
                 ],
             ),
@@ -363,45 +484,109 @@ cxxbridge_cmd_deps()
 http_archive(
     name = "minizip",
     add_prefix = "minizip",
-    build_file = "@//:BUILD.minizip",
+    build_file = "@//third_party/minizip:minizip.BUILD",
     sha256 = "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
     strip_prefix = "zlib-1.3.1/contrib/minizip",
-    url = "https://zlib.net/fossils/zlib-1.3.1.tar.gz",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/zlib.net/fossils/zlib-1.3.1.tar.gz",
+        "https://mirror.bazel.build/zlib.net/fossils/zlib-1.3.1.tar.gz",
+        "https://zlib.net/fossils/zlib-1.3.1.tar.gz",
+    ],
 )
 
 http_archive(
     name = "sentencepiece",
-    build_file = "@//:BUILD.sentencepiece",
+    build_file = "@//third_party/sentencepiece:sentencepiece.BUILD",
     patch_cmds = [
-        # Empty config.h seems enough.
-        "touch config.h",
+        "printf '#ifndef CONFIG_H_\\n#define CONFIG_H_\\n#define VERSION \"0.2.2\"\\n#define PACKAGE \"sentencepiece\"\\n#define PACKAGE_STRING \"sentencepiece\"\\n#define INSTALL_DATADIR \"\"\\n#endif\\n' > config.h",
+        "mv src/* .",
         # Replace third_party/absl/ with absl/ in *.h and *.cc files.
         "sed -i -e 's|#include \"third_party/absl/|#include \"absl/|g' *.h *.cc",
-        # Replace third_party/darts_clone/ with include/ in *.h and *.cc files.
-        "sed -i -e 's|#include \"third_party/darts_clone/|#include \"include/|g' *.h *.cc",
+        # Replace third_party/protobuf-lite/ with google/protobuf/ in *.h and *.cc files.
+        "sed -i -e 's|#include \"third_party/protobuf-lite/google/protobuf/|#include \"google/protobuf/|g' *.h *.cc",
+        "sed -i -e 's|#include \"third_party/protobuf/|#include \"google/protobuf/|g' *.h *.cc",
+        "rm -rf third_party/protobuf-lite third_party/protobuf third_party/absl third_party/abseil-cpp",
     ],
-    patches = ["@//:PATCH.sentencepiece"],
-    sha256 = "9970f0a0afee1648890293321665e5b2efa04eaec9f1671fcf8048f456f5bb86",
-    strip_prefix = "sentencepiece-0.2.0/src",
-    url = "https://github.com/google/sentencepiece/archive/refs/tags/v0.2.0.tar.gz",
+    # TODO: b/570513475 remove this patch once we guarantee that sentencepiece tokenizer is properly
+    # prepared for all supported models.
+    patches = ["@//third_party/sentencepiece:sentencepiece.patch"],
+    sha256 = "92381f713e094a15a1ccff1ac4a5315a4c4b82a99ac1332d6ac53c9dc8e1bcf1",
+    strip_prefix = "sentencepiece-0.2.2",
+    url = "https://github.com/google/sentencepiece/archive/refs/tags/v0.2.2.tar.gz",
 )
 
 http_archive(
     name = "litert",
     patch_cmds = [
-        # Replace @//third_party with @litert//third_party in files under third_party/.
-        "sed -i -e 's|\"@//third_party/|\"@litert//third_party/|g' third_party/*/*",
-        # Replace @stblib with @stb://stblib in support/*/BUILD files.
-        "sed -i -e 's|\"@stblib\"|\"@stb//:stblib\"|g' support/*/BUILD",
+        # @dawn//:webgpu_dawn in LiteRT's dawn.BUILD is headers-only; wire in LiteRT-LM's prebuilt Dawn shared library.
+        "sed -i -e 's|\"\\:dawn_native\",|\":dawn_native\", \"@//runtime/components:webgpu_dawn_shared_lib\",|g' third_party/dawn/dawn.BUILD",
     ],
     sha256 = LITERT_SHA256,
     strip_prefix = "LiteRT-" + LITERT_REF,
     url = "https://github.com/google-ai-edge/LiteRT/archive/" + LITERT_REF + ".tar.gz",
 )
 
+# SafeInt. Same version that LiteRT uses.
+http_archive(
+    name = "SafeInt",
+    build_file = "@litert//:BUILD.SafeInt",
+    sha256 = "4bd737e5885112e796742b7b6ba7181ff346855dc22d29ed2b258de567a1de8d",
+    strip_prefix = "SafeInt-72f0745e26091af6d1186fd91426377f16688ba7",
+    url = "https://github.com/dcleblanc/SafeInt/archive/72f0745e26091af6d1186fd91426377f16688ba7.tar.gz",
+)
+
+http_archive(
+    name = "ml_drift",
+    repo_mapping = {
+        "@fp16": "@FP16",
+        "@com_github_google_re2": "@com_googlesource_code_re2",
+    },
+    sha256 = ML_DRIFT_SHA256,
+    strip_prefix = "ml-drift-" + ML_DRIFT_COMMIT,
+    urls = [
+        "https://github.com/google-ai-edge/ml-drift/archive/" + ML_DRIFT_COMMIT + ".tar.gz",
+    ],
+)
+
+EGL_HEADERS_COMMIT = "db3425b8246136faccb5e2782b5694960bd6edf1"
+
+http_archive(
+    name = "egl_headers",
+    build_file = "@ml_drift//third_party/egl_headers:egl_headers.BUILD",
+    sha256 = "3d6b42b23da8030f5b29ade07d7384c5f885e713f17f04650f6cd4b8329b88e8",
+    strip_prefix = "EGL-Registry-" + EGL_HEADERS_COMMIT + "/api",
+    urls = [
+        "https://github.com/KhronosGroup/EGL-Registry/archive/" + EGL_HEADERS_COMMIT + ".tar.gz",
+    ],
+)
+
+OPENGL_HEADERS_COMMIT = "1cdd228e34966dd6b95bd203e9f84faba0f371a1"
+
+http_archive(
+    name = "opengl_headers",
+    build_file = "@ml_drift//third_party/opengl_headers:opengl_headers.BUILD",
+    sha256 = "d8ac2e70b4a8173d4e30ceb726eb8b3137883d459e4666983eb1d2444483c62c",
+    strip_prefix = "OpenGL-Registry-" + OPENGL_HEADERS_COMMIT + "/api",
+    urls = [
+        "https://github.com/KhronosGroup/OpenGL-Registry/archive/" + OPENGL_HEADERS_COMMIT + ".tar.gz",
+    ],
+)
+
+load("@litert//third_party/markupsafe:workspace.bzl", markupsafe = "repo")
+
+markupsafe()
+
+load("@litert//third_party/jinja2:workspace.bzl", jinja2 = "repo")
+
+jinja2()
+
+load("@litert//third_party/dawn:workspace.bzl", dawn = "repo")
+
+dawn()
+
 http_archive(
     name = "tokenizers_cpp",
-    build_file = "@//:BUILD.tokenizers_cpp",
+    build_file = "@//third_party/tokenizers_cpp:tokenizers_cpp.BUILD",
     sha256 = "3e0b9ec325a326b0a2cef5cf164ee94a74ac372c5881ae5af634036db0441823",
     strip_prefix = "tokenizers-cpp-0.1.1",
     url = "https://github.com/mlc-ai/tokenizers-cpp/archive/refs/tags/v0.1.1.tar.gz",
@@ -411,7 +596,11 @@ http_archive(
     name = "absl_py",
     sha256 = "8a3d0830e4eb4f66c4fa907c06edf6ce1c719ced811a12e26d9d3162f8471758",
     strip_prefix = "abseil-py-2.1.0",
-    url = "https://github.com/abseil/abseil-py/archive/refs/tags/v2.1.0.tar.gz",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/abseil/abseil-py/archive/refs/tags/v2.1.0.tar.gz",
+        "https://mirror.bazel.build/github.com/abseil/abseil-py/archive/refs/tags/v2.1.0.tar.gz",
+        "https://github.com/abseil/abseil-py/archive/refs/tags/v2.1.0.tar.gz",
+    ],
 )
 
 http_archive(
@@ -422,17 +611,8 @@ http_archive(
 )
 
 http_archive(
-    name = "minja",
-    build_file = "@//:BUILD.minja",
-    patches = ["@//:PATCH.minja"],
-    sha256 = "752f47dd2a2f4920a66f497c952785073c1983f12f084b99e5c12bf89f96acfe",
-    strip_prefix = "minja-58568621432715b0ed38efd16238b0e7ff36c3ba",
-    url = "https://github.com/google/minja/archive/58568621432715b0ed38efd16238b0e7ff36c3ba.zip",
-)
-
-http_archive(
     name = "miniaudio",
-    build_file = "@//:BUILD.miniaudio",
+    build_file = "@//third_party/miniaudio:miniaudio.BUILD",
     sha256 = "bcb07bfb27e6fa94d34da73ba2d5642d4940b208ec2a660dbf4e52e6b7cd492f",
     strip_prefix = "miniaudio-0.11.22",
     url = "https://github.com/mackron/miniaudio/archive/refs/tags/0.11.22.tar.gz",
@@ -440,16 +620,19 @@ http_archive(
 
 http_archive(
     name = "stb",
-    build_file = "@//:BUILD.stb",
+    build_file = "@//third_party/stb:stb.BUILD",
     sha256 = "119b9f3cca3e50225dc946ed1acd1b7a160943bc8bf549760109cea4e4e7c836",
     strip_prefix = "stb-f58f558c120e9b32c217290b80bad1a0729fbb2c",
     url = "https://github.com/nothings/stb/archive/f58f558c120e9b32c217290b80bad1a0729fbb2c.zip",
 )
 
-http_jar(
-    name = "javax_json",
-    sha256 = "0e1dec40a1ede965941251eda968aeee052cc4f50378bc316cc48e8159bdbeb4",
-    url = "https://jcenter.bintray.com/org/glassfish/javax.json/1.0.4/javax.json-1.0.4.jar",
+# Portable SIMD with runtime dispatch, used by the image preprocessor.
+# Dual-licensed Apache-2.0 / BSD-3-Clause.
+http_archive(
+    name = "highway",
+    sha256 = "07b3c1ba2c1096878a85a31a5b9b3757427af963b1141ca904db2f9f4afe0bc2",
+    strip_prefix = "highway-1.3.0",
+    url = "https://github.com/google/highway/archive/refs/tags/1.3.0.tar.gz",
 )
 
 http_archive(
@@ -459,7 +642,7 @@ http_archive(
         # Replace <jpeglib.h> with "jpeglib.h".
         "sed -i -e 's|#include <jpeglib.h>|#include \"jpeglib.h\"|g' */*.cpp */*.h */*/*.cpp */*/*.h",
     ],
-    patches = ["@//:PATCH.skia"],
+    patches = ["@//third_party/skia:skia.patch"],
     repo_mapping = {
         "@libpng": "@png",
     },
@@ -471,27 +654,69 @@ http_archive(
 http_archive(
     name = "skia_user_config",
     patch_args = ["-p1"],
-    patches = ["@//:PATCH.skia_user_config"],
+    patches = ["@//third_party/skia:skia_user_config.patch"],
     sha256 = "2fe28173428f8eebf2aa8a665bad32136086cc065f50c7154678a96250d1cde1",
     strip_prefix = "skia-226ae9d866748a2e68b6dbf114b37129c380a298/include/config",
     urls = ["https://github.com/google/skia/archive/226ae9d866748a2e68b6dbf114b37129c380a298.zip"],
 )
 
-# Android rules. Need latest rules_android_ndk to use NDK 26+.
-load("@rules_android_ndk//:rules.bzl", "android_ndk_repository")
+http_archive(
+    name = "cppjieba",
+    build_file = "@//third_party/cppjieba:cppjieba.BUILD",
+    patches = ["@//third_party/cppjieba:cppjieba.patch"],
+    sha256 = "8b27931630abab1136b7c3ee920e4a95e78cb84a3cab4670198172bc82104844",
+    strip_prefix = "OpenCC-025f371dc76b598d77384fbdab90c937471844d8/plugins/jieba/deps/cppjieba",
+    urls = ["https://github.com/BYVoid/OpenCC/archive/025f371dc76b598d77384fbdab90c937471844d8.tar.gz"],
+)
 
-android_ndk_repository(name = "androidndk")
+# Android rules ####################################################################################
 
-android_sdk_repository(name = "androidsdk")
-
-# Configure Android NDK only when ANDROID_NDK_HOME is set.
-# Creates current_android_ndk_env.bzl as a workaround since shell environment is available only
-# through repository rule's context.
-load("//:android_ndk_env.bzl", "check_android_ndk_env")
-
+# Resolve Android SDK and NDK paths from environment variables through a
+# repository rule (`current_android_ndk_env.bzl`), since WORKSPACE evaluation
+# cannot read host environment variables directly.
 check_android_ndk_env(name = "android_ndk_env")
 
-load("@android_ndk_env//:current_android_ndk_env.bzl", "ANDROID_NDK_HOME_IS_SET")
+load(
+    "@android_ndk_env//:current_android_ndk_env.bzl",
+    "ANDROID_NDK_HOME_IS_SET",
+    "ANDROID_NDK_PATH",
+    "ANDROID_SDK_PATH",
+)
+
+# Android SDK
+load("@rules_android//:prereqs.bzl", "rules_android_prereqs")
+
+rules_android_prereqs()
+
+load("@rules_android//:defs.bzl", "rules_android_workspace")
+
+rules_android_workspace()
+
+load("@rules_java//java:repositories.bzl", "java_tools_repos")
+
+java_tools_repos()
+
+load("@rules_android//rules:rules.bzl", "android_sdk_repository")
+
+maybe(
+    android_sdk_repository,
+    name = "androidsdk",
+    path = ANDROID_SDK_PATH,
+)
+
+register_toolchains(
+    "@rules_android//toolchains/android:android_default_toolchain",
+    "@rules_android//toolchains/android_sdk:android_sdk_tools",
+)
+
+# Android NDK. Need latest rules_android_ndk to use NDK 26+.
+load("@rules_android_ndk//:rules.bzl", "android_ndk_repository")
+
+maybe(
+    android_ndk_repository,
+    name = "androidndk",
+    path = ANDROID_NDK_PATH,
+)
 
 # Use "@android_ndk_env//:all" as a dummy toolchain target as register_toolchains() does not take
 # an empty string.
@@ -523,14 +748,10 @@ load("@litert//third_party/intel_openvino:openvino.bzl", "openvino_configure")
 
 openvino_configure()
 
-http_archive(
-    name = "nanobind_json",
-    build_file = "@//:BUILD.nanobind_json",
-    patches = ["@//:PATCH.nanobind_json"],
-    sha256 = "72cb4cdbf8108c7dd2dc669347669f2cc1acf4f943588f96661701f27f778912",
-    strip_prefix = "nanobind_json-e1953530697f61cbca9dc9b4f51561ea785cb09d",
-    urls = ["https://github.com/ianhbell/nanobind_json/archive/e1953530697f61cbca9dc9b4f51561ea785cb09d.zip"],
-)
+# SAMSUNG EXYNOS_AI_LITECORE----------------------------------------------------------------------
+load("@litert//third_party/exynos_ai_litecore:workspace.bzl", "exynos_ai_litecore")
+
+exynos_ai_litecore()
 
 load("@rules_python//python:pip.bzl", "pip_parse")
 
@@ -547,7 +768,7 @@ install_custom_deps()
 # DirectX Shader Compiler DLLs for Windows
 http_archive(
     name = "directx_shader_compiler",
-    build_file = "@//:BUILD.directx_shader_compiler",
+    build_file = "@//third_party/directx_shader_compiler:directx_shader_compiler.BUILD",
     sha256 = "a1e89031421cf3c1fca6627766ab3020ca4f962ac7e2caa7fab2b33a8436151e",
     url = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip",
 )

@@ -51,6 +51,11 @@ struct Channel {
 
   // A string that marks the end of the channel, e.g. "<channel|>".
   std::string end;
+
+  // Whether this channel contains reasoning/thinking content. When true (or
+  // when channel_name is "thought"), text from this channel is also copied to
+  // message["reasoning_content"].
+  bool is_reasoning_channel = false;
 };
 
 // Preface is the initial messages, tools and extra context for the

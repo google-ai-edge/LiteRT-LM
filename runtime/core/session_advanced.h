@@ -33,12 +33,14 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/proto/sampler_params.pb.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -87,7 +89,8 @@ class SessionAdvanced : public SessionInterface {
       support::Tokenizer* absl_nonnull tokenizer,
       const SessionConfig& session_config,
       std::optional<BenchmarkInfo> benchmark_info,
-      std::atomic<int>* living_sessions_count = nullptr);
+      std::atomic<int>* living_sessions_count = nullptr,
+      const Engine* engine = nullptr);
 
   // Destroys the SessionAdvanced object. It will wait for all tasks to be
   // done and release the session from the execution manager.
@@ -158,8 +161,9 @@ class SessionAdvanced : public SessionInterface {
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
       const DecodeConfig& decode_config) override ABSL_LOCKS_EXCLUDED(mutex_);
 
-  absl::StatusOr<BenchmarkInfo> GetBenchmarkInfo() override
-      ABSL_LOCKS_EXCLUDED(mutex_);
+  // Does not acquire `mutex_`, so it is safe to call from streaming callbacks
+  // that run while the execution thread holds the executor lock.
+  absl::StatusOr<BenchmarkInfo> GetBenchmarkInfo() override;
 
   absl::StatusOr<BenchmarkInfo*> GetMutableBenchmarkInfo() override;
 
@@ -172,16 +176,30 @@ class SessionAdvanced : public SessionInterface {
   // Rewinds the session to the given checkpoint.
   absl::Status RewindToCheckpoint(absl::string_view label) override;
 
+  // Save the current step and processed context with the name `label`. Saved
+  // contexts are single-use and are consumed upon restore.
+  absl::Status SaveContext(absl::string_view label) override;
+
+  // Restores the session to the given saved context, restoring and consuming
+  // the processed context.
+  absl::Status RestoreContext(absl::string_view label) override;
+
   // Rewinds the session to a specific step number.
   absl::Status RewindToStep(int step) override;
 
   // Get the current step of the session.
   absl::StatusOr<int> GetCurrentStep() const override;
 
+  // Cancels the ongoing inference process.
+  //
+  // NOTE: Reusing the session after calling CancelProcess() is neither
+  // recommended nor supported. Calling CancelProcess() leaves the session
+  // state poisoned, and subsequent operations may fail or behave incorrectly.
+  //
   // TODO(b/450903294): Add rollback history support for Session and
   // Conversation.
   void CancelProcess() override {
-    ABSL_LOG(INFO) << "SessionAdvanced::CancelProcess";
+    ABSL_VLOG(1) << "SessionAdvanced::CancelProcess";
     auto execution_manager_lock = execution_manager_.lock();
     if (execution_manager_lock == nullptr) {
       ABSL_LOG(ERROR) << "Execution manager is not available.";
@@ -196,6 +214,13 @@ class SessionAdvanced : public SessionInterface {
   const SessionConfig& GetSessionConfig() const override {
     return session_info_->session_config;
   }
+
+  // Returns debug info for this session.
+  std::optional<SessionDebugInfo> GetSessionDebugInfo() const override;
+
+  // Returns the LiteRT environment associated with this session's engine,
+  // if available.
+  absl::StatusOr<const ::litert::Environment*> GetEnvironment() const override;
 
   absl::Status WaitUntilDone() override {
     auto execution_manager_lock = execution_manager_.lock();
@@ -216,7 +241,7 @@ class SessionAdvanced : public SessionInterface {
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) override
       ABSL_LOCKS_EXCLUDED(mutex_);
 
- private:
+ protected:
   // The state of the session.
   // * `kFresh` means the session is just created and
   //   hasn't been prefilled yet.
@@ -236,21 +261,23 @@ class SessionAdvanced : public SessionInterface {
                            std::shared_ptr<const SessionInfo> session_info,
                            SessionState session_state = SessionState::kFresh,
                            absl::flat_hash_set<TaskId> last_task_ids = {},
-                           std::atomic<int>* living_sessions_count = nullptr)
+                           std::atomic<int>* living_sessions_count = nullptr,
+                           const Engine* engine = nullptr)
       : session_id_(session_id),
         execution_manager_(execution_manager),
         tokenizer_(tokenizer),
         session_info_(session_info),
         session_state_(session_state),
         last_task_ids_(last_task_ids),
-        living_sessions_count_(living_sessions_count) {
+        living_sessions_count_(living_sessions_count),
+        engine_(engine) {
     if (living_sessions_count_) {
       (*living_sessions_count_)++;
     }
   }
 
   // The implementation of CloneAsync which assumes mutex_ is locked.
-  absl::StatusOr<std::unique_ptr<SessionInterface>> CloneAsyncLocked(
+  virtual absl::StatusOr<std::unique_ptr<SessionInterface>> CloneAsyncLocked(
       absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
@@ -276,6 +303,7 @@ class SessionAdvanced : public SessionInterface {
     int step;
     SessionState state;
     absl::flat_hash_set<TaskId> last_task_ids;
+    std::unique_ptr<ProcessedContext> processed_context = nullptr;
   };
 
   // The checkpoint map for the session.
@@ -287,6 +315,9 @@ class SessionAdvanced : public SessionInterface {
 
   // Pointer to the counter of living sessions in Engine.
   std::atomic<int>* living_sessions_count_;
+
+  // Non-owning pointer to the Engine that created this session.
+  const Engine* engine_;
 };
 
 }  // namespace litert::lm

@@ -26,7 +26,11 @@ struct FastVlmDataProcessorConfig {
 };
 
 // Arguments for FastVlmDataProcessor.
-struct FastVlmDataProcessorArguments {};
+struct FastVlmDataProcessorArguments {
+  // Whether to only dry run the media preprocessing, to count the tokens the
+  // input consumes. See ModelDataProcessor::WithDryRun().
+  bool dry_run = false;
+};
 
 }  // namespace litert::lm
 

@@ -26,6 +26,12 @@ nlohmann::ordered_json ConvertJsonValue(const JsonValue& json_value) {
   } else if (json_value.is_bool()) {
     return nlohmann::ordered_json(json_value.get_bool());
   } else if (json_value.is_number()) {
+    // Check for an integer first: is_number() is also true for integers, and
+    // routing them through the f64 accessor would serialize `1000` as
+    // `1000.0`, which strict consumers reject when the schema says "integer".
+    if (json_value.is_integer()) {
+      return nlohmann::ordered_json(json_value.get_integer());
+    }
     return nlohmann::ordered_json(json_value.get_number());
   } else if (json_value.is_string()) {
     return nlohmann::ordered_json(json_value.get_string());

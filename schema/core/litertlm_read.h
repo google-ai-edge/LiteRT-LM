@@ -60,19 +60,16 @@ bool IsLiteRTLMFile(std::istream& stream);
 
 struct LitertlmHeader {
   std::unique_ptr<uint8_t[]> buffer;
-  const LiteRTLMMetaData* metadata;
+  const LiteRTLMMetaData* metadata = nullptr;
   uint32_t major_version = 0;
   uint32_t minor_version = 0;
   uint32_t patch_version = 0;
 
   // Default constructor
-  LitertlmHeader() : buffer(nullptr), metadata(nullptr) {}
+  LitertlmHeader() = default;
 
   // Constructor that takes ownership of the buffer.
-  explicit LitertlmHeader(std::unique_ptr<uint8_t[]>&& buffer_)
-      : buffer(std::move(buffer_)) {
-    reset(std::move(buffer_));
-  }
+  explicit LitertlmHeader(std::unique_ptr<uint8_t[]> buffer_);
 
   // Disable copy constructor and assignment operator to prevent incorrect
   // copying.
@@ -81,20 +78,11 @@ struct LitertlmHeader {
 
   // Add a move constructor and move assignment operator for proper transfer of
   // ownership
-  LitertlmHeader(LitertlmHeader&& other) noexcept
-      : buffer(std::move(other.buffer)), metadata(other.metadata) {
-    other.metadata = nullptr;
-  }
+  LitertlmHeader(LitertlmHeader&& other) noexcept;
+  LitertlmHeader& operator=(LitertlmHeader&& other) noexcept;
 
   // reset function
-  void reset(std::unique_ptr<uint8_t[]>&& buffer_) {
-    buffer = std::move(buffer_);
-    if (buffer) {
-      metadata = GetLiteRTLMMetaData(buffer.get());
-    } else {
-      metadata = nullptr;
-    }
-  }
+  void reset(std::unique_ptr<uint8_t[]> buffer_);
 
   ~LitertlmHeader() {
     // No need to delete, unique_ptr handles it.

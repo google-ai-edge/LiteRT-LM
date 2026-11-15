@@ -97,7 +97,7 @@ LLGuidance constraints can be specified as Regex, JSON Schema, or Lark grammars.
 Constrain the output to match a regular expression.
 
 ```cpp
-#include "runtime/components/logits_processor/constrained_decoding/llg_constraint_config.h"
+#include "runtime/components/constrained_decoding/llg_constraint_config.h"
 
 // ...
 
@@ -190,17 +190,6 @@ class MyCustomConstraint : public litert::lm::Constraint {
     int step_;
   };
 
-  // A custom bitmap that allows only a single specified token.
-  class SingleAllowedTokenBitmap : public litert::lm::Bitmap {
-   public:
-    explicit SingleAllowedTokenBitmap(int allowed_token)
-        : allowed_token_(allowed_token) {}
-    bool Get(int index) const override { return index == allowed_token_; }
-
-   private:
-    int allowed_token_;
-  };
-
   std::unique_ptr<State> Start() const override {
     return std::make_unique<MyState>(0);
   }
@@ -219,15 +208,17 @@ class MyCustomConstraint : public litert::lm::Constraint {
     return std::make_unique<MyState>(my_state.step() + 1);
   }
 
-  absl::StatusOr<std::unique_ptr<litert::lm::Bitmap>> ComputeBitmap(
+  absl::StatusOr<std::unique_ptr<litert::lm::LogitMask>> ComputeMask(
       const State& state) const override {
     const auto& my_state = static_cast<const MyState&>(state);
     if (my_state.step() == 0) {
       // In the first step, only allow token ID 42.
-      return std::make_unique<SingleAllowedTokenBitmap>(42);
+      return litert::lm::BitmapLogitMask::CreateSingleAllowedToken(
+          GetVocabularySize(), 42);
     } else {
       // In the second step, only allow token ID 99.
-      return std::make_unique<SingleAllowedTokenBitmap>(99);
+      return litert::lm::BitmapLogitMask::CreateSingleAllowedToken(
+          GetVocabularySize(), 99);
     }
   }
 };
@@ -250,7 +241,14 @@ auto response = conversation->SendMessage(
 A variant configuration passed to `ConversationConfig`.
 
 -   `LlGuidanceConfig`: Configures LLGuidance.
-    -   `eos_id`: Optional override for the End-of-Sequence token ID.
+    -   `eos_ids`: Optional list of token IDs that end generation. If empty,
+        defaults to all single-token stop sequences configured in
+        [`SessionConfig::GetStopTokenIds()`][SessionConfig] (populated from the
+        model's [`LlmMetadataProto.stop_tokens`][LlmMetadataProto] or set via
+        [`SessionConfig::SetStopTokenIds()`][SessionConfig]). Multi-token stop
+        sequences are ignored because LLGuidance EOS tokens must be single IDs.
+        If no single-token stop sequences are found, initialization returns
+        `absl::InvalidArgumentError`.
 -   `ExternalConstraintConfig`: Empty struct (marker) to enable external
     constraints.
 
@@ -264,3 +262,6 @@ A variant argument passed via `OptionalArgs` to `SendMessage`.
 -   `ExternalConstraintArg`:
     -   `constraint`: `std::unique_ptr<Constraint>`. Ownership is transferred to
         the conversation object for that request.
+
+[SessionConfig]: https://github.com/google-ai-edge/LiteRT-LM/blob/main/runtime/engine/engine_settings.h "litert::lm::SessionConfig"
+[LlmMetadataProto]: https://github.com/google-ai-edge/LiteRT-LM/blob/main/runtime/proto/llm_metadata.proto "litert.lm.proto.LlmMetadata"

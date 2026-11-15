@@ -40,6 +40,10 @@ message Channel {
 
   // A string that marks the end of the channel, e.g. "<channel|>".
   string end = 3;
+
+  // Whether this channel contains reasoning/thinking content. When true, text
+  // from this channel will also be copied to message["reasoning_content"].
+  optional bool is_reasoning_channel = 4;
 }
 
 // Prompt template used by the session to format the input prompt.
@@ -54,8 +58,178 @@ message PromptTemplates {
   optional PromptAffixes system = 3;
 }
 
+// Configuration for parsing tool/function calls from model outputs.
+//
+// Parsing operates in two stages:
+//
+// 1. **Fence extraction (`fence_start` / `fence_end`)**:
+//    The parser scans the model response for blocks delimited by
+//    `fence_start` and `fence_end`:
+//
+//    ```
+//    <fence_start>
+//    <tool_call_regex>
+//    <fence_end>
+//    ```
+//
+//    - **Multiple tool call fences**: A single model response may contain
+//      multiple fenced blocks interleaved with regular text:
+//
+//      ```
+//      Optional text before...
+//      <fence_start>
+//      <tool_call_regex>
+//      <fence_end>
+//      Optional text between...
+//      <fence_start>
+//      <tool_call_regex>
+//      <fence_end>
+//      Optional text after...
+//      ```
+//
+//      All text outside the fences is collected into the message's `content`
+//      array, and tool calls parsed from every fenced block are appended in
+//      order to the message's `tool_calls` array.
+//
+// 2. **Inner syntax parsing (`syntax_config`)**:
+//    The content inside each fenced block is parsed according to
+//    `syntax_config` (e.g., `regex_syntax`).
+//
+//    - **Multiple tool calls inside a single fence**: A single fenced block may
+//      contain multiple tool calls back-to-back:
+//
+//      ```
+//      <fence_start>
+//      <tool_call_regex>
+//      <tool_call_regex>
+//      <fence_end>
+//      ```
+//
+//      For `regex_syntax`, `tool_call_regex` is matched repeatedly across the
+//      fenced block to extract each tool call in order.
+//
+// Example (Qwen 3.5 XML format):
+//   Model output:
+//   ```
+//   <tool_call>
+//   <function=get_weather>
+//   <parameter=location>
+//   Paris
+//   </parameter>
+//   </function>
+//   </tool_call>
+//   ```
+//   Configuration:
+//   ```
+//   tool_call_config {
+//     fence_start: "<tool_call>"
+//     fence_end: "</tool_call>"
+//     regex_syntax {
+//       tool_call_regex: "(?s)<function=([^>]+)>(.*?)</function>"
+//       argument_regex: "(?s)<parameter=([^>]+)>\\s*(.*?)\\s*</parameter>"
+//     }
+//   }
+//   ```
+message ToolCallConfig {
+  // The literal string that marks the beginning of a tool call fence block
+  // (e.g., "<tool_call>"). Special regex characters are escaped automatically.
+  optional string fence_start = 1;
+
+  // The literal string that marks the end of a tool call fence block
+  // (e.g., "</tool_call>"). Special regex characters are escaped automatically.
+  optional string fence_end = 2;
+
+  // Regex-based extraction for XML/tag formats (e.g., Qwen 3.5).
+  //
+  // Given the following content inside a fenced block (`fence_start` ...
+  // `fence_end`):
+  //
+  // ```
+  // <function=get_weather>
+  // <parameter=location>
+  // Paris
+  // </parameter>
+  // </function>
+  // ```
+  //
+  // Extraction proceeds in two steps:
+  // 1. `tool_call_regex` matches each `<function=...>` block and captures the
+  //    function name and the inner arguments block.
+  // 2. `argument_regex` matches each `<parameter=...>` block inside that
+  //    arguments block and captures each parameter's key and value.
+  message RegexSyntax {
+    // Regular expression matched repeatedly inside a fenced tool call block to
+    // extract each tool call. Must define two capture groups:
+    //   (1) function name
+    //   (2) arguments block
+    //
+    // For the `<function=get_weather>...</function>` block above with
+    // `tool_call_regex = "(?s)<function=([^>]+)>(.*?)</function>"`:
+    //   - capture group (1): `"get_weather"`
+    //   - capture group (2): `"\n<parameter=location>\nParis\n</parameter>\n"`
+    optional string tool_call_regex = 1;
+
+    // Regular expression matched repeatedly inside the captured arguments block
+    // (capture group (2) of `tool_call_regex`) to extract each parameter. Must
+    // define two capture groups:
+    //   (1) parameter key
+    //   (2) parameter value (kept as a raw string when the tool schema declares
+    //       the parameter as `string`; otherwise parsed as a JSON value if
+    //       valid, or kept as a raw string)
+    //
+    // For the captured arguments block above with
+    // `argument_regex = "(?s)<parameter=([^>]+)>\\s*(.*?)\\s*</parameter>"`:
+    //   - capture group (1): `"location"`
+    //   - capture group (2): `"Paris"`
+    //
+    // If omitted, the entire arguments block (capture group (2) of
+    // `tool_call_regex`) is parsed directly as a JSON object.
+    optional string argument_regex = 2;
+  }
+
+  // The syntax configuration used to parse tool calls inside a fenced block.
+  oneof syntax_config {
+    // Regex-based extraction for XML/tag tool call formats.
+    RegexSyntax regex_syntax = 3;
+  }
+}
+
 // Parameters for Large Language Models (LLM).
 message LlmMetadata {
+  enum TfLiteModelType {
+    // Placeholder for uninitialized model type.
+    TF_LITE_MODEL_TYPE_UNSPECIFIED = 0;
+    // The base model is used for prefill and decode.
+    TF_LITE_PREFILL_DECODE = 1;
+    // The embedding model for the base model.
+    TF_LITE_EMBEDDER = 2;
+    // The per-layer embedding model for the base model.
+    TF_LITE_PER_LAYER_EMBEDDER = 3;
+    // The auxiliary model for the base model.
+    TF_LITE_AUX = 4;
+    // The audio encoder model.
+    TF_LITE_AUDIO_ENCODER_HW = 5;
+    // The end of audio token model.
+    TF_LITE_END_OF_AUDIO = 6;
+    // The vision adapter model.
+    TF_LITE_VISION_ADAPTER = 7;
+    // The vision encoder model.
+    TF_LITE_VISION_ENCODER = 8;
+    // The audio frontend model.
+    TF_LITE_AUDIO_FRONTEND = 9;
+    // The audio adapter model.
+    TF_LITE_AUDIO_ADAPTER = 10;
+    // The text decoder model for the artisan gpu.
+    TF_LITE_ARTISAN_TEXT_DECODER = 11;
+    // The end of vision token model.
+    TF_LITE_END_OF_VISION = 12;
+    // The MTP drafter model.
+    TF_LITE_MTP_DRAFTER = 13;
+    // The MTP auxiliary model.
+    TF_LITE_MTP_AUX = 14;
+    reserved 16, 17, 18, 19;
+  }
+
   // Start token prepended to the beginning of input sequence.
   // If in the future we support multiple start tokens, we can add a new field
   // that is a repeated TokenUnion.
@@ -73,7 +247,11 @@ message LlmMetadata {
   // Default sampler parameters for the LLM model.
   optional SamplerParameters sampler_params = 4;
 
-  // Maximum number of tokens that can be processed by the LLM.
+  // Default context size, in tokens, used to initialize the engine and model.
+  // The model can usually support a longer context, but a smaller default is
+  // usually chosen to balance performance and resource use. It can be
+  // overridden via the API when initializing the engine. If not set (or 0),
+  // the engine uses its own default.
   int32 max_num_tokens = 5;
 
   // LLM model type.
@@ -96,4 +274,28 @@ message LlmMetadata {
   // Note: This field is curently only used by NPU backends for certain models,
   // proceed with caution.
   optional int64 kv_cache_init_value = 10;
+
+  // Whether the model supports thinking/reasoning.
+  //
+  // Note: Models exported prior to this field will return false even if they
+  // support thinking.
+  optional bool supports_thinking = 11;
+
+  // Whether the model supports function calling/tool usage.
+  //
+  // Note: Models exported prior to this field will return false even if they
+  // support function calling.
+  optional bool supports_function_calling = 12;
+
+  // Pad token used to pad input sequences.
+  optional TokenUnion pad_token = 13;
+
+  // The minimum LiteRT-LM runtime version required to run this model (e.g.,
+  // "0.11.0"). Note: This refers to the official LiteRT-LM release version, not
+  // the C API release version.
+  optional string min_runtime_version = 14;
+
+  // Configuration for parsing tool/function calls from model outputs.
+  // Currently only supported when `llm_model_type` is `generic_model`.
+  optional ToolCallConfig tool_call_config = 15;
 }

@@ -16,7 +16,9 @@
 
 import {WasmModule} from '@litertjs/wasm-utils';
 
-import {type ReadableStreamDataStreamWrapper} from './readable_stream_data_stream_wrapper.js';
+import {ReadableStreamDataStreamWrapper, ReadableStreamDataStreamWrapperInterface} from './readable_stream_data_stream_wrapper.js';
+
+export {ReadableStreamDataStreamWrapper};
 
 /**
  * Backend types for LiteRT-LM.
@@ -25,12 +27,11 @@ export const Backend = {
   // Ideally, we'd pull these from the Wasm module, but we want them to be
   // available in JS before the Wasm module is loaded.
   UNSPECIFIED: 0,
-  CPU_ARTISAN: 1,
-  GPU_ARTISAN: 2,
-  CPU: 3,
-  GPU: 4,
-  GOOGLE_TENSOR_ARTISAN: 5,
-  NPU: 6,
+  GPU_ARTISAN: 1,
+  CPU: 2,
+  GPU: 3,
+  GOOGLE_TENSOR_ARTISAN: 4,
+  NPU: 5,
 };
 
 /**
@@ -39,10 +40,72 @@ export const Backend = {
 export type Backend = (typeof Backend)[keyof typeof Backend];
 
 /**
+ * Activation data types for LiteRT-LM executors.
+ */
+export const ActivationDataType = {
+  // Ideally, we'd pull these from the Wasm module, but we want them to be
+  // available in JS before the Wasm module is loaded.
+  FLOAT32: 0,
+  FLOAT16: 1,
+  INT16: 2,
+  INT8: 3,
+} as const;
+
+/**
+ * A LiteRT-LM ActivationDataType.
+ */
+export type ActivationDataType =
+    (typeof ActivationDataType)[keyof typeof ActivationDataType];
+
+/**
+ * How speculative decoding (e.g. MTP) is used during decode.
+ */
+export const SpeculativeDecodingMode = {
+  // Ideally, we'd pull these from the Wasm module, but we want them to be
+  // available in JS before the Wasm module is loaded.
+  OFF: 0,
+  ON: 1,
+  ADAPTIVE: 2,
+} as const;
+
+/**
+ * A LiteRT-LM SpeculativeDecodingMode.
+ */
+export type SpeculativeDecodingMode =
+    (typeof SpeculativeDecodingMode)[keyof typeof SpeculativeDecodingMode];
+
+/**
+ * LiteRT-LM SpeculativeDecodingConfig. Unset fields are undefined, but must be
+ * present when passed to Wasm.
+ */
+export declare interface SpeculativeDecodingConfig {
+  mode: EmscriptenEnumElement<SpeculativeDecodingMode>|undefined;
+  lenience: number|undefined;
+}
+
+/**
  * An object that must be manually deleted to free its memory.
  */
 export declare interface Deletable {
   delete(): void;
+}
+
+/**
+ * The result of a Wasm binding that can fail: either the value or an `Error`.
+ *
+ * Bindings return errors instead of throwing them because throwing from C++
+ * leaks memory and Wasm stack. Use `unwrapWasmResult` to get the value.
+ */
+export type WasmResult<T> = T|Error;
+
+/**
+ * Returns the value of a `WasmResult`, or throws its error.
+ */
+export function unwrapWasmResult<T>(result: WasmResult<T>): T {
+  if (result instanceof Error) {
+    throw result;
+  }
+  return result;
 }
 
 /**
@@ -76,6 +139,20 @@ export declare interface VectorVectorIntConstructor {
 }
 
 /**
+ * A C++ vector of float.
+ */
+export declare interface VectorFloatConstructor {
+  new(): EmscriptenVector<number>;
+}
+
+/**
+ * A C++ vector of EmbeddingResponse.
+ */
+export declare interface VectorEmbeddingResponseConstructor {
+  new(): EmscriptenVector<WasmEmbeddingResponse>;
+}
+
+/**
  * A C++ enum value in Wasm.
  */
 export declare interface EmscriptenEnumElement<T> {
@@ -91,8 +168,7 @@ declare interface ModelAssetsConstructor {
   // `ModelAssetsConstructor` as the class from which `ModelAssets` are
   // constructed, even though we don't use it.
   new(...args: never[]): ModelAssets;  // Do not call.
-  create(modelPath: string): ModelAssets;
-  createStreaming(stream: ReadableStreamDataStream): ModelAssets;
+  createStreaming(stream: ReadableStreamDataStream): WasmResult<ModelAssets>;
 }
 
 declare const ModelAssetsBrand: unique symbol;
@@ -103,7 +179,6 @@ declare const ModelAssetsBrand: unique symbol;
 export declare interface ModelAssets extends Deletable {
   // Prevent accidentally assigning other objects as ModelAssets.
   [ModelAssetsBrand]: void;
-  getPath(): string;
 }
 
 /**
@@ -115,8 +190,15 @@ declare interface EngineSettingsConstructor {
   // constructed, even though we don't use it.
   new(...args: never[]): EngineSettings;  // Do not call.
   createDefault(
-      modelAssets: ModelAssets,
-      backend: EmscriptenEnumElement<Backend>): EngineSettings;
+      modelAssets: ModelAssets, backend: EmscriptenEnumElement<Backend>):
+      Promise<WasmResult<EngineSettings>>;
+  // Embind requires all arguments to be passed; use `undefined` to disable a
+  // modality.
+  createDefaultMultimodal(
+      modelAssets: ModelAssets, backend: EmscriptenEnumElement<Backend>,
+      visionBackend: EmscriptenEnumElement<Backend>|undefined,
+      audioBackend: EmscriptenEnumElement<Backend>|
+      undefined): Promise<WasmResult<EngineSettings>>;
 }
 
 declare const EngineSettingsBrand: unique symbol;
@@ -128,11 +210,25 @@ export declare interface EngineSettings extends Deletable {
   // Prevent accidentally assigning other objects as EngineSettings.
   [EngineSettingsBrand]: void;
   getMutableMainExecutorSettings(): LlmExecutorSettings;
+  /** Returns undefined if vision is not enabled. */
+  getVisionBackend(): EmscriptenEnumElement<Backend>|undefined;
+  /** Returns null if vision is not enabled. */
+  getMutableVisionExecutorSettings(): ExecutorSettingsBase|null;
+  /** Returns undefined if audio is not enabled. */
+  getAudioBackend(): EmscriptenEnumElement<Backend>|undefined;
+  /** Returns null if audio is not enabled. */
+  getMutableAudioExecutorSettings(): ExecutorSettingsBase|null;
+  getMaxVisionTokensPerImage(): number|undefined;
+  setMaxVisionTokensPerImage(maxVisionTokensPerImage: number): void;
+  getMinVisionTokensPerImage(): number|undefined;
+  setMinVisionTokensPerImage(minVisionTokensPerImage: number): void;
   getParallelFileSectionLoading(): boolean;
   setParallelFileSectionLoading(parallelFileSectionLoading: boolean): void;
   getSingleThreadedExecution(): boolean;
   setSingleThreadedExecution(singleThreadedExecution: boolean): void;
   enableBenchmark(): void;
+  getSpeculativeDecodingConfig(): SpeculativeDecodingConfig;
+  setSpeculativeDecodingConfig(config: SpeculativeDecodingConfig): void;
 }
 
 /**
@@ -195,6 +291,11 @@ export declare interface GpuArtisanConfig {
 
   // Whether the submodel should be used if available.
   use_submodel: boolean;
+
+  // For low GPU memory with long contexts, use minimally sized ringbuffers for
+  // local attention. Prevents instantaneous rewinding, but saves a lot of
+  // memory, especially for large models.
+  use_autosized_ringbuffers: boolean;
 }
 
 /**
@@ -234,6 +335,10 @@ export declare interface ExecutorSettingsBase extends Deletable {
   [ExecutorSettingsBaseBrand]: void;
   getCacheDir(): string;
   setCacheDir(cacheDir: string): void;
+  getBackend(): EmscriptenEnumElement<Backend>;
+  getActivationDataType(): EmscriptenEnumElement<ActivationDataType>|undefined;
+  setActivationDataType(
+      activationDataType: EmscriptenEnumElement<ActivationDataType>): void;
 }
 
 /**
@@ -253,16 +358,19 @@ export declare interface LlmExecutorSettings extends ExecutorSettingsBase {
   [LlmExecutorSettingsBrand]: void;
   getMaxNumTokens(): number;
   setMaxNumTokens(maxNumTokens: number): void;
+  getMaxNumImages(): number;
+  setMaxNumImages(maxNumImages: number): void;
   setBackendConfigCpu(cpuConfig: CpuConfig): void;
   setBackendConfigGpu(gpuConfig: GpuConfig): void;
   setBackendConfigGpuArtisan(gpuArtisanConfig: GpuArtisanConfig): void;
-  getBackendConfigCpu(): CpuConfig;
-  getBackendConfigGpu(): GpuConfig;
-  getBackendConfigGpuArtisan(): GpuArtisanConfig;
+  getBackendConfigCpu(): WasmResult<CpuConfig>;
+  getBackendConfigGpu(): WasmResult<GpuConfig>;
+  getBackendConfigGpuArtisan(): WasmResult<GpuArtisanConfig>;
   setSamplerBackend(backend: EmscriptenEnumElement<Backend>): void;
   getSamplerBackend(): EmscriptenEnumElement<Backend>;
   setAdvancedSettings(advancedSettings: AdvancedSettings): void;
-  getAdvancedSettings(): AdvancedSettings;
+  /** Returns undefined if the advanced settings have not been set. */
+  getAdvancedSettings(): AdvancedSettings|undefined;
 }
 
 /**
@@ -274,9 +382,9 @@ declare interface EngineConstructor {
   // constructed, even though we don't use it.
   new(...args: never[]): Engine;  // Do not call.
   createEngine(engineSettings: EngineSettings, inputPromptAsHint: string):
-      Promise<Engine>;
-  createStreaming(engineSettings: EngineSettings, inputPromptAsHint: string):
-      Promise<Engine>;
+      Promise<WasmResult<Engine>>;
+  createLegacyEngine(engineSettings: EngineSettings, inputPromptAsHint: string):
+      Promise<WasmResult<Engine>>;
 }
 
 declare const EngineBrand: unique symbol;
@@ -287,9 +395,9 @@ declare const EngineBrand: unique symbol;
 export declare interface Engine extends Deletable {
   // Prevent accidentally assigning other objects as Engine.
   [EngineBrand]: void;
-  createSession(sessionConfig: SessionConfig): Session;
+  createSession(sessionConfig: SessionConfig): WasmResult<Session>;
   getEngineSettings(): EngineSettings;
-  waitUntilDone(): Promise<void>;
+  waitUntilDone(): Promise<WasmResult<void>>;
 }
 
 /**
@@ -362,6 +470,9 @@ export declare interface SessionConfig extends Deletable {
   setUseExternalSampler(useExternalSampler: boolean): void;
   getMaxOutputTokens(): number;
   setMaxOutputTokens(maxOutputTokens: number): void;
+  /** Unset fields inherit the engine's values. */
+  getSpeculativeDecodingConfig(): SpeculativeDecodingConfig;
+  setSpeculativeDecodingConfig(config: SpeculativeDecodingConfig): void;
 }
 
 /**
@@ -383,10 +494,10 @@ export declare interface Session extends Deletable {
   // Prevent accidentally assigning other objects as Session.
   [SessionBrand]: void;
   getSessionConfig(): SessionConfig;
-  runPrefill(inputs: string[]): Promise<void>;
-  runDecode(): Promise<Responses>;
+  runPrefill(inputs: string[]): Promise<WasmResult<void>>;
+  runDecode(): Promise<WasmResult<Responses>>;
   cancelProcess(): void;
-  clone(): Session;
+  clone(): WasmResult<Session>;
 }
 
 /**
@@ -415,12 +526,12 @@ export declare interface Responses extends Deletable {
  */
 declare interface ConversationConfigConstructor {
   new(...args: never[]): ConversationConfig;  // Do not call.
-  createDefault(engine: Engine): ConversationConfig;
+  createDefault(engine: Engine): WasmResult<ConversationConfig>;
   createCustom(
       engine: Engine, sessionConfig: SessionConfig,
       enableConstrainedDecoding: boolean, prefillPrefaceOnInit: boolean,
       filterChannelContentFromKvCache: boolean,
-      prefaceJson: string): ConversationConfig;
+      prefaceJson: string): WasmResult<ConversationConfig>;
 }
 
 declare const ConversationConfigBrand: unique symbol;
@@ -437,7 +548,8 @@ export declare interface ConversationConfig extends Deletable {
  */
 declare interface ConversationConstructor {
   new(...args: never[]): Conversation;  // Do not call.
-  create(engine: Engine, config: ConversationConfig): Promise<Conversation>;
+  create(engine: Engine, config: ConversationConfig):
+      Promise<WasmResult<Conversation>>;
 }
 
 declare const ConversationBrand: unique symbol;
@@ -447,17 +559,24 @@ declare const ConversationBrand: unique symbol;
  */
 export declare interface Conversation extends Deletable {
   [ConversationBrand]: void;
-  sendMessage(messageJson: string): Promise<string>;
+  /**
+   * @param blobs Binary payloads referenced by `blob_index` in `messageJson`.
+   * @param visualTokenBudget Max vision tokens per image for this message, or
+   *     <= 0 for no budget.
+   */
+  sendMessage(
+      messageJson: string, blobs: Uint8Array[],
+      visualTokenBudget: number): Promise<WasmResult<string>>;
   sendMessageAsync(
-      messageJson: string,
+      messageJson: string, blobs: Uint8Array[],
       callback:
-          (chunk: string|null, isDone: boolean, error: string|null) => void):
-      Promise<void>;
+          (chunk: string|null, isDone: boolean, error: string|null) => void,
+      visualTokenBudget: number): Promise<WasmResult<void>>;
   getHistory(): string;
-  getTokenCount(): number;
+  getTokenCount(): WasmResult<number>;
   getBenchmarkInfo(): BenchmarkInfo;
   cancelProcess(): void;
-  clone(): Conversation;
+  clone(): WasmResult<Conversation>;
 }
 
 /** Benchmark metadata for tracking decoding efficiency. */
@@ -467,12 +586,29 @@ export declare interface BenchmarkInfo {
   lastDecodeTokensPerSecond: number;
   lastDecodeTokenCount: number;
   timeToFirstTokenInSecond: number;
+  /**
+   * Number of speculative decoding (MTP) rounds, accumulated over all decode
+   * turns since the first decode turn.
+   */
+  mtpRounds: number;
+  /** Number of tokens drafted by the MTP drafter. */
+  mtpDraftedTokens: number;
+  /** Number of drafted tokens accepted by the verifier. */
+  mtpAcceptedTokens: number;
+  /** Number of tokens emitted by MTP rounds. */
+  mtpEmittedTokens: number;
+  /**
+   * Number of plain (non-speculative) decode steps, including the steps that
+   * re-prime the MTP drafter.
+   */
+  plainDecodeSteps: number;
 }
 
 
 declare interface ReadableStreamDataStreamConstructor {
   new(...args: never[]): ReadableStreamDataStream;
-  create(stream: ReadableStreamDataStreamWrapper): ReadableStreamDataStream;
+  create(stream: ReadableStreamDataStreamWrapperInterface):
+      ReadableStreamDataStream;
 }
 
 declare const ReadableStreamDataStreamBrand: unique symbol;
@@ -486,12 +622,108 @@ export declare interface ReadableStreamDataStream extends Deletable {
 }
 
 type BackendEnum = EmscriptenEnum<{
-  UNSPECIFIED: Backend; CPU_ARTISAN: Backend; GPU_ARTISAN: Backend;
+  UNSPECIFIED: Backend; GPU_ARTISAN: Backend;
   CPU: Backend;
   GPU: Backend;
   GOOGLE_TENSOR_ARTISAN: Backend;
   NPU: Backend;
 }>;
+
+/**
+ * Input overflow strategies for embedding computations.
+ */
+export const InputOverflowStrategy = {
+  CHUNK_AND_AVERAGE: 0,
+  TRUNCATE: 1,
+  ERROR: 2,
+} as const;
+
+/**
+ * An input overflow strategy.
+ */
+export type InputOverflowStrategy =
+    (typeof InputOverflowStrategy)[keyof typeof InputOverflowStrategy];
+
+/**
+ * Options for configuring the embedding computation.
+ */
+export declare interface EmbeddingOptions {
+  normalize?: boolean;
+  insertSpecialTokens?: boolean;
+  inputOverflowStrategy?: InputOverflowStrategy;
+  visionTokensPerImage?: number;
+  outputSize?: number;
+}
+
+/**
+ * Wasm-level result of an embedding computation.
+ */
+export declare interface WasmEmbeddingResponse {
+  embedding: EmscriptenVector<number>;
+  inputLength: number;
+  truncatedLength?: number;
+  numChunks: number;
+}
+
+declare const EmbeddingExecutorSettingsBrand: unique symbol;
+
+/**
+ * LiteRT-LM EmbeddingExecutorSettings
+ */
+export declare interface EmbeddingExecutorSettings extends ExecutorSettingsBase {
+  [EmbeddingExecutorSettingsBrand]: void;
+  getNumThreads(): number;
+  setNumThreads(numThreads: number): void;
+}
+
+declare interface EmbeddingEngineSettingsConstructor {
+  new(...args: never[]): EmbeddingEngineSettings;  // Do not call.
+  createDefault(
+      modelAssets: ModelAssets, backend: EmscriptenEnumElement<Backend>):
+      WasmResult<EmbeddingEngineSettings>;
+  createDefaultMultimodal(
+      modelAssets: ModelAssets, backend: EmscriptenEnumElement<Backend>,
+      visionBackend?: EmscriptenEnumElement<Backend>,
+      audioBackend?: EmscriptenEnumElement<Backend>):
+      WasmResult<EmbeddingEngineSettings>;
+}
+
+declare const EmbeddingEngineSettingsBrand: unique symbol;
+
+/**
+ * LiteRT-LM EmbeddingEngineSettings
+ */
+export declare interface EmbeddingEngineSettings extends Deletable {
+  [EmbeddingEngineSettingsBrand]: void;
+  getMaxInputLength(): number | undefined;
+  setMaxInputLength(maxInputLength?: number): void;
+  getMinInputLength(): number | undefined;
+  setMinInputLength(minInputLength?: number): void;
+  getVisionTokensPerImage(): number | undefined;
+  setVisionTokensPerImage(visionTokensPerImage?: number): void;
+  getMinVisionTokensPerImage(): number | undefined;
+  setMinVisionTokensPerImage(minVisionTokensPerImage?: number): void;
+  getMutableMainExecutorSettings(): EmbeddingExecutorSettings;
+}
+
+declare interface EmbeddingEngineConstructor {
+  new(...args: never[]): EmbeddingEngine;  // Do not call.
+  createEngine(settings: EmbeddingEngineSettings):
+      Promise<WasmResult<EmbeddingEngine>>;
+}
+
+declare const EmbeddingEngineBrand: unique symbol;
+
+/**
+ * LiteRT-LM EmbeddingEngine
+ */
+export declare interface EmbeddingEngine extends Deletable {
+  [EmbeddingEngineBrand]: void;
+  computeEmbedding(input: unknown, options: EmbeddingOptions):
+      Promise<WasmResult<WasmEmbeddingResponse>>;
+  computeEmbeddingBatch(inputs: unknown[], options: EmbeddingOptions):
+      Promise<WasmResult<EmscriptenVector<WasmEmbeddingResponse>>>;
+}
 
 /**
  * Interface for the C++ LiteRt LM bindings.
@@ -501,25 +733,29 @@ export declare interface LiteRtLmWasm extends WasmModule {
   VectorUint32: VectorUint32Constructor;
   VectorInt: VectorIntConstructor;
   VectorVectorInt: VectorVectorIntConstructor;
-  FS: FileSystemApi;
+  VectorFloat: VectorFloatConstructor;
+  VectorEmbeddingResponse: VectorEmbeddingResponseConstructor;
   setupLogging(): void;
+  /** Returns an AdvancedSettings object with the C++ default values. */
+  createDefaultAdvancedSettings(): AdvancedSettings;
   Backend: BackendEnum;
+  ActivationDataType: EmscriptenEnum<{
+    FLOAT32: ActivationDataType; FLOAT16: ActivationDataType;
+    INT16: ActivationDataType;
+    INT8: ActivationDataType;
+  }>;
+  SpeculativeDecodingMode: EmscriptenEnum<{
+    OFF: SpeculativeDecodingMode; ON: SpeculativeDecodingMode;
+    ADAPTIVE: SpeculativeDecodingMode;
+  }>;
   ModelAssets: ModelAssetsConstructor;
   EngineSettings: EngineSettingsConstructor;
   LlmExecutorSettings: LlmExecutorSettingsConstructor;
   Engine: EngineConstructor;
+  EmbeddingEngineSettings: EmbeddingEngineSettingsConstructor;
+  EmbeddingEngine: EmbeddingEngineConstructor;
   SessionConfig: SessionConfigConstructor;
   ReadableStreamDataStream: ReadableStreamDataStreamConstructor;
   ConversationConfig: ConversationConfigConstructor;
   Conversation: ConversationConstructor;
-}
-
-
-// Minimal subset of Emscripten FS api needed in order to write a model file to
-// the in-memory file system. This will likely be removed when we switch to
-// streaming loading.
-
-declare interface FileSystemApi {
-  writeFile(path: string, data: string|ArrayBufferView): void;
-  unlink(path: string): void;
 }

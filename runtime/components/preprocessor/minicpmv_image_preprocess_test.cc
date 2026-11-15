@@ -1,0 +1,247 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "runtime/components/preprocessor/minicpmv_image_preprocess.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include <gtest/gtest.h>
+#include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "runtime/components/preprocessor/image_preprocessor.h"
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
+
+namespace litert::lm {
+namespace {
+
+// Appends `value` to `out` as a little-endian 32-bit word.
+void AppendLe32(uint32_t value, std::string& out) {
+  for (int i = 0; i < 4; ++i) {
+    out.push_back(static_cast<char>((value >> (8 * i)) & 0xFF));
+  }
+}
+
+// Appends `value` to `out` as a little-endian 16-bit word.
+void AppendLe16(uint16_t value, std::string& out) {
+  for (int i = 0; i < 2; ++i) {
+    out.push_back(static_cast<char>((value >> (8 * i)) & 0xFF));
+  }
+}
+
+// Encodes an uncompressed 24-bit BMP. BMP is used rather than PNG because it
+// needs no compressor, and every ImagePreprocessor decode backend reads it.
+// The pixel at (x, y) is a deterministic function of its coordinates unless
+// `solid` is true, in which case every pixel is mid-white.
+std::string MakeBmp(int width, int height, bool solid) {
+  const int row_stride = (width * 3 + 3) / 4 * 4;
+  const uint32_t pixel_bytes = static_cast<uint32_t>(row_stride) * height;
+  std::string bmp;
+  bmp.append("BM");
+  AppendLe32(54 + pixel_bytes, bmp);
+  AppendLe16(0, bmp);
+  AppendLe16(0, bmp);
+  AppendLe32(54, bmp);
+  AppendLe32(40, bmp);
+  AppendLe32(static_cast<uint32_t>(width), bmp);
+  AppendLe32(static_cast<uint32_t>(height), bmp);
+  AppendLe16(1, bmp);
+  AppendLe16(24, bmp);
+  AppendLe32(0, bmp);
+  AppendLe32(pixel_bytes, bmp);
+  AppendLe32(0, bmp);
+  AppendLe32(0, bmp);
+  AppendLe32(0, bmp);
+  AppendLe32(0, bmp);
+  // BMP rows are stored bottom-up, as BGR triples.
+  for (int y = height - 1; y >= 0; --y) {
+    int written = 0;
+    for (int x = 0; x < width; ++x) {
+      const uint8_t r = solid ? 255 : static_cast<uint8_t>((x * 7) % 256);
+      const uint8_t g = solid ? 255 : static_cast<uint8_t>((y * 11) % 256);
+      const uint8_t b = solid ? 255 : static_cast<uint8_t>((x + y) % 256);
+      bmp.push_back(static_cast<char>(b));
+      bmp.push_back(static_cast<char>(g));
+      bmp.push_back(static_cast<char>(r));
+      written += 3;
+    }
+    while (written < row_stride) {
+      bmp.push_back('\0');
+      ++written;
+    }
+  }
+  return bmp;
+}
+
+// Checks the internal consistency every slice must satisfy.
+void ExpectSliceIsWellFormed(const MiniCpmVSlice& slice) {
+  EXPECT_GT(slice.tgt_h, 0);
+  EXPECT_GT(slice.tgt_w, 0);
+  EXPECT_EQ(slice.num_patches, slice.tgt_h * slice.tgt_w);
+  // The fused vision signature cannot accept more patches than its capacity.
+  EXPECT_LE(slice.num_patches, kMiniCpmVMaxPatchLen);
+  EXPECT_EQ(slice.strip.size(), static_cast<size_t>(3) * kMiniCpmVPatchSize *
+                                    slice.num_patches * kMiniCpmVPatchSize);
+  EXPECT_EQ(slice.position_ids.size(),
+            static_cast<size_t>(slice.num_patches));
+  for (const int64_t id : slice.position_ids) {
+    EXPECT_GE(id, 0);
+    EXPECT_LT(id, kMiniCpmVNumPatchesPerSide * kMiniCpmVNumPatchesPerSide);
+  }
+}
+
+class MiniCpmVImagePreprocessTest : public ::testing::Test {
+ protected:
+  // Mirrors production use: one decoder, reused for every image.
+  absl::StatusOr<MiniCpmVSliced> Preprocess(const std::string& image_bytes) {
+    return PreprocessImageSliced(image_bytes, *image_preprocessor_);
+  }
+
+  std::unique_ptr<ImagePreprocessor> image_preprocessor_ =
+      ImagePreprocessor::Create();
+};
+
+TEST_F(MiniCpmVImagePreprocessTest, SmallImageProducesThumbnailOnly) {
+  // 280x280 is well under scale_resolution^2, so no slicing grid is chosen.
+  const auto sliced = Preprocess(MakeBmp(280, 280, /*solid=*/false));
+  ASSERT_OK(sliced);
+  EXPECT_EQ(sliced->grid_x, 0);
+  EXPECT_EQ(sliced->grid_y, 0);
+  ASSERT_EQ(sliced->slices.size(), 1);
+  ExpectSliceIsWellFormed(sliced->slices[0]);
+}
+
+TEST_F(MiniCpmVImagePreprocessTest, LargeImageIsSlicedIntoThumbnailPlusGrid) {
+  // A wide image large enough to trigger the multi-slice path.
+  const auto sliced = Preprocess(MakeBmp(1400, 500, /*solid=*/false));
+  ASSERT_OK(sliced);
+  EXPECT_GT(sliced->grid_x, 0);
+  EXPECT_GT(sliced->grid_y, 0);
+  // A thumbnail plus one sub-image per grid cell.
+  EXPECT_EQ(sliced->slices.size(),
+            1 + static_cast<size_t>(sliced->grid_x) * sliced->grid_y);
+  // A wide image should be split into more columns than rows.
+  EXPECT_GE(sliced->grid_x, sliced->grid_y);
+  for (const MiniCpmVSlice& slice : sliced->slices) {
+    ExpectSliceIsWellFormed(slice);
+  }
+}
+
+TEST_F(MiniCpmVImagePreprocessTest, NormalizationMapsWhiteToOne) {
+  // With mean 0.5 and std 0.5, a saturated pixel normalizes to exactly 1.0,
+  // and resampling a constant field cannot introduce any other value.
+  const auto sliced = Preprocess(MakeBmp(300, 300, /*solid=*/true));
+  ASSERT_OK(sliced);
+  ASSERT_FALSE(sliced->slices.empty());
+  for (const float value : sliced->slices[0].strip) {
+    EXPECT_FLOAT_EQ(value, 1.0f);
+  }
+}
+
+TEST_F(MiniCpmVImagePreprocessTest, PositionIdsAreRowMajorOnTheViTGrid) {
+  const auto sliced = Preprocess(MakeBmp(280, 280, /*solid=*/false));
+  ASSERT_OK(sliced);
+  ASSERT_EQ(sliced->slices.size(), 1);
+  const MiniCpmVSlice& slice = sliced->slices[0];
+  // Ids are bucketized row index * grid side + bucketized column index, so
+  // they are non-decreasing in row-major order and the first is always 0.
+  EXPECT_EQ(slice.position_ids.front(), 0);
+  for (size_t i = 1; i < slice.position_ids.size(); ++i) {
+    const bool same_row =
+        (i % slice.tgt_w) != 0;
+    if (same_row) {
+      EXPECT_GT(slice.position_ids[i], slice.position_ids[i - 1]);
+    }
+  }
+}
+
+TEST_F(MiniCpmVImagePreprocessTest, RejectsUndecodableBytes) {
+  EXPECT_FALSE(Preprocess("not an image").ok());
+}
+
+TEST_F(MiniCpmVImagePreprocessTest,
+       ExtremeAspectRatioClampedToSignatureCapacity) {
+  const auto sliced = Preprocess(MakeBmp(4000, 50, /*solid=*/false));
+  ASSERT_OK(sliced);
+  ASSERT_FALSE(sliced->slices.empty());
+  for (const auto& slice : sliced->slices) {
+    EXPECT_LE(slice.num_patches, kMiniCpmVMaxPatchLen);
+    EXPECT_EQ(slice.num_patches, slice.tgt_w * slice.tgt_h);
+  }
+}
+
+TEST_F(MiniCpmVImagePreprocessTest, EnsureDivideRoundsHalfToEven) {
+  // For 212x448, upscaled height before EnsureDivide is 651:
+  //   651 / 14 = 46.5 -> round-half-to-even gives 46 (lround would give 47).
+  const auto sliced = Preprocess(MakeBmp(212, 448, /*solid=*/false));
+  ASSERT_OK(sliced);
+  ASSERT_EQ(sliced->slices.size(), 1);
+  EXPECT_EQ(sliced->slices[0].tgt_w, 22);
+  EXPECT_EQ(sliced->slices[0].tgt_h, 46);
+}
+
+TEST_F(MiniCpmVImagePreprocessTest,
+       PadSliceToSignatureLengthAndPackSlicePatchesRoundTrip) {
+  // Arrange: 2x1 slice with patch_size = 2 and patches_per_side = 10.
+  constexpr int kPatchSize = 2;
+  constexpr int kPatchesPerSide = 10;
+  MiniCpmVSlice slice;
+  slice.tgt_h = 1;
+  slice.tgt_w = 2;
+  slice.num_patches = 2;
+  slice.position_ids = {0, 35};
+  // Strip shape is [3, 2, 2 * 2] = 24 floats. Fill with distinct values so
+  // row-wise padding and patch-flattening order are verified.
+  slice.strip.resize(3 * kPatchSize * slice.num_patches * kPatchSize);
+  for (size_t i = 0; i < slice.strip.size(); ++i) {
+    slice.strip[i] = static_cast<float>(i + 1);
+  }
+
+  // Act: Pad from 2 patches to 4 patches and pack into 3-input layout.
+  PadSliceToSignatureLength(slice, /*padded_num_patches=*/4, kPatchSize);
+  const MiniCpmVPackedSlice packed =
+      PackSlicePatches(slice, kPatchSize, kPatchesPerSide);
+
+  // Assert
+  EXPECT_EQ(slice.num_patches, 4);
+  EXPECT_EQ(slice.position_ids, (std::vector<int64_t>{0, 35, -1, -1}));
+  ASSERT_EQ(packed.images.size(), 4 * 3 * kPatchSize * kPatchSize);
+  // Padded patches (p = 2, 3) are all zeros.
+  for (size_t i = 2 * 3 * kPatchSize * kPatchSize; i < packed.images.size();
+       ++i) {
+    EXPECT_FLOAT_EQ(packed.images[i], 0.0f);
+  }
+  // Valid patches (p = 0, 1) preserve their strip values.
+  EXPECT_FLOAT_EQ(packed.images[0], 1.0f);
+  EXPECT_FLOAT_EQ(packed.images[1], 2.0f);
+  EXPECT_FLOAT_EQ(packed.images[3 * kPatchSize * kPatchSize + 0], 3.0f);
+  EXPECT_FLOAT_EQ(packed.images[3 * kPatchSize * kPatchSize + 1], 4.0f);
+
+  EXPECT_EQ(packed.positions_xy,
+            (std::vector<int32_t>{0, 0, 1, 0, -1, -1, -1, -1}));
+  EXPECT_EQ(packed.vit_positions,
+            (std::vector<int32_t>{0, 0, 5, 3, -1, -1, -1, -1}));
+
+  // Calling PadSliceToSignatureLength with padded_num_patches <= num_patches is
+  // a no-op and preserves the existing slice.
+  PadSliceToSignatureLength(slice, /*padded_num_patches=*/2, kPatchSize);
+  EXPECT_EQ(slice.num_patches, 4);
+  EXPECT_EQ(slice.strip.size(), 3 * kPatchSize * 4 * kPatchSize);
+}
+
+}  // namespace
+}  // namespace litert::lm

@@ -22,6 +22,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -231,6 +232,39 @@ TEST(LiteRTLMReadTest, DecompressData_InvalidSize) {
   EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
   EXPECT_THAT(status.message(),
               ::testing::HasSubstr("exceeds maximum allowed size"));
+}
+
+TEST(LiteRTLMReadTest, HeaderBufferConstructorAndMove) {
+  const auto input_filename =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/schema/testdata/test_tok_tfl_llm.litertlm";
+  LitertlmHeader source;
+  ASSERT_OK(ReadHeaderFromLiteRTLM(input_filename.string(), &source));
+  const uint8_t* raw_buffer = source.buffer.get();
+  ASSERT_NE(raw_buffer, nullptr);
+
+  LitertlmHeader owned(std::move(source.buffer));
+  ASSERT_EQ(owned.buffer.get(), raw_buffer);
+  ASSERT_NE(owned.metadata, nullptr);
+  EXPECT_EQ(owned.metadata->system_metadata()->entries()->size(), 2);
+  owned.major_version = 1;
+  owned.minor_version = 2;
+  owned.patch_version = 3;
+
+  LitertlmHeader moved(std::move(owned));
+  EXPECT_EQ(moved.buffer.get(), raw_buffer);
+  EXPECT_NE(moved.metadata, nullptr);
+  EXPECT_EQ(moved.major_version, 1);
+  EXPECT_EQ(moved.minor_version, 2);
+  EXPECT_EQ(moved.patch_version, 3);
+
+  LitertlmHeader assigned;
+  assigned = std::move(moved);
+  EXPECT_EQ(assigned.buffer.get(), raw_buffer);
+  EXPECT_NE(assigned.metadata, nullptr);
+  EXPECT_EQ(assigned.major_version, 1);
+  EXPECT_EQ(assigned.minor_version, 2);
+  EXPECT_EQ(assigned.patch_version, 3);
 }
 
 }  // namespace

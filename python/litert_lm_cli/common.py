@@ -22,9 +22,35 @@ import textwrap
 
 import click
 
+from litert_lm_cli import config
 
-def parse_speculative_decoding(unused_ctx, unused_param, value):
-  """Click callback to parse speculative decoding mode strings into bool | None.
+
+def parse_config_opt(unused_ctx, unused_param, value):
+  """Click callback for --config option to set the custom config path."""
+  if value is not None:
+    config.set_config_path(value)
+  return value
+
+
+def config_option(f):
+  """Decorator for the --config option."""
+  f = click.option(
+      "--config",
+      type=click.Path(exists=True, dir_okay=False, path_type=str),
+      default=None,
+      callback=parse_config_opt,
+      is_eager=True,
+      expose_value=False,
+      help=(
+          "Path to a custom config.json file to use instead of the default"
+          " ~/.litert-lm/config.json."
+      ),
+  )(f)
+  return f
+
+
+def parse_bool_opt(unused_ctx, unused_param, value):
+  """Click callback to parse boolean option strings into bool | None.
 
   Args:
     unused_ctx: The click context.
@@ -36,12 +62,75 @@ def parse_speculative_decoding(unused_ctx, unused_param, value):
   """
   if value is None:
     return None
-  value_lower = value.lower()
+  if isinstance(value, bool):
+    return value
+  value_lower = str(value).lower()
   if value_lower == "true":
     return True
   elif value_lower == "false":
     return False
   return value
+
+
+SPECULATIVE_DECODING_MODES = ("on", "off", "adaptive")
+
+
+def normalize_speculative_decoding(value) -> str | None:
+  """Returns the speculative decoding mode of an option or config value.
+
+  Args:
+    value: "on", "off" or "adaptive" (case-insensitive), or, deprecated, a
+      boolean or "true"/"false" (True is "on" and False is "off").
+
+  Returns:
+    "on", "off" or "adaptive", or None if `value` is None.
+
+  Raises:
+    ValueError: If `value` is not a valid speculative decoding mode.
+  """
+  if value is None:
+    return None
+  if isinstance(value, bool):
+    return "on" if value else "off"
+  value_lower = str(value).lower()
+  if value_lower == "true":
+    return "on"
+  if value_lower == "false":
+    return "off"
+  if value_lower in SPECULATIVE_DECODING_MODES:
+    return value_lower
+  raise ValueError(
+      f"Invalid speculative decoding mode: {value!r}. Expected one of"
+      f" {', '.join(SPECULATIVE_DECODING_MODES)}."
+  )
+
+
+def parse_speculative_decoding(ctx, unused_param, value):
+  """Click callback for the --speculative-decoding option.
+
+  Args:
+    ctx: The click context.
+    unused_param: The click parameter.
+    value: "on", "off" or "adaptive", or the deprecated "true"/"false".
+
+  Returns:
+    "on", "off" or "adaptive", or None if not set.
+  """
+  if (
+      value is not None
+      and str(value).lower() in ("true", "false")
+      and (ctx is None or not ctx.resilient_parsing)
+  ):
+    click.echo(
+        click.style(
+            "Warning: '--speculative-decoding true/false' is deprecated and"
+            " will be removed in the future. Please use"
+            " '--speculative-decoding on/off' instead.",
+            fg="yellow",
+        ),
+        err=True,
+    )
+  return normalize_speculative_decoding(value)
 
 
 def cache_dir_value_from_cache_mode(cache: str | None) -> str:
@@ -90,6 +179,7 @@ def huggingface_options(f):
 
 def common_inference_options(f):
   """Decorator for common options shared across commands."""
+  f = config_option(f)
   f = huggingface_options(f)
   f = click.option(
       "--verbose",
@@ -111,17 +201,24 @@ def common_inference_options(f):
           """),
   )(f)
   f = click.option(
-      "--enable-speculative-decoding",
-      type=click.Choice(["true", "false"], case_sensitive=False),
+      "--speculative-decoding",
+      is_flag=False,
+      flag_value="on",
+      type=click.Choice(
+          [*SPECULATIVE_DECODING_MODES, "true", "false"], case_sensitive=False
+      ),
       default=None,
       callback=parse_speculative_decoding,
       help=textwrap.dedent("""\
           \b
-          Speculative decoding mode ("true", "false"). If not set, use the model's configured value.
-            - true: Force enable speculative decoding. It will throw an error if the model does not support it.
-            - false: Force disable speculative decoding.
+          Speculative decoding mode ("on", "off", "adaptive"). If not set, use the model's configured value (off by default).
+            - on: Speculate on every decode step. It will throw an error if the model does not support it.
+            - off: Never speculate.
+            - adaptive: Speculate only while it is measured to be faster than plain decoding.
+          "true" and "false" are deprecated aliases of "on" and "off".
           """),
   )(f)
+
   f = click.option(
       "--backend",
       type=click.Choice(["cpu", "gpu", "npu"], case_sensitive=False),
@@ -138,6 +235,15 @@ def common_inference_options(f):
       ),
   )(f)
   f = click.option(
+      "--gpu-decode-steps-per-sync",
+      type=click.IntRange(min=1),
+      default=None,
+      help=(
+          "The number of decode steps per sync for GPU backend. Only applied"
+          " to supported GPU models. Otherwise, ignored."
+      ),
+  )(f)
+  f = click.option(
       "--activation-data-type",
       type=click.Choice(
           ["fp32", "fp16", "int16", "int8"], case_sensitive=False
@@ -150,6 +256,30 @@ def common_inference_options(f):
           " not always work.  Currently, it can be used to force FP32 mode when"
           " using a GPU backend."
       ),
+  )(f)
+  f = click.option(
+      "--ringbuffers-local-attention",
+      is_flag=False,
+      flag_value="true",
+      type=click.Choice(["true", "false"], case_sensitive=False),
+      default=None,
+      callback=parse_bool_opt,
+      help=(
+          "Whether to use ringbuffers for local attention KV cache to minimize"
+          " memory usage on supported models. When disabled, memory is"
+          " allocated for the full context length, enabling instant rewinding"
+          " at higher memory cost."
+      ),
+  )(f)
+  f = click.option(
+      "--enable-ynnpack",
+      is_flag=False,
+      flag_value="true",
+      type=click.Choice(["true", "false"], case_sensitive=False),
+      default=None,
+      callback=parse_bool_opt,
+      hidden=True,
+      help="Delegate supported CPU operations to YNNPACK before XNNPACK.",
   )(f)
   return f
 

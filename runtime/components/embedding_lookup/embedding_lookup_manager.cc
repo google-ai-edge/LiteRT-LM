@@ -33,11 +33,13 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_end_of_multi_modal.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_multi_modal.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_text.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  //NOLINT
 
 namespace litert::lm {
@@ -50,12 +52,15 @@ EmbeddingLookupManager::Create(
         end_of_multi_modal_embedding_models,
     bool fully_supports_multi_modal, std::optional<std::string> signature_key,
     std::optional<ScopedFile> external_weight_file,
-    litert::Options::ScopedWeightSectionMap external_weight_sections) {
+    litert::Options::ScopedWeightSectionMap external_weight_sections,
+    const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
+        weight_in_memory_map) {
   auto embedding_lookup_manager = std::make_unique<EmbeddingLookupManager>();
   ABSL_RETURN_IF_ERROR(embedding_lookup_manager->Initialize(
       env, text_embedding_model, end_of_multi_modal_embedding_models,
       fully_supports_multi_modal, std::move(signature_key),
-      std::move(external_weight_file), std::move(external_weight_sections)));
+      std::move(external_weight_file), std::move(external_weight_sections),
+      weight_in_memory_map));
   return std::move(embedding_lookup_manager);
 }
 
@@ -65,13 +70,41 @@ EmbeddingLookupManager::Create(
     const litert::Model* absl_nonnull text_embedding_model,
     bool fully_supports_multi_modal, std::optional<std::string> signature_key,
     std::optional<ScopedFile> external_weight_file,
-    litert::Options::ScopedWeightSectionMap external_weight_sections) {
+    litert::Options::ScopedWeightSectionMap external_weight_sections,
+    const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
+        weight_in_memory_map) {
   absl::flat_hash_map<int, const litert::Model*>
       end_of_multi_modal_embedding_models;
   return Create(env, text_embedding_model, end_of_multi_modal_embedding_models,
                 fully_supports_multi_modal, std::move(signature_key),
                 std::move(external_weight_file),
-                std::move(external_weight_sections));
+                std::move(external_weight_sections), weight_in_memory_map);
+}
+
+absl::StatusOr<std::unique_ptr<EmbeddingLookupManager>>
+EmbeddingLookupManager::Create(
+    litert::Environment& env,
+    std::unique_ptr<EmbeddingLookupText> text_embedding_lookup,
+    absl::flat_hash_map<int, const litert::Model*>&
+        end_of_multi_modal_embedding_models,
+    bool fully_supports_multi_modal) {
+  auto embedding_lookup_manager = std::make_unique<EmbeddingLookupManager>();
+  ABSL_RETURN_IF_ERROR(embedding_lookup_manager->Initialize(
+      env, std::move(text_embedding_lookup),
+      end_of_multi_modal_embedding_models, fully_supports_multi_modal));
+  return embedding_lookup_manager;
+}
+
+absl::StatusOr<std::unique_ptr<EmbeddingLookupManager>>
+EmbeddingLookupManager::Create(
+    litert::Environment& env,
+    std::unique_ptr<EmbeddingLookupText> text_embedding_lookup,
+    bool fully_supports_multi_modal) {
+  absl::flat_hash_map<int, const litert::Model*>
+      end_of_multi_modal_embedding_models;
+  return Create(env, std::move(text_embedding_lookup),
+                end_of_multi_modal_embedding_models,
+                fully_supports_multi_modal);
 }
 
 absl::Status EmbeddingLookupManager::UpdateMultiModalEmbeddings(
@@ -93,8 +126,9 @@ absl::Status EmbeddingLookupManager::UpdateMultiModalEmbeddings(
         std::move(*vision_embedding_lookup));
   }
 
-  auto audio_embeddings = inputs.GetAudioEmbeddingsPtr();
-  if (audio_embeddings.ok() && *audio_embeddings != nullptr) {
+  auto projected_audio_embeddings = inputs.GetProjectedAudioEmbeddingsPtr();
+  if (projected_audio_embeddings.ok() &&
+      *projected_audio_embeddings != nullptr) {
     if (!fully_supports_multi_modal_) {
       return absl::InvalidArgumentError(
           "When fully_supports_multi_modal_ is false, multimodal embeddings "
@@ -102,7 +136,8 @@ absl::Status EmbeddingLookupManager::UpdateMultiModalEmbeddings(
           "embedding value of the text embedding table.");
     }
     auto audio_embedding_lookup = EmbeddingLookupMultiModal::Create(
-        *audio_embeddings, ::litert::lm::ExecutorAudioData::kSpecialToken);
+        *projected_audio_embeddings,
+        ::litert::lm::ExecutorAudioData::kSpecialToken);
     if (!audio_embedding_lookup.ok()) {
       return audio_embedding_lookup.status();
     }
@@ -255,7 +290,9 @@ absl::Status EmbeddingLookupManager::Initialize(
         end_of_multi_modal_embedding_models,
     bool fully_supports_multi_modal, std::optional<std::string> signature_key,
     std::optional<ScopedFile> external_weight_file,
-    litert::Options::ScopedWeightSectionMap external_weight_sections) {
+    litert::Options::ScopedWeightSectionMap external_weight_sections,
+    const absl::flat_hash_map<std::string, absl::Span<const std::byte>>*
+        weight_in_memory_map) {
   if (!fully_supports_multi_modal &&
       !end_of_multi_modal_embedding_models.empty()) {
     return absl::InvalidArgumentError(
@@ -265,10 +302,36 @@ absl::Status EmbeddingLookupManager::Initialize(
   fully_supports_multi_modal_ = fully_supports_multi_modal;
   ABSL_ASSIGN_OR_RETURN(
       text_embedding_lookup_,
-      EmbeddingLookupText::Create(env, std::move(text_embedding_model),
-                                  std::move(signature_key),
-                                  std::move(external_weight_file),
-                                  std::move(external_weight_sections)));
+      EmbeddingLookupText::Create(
+          env, std::move(text_embedding_model), std::move(signature_key),
+          std::move(external_weight_file), std::move(external_weight_sections),
+          weight_in_memory_map));
+  for (const auto& [special_token, embedding_model] :
+       end_of_multi_modal_embedding_models) {
+    ABSL_ASSIGN_OR_RETURN(auto end_of_multi_modal_embedding_lookup,
+                          EndOfMultiModalEmbedding::Create(
+                              env, std::move(embedding_model), special_token));
+    end_of_multi_modal_embedding_lookups_.push_back(
+        std::move(end_of_multi_modal_embedding_lookup));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status EmbeddingLookupManager::Initialize(
+    litert::Environment& env,
+    std::unique_ptr<EmbeddingLookupText> text_embedding_lookup,
+    absl::flat_hash_map<int, const litert::Model*>&
+        end_of_multi_modal_embedding_models,
+    bool fully_supports_multi_modal) {
+  if (!fully_supports_multi_modal &&
+      !end_of_multi_modal_embedding_models.empty()) {
+    return absl::InvalidArgumentError(
+        "When fully_supports_multi_modal is false, "
+        "end_of_multi_modal_embedding_models must be empty.");
+  }
+  fully_supports_multi_modal_ = fully_supports_multi_modal;
+  text_embedding_lookup_ = std::move(text_embedding_lookup);
+
   for (const auto& [special_token, embedding_model] :
        end_of_multi_modal_embedding_models) {
     ABSL_ASSIGN_OR_RETURN(auto end_of_multi_modal_embedding_lookup,

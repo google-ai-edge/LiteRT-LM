@@ -53,7 +53,8 @@ class LoRA {
 
   virtual ~LoRA() = default;
 
-  // Returns a duplicated TensorBuffer for the given LoRA tensor name.
+  // Returns a duplicated TensorBuffer for the given LoRA tensor name, for the
+  // signature the LoRA was created with.
   // TensorBuffer is a shared_ptr to the real data, so users are responsible
   // for destroying the TensorBuffer received after use to properly decrease
   // reference count to the underlying data.
@@ -61,10 +62,19 @@ class LoRA {
       const std::string& name) const;
 
   // Returns a map of all the LoRA tensor names to their duplicated
-  // TensorBuffers.
+  // TensorBuffers, for the signature the LoRA was created with.
   // See GetLoRABuffer() for more details about resource ownership.
   absl::StatusOr<absl::flat_hash_map<absl::string_view, litert::TensorBuffer>>
   GetLoRABuffers() const;
+
+  // Returns a map of all the LoRA input names of `signature_name` to their
+  // duplicated TensorBuffers. The buffers hold the same LoRA weights for every
+  // signature, but their buffer types satisfy the requirements of
+  // `signature_name`, which may differ from those of the signature the LoRA
+  // was created with (e.g. "prefill" vs. "decode" on GPU).
+  // See GetLoRABuffer() for more details about resource ownership.
+  absl::StatusOr<absl::flat_hash_map<absl::string_view, litert::TensorBuffer>>
+  GetLoRABuffers(absl::string_view signature_name) const;
 
  private:
   LoRA(std::unique_ptr<LoraData> lora_data,
@@ -75,13 +85,17 @@ class LoRA {
         signature_name_(signature_name) {}
 
   // Initializes the LoRA object by creating TensorBuffers for all LoRA inputs
-  // and copying the data from LoraData.
+  // of all signatures and copying the data from LoraData. Buffers are shared
+  // across signatures whenever their buffer type is supported.
   absl::Status Init();
 
   std::unique_ptr<LoraData> lora_data_;
   const litert::CompiledModel& compiled_model_;
   std::string signature_name_;
-  absl::flat_hash_map<std::string, litert::TensorBuffer> lora_buffers_;
+  // Signature name -> LoRA input name -> TensorBuffer.
+  absl::flat_hash_map<std::string,
+                      absl::flat_hash_map<std::string, litert::TensorBuffer>>
+      lora_buffers_by_signature_;
 };
 
 }  // namespace litert::lm

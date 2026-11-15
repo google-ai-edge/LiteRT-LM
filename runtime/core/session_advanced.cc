@@ -35,19 +35,53 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert  // IWYU pragma: keep
 #include "runtime/core/session_utils.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/proto/sampler_params.pb.h"
+#include "runtime/util/runtime_debugger.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 namespace {
 
 using TaskController = SessionInterface::TaskController;
+
+// Text scoring takes one target, or several targets that are each a single
+// token, which are all scored from the same decode step. Several targets need a
+// session with one output candidate, so that the decode step has one row.
+absl::Status ValidateScoringTargets(
+    const std::vector<absl::string_view>& target_text,
+    support::Tokenizer& tokenizer, int num_output_candidates) {
+  if (target_text.empty()) {
+    return absl::InvalidArgumentError("Target text must not be empty.");
+  }
+  if (target_text.size() == 1) {
+    return absl::OkStatus();
+  }
+  if (num_output_candidates != 1) {
+    return absl::InvalidArgumentError(
+        "Scoring several target texts requires num_output_candidates == 1.");
+  }
+  const bool all_single_token =
+      std::all_of(target_text.begin(), target_text.end(),
+                  [&tokenizer](absl::string_view text) {
+                    absl::StatusOr<support::TokenIds> token_ids =
+                        tokenizer.TextToTokenIds(text);
+                    return token_ids.ok() && token_ids->size() == 1;
+                  });
+  if (!all_single_token) {
+    return absl::InvalidArgumentError(
+        "Target text size should be 1 unless every target text is a single "
+        "token.");
+  }
+  return absl::OkStatus();
+}
 
 }  // namespace
 
@@ -57,20 +91,28 @@ absl::StatusOr<std::unique_ptr<SessionAdvanced>> SessionAdvanced::Create(
     support::Tokenizer* absl_nonnull tokenizer,
     const SessionConfig& session_config,
     std::optional<BenchmarkInfo> benchmark_info,
-    std::atomic<int>* living_sessions_count) {
+    std::atomic<int>* living_sessions_count, const Engine* engine) {
   auto execution_manager_lock = execution_manager.lock();
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
-  ABSL_ASSIGN_OR_RETURN(auto session_id,
-                        execution_manager_lock->RegisterNewSession(
-                            session_config, benchmark_info));
+  SessionConfig config = session_config;
+  if (benchmark_info.has_value() &&
+      benchmark_info->GetBenchmarkParams().num_prefill_tokens() > 0 &&
+      config.GetApplyPromptTemplateInSession()) {
+    ABSL_LOG(INFO) << "Benchmark has num_prefill_tokens > 0; forcing "
+                      "apply_prompt_template_in_session to false.";
+    config.SetApplyPromptTemplateInSession(false);
+  }
+  ABSL_ASSIGN_OR_RETURN(
+      auto session_id,
+      execution_manager_lock->RegisterNewSession(config, benchmark_info));
   ABSL_ASSIGN_OR_RETURN(auto session_info_,
                         execution_manager_lock->GetSessionInfo(session_id));
   return absl::WrapUnique(new SessionAdvanced(
       session_id, execution_manager, tokenizer, session_info_,
       /*session_state=*/SessionState::kFresh,
-      /*last_task_ids=*/{}, living_sessions_count));
+      /*last_task_ids=*/{}, living_sessions_count, engine));
 }
 
 absl::Status SessionAdvanced::RunPrefill(
@@ -300,7 +342,8 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionAdvanced::RunDecodeAsync(
           session_info_->session_config.GetMaxOutputTokens()),
       decode_config.GetThinkingTokenBudget(),
       decode_config.GetThinkingStartTokenIds(),
-      decode_config.GetThinkingEndTokenIds()));
+      decode_config.GetThinkingEndTokenIds(),
+      decode_config.GetDraftTokenIds()));
 
   last_task_ids_ = {task_id};
 
@@ -311,10 +354,6 @@ absl::StatusOr<std::unique_ptr<TaskController>> SessionAdvanced::RunDecodeAsync(
 absl::StatusOr<Responses> SessionAdvanced::RunTextScoring(
     const std::vector<absl::string_view>& target_text,
     bool store_token_lengths) {
-  if (target_text.size() != 1) {
-    // Batch scoring is not supported yet.
-    return absl::InvalidArgumentError("Target text size should be 1.");
-  }
   auto execution_manager_lock = execution_manager_.lock();
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
@@ -340,9 +379,9 @@ SessionAdvanced::RunTextScoringAsync(
     absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
     bool store_token_lengths) {
   absl::MutexLock lock(mutex_);
-  if (target_text.size() != 1) {
-    return absl::InvalidArgumentError("Target text size should be 1.");
-  }
+  ABSL_RETURN_IF_ERROR(ValidateScoringTargets(
+      target_text, *tokenizer_,
+      session_info_->session_config.GetNumOutputCandidates()));
   auto execution_manager_lock = execution_manager_.lock();
   if (execution_manager_lock == nullptr) {
     return absl::FailedPreconditionError("Execution manager is not available.");
@@ -402,7 +441,13 @@ absl::Status SessionAdvanced::GenerateContentStream(
 }
 
 absl::StatusOr<BenchmarkInfo> SessionAdvanced::GetBenchmarkInfo() {
-  absl::MutexLock lock(mutex_);
+  // Intentionally does not acquire `mutex_`: `session_info_` is an immutable
+  // pointer and `mutex_` does not guard `benchmark_info` contents. More
+  // importantly, this method is called from streaming callbacks that run on
+  // the execution thread while it holds the executor lock, whereas
+  // `SaveCheckpoint`/`RewindToStep`/`RestoreContext` acquire the executor lock
+  // while holding `mutex_`. Taking `mutex_` here creates a lock-order inversion
+  // that can deadlock.
   if (session_info_->benchmark_info.has_value()) {
     return session_info_->benchmark_info.value();
   }
@@ -465,9 +510,9 @@ SessionAdvanced::CloneAsyncLocked(
   ABSL_ASSIGN_OR_RETURN(auto session_info,
                         execution_manager_lock->GetSessionInfo(session_id));
 
-  return absl::WrapUnique(new SessionAdvanced(session_id, execution_manager_,
-                                              tokenizer_, session_info,
-                                              session_state_, last_task_ids_));
+  return absl::WrapUnique(new SessionAdvanced(
+      session_id, execution_manager_, tokenizer_, session_info, session_state_,
+      last_task_ids_, living_sessions_count_, engine_));
 }
 
 SessionAdvanced::~SessionAdvanced() {
@@ -527,6 +572,60 @@ absl::Status SessionAdvanced::RewindToCheckpoint(absl::string_view label) {
   return execution_manager_lock->SetCurrentStep(*session_info_, target_step);
 }
 
+absl::Status SessionAdvanced::SaveContext(absl::string_view label) {
+  absl::MutexLock lock(mutex_);
+  auto execution_manager_lock = execution_manager_.lock();
+  if (execution_manager_lock == nullptr) {
+    return absl::FailedPreconditionError("Execution manager is not available.");
+  }
+  ABSL_ASSIGN_OR_RETURN(int current_step,
+                        execution_manager_lock->GetCurrentStep(*session_info_));
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<ProcessedContext> processed_context,
+                        execution_manager_lock->SaveContext(*session_info_));
+  checkpoint_map_[label] = {current_step, session_state_, last_task_ids_,
+                            std::move(processed_context)};
+  return absl::OkStatus();
+}
+
+absl::Status SessionAdvanced::RestoreContext(absl::string_view label) {
+  absl::MutexLock lock(mutex_);
+
+  // Look up the checkpoint step.
+  auto it = checkpoint_map_.find(label);
+  if (it == checkpoint_map_.end()) {
+    return absl::NotFoundError(absl::StrCat("Checkpoint not found: ", label));
+  }
+  if (it->second.processed_context == nullptr) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Checkpoint does not contain context: ", label));
+  }
+  int target_step = it->second.step;
+  session_state_ = it->second.state;
+  // Restore the task dependencies. This is necessary to prevent task-dependency
+  // errors when a task is failed before the rewind. Otherwise, if the task
+  // failed, because of the dependency chain, all tasks after the rewind point
+  // would be considered as failed then finished immediately.
+  last_task_ids_ = it->second.last_task_ids;
+  std::unique_ptr<ProcessedContext> processed_context =
+      std::move(it->second.processed_context);
+  checkpoint_map_.erase(it);
+
+  // Remove all checkpoints after the current step.
+  absl::erase_if(checkpoint_map_, [target_step](const auto& pair) {
+    return pair.second.step > target_step;
+  });
+
+  // Get the execution manager, set the current step, and restore context.
+  auto execution_manager_lock = execution_manager_.lock();
+  if (execution_manager_lock == nullptr) {
+    return absl::FailedPreconditionError("Execution manager is not available.");
+  }
+  ABSL_RETURN_IF_ERROR(
+      execution_manager_lock->SetCurrentStep(*session_info_, target_step));
+  return execution_manager_lock->RestoreContext(*session_info_,
+                                                std::move(processed_context));
+}
+
 absl::Status SessionAdvanced::RewindToStep(int step) {
   absl::MutexLock lock(mutex_);
   auto execution_manager_lock = execution_manager_.lock();
@@ -558,6 +657,25 @@ absl::StatusOr<int> SessionAdvanced::GetCurrentStep() const {
     return absl::FailedPreconditionError("Execution manager is not available.");
   }
   return execution_manager_lock->GetCurrentStep(*session_info_);
+}
+
+std::optional<SessionDebugInfo> SessionAdvanced::GetSessionDebugInfo() const {
+  auto execution_manager_lock = execution_manager_.lock();
+  if (execution_manager_lock == nullptr ||
+      !execution_manager_lock->IsDebuggerEnabled()) {
+    return std::nullopt;
+  }
+  SessionDebugInfo debug_info;
+  debug_info.capture_dir = RuntimeDebugger::GetSessionCaptureDir(session_id_);
+  return debug_info;
+}
+
+absl::StatusOr<const ::litert::Environment*> SessionAdvanced::GetEnvironment()
+    const {
+  if (engine_ == nullptr) {
+    return absl::NotFoundError("Engine is not available.");
+  }
+  return engine_->GetEnvironment();
 }
 
 }  // namespace litert::lm

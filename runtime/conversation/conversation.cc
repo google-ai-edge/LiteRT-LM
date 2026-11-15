@@ -24,6 +24,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -37,27 +38,30 @@
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
-#include "runtime/components/logits_processor/constrained_decoding/constraint_provider.h"
-#include "runtime/components/logits_processor/constrained_decoding/constraint_provider_config.h"
-#include "runtime/components/logits_processor/constrained_decoding/constraint_provider_factory.h"
-#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
-#include "runtime/components/logits_processor/repetition_penalty_config.h"
-#include "runtime/components/logits_processor/suppress_tokens_config.h"
+#include "runtime/components/constrained_decoding/constraint_provider.h"
+#include "runtime/components/constrained_decoding/constraint_provider_config.h"
+#include "runtime/components/constrained_decoding/constraint_provider_factory.h"
+#include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
+#include "runtime/components/constrained_decoding/repetition_penalty_config.h"
+#include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/channel_util.h"
 #include "runtime/conversation/internal_callback_util.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
+#include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/model_data_processor_factory.h"
 #include "runtime/conversation/prompt_utils.h"
 #include "runtime/conversation/thinking_config.h"
+#include "runtime/core/session_utils.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
-#include "runtime/proto/token.pb.h"
 #include "runtime/util/model_type_utils.h"
 #include "runtime/util/status_macros.h"
 
@@ -65,8 +69,6 @@ namespace litert::lm {
 
 namespace {
 
-constexpr absl::string_view kRoleKey = "role";
-constexpr absl::string_view kUser = "user";
 constexpr absl::string_view kChannelsKey = "channels";
 constexpr absl::string_view kChannelContentCheckpoint =
     "channel_content_checkpoint";
@@ -82,17 +84,34 @@ absl::Status IgnoreEmptyInputError(const absl::Status& status) {
   return IsEmptyInputError(status) ? absl::OkStatus() : status;
 }
 
+// Returns whether a prefill did not run because its input does not fit in the
+// context window. This is the case when the context window has no space left
+// for the input, or when it was already full: the prefill then inherits the
+// `kMaxNumTokensReached` end state of the decode that filled it.
+bool IsContextWindowFull(const absl::StatusOr<Responses>& responses) {
+  if (!responses.ok()) {
+    return absl::IsResourceExhausted(responses.status());
+  }
+  return responses->GetTaskState() == TaskState::kMaxNumTokensReached;
+}
+
+// Returns the error to report for a prefill for which `IsContextWindowFull()`
+// is true.
+absl::Status ContextWindowFullError(
+    const absl::StatusOr<Responses>& responses) {
+  if (!responses.ok()) {
+    return responses.status();
+  }
+  return absl::ResourceExhaustedError(
+      "Max number of tokens reached, the context window is full.");
+}
+
 bool IsEmptyPreface(const Preface& preface) {
   auto json_preface = std::get<JsonPreface>(preface);
   return (json_preface.messages.is_null() || json_preface.messages.empty()) &&
          (json_preface.tools.is_null() || json_preface.tools.empty()) &&
          (json_preface.extra_context.is_null() ||
           json_preface.extra_context.empty());
-}
-
-bool IsUserMessage(const nlohmann::ordered_json& json_msg) {
-  return json_msg.contains(kRoleKey) && json_msg[kRoleKey].is_string() &&
-         json_msg[kRoleKey].get<absl::string_view>() == kUser;
 }
 
 std::optional<ThinkingConfig> ResolveThinkingConfig(
@@ -134,6 +153,128 @@ absl::string_view TaskStateToString(TaskState task_state) {
   return "Unknown";
 }
 
+// Validates the visual token budget in `optional_args`, if any, against the
+// max vision tokens per image of `engine`, if set.
+absl::Status ValidateVisualTokenBudgetForEngine(
+    const OptionalArgs& optional_args, const Engine& engine) {
+  if (optional_args.args.has_value() &&
+      engine.GetEngineSettings().GetMaxVisionTokensPerImage().has_value()) {
+    return ValidateVisualTokenBudget(
+        *optional_args.args,
+        *engine.GetEngineSettings().GetMaxVisionTokensPerImage());
+  }
+  return absl::OkStatus();
+}
+
+// Lightweight C++ fallback for rendering turn-based prompts when the Minijinja
+// template engine is disabled (e.g., in `:conversation_lite`).
+std::string ApplyFallbackPromptTemplate(const PromptTemplateInput& input,
+                                        const ConversationConfig& config) {
+  const proto::PromptTemplates& prompt_templates =
+      config.GetSessionConfig().GetPromptTemplates();
+  const proto::LlmModelType& model_type =
+      config.GetSessionConfig().GetLlmModelType();
+  const DataProcessorConfig& processor_config = config.GetProcessorConfig();
+
+  const bool is_gemma4 =
+      model_type.model_type_case() == proto::LlmModelType::kGemma4 ||
+      std::holds_alternative<Gemma4DataProcessorConfig>(processor_config);
+  const bool is_gemma3 =
+      model_type.model_type_case() == proto::LlmModelType::kGemma3 ||
+      model_type.model_type_case() == proto::LlmModelType::kGemma3N ||
+      std::holds_alternative<Gemma3DataProcessorConfig>(processor_config);
+
+  std::string user_prefix = prompt_templates.user().prefix();
+  std::string user_suffix = prompt_templates.user().suffix();
+  std::string model_prefix = prompt_templates.model().prefix();
+  std::string model_suffix = prompt_templates.model().suffix();
+  std::string system_prefix = prompt_templates.system().prefix();
+  std::string system_suffix = prompt_templates.system().suffix();
+
+  if (is_gemma4) {
+    if (!prompt_templates.has_user()) {
+      user_prefix = "<|turn>user\n";
+      user_suffix = "<turn|>\n";
+    }
+    if (!prompt_templates.has_model()) {
+      model_prefix = "<|turn>model\n";
+      model_suffix = "<turn|>\n";
+    }
+    if (!prompt_templates.has_system()) {
+      system_prefix = "<|turn>system\n";
+      system_suffix = "<turn|>\n";
+    }
+  } else if (is_gemma3) {
+    if (!prompt_templates.has_user()) {
+      user_prefix = "<start_of_turn>user\n";
+      user_suffix = "<end_of_turn>\n";
+    }
+    if (!prompt_templates.has_model()) {
+      model_prefix = "<start_of_turn>model\n";
+      model_suffix = "<end_of_turn>\n";
+    }
+    if (!prompt_templates.has_system()) {
+      system_prefix = "<start_of_turn>system\n";
+      system_suffix = "<end_of_turn>\n";
+    }
+  }
+
+  std::string output;
+  if (input.bos_token.is_string()) {
+    absl::StrAppend(&output, input.bos_token.get<std::string>());
+  }
+  if (input.messages.is_array()) {
+    for (const auto& message : input.messages) {
+      if (!message.is_object()) {
+        continue;
+      }
+      const std::string role = message.value("role", "");
+      if (role == "user") {
+        absl::StrAppend(&output, user_prefix);
+      } else if (role == "assistant" || role == "model") {
+        absl::StrAppend(&output, model_prefix);
+      } else if (role == "system") {
+        absl::StrAppend(&output, system_prefix);
+      }
+
+      if (message.contains("content")) {
+        const auto& content = message["content"];
+        if (content.is_string()) {
+          absl::StrAppend(&output, content.get<std::string>());
+        } else if (content.is_array()) {
+          for (const auto& item : content) {
+            if (item.is_string()) {
+              absl::StrAppend(&output, item.get<std::string>());
+            } else if (item.is_object()) {
+              const std::string type = item.value("type", "");
+              if (type == "text" && item.contains("text") &&
+                  item["text"].is_string()) {
+                absl::StrAppend(&output, item["text"].get<std::string>());
+              } else if (type == "image") {
+                absl::StrAppend(&output, "<start_of_image>");
+              } else if (type == "audio") {
+                absl::StrAppend(&output, "<start_of_audio>");
+              }
+            }
+          }
+        }
+      }
+
+      if (role == "user") {
+        absl::StrAppend(&output, user_suffix);
+      } else if (role == "assistant" || role == "model") {
+        absl::StrAppend(&output, model_suffix);
+      } else if (role == "system") {
+        absl::StrAppend(&output, system_suffix);
+      }
+    }
+  }
+  if (input.add_generation_prompt) {
+    absl::StrAppend(&output, model_prefix);
+  }
+  return output;
+}
+
 }  // namespace
 
 absl::StatusOr<ConversationConfig> ConversationConfig::CreateDefault(
@@ -152,7 +293,7 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     bool filter_channel_content_from_kv_cache,
     bool return_error_on_parse_failure, bool return_error_on_max_tokens_reached,
     std::optional<ThinkingConfig> thinking_config, bool stream_tool_calls,
-    const std::string& stream_tool_calls_channel_name) {
+    const std::string& stream_tool_calls_channel_name, bool enable_rewinding) {
   if (preface.has_value() && !std::holds_alternative<JsonPreface>(*preface)) {
     return absl::InvalidArgumentError("Only JsonPreface is supported for now.");
   }
@@ -189,10 +330,11 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     channels = *std::move(overwrite_channels);
   } else if (metadata.has_value()) {
     for (const auto& channel : metadata->channels()) {
-      channels.push_back(
-          litert::lm::Channel{.channel_name = channel.channel_name(),
-                              .start = channel.start(),
-                              .end = channel.end()});
+      channels.push_back(litert::lm::Channel{
+          .channel_name = channel.channel_name(),
+          .start = channel.start(),
+          .end = channel.end(),
+          .is_reasoning_channel = channel.is_reasoning_channel()});
     }
   }
 
@@ -203,15 +345,30 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     }
   }
 
+  // A benchmark with `num_prefill_tokens > 0` resizes every prefill to that
+  // many tokens. Prefilling a reply again without its channel content would
+  // then prefill that many tokens of a truncated or padded history, and record
+  // it as the last prefill turn of the benchmark instead of the prompt.
+  const EngineSettings& engine_settings = engine.GetEngineSettings();
+  if (engine_settings.IsBenchmarkEnabled() &&
+      engine_settings.GetBenchmarkParams()->num_prefill_tokens() > 0) {
+    filter_channel_content_from_kv_cache = false;
+  }
+
   DataProcessorConfig processor_config;
   if (overwrite_processor_config.has_value()) {
     // Use the overwrite processor config if provided.
     processor_config = *overwrite_processor_config;
   } else {
     // Build the processor config from the model metadata.
-    ABSL_ASSIGN_OR_RETURN(processor_config,
-                          CreateDataProcessorConfigFromLlmModelType(
-                              session_config_copy.GetLlmModelType()));
+    std::optional<proto::ToolCallConfig> tool_call_config = std::nullopt;
+    if (metadata.has_value() && metadata->has_tool_call_config()) {
+      tool_call_config = metadata->tool_call_config();
+    }
+    ABSL_ASSIGN_OR_RETURN(
+        processor_config,
+        CreateDataProcessorConfigFromLlmModelType(
+            session_config_copy.GetLlmModelType(), tool_call_config, channels));
   }
 
   return ConversationConfig(
@@ -220,7 +377,7 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
       std::move(constraint_provider_config), std::move(channels),
       filter_channel_content_from_kv_cache, return_error_on_parse_failure,
       return_error_on_max_tokens_reached, thinking_config, stream_tool_calls,
-      stream_tool_calls_channel_name);
+      stream_tool_calls_channel_name, enable_rewinding);
 }
 
 absl::StatusOr<std::string>
@@ -241,8 +398,8 @@ Conversation::GetSingleTurnTextFromSingleTurnTemplate(
   }
   ABSL_ASSIGN_OR_RETURN(
       auto result,
-      model_data_processor_->RenderSingleTurnTemplate(
-          history_,
+      RenderSingleTurnTemplate(
+          *model_data_processor_, history_,
           config_.prefill_preface_on_init() ? JsonPreface() : preface_, message,
           prompt_template_,
           /*current_is_appending_message=*/is_appending_message_,
@@ -280,16 +437,11 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
         model_data_processor_->MessageToTemplateInput(history_msg));
     old_tmpl_input.messages.push_back(message_tmpl_input);
   }
-  nlohmann::ordered_json messages =
-      message.is_array() ? message : nlohmann::ordered_json::array({message});
+  ABSL_ASSIGN_OR_RETURN(nlohmann::ordered_json message_tmpl_input,
+                        model_data_processor_->MessageToTemplateInput(message));
   if (history_.empty() && !config_.prefill_preface_on_init()) {
     PromptTemplateInput new_tmpl_input = std::move(old_tmpl_input);
-    for (const auto& message : messages) {
-      ABSL_ASSIGN_OR_RETURN(
-          nlohmann::ordered_json message_tmpl_input,
-          model_data_processor_->MessageToTemplateInput(message));
-      new_tmpl_input.messages.push_back(message_tmpl_input);
-    }
+    new_tmpl_input.messages.push_back(std::move(message_tmpl_input));
     new_tmpl_input.add_generation_prompt = true;
     return ApplyTemplate(new_tmpl_input);
   }
@@ -301,12 +453,7 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
   }
 
   PromptTemplateInput new_tmpl_input = std::move(old_tmpl_input);
-  for (const auto& message : messages) {
-    ABSL_ASSIGN_OR_RETURN(
-        nlohmann::ordered_json message_tmpl_input,
-        model_data_processor_->MessageToTemplateInput(message));
-    new_tmpl_input.messages.push_back(message_tmpl_input);
-  }
+  new_tmpl_input.messages.push_back(std::move(message_tmpl_input));
   new_tmpl_input.add_generation_prompt = true;
   ABSL_ASSIGN_OR_RETURN(const std::string& new_string,
                         ApplyTemplate(new_tmpl_input));
@@ -322,6 +469,9 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnTextFromFullHistory(
 
 absl::StatusOr<std::string> Conversation::GetSingleTurnText(
     const Message& message, const OptionalArgs& optional_args) {
+  if (!message.is_object()) {
+    return absl::InvalidArgumentError("Message must be a JSON object.");
+  }
   if (!prompt_template_.GetCapabilities().supports_single_turn &&
       optional_args.has_pending_message) {
     return absl::InvalidArgumentError(
@@ -331,11 +481,7 @@ absl::StatusOr<std::string> Conversation::GetSingleTurnText(
         "prompt rendering.");
   }
   if (prompt_template_.GetCapabilities().supports_single_turn) {
-    auto single_turn_text =
-        GetSingleTurnTextFromSingleTurnTemplate(message, optional_args);
-    if (!absl::IsUnimplemented(single_turn_text.status())) {
-      return single_turn_text;
-    }
+    return GetSingleTurnTextFromSingleTurnTemplate(message, optional_args);
   }
   return GetSingleTurnTextFromFullHistory(message, optional_args);
 }
@@ -345,8 +491,9 @@ absl::StatusOr<DecodeConfig> Conversation::CreateDecodeConfig(
     std::optional<NoRepeatNgramConfig> no_repeat_ngram_config,
     std::optional<SuppressTokensConfig> suppress_tokens_config,
     std::optional<ConstraintArg> decoding_constraint,
-    std::optional<int> max_output_tokens,
-    std::optional<ThinkingConfig> thinking_config) {
+    std::optional<ToolChoice> tool_choice, std::optional<int> max_output_tokens,
+    std::optional<ThinkingConfig> thinking_config,
+    std::optional<absl::string_view> open_channel_name) {
   auto decode_config = DecodeConfig::CreateDefault();
 
   if (repetition_penalty_config.has_value()) {
@@ -369,38 +516,78 @@ absl::StatusOr<DecodeConfig> Conversation::CreateDecodeConfig(
     decode_config.SetThinkingTokenBudget(
         thinking_config->thinking_token_budget());
     const Channel* thinking_channel = nullptr;
-    // TODO(b/521921341): Support dynamically configuring the thinking channel
-    // name via LlmMetadata. Use "thought" as the default name for now.
-    for (const auto& channel : config_.GetChannels()) {
-      if (channel.channel_name == "thought") {
-        thinking_channel = &channel;
-        break;
-      }
+    // We assume the thinking channel is the first channel configured for the
+    // conversation.
+    // TODO(b/521921341): Support dynamically identifying or specifying the
+    // thinking channel when multiple channels are present.
+    if (!config_.GetChannels().empty()) {
+      thinking_channel = &config_.GetChannels().front();
     }
     if (thinking_channel != nullptr) {
-      ASSIGN_OR_RETURN(auto start_token_ids,
-                       const_cast<Tokenizer&>(engine_.GetTokenizer())
-                           .TextToTokenIds(thinking_channel->start));
-      decode_config.SetThinkingStartTokenIds(std::move(start_token_ids));
-      ASSIGN_OR_RETURN(auto end_token_ids,
-                       const_cast<Tokenizer&>(engine_.GetTokenizer())
-                           .TextToTokenIds(thinking_channel->end));
+      if (open_channel_name.has_value() &&
+          *open_channel_name == thinking_channel->channel_name) {
+        decode_config.SetThinkingStartTokenIds({});
+      } else {
+        ABSL_ASSIGN_OR_RETURN(auto start_token_ids,
+                              const_cast<Tokenizer&>(engine_.GetTokenizer())
+                                  .TextToTokenIds(thinking_channel->start));
+        decode_config.SetThinkingStartTokenIds(std::move(start_token_ids));
+      }
+      ABSL_ASSIGN_OR_RETURN(auto end_token_ids,
+                            const_cast<Tokenizer&>(engine_.GetTokenizer())
+                                .TextToTokenIds(thinking_channel->end));
       decode_config.SetThinkingEndTokenIds(std::move(end_token_ids));
     }
   } else {
-    decode_config.SetThinkingTokenBudget(0);
+    // If the prompt already opened a channel, e.g. Gemma 4's thought channel
+    // after a tool response when only the extra context enables thinking, hold
+    // the constraint back until the model closes it, as for thinking. The tool
+    // call constraints only accept channels that the model opens itself.
+    const Channel* open_channel = nullptr;
+    if (open_channel_name.has_value() &&
+        (decoding_constraint.has_value() ||
+         config_.constrained_decoding_enabled())) {
+      for (const Channel& channel : config_.GetChannels()) {
+        if (channel.channel_name == *open_channel_name) {
+          open_channel = &channel;
+          break;
+        }
+      }
+    }
+    if (open_channel != nullptr) {
+      decode_config.SetThinkingTokenBudget(-1);  // Unlimited.
+      decode_config.SetThinkingStartTokenIds({});
+      ABSL_ASSIGN_OR_RETURN(auto end_token_ids,
+                            const_cast<Tokenizer&>(engine_.GetTokenizer())
+                                .TextToTokenIds(open_channel->end));
+      decode_config.SetThinkingEndTokenIds(std::move(end_token_ids));
+    } else {
+      decode_config.SetThinkingTokenBudget(0);
+    }
   }
   if (decoding_constraint.has_value() && constraint_provider_ != nullptr) {
     ABSL_ASSIGN_OR_RETURN(constraint_,
                           constraint_provider_->CreateConstraint(
                               std::move(decoding_constraint).value()));
-  } else if (config_.constrained_decoding_enabled() && constraint_ == nullptr &&
+  } else if (config_.constrained_decoding_enabled() &&
              std::holds_alternative<JsonPreface>(preface_)) {
     // Create a constraint from the tools defined in the preface, if any.
-    auto json_preface = std::get<JsonPreface>(preface_);
-    if (!json_preface.tools.is_null()) {
-      auto constraint =
-          model_data_processor_->CreateConstraint(json_preface.tools);
+    const nlohmann::ordered_json& tools = std::get<JsonPreface>(preface_).tools;
+    if (!tools.is_null() && tool_choice.has_value()) {
+      // The tool choice only applies to this message, so its constraint doesn't
+      // replace the default one.
+      auto constraint = model_data_processor_->CreateConstraint(
+          tools, std::move(tool_choice));
+      if (constraint.ok()) {
+        tool_choice_constraint_ = std::move(constraint.value());
+        decode_config.SetConstraint(tool_choice_constraint_.get());
+        return decode_config;
+      }
+      if (!absl::IsUnimplemented(constraint.status())) {
+        return constraint.status();
+      }
+    } else if (!tools.is_null() && constraint_ == nullptr) {
+      auto constraint = model_data_processor_->CreateConstraint(tools);
       if (constraint.ok()) {
         constraint_ = std::move(constraint.value());
       } else if (!absl::IsUnimplemented(constraint.status())) {
@@ -425,8 +612,7 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
       CreateModelDataProcessor(config.GetProcessorConfig(), config.GetPreface(),
                                &engine.GetTokenizer(),
                                session->GetSessionConfig().GetStopTokenIds(),
-                               config.constrained_decoding_enabled(),
-                               config.GetPromptTemplate().GetCapabilities()));
+                               config.constrained_decoding_enabled()));
   std::unique_ptr<ConstraintProvider> constraint_provider;
   if (config.constraint_provider_config().has_value()) {
     ABSL_ASSIGN_OR_RETURN(
@@ -442,21 +628,22 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
   if (config.prefill_preface_on_init() &&
       !IsEmptyPreface(config.GetPreface())) {
     std::string single_turn_text;
-    std::vector<Message> tmp_history;
-    bool fallback =
-        !conversation->prompt_template_.GetCapabilities().supports_single_turn;
-    std::optional<nlohmann::ordered_json> extra_context = std::nullopt;
-    if (config.thinking_config().has_value()) {
-      extra_context = nlohmann::ordered_json::object(
-          {{"enable_thinking", config.thinking_config()->enable_thinking()}});
-    }
-    const auto render_result =
-        conversation->model_data_processor_->RenderSingleTurnTemplate(
-            tmp_history, config.GetPreface(), Message(),
-            config.GetPromptTemplate(),
-            /*current_is_appending_message=*/false,
-            /*append_message=*/false, extra_context);
-    if (fallback || absl::IsUnimplemented(render_result.status())) {
+    if (conversation->prompt_template_.GetCapabilities().supports_single_turn) {
+      std::vector<Message> tmp_history;
+      std::optional<nlohmann::ordered_json> extra_context = std::nullopt;
+      if (config.thinking_config().has_value()) {
+        extra_context = nlohmann::ordered_json::object(
+            {{"enable_thinking", config.thinking_config()->enable_thinking()}});
+      }
+      ABSL_ASSIGN_OR_RETURN(
+          const auto render_result,
+          RenderSingleTurnTemplate(*conversation->model_data_processor_,
+                                   tmp_history, config.GetPreface(), Message(),
+                                   config.GetPromptTemplate(),
+                                   /*current_is_appending_message=*/false,
+                                   /*append_message=*/false, extra_context));
+      single_turn_text = render_result.text;
+    } else {
       // Fallback to the old way of prefilling the preface.
       PromptTemplateInput tmpl_input;
       ABSL_RETURN_IF_ERROR(FillPrefaceForPromptTemplateInput(
@@ -469,10 +656,6 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
       tmpl_input.add_generation_prompt = false;
       ABSL_ASSIGN_OR_RETURN(single_turn_text,
                             conversation->ApplyTemplate(tmpl_input));
-    } else if (render_result.ok()) {
-      single_turn_text = render_result->text;
-    } else {
-      return render_result.status();
     }
     ABSL_ASSIGN_OR_RETURN(
         const auto session_inputs,
@@ -508,7 +691,11 @@ absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
                                                   OptionalArgs optional_args) {
   absl::Notification done;
   absl::Status error_status;
-  bool appending = is_appending_message_;
+  bool appending = false;
+  {
+    absl::MutexLock lock(history_mutex_);  // NOLINT
+    appending = is_appending_message_;
+  }
 
   absl::Status status = SendMessageAsync(
       message,
@@ -561,43 +748,63 @@ absl::Status Conversation::SendMessageAsync(
     const Message& message,
     absl::AnyInvocable<void(absl::StatusOr<Message>)> user_callback,
     OptionalArgs optional_args) {
-  ABSL_ASSIGN_OR_RETURN(const std::string& single_turn_text,
+  if (!message.is_object()) {
+    return absl::InvalidArgumentError("Message must be a JSON object.");
+  }
+  ABSL_RETURN_IF_ERROR(
+      ValidateVisualTokenBudgetForEngine(optional_args, engine_));
+
+  bool prev_is_appending_message = false;
+  {
+    absl::MutexLock lock(history_mutex_);  // NOLINT
+    prev_is_appending_message = is_appending_message_;
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string single_turn_text,
                         GetSingleTurnText(message, optional_args));
   auto open_channel_name =
       GetOpenChannelName(single_turn_text, config_.GetChannels());
 
   bool was_history_empty = false;
+  bool is_appending_message = false;
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
     was_history_empty = history_.empty();
-    if (message.is_array()) {
-      for (const auto& message : message) {
-        history_.push_back(message);
-      }
-    } else {
-      history_.push_back(message);
-    }
+    history_.push_back(message);
+    is_appending_message = is_appending_message_;
   }
 
-  // If channel content (e.g. reasoning) needs to be filtered from the KV cache,
-  // we rewind the session to the last user message and compute the inputs that
-  // need to be "refilled" into the session.
-  std::vector<InputData> refill_session_inputs;
-  if (config_.filter_channel_content_from_kv_cache() &&
-      IsUserMessage(message) && !is_appending_message_) {
-    if (channel_content_since_last_user_message_) {
-      ABSL_ASSIGN_OR_RETURN(refill_session_inputs,
-                            RewindAndGetInputDataVector(optional_args));
-      channel_content_since_last_user_message_ = false;
+  // Removes the messages of this turn from the history, e.g. when the turn is
+  // cancelled or its input could not be prefilled.
+  auto remove_turn_from_history = [this, prev_is_appending_message]() {
+    absl::MutexLock lock(history_mutex_);
+    if (!history_.empty()) {
+      history_.pop_back();
     }
+    is_appending_message_ = prev_is_appending_message;
+    checkpoint_message_index_ = std::nullopt;
+    checkpoint_after_user_prefill_ = false;
+  };
 
-    if (refill_session_inputs.empty()) {
-      // If there are no refill session inputs, save a session checkpoint here.
+  // If the prompt template itself opens a channel at the end of the user
+  // prefill (e.g. `<think>\n`), save the checkpoint before prefilling the user
+  // message so that the open channel start tag can also be stripped on rewind.
+  // Otherwise, the checkpoint is saved after prefilling the user message
+  // (PostUserPrefill) right before decoding starts.
+  if (config_.filter_channel_content_from_kv_cache() && !is_appending_message &&
+      open_channel_name.has_value()) {
+    // `SaveCheckpoint` and `SaveContext` read session state synchronously on
+    // the calling thread rather than scheduling a dependent task, so wait for
+    // any background KV-cache refill task from the previous turn to finish
+    // first.
+    ABSL_RETURN_IF_ERROR(session_->WaitUntilDone());
+    if (config_.enable_rewinding()) {
       ABSL_RETURN_IF_ERROR(session_->SaveCheckpoint(kChannelContentCheckpoint));
+    } else {
+      ABSL_RETURN_IF_ERROR(session_->SaveContext(kChannelContentCheckpoint));
     }
-
     absl::MutexLock lock(history_mutex_);
     checkpoint_message_index_ = history_.size() - 1;
+    checkpoint_after_user_prefill_ = false;
   }
 
   nlohmann::ordered_json messages_for_conversion;
@@ -613,19 +820,9 @@ absl::Status Conversation::SendMessageAsync(
     }
   }
   if (messages_for_conversion.is_array()) {
-    if (message.is_array()) {
-      for (const auto& msg : message) {
-        messages_for_conversion.push_back(msg);
-      }
-    } else {
-      messages_for_conversion.push_back(message);
-    }
+    messages_for_conversion.push_back(message);
   } else {
-    if (message.is_array()) {
-      messages_for_conversion = message;
-    } else {
-      messages_for_conversion = nlohmann::ordered_json::array({message});
-    }
+    messages_for_conversion = nlohmann::ordered_json::array({message});
   }
 
   ABSL_ASSIGN_OR_RETURN(auto session_inputs,
@@ -633,15 +830,30 @@ absl::Status Conversation::SendMessageAsync(
                             single_turn_text, messages_for_conversion,
                             optional_args.args.value_or(std::monostate())));
 
-  if (is_appending_message_) {
+  if (is_appending_message) {
+    if (session_inputs.empty()) {
+      user_callback(Message());
+      return absl::OkStatus();
+    }
     ABSL_ASSIGN_OR_RETURN(
         auto task_controller,
         session_->RunPrefillAsync(
-            session_inputs, [callback = std::move(user_callback)](
-                                absl::StatusOr<Responses> responses) mutable {
+            session_inputs,
+            [callback = std::move(user_callback), remove_turn_from_history](
+                absl::StatusOr<Responses> responses) mutable {
+              if (IsContextWindowFull(responses)) {
+                // The input was not prefilled, so it is not part of the
+                // conversation.
+                remove_turn_from_history();
+                callback(ContextWindowFullError(responses));
+                return;
+              }
               if (!responses.ok()) {
                 auto status = IgnoreEmptyInputError(responses.status());
                 if (!status.ok()) {
+                  if (absl::IsCancelled(status)) {
+                    remove_turn_from_history();
+                  }
                   callback(status);
                 } else {
                   callback(Message());
@@ -650,6 +862,11 @@ absl::Status Conversation::SendMessageAsync(
               }
               if (responses->GetTaskState() == TaskState::kDone) {
                 callback(Message());
+              } else if (responses->GetTaskState() == TaskState::kCancelled ||
+                         responses->GetTaskState() ==
+                             TaskState::kDependentTaskCancelled) {
+                remove_turn_from_history();
+                callback(absl::CancelledError("Task cancelled"));
               } else if (IsTaskEndState(responses->GetTaskState())) {
                 callback(absl::InternalError(absl::StrCat(
                     "Prefill failed with task state: ",
@@ -660,149 +877,183 @@ absl::Status Conversation::SendMessageAsync(
     return absl::OkStatus();
   }
 
-  absl::AnyInvocable<void(Message)> complete_message_callback =
-      [this](const Message& complete_message) {
-        absl::MutexLock lock(this->history_mutex_);
-        this->history_.push_back(complete_message);
+  ABSL_ASSIGN_OR_RETURN(
+      auto decode_config,
+      CreateDecodeConfig(
+          std::move(optional_args.repetition_penalty_config),
+          std::move(optional_args.no_repeat_ngram_config),
+          std::move(optional_args.suppress_tokens_config),
+          std::move(optional_args.decoding_constraint),
+          std::move(optional_args.tool_choice), optional_args.max_output_tokens,
+          ResolveThinkingConfig(config_, optional_args), open_channel_name));
 
-        // If the model's output message contains channel content, set a
-        // variable indicating the session needs to be rewound to the last user
-        // message.
-        if (config_.filter_channel_content_from_kv_cache() &&
-            complete_message.contains(kChannelsKey)) {
-          channel_content_since_last_user_message_ = true;
+  auto shared_user_callback =
+      std::make_shared<absl::AnyInvocable<void(absl::StatusOr<Message>)>>(
+          std::move(user_callback));
+  // `SendCompleteMessage` in `internal_callback_util.cc` invokes
+  // `complete_message_callback` synchronously before invoking
+  // `user_callback(Message())` (the null completion sentinel). When channel
+  // content must be stripped from the KV cache, `complete_message_callback`
+  // rewinds to the checkpoint and schedules the refill `RunPrefillAsync` task
+  // asynchronously in the background without blocking
+  // `user_callback(Message())` (unless scheduling the refill fails
+  // synchronously, in which case
+  // `*suppress_completion = true` prevents emitting `Message()` after the
+  // error status).
+  auto suppress_completion = std::make_shared<bool>(false);
+
+  absl::AnyInvocable<void(absl::StatusOr<Message>)> wrapped_user_callback =
+      [shared_user_callback,
+       suppress_completion](absl::StatusOr<Message> message) {
+        if (message.ok() && message->is_null() && *suppress_completion) {
+          return;
         }
+        (*shared_user_callback)(std::move(message));
       };
 
-  absl::AnyInvocable<void()> cancel_callback = [this]() {
-    absl::MutexLock lock(this->history_mutex_);
-    this->history_.pop_back();
-  };
+  auto data_processor_args = optional_args.args.value_or(std::monostate());
+  auto task_group_id = optional_args.task_group_id;
+
+  absl::AnyInvocable<void(Message)> complete_message_callback =
+      [this, shared_user_callback, suppress_completion,
+       optional_args =
+           std::move(optional_args)](const Message& complete_message) {
+        absl::StatusOr<std::vector<InputData>> refill_session_inputs;
+        {
+          absl::MutexLock lock(history_mutex_);
+          history_.push_back(complete_message);
+          if (!config_.filter_channel_content_from_kv_cache() ||
+              !complete_message.contains(kChannelsKey)) {
+            checkpoint_message_index_ = std::nullopt;
+            checkpoint_after_user_prefill_ = false;
+            return;
+          }
+
+          // Rewind to the checkpoint and schedule refilling the model response
+          // without channel content asynchronously in the background.
+          refill_session_inputs = RewindAndGetInputDataVector(optional_args);
+        }
+        if (!refill_session_inputs.ok()) {
+          *suppress_completion = true;
+          (*shared_user_callback)(refill_session_inputs.status());
+          return;
+        }
+        if (refill_session_inputs->empty()) {
+          return;
+        }
+
+        auto refill_task_controller = session_->RunPrefillAsync(
+            *refill_session_inputs, [](absl::StatusOr<Responses> responses) {
+              if (!responses.ok()) {
+                ABSL_LOG(ERROR)
+                    << "Failed to refill KV cache after channel filtering: "
+                    << responses.status();
+              }
+            });
+        if (refill_task_controller.ok()) {
+          AddTaskController(optional_args.task_group_id,
+                            std::move(*refill_task_controller));
+        } else {
+          *suppress_completion = true;
+          (*shared_user_callback)(refill_task_controller.status());
+        }
+      };
 
   auto internal_callback =
       std::make_shared<absl::AnyInvocable<void(absl::StatusOr<Responses>)>>(
           CreateInternalCallback(
-              *model_data_processor_,
-              optional_args.args.value_or(std::monostate()),
-              config_.GetChannels(), std::move(user_callback),
-              std::move(cancel_callback), std::move(complete_message_callback),
+              *model_data_processor_, std::move(data_processor_args),
+              config_.GetChannels(), std::move(wrapped_user_callback),
+              remove_turn_from_history, std::move(complete_message_callback),
               open_channel_name, config_.return_error_on_max_tokens_reached(),
               config_.stream_tool_calls(),
               config_.stream_tool_calls_channel_name()));
 
-  ABSL_ASSIGN_OR_RETURN(
-      auto decode_config,
-      CreateDecodeConfig(std::move(optional_args.repetition_penalty_config),
-                         std::move(optional_args.no_repeat_ngram_config),
-                         std::move(optional_args.suppress_tokens_config),
-                         std::move(optional_args.decoding_constraint),
-                         optional_args.max_output_tokens,
-                         ResolveThinkingConfig(config_, optional_args)));
-
-  std::optional<std::string> task_group_id = optional_args.task_group_id;
-
-  // This lambda contains the async calls to prefill and decode. It is called
-  // immediately if refill_session_inputs is empty. If refill_session_inputs is
-  // not empty, this lambda is called after refill_session_inputs is prefilled.
-  auto run_prefill = [this, session_inputs = std::move(session_inputs),
-                      internal_callback, decode_config,
-                      optional_args =
-                          std::move(optional_args)]() -> absl::Status {
-    ABSL_ASSIGN_OR_RETURN(
-        auto prefill_task_controller,
-        session_->RunPrefillAsync(
-            session_inputs, [this, callback = internal_callback, decode_config,
-                             task_group_id = optional_args.task_group_id](
-                                absl::StatusOr<Responses> responses) mutable {
-              // First, check if prefill returned an error. Ignore errors
-              // caused by empty input, as this is a valid case for triggering
-              // decode only.
-              auto status = IgnoreEmptyInputError(responses.status());
-              // Scenario 1: Prefill failed with an unexpected error.
-              if (!status.ok()) {
-                // If prefill failed, invoke the callback with the error
-                // status and do not proceed to decode.
-                (*callback)(responses.status());
-              } else if (responses.ok() &&
-                         (responses->GetTaskState() == TaskState::kCancelled ||
-                          responses->GetTaskState() ==
-                              TaskState::kMaxNumTokensReached)) {
-                (*callback)(responses);
-              } else if (IsEmptyInputError(responses.status()) ||
-                         (responses.ok() &&
-                          responses->GetTaskState() == TaskState::kDone)) {
-                // Scenario 2: Prefill was skipped due to empty input, or
-                // prefill completed successfully. In either case, we can now
-                // start the decode process.
-
-                // Run decode.
-                auto decode_task_controller = session_->RunDecodeAsync(
-                    [callback](absl::StatusOr<Responses> responses) {
-                      (*callback)(responses);
-                    },
-                    decode_config);
-                // If RunDecodeAsync returns a task controller, it means the
-                // decode task was scheduled successfully. Add the controller
-                // to our map if a task_group_id was provided, so it can be
-                // cancelled later.
-                if (decode_task_controller.ok()) {
-                  AddTaskController(task_group_id,
-                                    std::move(*decode_task_controller));
-                } else {
-                  // If !decode_task_controller.ok(), it means
-                  // RunDecodeAsync failed to schedule. Invoke the callback
-                  // with the error status.
-                  (*callback)(decode_task_controller.status());
-                }
-              }
-            }));
-    AddTaskController(optional_args.task_group_id,
-                      std::move(prefill_task_controller));
-
-    return absl::OkStatus();
-  };
-
-  // If there are refill session inputs, run prefill for the refill session
-  // inputs first, then save a checkpoint, and then run prefill for the
-  // input message.
-  if (!refill_session_inputs.empty()) {
-    auto refill_callback = [this, run_prefill = std::move(run_prefill),
-                            internal_callback](
-                               absl::StatusOr<Responses> responses) mutable {
-      if (!responses.ok()) {
-        (*internal_callback)(responses.status());
-        return;
-      }
-
-      if (responses->GetTaskState() == TaskState::kCancelled ||
-          responses->GetTaskState() == TaskState::kMaxNumTokensReached) {
-        (*internal_callback)(responses);
-        return;
-      }
-
-      if (responses->GetTaskState() == TaskState::kDone) {
-        if (!session_->SaveCheckpoint(kChannelContentCheckpoint).ok()) {
-          (*internal_callback)(absl::InternalError(
-              "Failed to save checkpoint for channel content."));
-          return;
-        }
-
-        if (!run_prefill().ok()) {
-          (*internal_callback)(absl::InternalError("Failed to start prefill."));
-          return;
-        }
-      }
-    };
-    ABSL_ASSIGN_OR_RETURN(
-        auto refill_task_controller,
-        session_->RunPrefillAsync(refill_session_inputs,
-                                  std::move(refill_callback)));
-    AddTaskController(task_group_id, std::move(refill_task_controller));
+  if (session_inputs.empty()) {
+    auto decode_task_controller = session_->RunDecodeAsync(
+        [callback = internal_callback](absl::StatusOr<Responses> responses) {
+          (*callback)(responses);
+        },
+        decode_config);
+    if (decode_task_controller.ok()) {
+      AddTaskController(task_group_id, std::move(*decode_task_controller));
+    } else {
+      (*internal_callback)(decode_task_controller.status());
+    }
     return absl::OkStatus();
   }
 
-  // Run prefill for the input message.
-  return run_prefill();
+  ABSL_ASSIGN_OR_RETURN(
+      auto prefill_task_controller,
+      session_->RunPrefillAsync(
+          session_inputs,
+          [this, callback = internal_callback, decode_config,
+           open_channel_name = std::move(open_channel_name), task_group_id,
+           remove_turn_from_history = std::move(remove_turn_from_history)](
+              absl::StatusOr<Responses> responses) mutable {
+            // First, check if prefill returned an error. Ignore errors
+            // caused by empty input, as this is a valid case for triggering
+            // decode only.
+            auto status = IgnoreEmptyInputError(responses.status());
+            if (IsContextWindowFull(responses)) {
+              // The input was not prefilled, so it is not part of the
+              // conversation.
+              remove_turn_from_history();
+              (*callback)(ContextWindowFullError(responses));
+            } else if (!status.ok()) {
+              // Scenario 1: Prefill failed with an unexpected error.
+              // If prefill failed, invoke the callback with the error
+              // status and do not proceed to decode.
+              (*callback)(responses.status());
+            } else if (responses.ok() &&
+                       IsTaskEndState(responses->GetTaskState()) &&
+                       responses->GetTaskState() != TaskState::kDone) {
+              (*callback)(responses);
+            } else if (IsEmptyInputError(responses.status()) ||
+                       (responses.ok() &&
+                        responses->GetTaskState() == TaskState::kDone)) {
+              // Scenario 2: Prefill was skipped due to empty input, or
+              // prefill completed successfully. In either case, we can now
+              // start the decode process.
+              if (config_.filter_channel_content_from_kv_cache() &&
+                  !open_channel_name.has_value()) {
+                auto save_status =
+                    config_.enable_rewinding()
+                        ? session_->SaveCheckpoint(kChannelContentCheckpoint)
+                        : session_->SaveContext(kChannelContentCheckpoint);
+                if (!save_status.ok()) {
+                  (*callback)(save_status);
+                  return;
+                }
+                absl::MutexLock lock(history_mutex_);
+                checkpoint_message_index_ = history_.size();
+                checkpoint_after_user_prefill_ = true;
+              }
+
+              // Run decode.
+              auto decode_task_controller = session_->RunDecodeAsync(
+                  [callback](absl::StatusOr<Responses> responses) {
+                    (*callback)(responses);
+                  },
+                  decode_config);
+              // If RunDecodeAsync returns a task controller, it means the
+              // decode task was scheduled successfully. Add the controller
+              // to our map if a task_group_id was provided, so it can be
+              // cancelled later.
+              if (decode_task_controller.ok()) {
+                AddTaskController(task_group_id,
+                                  std::move(*decode_task_controller));
+              } else {
+                // If !decode_task_controller.ok(), it means
+                // RunDecodeAsync failed to schedule. Invoke the callback
+                // with the error status.
+                (*callback)(decode_task_controller.status());
+              }
+            }
+          }));
+  AddTaskController(task_group_id, std::move(prefill_task_controller));
+
+  return absl::OkStatus();
 };
 
 absl::StatusOr<Responses> Conversation::RunTextScoring(
@@ -829,10 +1080,59 @@ absl::Status Conversation::RunTextScoringAsync(
 }
 
 absl::StatusOr<int> Conversation::GetTokenCount() const {
+  // Do NOT wait for in-flight session tasks here. Clients call this from
+  // inside `SendMessageAsync` callbacks (e.g. on the final message), which run
+  // while the producing task is still registered as active in the execution
+  // manager; waiting for the session to become idle from that context
+  // deadlocks until `Engine::kDefaultTimeout` expires. Callers that need the
+  // token count to reflect the background KV-cache refill scheduled after
+  // channel filtering should call `WaitUntilDone()` first from a non-callback
+  // thread.
   return session_->GetCurrentStep();
 }
 
+absl::StatusOr<int> Conversation::CountTokens(
+    const std::vector<Message>& messages,
+    const OptionalArgs& optional_args) const {
+  for (const auto& message : messages) {
+    if (!message.is_object()) {
+      return absl::InvalidArgumentError("Message must be a JSON object.");
+    }
+  }
+  absl::MutexLock lock(history_mutex_);  // NOLINT
+
+  ABSL_RETURN_IF_ERROR(
+      ValidateVisualTokenBudgetForEngine(optional_args, engine_));
+  if (messages.empty()) {
+    return 0;
+  }
+
+  // Only what is needed to count the tokens of any media is computed, so the
+  // expensive parts of media preprocessing are skipped.
+  ABSL_ASSIGN_OR_RETURN(DataProcessorArguments dry_run_args,
+                        model_data_processor_->WithDryRun(
+                            optional_args.args.value_or(std::monostate())));
+
+  // const_cast is needed because GetPrefillTextForMessages() is non-const,
+  // even though rendering the prefill text does not mutate conversation state.
+  ABSL_ASSIGN_OR_RETURN(
+      std::string prefill_text,
+      const_cast<Conversation*>(this)->GetPrefillTextForMessages(
+          history_, messages, optional_args,
+          /*include_preface=*/history_.empty() &&
+              !config_.prefill_preface_on_init()));
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<InputData> input_data,
+      model_data_processor_->ToInputDataVector(
+          prefill_text, nlohmann::ordered_json(messages), dry_run_args));
+
+  return CalculateInputDataTokens(input_data, engine_);
+}
+
 absl::StatusOr<BenchmarkInfo> Conversation::GetBenchmarkInfo() {
+  // Must stay non-blocking: clients query the prefill benchmark from the
+  // streaming callback on the first token (TTFT), while the decode task is
+  // still running on the execution thread.
   return session_->GetBenchmarkInfo();
 }
 
@@ -862,8 +1162,7 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
       CreateModelDataProcessor(config_.GetProcessorConfig(),
                                config_.GetPreface(), &engine_.GetTokenizer(),
                                session->GetSessionConfig().GetStopTokenIds(),
-                               config_.constrained_decoding_enabled(),
-                               config_.GetPromptTemplate().GetCapabilities()));
+                               config_.constrained_decoding_enabled()));
   auto status = model_data_processor->CloneState(*model_data_processor_);
   if (!status.ok() && !absl::IsUnimplemented(status)) {
     return status;
@@ -880,9 +1179,9 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
       engine_, std::move(session), std::move(model_data_processor),
       config_.GetPreface(), config_.GetPromptTemplate(), config_,
       std::move(constraint_provider)));
-  new_conversation->is_appending_message_ = is_appending_message_;
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
+    new_conversation->is_appending_message_ = is_appending_message_;
     new_conversation->history_ = history_;
   }
   return new_conversation;
@@ -924,10 +1223,10 @@ absl::StatusOr<std::string> Conversation::RenderPrefaceIntoString(
 absl::StatusOr<std::string> Conversation::GetPrefillTextForMessages(
     absl::Span<const Message> old_messages,
     absl::Span<const Message> new_messages, const OptionalArgs& optional_args,
-    bool include_preface) {
+    bool include_preface, bool add_generation_prompt_to_old) {
   // Create the template context for the `old` string.
   PromptTemplateInput old_context;
-  old_context.add_generation_prompt = false;
+  old_context.add_generation_prompt = add_generation_prompt_to_old;
 
   // Fill the `old` template context with the preface.
   ABSL_RETURN_IF_ERROR(FillPrefaceForPromptTemplateInput(
@@ -976,6 +1275,7 @@ absl::StatusOr<std::string> Conversation::GetPrefillTextForMessages(
 
   // Copy the `old` template context to the `new` template context.
   PromptTemplateInput new_context = old_context;
+  new_context.add_generation_prompt = false;
 
   // Add new messages to the `new` template context.
   nlohmann::ordered_json prefill_messages = nlohmann::ordered_json::array();
@@ -1011,11 +1311,11 @@ absl::StatusOr<std::vector<InputData>>
 Conversation::GetInputDataVectorForMessages(
     absl::Span<const Message> old_messages,
     absl::Span<const Message> new_messages, const OptionalArgs& optional_args,
-    bool include_preface) {
+    bool include_preface, bool add_generation_prompt_to_old) {
   ABSL_ASSIGN_OR_RETURN(
       std::string prefill_text,
       GetPrefillTextForMessages(old_messages, new_messages, optional_args,
-                                include_preface));
+                                include_preface, add_generation_prompt_to_old));
 
   nlohmann::ordered_json prefill_messages = nlohmann::ordered_json::array();
   for (const auto& message : new_messages) {
@@ -1029,28 +1329,35 @@ Conversation::GetInputDataVectorForMessages(
 
 absl::StatusOr<std::vector<InputData>>
 Conversation::RewindAndGetInputDataVector(const OptionalArgs& optional_args) {
-  absl::MutexLock lock(history_mutex_);
   if (!checkpoint_message_index_.has_value()) {
     // If no rewind is needed, return early with empty InputData vector.
     return std::vector<InputData>();
   }
 
-  // Rewind the session to the saved checkpoint.
-  ABSL_RETURN_IF_ERROR(session_->RewindToCheckpoint(kChannelContentCheckpoint));
+  bool add_generation_prompt_to_old = checkpoint_after_user_prefill_;
+
+  // If rewinding enabled, rewind the session to the saved checkpoint.
+  if (config_.enable_rewinding()) {
+    ABSL_RETURN_IF_ERROR(
+        session_->RewindToCheckpoint(kChannelContentCheckpoint));
+  } else {
+    // Otherwise restore the saved context.
+    ABSL_RETURN_IF_ERROR(session_->RestoreContext(kChannelContentCheckpoint));
+  }
 
   // Get the InputData vector for the messages from the checkpoint onward.
   ABSL_ASSIGN_OR_RETURN(
       std::vector<InputData> input_data_vector,
       GetInputDataVectorForMessages(
           absl::MakeSpan(history_).subspan(0, *checkpoint_message_index_),
-          absl::MakeSpan(history_).subspan(
-              *checkpoint_message_index_,
-              history_.size() - *checkpoint_message_index_ - 1),
+          absl::MakeSpan(history_).subspan(*checkpoint_message_index_),
           optional_args,
-          /*include_preface=*/!config_.prefill_preface_on_init()));
+          /*include_preface=*/!config_.prefill_preface_on_init(),
+          add_generation_prompt_to_old));
 
   // Clear the checkpoint message index.
   checkpoint_message_index_ = std::nullopt;
+  checkpoint_after_user_prefill_ = false;
 
   return input_data_vector;
 }
@@ -1058,7 +1365,11 @@ Conversation::RewindAndGetInputDataVector(const OptionalArgs& optional_args) {
 absl::StatusOr<std::string> Conversation::ApplyTemplate(
     PromptTemplateInput& input) {
   StripBlobsFromTemplateInput(input);
-  return prompt_template_.Apply(input);
+  absl::StatusOr<std::string> rendered = prompt_template_.Apply(input);
+  if (absl::IsUnimplemented(rendered.status())) {
+    return ApplyFallbackPromptTemplate(input, config_);
+  }
+  return rendered;
 }
 
 }  // namespace litert::lm

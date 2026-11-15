@@ -14,22 +14,37 @@
 
 #include "runtime/components/sampling_cpu_util.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
-#include <memory>
+#include <limits>
 #include <random>
+#include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "runtime/components/sampling_uniforms.h"
 
 namespace litert::lm {
 namespace {
 
+using ::absl_testing::StatusIs;
 using ::testing::ElementsAre;
 using ::testing::UnorderedElementsAre;
+
+// Returns `count` uniforms drawn from a generator seeded with 0.
+std::vector<float> UniformsFromSeed(int count) {
+  std::default_random_engine rng(0);
+  std::vector<float> uniforms(count);
+  DrawUniforms(rng, absl::MakeSpan(uniforms));
+  return uniforms;
+}
 
 TEST(SamplingCpuUtilTest, TopKTokenIds_BatchSize1) {
   const std::vector<float> logits = {0.1, 0.5, 0.4, 0.2};
@@ -167,33 +182,34 @@ TEST(SamplingCpuUtilTest, Softmax_BatchSize3) {
 
 TEST(SamplingCpuUtilTest, TopKTopPSampling_InvalidInputs) {
   const std::vector<float> probabilities = {0.0, 0.0, 0.3};
-  auto rng = std::make_shared<std::default_random_engine>(0);
+  const std::vector<float> uniforms = UniformsFromSeed(1);
   // Negative k.
   std::vector<std::vector<float>> sampled_scores;
-  auto sampled_ids =
-      TopKTopPSampling(absl::MakeConstSpan(probabilities), /*k=*/-1,
-                       /*p=*/0.5,
-                       /*temperature=*/1.0, rng, /*batch_size=*/1,
-                       /*sequence_size=*/1, sampled_scores);
+  auto sampled_ids = TopKTopPSampling(
+      absl::MakeConstSpan(probabilities), /*k=*/-1,
+      /*p=*/0.5,
+      /*temperature=*/1.0, absl::MakeConstSpan(uniforms), /*batch_size=*/1,
+      /*sequence_size=*/1, sampled_scores);
   EXPECT_FALSE(sampled_ids.ok());
   // Negative p.
   sampled_ids = TopKTopPSampling(absl::MakeConstSpan(probabilities),
                                  /*k=*/1,
-                                 /*p=*/-0.5, /*temperature=*/1.0f, rng,
-                                 /*sequence_size=*/1,
-                                 /*batch_size=*/1, sampled_scores);
+                                 /*p=*/-0.5, /*temperature=*/1.0f,
+                                 absl::MakeConstSpan(uniforms),
+                                 /*batch_size=*/1,
+                                 /*sequence_size=*/1, sampled_scores);
   EXPECT_FALSE(sampled_ids.ok());
 }
 
 TEST(SamplingCpuUtilTest, TopKTopPSampling_BatchSize1) {
   const std::vector<float> probabilities = {0.0, 0.0, 0.3};
-  auto rng = std::make_shared<std::default_random_engine>(0);
+  const std::vector<float> uniforms = UniformsFromSeed(1);
   std::vector<std::vector<float>> sampled_scores;
-  auto sampled_ids =
-      TopKTopPSampling(absl::MakeConstSpan(probabilities), /*k=*/1,
-                       /*p=*/0.5,
-                       /*temperature=*/1.0f, rng, /*batch_size=*/1,
-                       /*sequence_size=*/1, sampled_scores);
+  auto sampled_ids = TopKTopPSampling(
+      absl::MakeConstSpan(probabilities), /*k=*/1,
+      /*p=*/0.5,
+      /*temperature=*/1.0f, absl::MakeConstSpan(uniforms), /*batch_size=*/1,
+      /*sequence_size=*/1, sampled_scores);
   ASSERT_TRUE(sampled_ids.ok());
   EXPECT_EQ(sampled_ids->size(), 1);
   EXPECT_THAT((*sampled_ids)[0], ElementsAre(2));
@@ -205,12 +221,12 @@ TEST(SamplingCpuUtilTest, TopKTopPSampling_BatchSize1_TopK) {
   // Test that the sampler does return a sampled token from the top k
   // instead of always returning the first or the last token.
   const std::vector<float> logits = {-1.0e7f, 1.0f, -1e3f};
-  auto rng = std::make_shared<std::default_random_engine>(0);
+  const std::vector<float> uniforms = UniformsFromSeed(1);
   std::vector<std::vector<float>> sampled_scores;
   auto sampled_ids =
       TopKTopPSampling(absl::MakeConstSpan(logits), /*k=*/3,
                        /*p=*/1.0,
-                       /*temperature=*/1.0f, rng,
+                       /*temperature=*/1.0f, absl::MakeConstSpan(uniforms),
                        /*batch_size=*/1, /*sequence_size=*/1, sampled_scores);
   ASSERT_TRUE(sampled_ids.ok());
   EXPECT_EQ(sampled_ids->size(), 1);
@@ -219,16 +235,116 @@ TEST(SamplingCpuUtilTest, TopKTopPSampling_BatchSize1_TopK) {
   EXPECT_THAT(sampled_scores[0], ElementsAre(1.0));
 }
 
+TEST(SamplingCpuUtilTest, TopKTopPSamplingWithUniforms_PicksByCumulativeMass) {
+  // Probabilities 0.5, 0.3, 0.2 (already in descending order).
+  const std::vector<float> logits = {std::log(0.5f), std::log(0.3f),
+                                     std::log(0.2f)};
+  const std::vector<std::pair<float, int>> uniform_and_expected_id = {
+      {0.0f, 0},  {0.1f, 0},  {0.49f, 0}, {0.51f, 1},
+      {0.79f, 1}, {0.81f, 2}, {0.999f, 2}};
+  for (const auto& [uniform, expected_id] : uniform_and_expected_id) {
+    std::vector<std::vector<float>> sampled_scores;
+    const std::vector<float> uniforms = {uniform};
+    auto sampled_ids = TopKTopPSampling(
+        absl::MakeConstSpan(logits), /*k=*/3, /*p=*/1.0f,
+        /*temperature=*/1.0f, absl::MakeConstSpan(uniforms), /*batch_size=*/1,
+        /*sequence_size=*/1, sampled_scores);
+    ASSERT_TRUE(sampled_ids.ok());
+    EXPECT_THAT((*sampled_ids)[0], ElementsAre(expected_id))
+        << "uniform=" << uniform;
+  }
+}
+
+TEST(SamplingCpuUtilTest, TopKTopPSamplingWithUniforms_ScalesByNucleusMass) {
+  // With p = 0.8 the nucleus is {0, 1} with mass 0.8, so u = 0.7 maps to
+  // 0.56 which falls in token 1's range, and token 2 is never picked.
+  const std::vector<float> logits = {std::log(0.5f), std::log(0.3f),
+                                     std::log(0.2f)};
+  std::vector<std::vector<float>> sampled_scores;
+  std::vector<float> uniforms = {0.7f};
+  auto sampled_ids =
+      TopKTopPSampling(absl::MakeConstSpan(logits), /*k=*/3, /*p=*/0.8f,
+                       /*temperature=*/1.0f, absl::MakeConstSpan(uniforms),
+                       /*batch_size=*/1, /*sequence_size=*/1, sampled_scores);
+  ASSERT_TRUE(sampled_ids.ok());
+  EXPECT_THAT((*sampled_ids)[0], ElementsAre(1));
+
+  uniforms = {0.999f};
+  sampled_ids =
+      TopKTopPSampling(absl::MakeConstSpan(logits), /*k=*/3, /*p=*/0.8f,
+                       /*temperature=*/1.0f, absl::MakeConstSpan(uniforms),
+                       /*batch_size=*/1, /*sequence_size=*/1, sampled_scores);
+  ASSERT_TRUE(sampled_ids.ok());
+  EXPECT_THAT((*sampled_ids)[0], ElementsAre(1));
+}
+
+TEST(SamplingCpuUtilTest, TopKTopPSamplingWithUniforms_PerPositionUniforms) {
+  // Batch 2, sequence 2; each (b, s) uses its own uniform.
+  const std::vector<float> row = {std::log(0.5f), std::log(0.3f),
+                                  std::log(0.2f)};
+  std::vector<float> logits;
+  for (int i = 0; i < 4; ++i)
+    logits.insert(logits.end(), row.begin(), row.end());
+  const std::vector<float> uniforms = {0.1f, 0.6f, 0.9f, 0.3f};
+  std::vector<std::vector<float>> sampled_scores;
+  auto sampled_ids =
+      TopKTopPSampling(absl::MakeConstSpan(logits), /*k=*/3, /*p=*/1.0f,
+                       /*temperature=*/1.0f, absl::MakeConstSpan(uniforms),
+                       /*batch_size=*/2, /*sequence_size=*/2, sampled_scores);
+  ASSERT_TRUE(sampled_ids.ok());
+  EXPECT_THAT((*sampled_ids)[0], ElementsAre(0, 1));
+  EXPECT_THAT((*sampled_ids)[1], ElementsAre(2, 0));
+}
+
+TEST(SamplingCpuUtilTest, TopKTopPSamplingWithUniforms_WrongSize) {
+  const std::vector<float> logits = {0.1f, 0.2f, 0.3f, 0.1f, 0.2f, 0.3f};
+  const std::vector<float> uniforms = {0.5f};
+  std::vector<std::vector<float>> sampled_scores;
+  auto sampled_ids =
+      TopKTopPSampling(absl::MakeConstSpan(logits), /*k=*/3, /*p=*/1.0f,
+                       /*temperature=*/1.0f, absl::MakeConstSpan(uniforms),
+                       /*batch_size=*/1, /*sequence_size=*/2, sampled_scores);
+  EXPECT_THAT(sampled_ids, StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(SamplingCpuUtilTest, TopKTopPSamplingWithUniforms_OutOfRange) {
+  const std::vector<float> logits = {0.1f, 0.2f, 0.3f};
+  for (float uniform : {-0.1f, 1.0f, 1.5f, std::nanf("")}) {
+    const std::vector<float> uniforms = {uniform};
+    std::vector<std::vector<float>> sampled_scores;
+    auto sampled_ids = TopKTopPSampling(
+        absl::MakeConstSpan(logits), /*k=*/3, /*p=*/1.0f,
+        /*temperature=*/1.0f, absl::MakeConstSpan(uniforms), /*batch_size=*/1,
+        /*sequence_size=*/1, sampled_scores);
+    EXPECT_THAT(sampled_ids, StatusIs(absl::StatusCode::kInvalidArgument))
+        << "uniform=" << uniform;
+  }
+}
+
+TEST(SamplingCpuUtilTest, TopKTopPSamplingWithUniforms_GreedyIgnoresUniforms) {
+  const std::vector<float> logits = {0.1f, 5.0f, 0.3f};
+  for (float uniform : {0.0f, 0.5f, 0.999f}) {
+    const std::vector<float> uniforms = {uniform};
+    std::vector<std::vector<float>> sampled_scores;
+    auto sampled_ids = TopKTopPSampling(
+        absl::MakeConstSpan(logits), /*k=*/1, /*p=*/1.0f,
+        /*temperature=*/1.0f, absl::MakeConstSpan(uniforms), /*batch_size=*/1,
+        /*sequence_size=*/1, sampled_scores);
+    ASSERT_TRUE(sampled_ids.ok());
+    EXPECT_THAT((*sampled_ids)[0], ElementsAre(1));
+  }
+}
+
 TEST(SamplingCpuUtilTest, TopKTopPSampling_BatchSize3) {
   // Batch of 3, vocab size of 3. The sampled ids are 2, 1, 0.
   const std::vector<float> logits = {0.0, 0.0, 1.0, 0.0, 1.0,
                                      0.0, 1.0, 0.0, 0.0};
-  auto rng = std::make_shared<std::default_random_engine>(0);
+  const std::vector<float> uniforms = UniformsFromSeed(3);
   std::vector<std::vector<float>> sampled_scores;
-  auto sampled_ids =
-      TopKTopPSampling(absl::MakeConstSpan(logits), /*k=*/2, /*p=*/0.5,
-                       /*temperature=*/0.00001f, rng, /*batch_size=*/3,
-                       /*sequence_size=*/1, sampled_scores);
+  auto sampled_ids = TopKTopPSampling(
+      absl::MakeConstSpan(logits), /*k=*/2, /*p=*/0.5,
+      /*temperature=*/0.00001f, absl::MakeConstSpan(uniforms), /*batch_size=*/3,
+      /*sequence_size=*/1, sampled_scores);
   ASSERT_TRUE(sampled_ids.ok());
   EXPECT_EQ(sampled_ids->size(), 3);
   EXPECT_EQ((*sampled_ids)[0][0], 2);
@@ -246,14 +362,14 @@ TEST(SamplingCpuUtilTest, TopKTopPSampling_LargeVocabIndices) {
   // as offsets.
   std::vector<float> logits = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
                                1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 10.0};
-  auto rng = std::make_shared<std::default_random_engine>(0);
+  const std::vector<float> uniforms = UniformsFromSeed(1);
   std::vector<std::vector<float>> sampled_scores;
   // Top p = 0.0001f, should always return the token with the highest logit,
   // which is the 14th token in this case.
-  auto sampled_ids =
-      TopKTopPSampling(absl::MakeConstSpan(logits), /*k=*/15, /*p=*/0.0001f,
-                       /*temperature=*/1.0f, rng, /*batch_size=*/1,
-                       /*sequence_size=*/1, sampled_scores);
+  auto sampled_ids = TopKTopPSampling(
+      absl::MakeConstSpan(logits), /*k=*/15, /*p=*/0.0001f,
+      /*temperature=*/1.0f, absl::MakeConstSpan(uniforms), /*batch_size=*/1,
+      /*sequence_size=*/1, sampled_scores);
   ASSERT_TRUE(sampled_ids.ok());
   // With very small temperature, it should pick the logit with the highest
   // value, which is at index 11.
@@ -314,12 +430,12 @@ TEST(SamplingCpuUtilTest, TopKTopPSampling_BatchSize2SequenceLength2) {
       0.0f, 1.0f, 0.0f,  // b1, s0: top is 1
       0.0f, 0.0f, 1.0f   // b1, s1: top is 2
   };
-  auto rng = std::make_shared<std::default_random_engine>(0);
+  const std::vector<float> uniforms = UniformsFromSeed(4);
   std::vector<std::vector<float>> sampled_scores;
-  auto sampled_ids =
-      TopKTopPSampling(absl::MakeConstSpan(logits), /*k=*/2, /*p=*/0.5f,
-                       /*temperature=*/0.00001f, rng, /*batch_size=*/2,
-                       /*sequence_size=*/2, sampled_scores);
+  auto sampled_ids = TopKTopPSampling(
+      absl::MakeConstSpan(logits), /*k=*/2, /*p=*/0.5f,
+      /*temperature=*/0.00001f, absl::MakeConstSpan(uniforms), /*batch_size=*/2,
+      /*sequence_size=*/2, sampled_scores);
   ASSERT_TRUE(sampled_ids.ok());
   EXPECT_EQ(sampled_ids->size(), 2);
   EXPECT_THAT((*sampled_ids)[0], ElementsAre(2, 0));
@@ -342,13 +458,24 @@ TEST(SamplingCpuUtilTest, BenchmarkTopKTokenIds) {
 
   absl::Time start = absl::Now();
   for (int i = 0; i < kIterations; ++i) {
-    auto res = TopKTokenIds(absl::MakeConstSpan(logits), /*k=*/256,
+    auto res = TopKTokenIds(absl::MakeConstSpan(logits), /*k=*/1,
                             /*batch_size=*/1, /*sequence_size=*/1);
     ASSERT_TRUE(res.ok());
   }
   absl::Time end = absl::Now();
   absl::Duration duration = end - start;
-  std::printf("\n[BENCHMARK] TopK=256 (min-heap) execution took: %.3f ms\n",
+  std::printf("\n[BENCHMARK] TopK=1 (greedy) execution took: %.3f ms\n",
+              absl::ToDoubleMilliseconds(duration) / kIterations);
+
+  start = absl::Now();
+  for (int i = 0; i < kIterations; ++i) {
+    auto res = TopKTokenIds(absl::MakeConstSpan(logits), /*k=*/256,
+                            /*batch_size=*/1, /*sequence_size=*/1);
+    ASSERT_TRUE(res.ok());
+  }
+  end = absl::Now();
+  duration = end - start;
+  std::printf("[BENCHMARK] TopK=256 (min-heap) execution took: %.3f ms\n",
               absl::ToDoubleMilliseconds(duration) / kIterations);
 
   start = absl::Now();
@@ -361,6 +488,113 @@ TEST(SamplingCpuUtilTest, BenchmarkTopKTokenIds) {
   duration = end - start;
   std::printf("[BENCHMARK] TopK=1025 (full-sort) execution took: %.3f ms\n\n",
               absl::ToDoubleMilliseconds(duration) / kIterations);
+}
+
+// A verbatim copy of the scalar greedy arg max that TopKTokenIds() used before
+// it got explicit vectors. TopKTokenIds(k = 1) must return the same index for
+// every input, including NaN, signed zeros, infinities and ties.
+int ReferenceMaxElement(const float* logits, int size) {
+  constexpr int kTileSize = 128;
+  constexpr int kLaneCount = 8;
+  float max = logits[0];
+  int max_idx = 0;
+  int i = 0;
+  for (; i + kTileSize <= size; i += kTileSize) {
+    const float* tile_logits = logits + i;
+    float lanes[kLaneCount];
+    std::copy_n(tile_logits, kLaneCount, lanes);
+    for (int t = kLaneCount; t < kTileSize; t += kLaneCount) {
+      for (int j = 0; j < kLaneCount; ++j) {
+        lanes[j] = std::max(lanes[j], tile_logits[t + j]);
+      }
+    }
+    const float tile_max = *std::max_element(lanes, lanes + kLaneCount);
+    if (tile_max > max) {
+      for (int j = 0; j < kTileSize; ++j) {
+        if (tile_logits[j] == tile_max) {
+          max = tile_max;
+          max_idx = i + j;
+          break;
+        }
+      }
+    }
+  }
+  for (; i < size; ++i) {
+    if (logits[i] > max) {
+      max = logits[i];
+      max_idx = i;
+    }
+  }
+  return max_idx;
+}
+
+TEST(SamplingCpuUtilTest, TopKTokenIds_GreedyMatchesScalarReference) {
+  const float kNaN = std::numeric_limits<float>::quiet_NaN();
+  const float kInf = std::numeric_limits<float>::infinity();
+  std::mt19937 gen(1234);
+  std::uniform_int_distribution<int> special_dis(0, 15);
+  std::uniform_int_distribution<int> small_dis(-3, 3);
+  std::uniform_real_distribution<float> dis(-5.0f, 5.0f);
+  int num_checked = 0;
+  for (int size : {1, 7, 8, 127, 128, 129, 255, 256, 1000, 32000, 32003}) {
+    for (int trial = 0; trial < 80; ++trial) {
+      std::vector<float> logits(size);
+      for (float& val : logits) {
+        // Trials 0-9: continuous values. 10-29: few distinct values (many
+        // ties). 30-39: also NaN, +/-0 and +/-inf. 40-79: continuous values
+        // with NaN, +/-0 and +/-inf, so that a NaN at the start of a lane can
+        // hide a unique maximum.
+        if (trial < 10) {
+          val = dis(gen);
+        } else {
+          val = trial < 40 ? static_cast<float>(small_dis(gen)) : dis(gen);
+          if (trial >= 30) {
+            switch (special_dis(gen)) {
+              case 0:
+                val = kNaN;
+                break;
+              case 1:
+                val = 0.0f;
+                break;
+              case 2:
+                val = -0.0f;
+                break;
+              case 3:
+                val = kInf;
+                break;
+              case 4:
+                val = -kInf;
+                break;
+              default:
+                break;
+            }
+          }
+        }
+      }
+      if (trial >= 40 && std::isnan(logits[0])) {
+        // A NaN first element makes every later comparison false. Keep it
+        // finite here; trials 30-39 cover that case.
+        logits[0] = dis(gen);
+      }
+      auto ids = TopKTokenIds(absl::MakeConstSpan(logits), /*k=*/1);
+      ASSERT_TRUE(ids.ok());
+      ASSERT_EQ((*ids)[0][0], ReferenceMaxElement(logits.data(), size))
+          << "size " << size << " trial " << trial;
+      ++num_checked;
+    }
+  }
+  EXPECT_EQ(num_checked, 11 * 80);
+
+  // A NaN at the start of lane 2 of the second tile hides the unique maximum
+  // at index 138 (same lane). Also an earlier -0 and a later +0.
+  std::vector<float> logits(256, -1.0f);
+  logits[9] = -0.0f;
+  logits[17] = 0.0f;
+  logits[130] = kNaN;
+  logits[138] = 0.5f;
+  auto ids = TopKTokenIds(absl::MakeConstSpan(logits), /*k=*/1);
+  ASSERT_TRUE(ids.ok());
+  EXPECT_EQ((*ids)[0][0], ReferenceMaxElement(logits.data(), 256));
 }
 
 }  // namespace

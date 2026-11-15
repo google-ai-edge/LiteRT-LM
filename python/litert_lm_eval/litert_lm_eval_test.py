@@ -31,7 +31,7 @@ mock_lm_eval_tasks = mock.MagicMock()
 sys.modules["lm_eval.tasks"] = mock_lm_eval_tasks
 sys.modules["lm_eval.api"] = mock_lm_eval.api
 sys.modules["lm_eval.api.model"] = mock_lm_eval.api.model
-sys.modules["lm_eval.api.model"].LM = object
+sys.modules["lm_eval.api.model"].LM = object  # pyrefly: ignore[missing-attribute]
 sys.modules["lm_eval.api.registry"] = mock.MagicMock()
 sys.modules["lm_eval.api.registry"].register_model = lambda x: lambda y: y
 

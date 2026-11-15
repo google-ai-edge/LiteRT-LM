@@ -15,9 +15,11 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_TENSOR_BUFFER_UTIL_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_TENSOR_BUFFER_UTIL_H_
 
+#include <cstddef>
 #include <utility>
 #include <vector>
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -39,6 +41,18 @@ absl::StatusOr<std::vector<int>> TensorBufferDims(
 // Creates a deep copy of the given tensor buffer.
 absl::StatusOr<litert::TensorBuffer> CopyTensorBuffer(
     litert::Environment& env, const litert::TensorBuffer& tensor_buffer);
+
+// Creates a deep copy of the given tensor buffer backed by host memory
+// (`TensorBufferType::kHostMemory`), compacting any trailing hardware buffer
+// padding beyond the locked tensor payload.
+absl::StatusOr<litert::TensorBuffer> CopyTensorBufferToHostMemory(
+    litert::Environment& env, const litert::TensorBuffer& tensor_buffer);
+
+// Copies the locked tensor payload from `src` into `dst` in place.
+// `src` and `dst` must have matching element type and dimensions; linear memory
+// buffers must also have matching strides.
+absl::Status CopyTensorBufferContents(litert::TensorBuffer& dst,
+                                      const litert::TensorBuffer& src);
 
 // Struct to hold a TensorBuffer and a boolean indicating if the buffer is
 // wrapped around existing memory or if it owns the memory.

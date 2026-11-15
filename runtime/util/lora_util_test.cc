@@ -71,7 +71,7 @@ TEST(MemoryMappedFileWithAutoAlignment, SucceedsMappingLengthAndOffset) {
   file_contents += "END";
   WriteFile(path.string(), file_contents);
 
-  auto scoped_file = *ScopedFile::Open(path.string());
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(path.string()));
 
   // Case 1: offset = 0, size = 0 (whole file)
   {
@@ -162,6 +162,13 @@ TEST_F(IsLoRAInputNameTest, MatchesValidPattern2) {
   EXPECT_TRUE(IsLoRAInputName("lora_atten_o_b_prime_weight_123"));
 }
 
+TEST_F(IsLoRAInputNameTest, MatchesGpuPattern) {
+  EXPECT_TRUE(IsLoRAInputName("transformer.layer_0.attn.q.w_prime_left"));
+  EXPECT_TRUE(IsLoRAInputName("transformer.layer_10.attn.k.w_prime_right"));
+  EXPECT_TRUE(IsLoRAInputName(
+      "transformer.layer_34.attn.attn_vec_einsum.w_prime_left"));
+}
+
 TEST_F(IsLoRAInputNameTest, RejectsIncorrectComponentCount) {
   // Too few parts.
   EXPECT_FALSE(IsLoRAInputName("query_w_prime_left"));
@@ -200,10 +207,40 @@ TEST_F(IsLoRAInputNameTest, RejectsPartialOrIncompleteMatches) {
   EXPECT_FALSE(IsLoRAInputName("not_the_start_query_w_prime_left_0"));
 }
 
+TEST_F(IsLoRAInputNameTest, MatchesAudioEncoderPattern) {
+  // The audio encoder names its LoRA inputs without "_" before the layer.
+  EXPECT_TRUE(IsLoRAInputName("query_w_prime_left0"));
+  EXPECT_TRUE(IsLoRAInputName("key_w_prime_right11"));
+  EXPECT_TRUE(IsLoRAInputName("value_w_prime_left5"));
+  EXPECT_TRUE(IsLoRAInputName("post_w_prime_right23"));
+  EXPECT_FALSE(IsLoRAInputName("query_w_prime_left__0"));
+  EXPECT_FALSE(IsLoRAInputName("lora_atten_q_a_prime_weight0"));
+}
+
 TEST_F(IsLoRAInputNameTest, RejectsEmptyAndMalformedStrings) {
   EXPECT_FALSE(IsLoRAInputName(""));
   EXPECT_FALSE(IsLoRAInputName("____"));
   EXPECT_FALSE(IsLoRAInputName("just_a_string"));
+}
+
+TEST(IsLoRABufferInputNameTest, MatchesLoRAWeightInputs) {
+  EXPECT_TRUE(IsLoRABufferInputName("query_w_prime_left_0"));
+  EXPECT_TRUE(IsLoRABufferInputName("lora_atten_o_b_prime_weight_12"));
+  EXPECT_TRUE(IsLoRABufferInputName("value_w_prime_right3"));
+  EXPECT_TRUE(
+      IsLoRABufferInputName("transformer.layer_0.attn.q.w_prime_left"));
+}
+
+TEST(IsLoRABufferInputNameTest, MatchesLoRAParamTensor) {
+  EXPECT_TRUE(IsLoRABufferInputName("lora_param_tensor"));
+}
+
+TEST(IsLoRABufferInputNameTest, RejectsOtherModelInputs) {
+  EXPECT_FALSE(IsLoRABufferInputName("src_inputs"));
+  EXPECT_FALSE(IsLoRABufferInputName("mask"));
+  EXPECT_FALSE(IsLoRABufferInputName("prev_mask"));
+  EXPECT_FALSE(IsLoRABufferInputName("lora_param_tensor_0"));
+  EXPECT_FALSE(IsLoRABufferInputName(""));
 }
 
 }  // namespace

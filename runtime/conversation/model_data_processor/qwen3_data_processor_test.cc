@@ -20,7 +20,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
+#include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/qwen3_data_processor_config.h"
 #include "runtime/engine/io_types.h"
@@ -37,10 +37,11 @@ MATCHER_P(HasInputText, text_input, "") {
     return false;
   }
   auto text_bytes = std::get<InputText>(arg).GetRawTextString();
-  if (!text_bytes.ok()) {
+  auto expected_bytes = text_input->GetRawTextString();
+  if (!text_bytes.ok() || !expected_bytes.ok()) {
     return false;
   }
-  return text_bytes.value() == text_input->GetRawTextString().value();
+  return *text_bytes == *expected_bytes;
 }
 
 TEST(Qwen3DataProcessorTest, ToInputDataVector) {
@@ -82,7 +83,7 @@ TEST(Qwen3DataProcessorTest, ToMessageDefault) {
             {"content", {{{"type", "text"}, {"text", "test response"}}}}}));
 }
 
-TEST(Qwen3DataProcessorTest, ToMessageModelRole) {
+TEST(Qwen3DataProcessorTest, ToMessageWithToolCall) {
   JsonPreface preface;
   preface.tools = nlohmann::ordered_json::array();
   preface.tools.push_back(
@@ -127,6 +128,26 @@ TEST(Qwen3DataProcessorTest, CodeFence) {
                        Qwen3DataProcessor::Create(Qwen3DataProcessorConfig{}));
   EXPECT_EQ(processor->CodeFenceStart(), "<tool_call>");
   EXPECT_EQ(processor->CodeFenceEnd(), "</tool_call>");
+}
+
+TEST(Qwen3DataProcessorTest, MessageToTemplateInput) {
+  ASSERT_OK_AND_ASSIGN(auto processor,
+                       Qwen3DataProcessor::Create(Qwen3DataProcessorConfig{}));
+
+  // String content is converted to array of parts
+  json string_msg = {{"role", "user"}, {"content", "hello"}};
+  ASSERT_OK_AND_ASSIGN(json result1,
+                       processor->MessageToTemplateInput(string_msg));
+  EXPECT_EQ(result1,
+            json({{"role", "user"},
+                  {"content", {{{"type", "text"}, {"text", "hello"}}}}}));
+
+  // Array content is preserved
+  json array_msg = {{"role", "user"},
+                    {"content", {{{"type", "text"}, {"text", "hello"}}}}};
+  ASSERT_OK_AND_ASSIGN(json result2,
+                       processor->MessageToTemplateInput(array_msg));
+  EXPECT_EQ(result2, array_msg);
 }
 
 }  // namespace

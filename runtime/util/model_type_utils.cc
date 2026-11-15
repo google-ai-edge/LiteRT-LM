@@ -23,9 +23,8 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
-#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/strings/substitute.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/token.pb.h"
@@ -136,18 +135,14 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
 {%- set ns = namespace(prev_message_type=None) -%}
 {#- Tool Declarations -#}
 {%- set loop_messages = messages -%}
-{%- if tools or messages[0]['role'] == 'system' -%}
+{%- if tools or (messages and messages[0]['role'] == 'system') -%}
     {{- '<start_of_turn>developer\n' -}}
-    {%- if messages[0]['role'] == 'system' -%}
-        {%- if messages[0]['content'] is string -%}
-            {{- messages[0]['content'] | trim -}}
-        {%- else -%}
-            {%- for item in messages[0]['content'] -%}
-                {%- if item['type'] == 'text' -%}
-                    {{- item['text'] | trim -}}
-                {%- endif -%}
-            {%- endfor -%}
-        {%- endif -%}
+    {%- if messages and messages[0]['role'] == 'system' -%}
+        {%- for item in messages[0]['content'] -%}
+            {%- if item['type'] == 'text' -%}
+                {{- item['text'] | trim -}}
+            {%- endif -%}
+        {%- endfor -%}
         {%- set loop_messages = messages[1:] -%}
         {%- if tools -%}
             {{- '\n\n' -}}
@@ -177,17 +172,11 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
         {%- endif -%}
         {%- set ns.prev_message_type = None -%}
         {%- if 'content' in message -%}
-            {%- if message['content'] is string -%}
-                {{ message['content'] | trim }}
-            {%- elif message['content'] is iterable -%}
-                {%- for item in message['content'] -%}
-                    {%- if item['type'] == 'text' -%}
-                        {{ item['text'] | trim }}
-                    {%- endif -%}
-                {%- endfor -%}
-            {%- else -%}
-                {{ raise_exception("Invalid content type") }}
-            {%- endif -%}
+            {%- for item in message['content'] -%}
+                {%- if item['type'] == 'text' -%}
+                    {{ item['text'] | trim }}
+                {%- endif -%}
+            {%- endfor -%}
             {%- set ns.prev_message_type = 'content' -%}
         {%- endif -%}
         {%- if 'tool_calls' in message and message['tool_calls'] and message['tool_calls'] is iterable -%}
@@ -215,21 +204,13 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
     {%- else -%}
         {#- Tool Responses -#}
         {%- if 'content' in message -%}
-            {%- if message['content'] is string -%}
-                {{- '<start_function_response>response:' -}}
-                {{ message['content'] | trim }}
-                {{- '<end_function_response>' -}}
-            {%- elif message['content'] is iterable -%}
-                {%- for item in message['content'] -%}
-                    {%- if item['type'] == 'text' -%}
-                        {{ '<start_function_response>response:' + item['text'] + '<end_function_response>' }}
-                    {%- else -%}
-                        {{ raise_exception("Invalid content type for tool response.") }}
-                    {%- endif -%}
-                {%- endfor -%}
-            {%- else -%}
-                {{ raise_exception("Invalid content type") }}
-            {%- endif -%}
+            {%- for item in message['content'] -%}
+                {%- if item['type'] == 'text' -%}
+                    {{ '<start_function_response>response:' + item['text'] + '<end_function_response>' }}
+                {%- else -%}
+                    {{ raise_exception("Invalid content type for tool response.") }}
+                {%- endif -%}
+            {%- endfor -%}
         {%- endif -%}
         {%- set ns.prev_message_type = 'tool_response' -%}
     {%- endif -%}
@@ -246,12 +227,8 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
 {%- endif -%})tmpl";
     case proto::LlmModelType::kGemma3:
       return R"tmpl({{ bos_token }}
-{%- if messages[0]['role'] == 'system' -%}
-    {%- if messages[0]['content'] is string -%}
-        {%- set first_user_prefix = messages[0]['content'] + '\n\n' -%}
-    {%- else -%}
-        {%- set first_user_prefix = messages[0]['content'][0]['text'] + '\n\n' -%}
-    {%- endif -%}
+{%- if messages and messages[0]['role'] == 'system' -%}
+    {%- set first_user_prefix = messages[0]['content'][0]['text'] + '\n\n' -%}
     {%- set loop_messages = messages[1:] -%}
 {%- else -%}
     {%- set first_user_prefix = "" -%}
@@ -268,19 +245,13 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
     {%- endif -%}
     {{ '<start_of_turn>' + role + '
 ' + (first_user_prefix if loop.first else "") }}
-    {%- if message['content'] is string -%}
-        {{ message['content'] | trim }}
-    {%- elif message['content'] is iterable -%}
-        {%- for item in message['content'] -%}
-            {%- if item['type'] == 'image' -%}
-                {{ '<start_of_image>' }}
-            {%- elif item['type'] == 'text' -%}
-                {{ item['text'] | trim }}
-            {%- endif -%}
-        {%- endfor -%}
-    {%- else -%}
-        {{ raise_exception("Invalid content type") }}
-    {%- endif -%}
+    {%- for item in message['content'] -%}
+        {%- if item['type'] == 'image' -%}
+            {{ '<start_of_image>' }}
+        {%- elif item['type'] == 'text' -%}
+            {{ item['text'] | trim }}
+        {%- endif -%}
+    {%- endfor -%}
     {{ '<end_of_turn>
 ' }}
 {%- endfor -%}
@@ -297,12 +268,8 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
     {%- endfor %}
     {{- '<end_of_turn>\n'}}
 {%- endif %}
-{%- if messages[0]['role'] == 'system' -%}
-    {%- if messages[0]['content'] is string -%}
-        {%- set first_user_prefix = messages[0]['content'] + '\n\n' -%}
-    {%- else -%}
-        {%- set first_user_prefix = messages[0]['content'][0]['text'] + '\n\n' -%}
-    {%- endif -%}
+{%- if messages and messages[0]['role'] == 'system' -%}
+    {%- set first_user_prefix = messages[0]['content'][0]['text'] + '\n\n' -%}
     {%- set loop_messages = messages[1:] -%}
 {%- else -%}
     {%- set first_user_prefix = "" -%}
@@ -322,24 +289,18 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
         {{ '```tool_outputs\n' }}
     {%- endif -%}
     {%- if 'content' in message -%}
-        {%- if message['content'] is string -%}
-            {{ message['content'] | trim }}
-        {%- elif message['content'] is iterable -%}
-            {%- for item in message['content'] -%}
-                {%- if item['type'] == 'audio' -%}
-                    {{ '<audio_soft_token>' }}
-                {%- elif item['type'] == 'image' -%}
-                    {{ '<image_soft_token>' }}
-                {%- elif item['type'] == 'text' -%}
-                    {{ item['text'] | trim }}
-                {%- endif -%}
-                {%- if is_tool -%}
-                    {{ '\n' }}
-                {%- endif -%}
-            {%- endfor -%}
-        {%- else -%}
-            {{ raise_exception("Invalid content type") }}
-        {%- endif -%}
+        {%- for item in message['content'] -%}
+            {%- if item['type'] == 'audio' -%}
+                {{ '<audio_soft_token>' }}
+            {%- elif item['type'] == 'image' -%}
+                {{ '<image_soft_token>' }}
+            {%- elif item['type'] == 'text' -%}
+                {{ item['text'] | trim }}
+            {%- endif -%}
+            {%- if is_tool -%}
+                {{ '\n' }}
+            {%- endif -%}
+        {%- endfor -%}
     {%- endif -%}
     {%- if is_tool -%}
         {{ '```' }}
@@ -369,128 +330,93 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
 {%- if add_generation_prompt -%}
     {{'<start_of_turn>model\n'}}
 {%- endif -%})tmpl";
+    // MiniCPM-V shares the FastVLM fallback template: both mark image
+    // placeholders with `<image_soft_token>`.
+    case proto::LlmModelType::kMinicpmv4:
     case proto::LlmModelType::kFastVlm:
-      // absl::Substitute takes up to 10 arguments, so we have to split the
-      // template into two parts.
-      return absl::StrCat(
-          absl::Substitute("{%- for message in messages -%}"
-                           "{%- if message.content is string -%}"
-                           "{%- if message.role == 'user' %}"
-                           "$0{{ message.content }}$1"
-                           "{% endif -%}"
-                           "{%- if message.role == 'model' %}"
-                           "$2{{ message.content }}$3"
-                           "{% endif -%}"
-                           "{%- if message.role == 'system' %}"
-                           "$4{{ message.content }}$5"
-                           "{% endif -%}"
-                           "{%- else -%}",
-                           prompt_templates.user().prefix(),
-                           prompt_templates.user().suffix(),
-                           prompt_templates.model().prefix(),
-                           prompt_templates.model().suffix(),
-                           prompt_templates.system().prefix(),
-                           prompt_templates.system().suffix()),
-          absl::Substitute("{%- if message.role == 'user' %}"
-                           "$0"
-                           "{% elif message.role == 'model' %}"
-                           "$1"
-                           "{% elif message.role == 'system' %}"
-                           "$2"
-                           "{% endif -%}"
-                           "{%- for item in message['content'] %}"
-                           "{%- if item['type'] == 'text' %}"
-                           "{{ item['text'] }}"
-                           "{% elif item['type'] == 'image' -%}"
-                           "<image_soft_token>"
-                           "{%- elif item['type'] == 'audio' -%}"
-                           ""
-                           "{%- endif -%}"
-                           "{%- endfor -%}"
-                           "{%- if message.role == 'user' %}"
-                           "$3"
-                           "{% elif message.role == 'model' %}"
-                           "$4"
-                           "{% elif message.role == 'system' %}"
-                           "$5"
-                           "{% endif -%}"
-                           "{%- endif -%}"
-                           "{%- endfor -%}"
-                           "{%- if add_generation_prompt %}"
-                           "$6"
-                           "{% endif -%}",
-                           prompt_templates.user().prefix(),
-                           prompt_templates.model().prefix(),
-                           prompt_templates.system().prefix(),
-                           prompt_templates.user().suffix(),
-                           prompt_templates.model().suffix(),
-                           prompt_templates.system().suffix(),
-                           prompt_templates.model().prefix()));
+      return absl::Substitute(
+          "{%- for message in messages -%}"
+          "{%- if message.role == 'user' %}$0"
+          "{% elif message.role == 'assistant' %}$1"
+          "{% elif message.role == 'system' %}$2"
+          "{% endif -%}"
+          "{%- for item in message['content'] %}"
+          "{%- if item['type'] == 'text' %}{{ item['text'] }}"
+          "{% elif item['type'] == 'image' -%}<image_soft_token>"
+          "{%- elif item['type'] == 'audio' -%}"
+          "{%- endif -%}"
+          "{%- endfor -%}"
+          "{%- if message.role == 'user' %}$3"
+          "{% elif message.role == 'assistant' %}$4"
+          "{% elif message.role == 'system' %}$5"
+          "{% endif -%}"
+          "{%- endfor -%}"
+          "{%- if add_generation_prompt %}$6{% endif -%}",
+          prompt_templates.user().prefix(), prompt_templates.model().prefix(),
+          prompt_templates.system().prefix(), prompt_templates.user().suffix(),
+          prompt_templates.model().suffix(), prompt_templates.system().suffix(),
+          prompt_templates.model().prefix());
     case proto::LlmModelType::kQwen3:
     case proto::LlmModelType::kQwen2P5:
     case proto::LlmModelType::kGenericModel:
     case proto::LlmModelType::kGemma4:
-      // absl::Substitute takes up to 10 arguments, so we have to split the
-      // template into two parts.
-      return absl::StrCat(
-          absl::Substitute("{%- for message in messages -%}"
-                           "{%- if message.content is string -%}"
-                           "{%- if message.role == 'user' %}"
-                           "$0{{ message.content }}$1"
-                           "{% endif -%}"
-                           "{%- if message.role == 'model' %}"
-                           "$2{{ message.content }}$3"
-                           "{% endif -%}"
-                           "{%- if message.role == 'system' %}"
-                           "$4{{ message.content }}$5"
-                           "{% endif -%}"
-                           "{%- else -%}",
-                           prompt_templates.user().prefix(),
-                           prompt_templates.user().suffix(),
-                           prompt_templates.model().prefix(),
-                           prompt_templates.model().suffix(),
-                           prompt_templates.system().prefix(),
-                           prompt_templates.system().suffix()),
-          absl::Substitute("{%- if message.role == 'user' %}"
-                           "$0"
-                           "{% elif message.role == 'model' %}"
-                           "$1"
-                           "{% elif message.role == 'system' %}"
-                           "$2"
-                           "{% endif -%}"
-                           "{%- for item in message.content %}"
-                           "{%- if item.type == 'text' %}"
-                           "{{ item.text }}"
-                           "{% elif item.type == 'image' -%}"
-                           "{{ '<start_of_image>' }}"
-                           "{%- elif item.type == 'audio' -%}"
-                           "{{ '<start_of_audio>' }}"
-                           "{%- endif -%}"
-                           "{%- endfor -%}"
-                           "{%- if message.role == 'user' %}"
-                           "$3"
-                           "{% elif message.role == 'model' %}"
-                           "$4"
-                           "{% elif message.role == 'system' %}"
-                           "$5"
-                           "{% endif -%}"
-                           "{%- endif -%}"
-                           "{%- endfor -%}"
-                           "{%- if add_generation_prompt %}"
-                           "$6"
-                           "{% endif -%}",
-                           prompt_templates.user().prefix(),
-                           prompt_templates.model().prefix(),
-                           prompt_templates.system().prefix(),
-                           prompt_templates.user().suffix(),
-                           prompt_templates.model().suffix(),
-                           prompt_templates.system().suffix(),
-                           prompt_templates.model().prefix()));
+    return absl::Substitute(
+        "{%- for message in messages -%}"
+        "{%- if message.role == 'user' %}$0"
+        "{% elif message.role == 'assistant' %}$1"
+        "{% elif message.role == 'system' %}$2"
+        "{% endif -%}"
+        "{%- for item in message.content %}"
+        "{%- if item.type == 'text' %}{{ item.text }}"
+        "{% elif item.type == 'image' -%}{{ '<start_of_image>' }}"
+        "{%- elif item.type == 'audio' -%}{{ '<start_of_audio>' }}"
+        "{%- endif -%}"
+        "{%- endfor -%}"
+        "{%- if message.role == 'user' %}$3"
+        "{% elif message.role == 'assistant' %}$4"
+        "{% elif message.role == 'system' %}$5"
+        "{% endif -%}"
+        "{%- endfor -%}"
+        "{%- if add_generation_prompt %}$6{% endif -%}",
+        prompt_templates.user().prefix(), prompt_templates.model().prefix(),
+        prompt_templates.system().prefix(), prompt_templates.user().suffix(),
+        prompt_templates.model().suffix(), prompt_templates.system().suffix(),
+        prompt_templates.model().prefix());
     case proto::LlmModelType::MODEL_TYPE_NOT_SET:
       return absl::InvalidArgumentError("LlmModelType is not set.");
     default:
       return absl::InvalidArgumentError("Unsupported model type for template.");
   }
+}
+
+absl::string_view GetModelTypeName(const proto::LlmModelType& model_type) {
+  switch (model_type.model_type_case()) {
+    case proto::LlmModelType::kGenericModel:
+      return "generic_model";
+    case proto::LlmModelType::kGemma3N:
+      return "gemma3n";
+    case proto::LlmModelType::kFunctionGemma:
+      return "function_gemma";
+    case proto::LlmModelType::kGemma3:
+      return "gemma3";
+    case proto::LlmModelType::kQwen3:
+      return "qwen3";
+    case proto::LlmModelType::kQwen2P5:
+      return "qwen2p5";
+    case proto::LlmModelType::kGemma4:
+      return "gemma4";
+    case proto::LlmModelType::kFastVlm:
+      return "fast_vlm";
+    case proto::LlmModelType::kLfm2:
+      return "lfm2";
+    case proto::LlmModelType::kMinicpm5:
+      return "minicpm5";
+    case proto::LlmModelType::kMinicpmv4:
+      return "minicpmv4";
+    case proto::LlmModelType::MODEL_TYPE_NOT_SET:
+      return "Not set";
+  }
+  return "Unknown";
 }
 
 }  // namespace litert::lm

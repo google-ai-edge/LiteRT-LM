@@ -1,0 +1,129 @@
+# Copyright 2026 The ODML Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: "Nightly-Swift-Package-Update"
+
+on:
+  schedule:
+    # Runs daily at 05:00 UTC (9:00 PM PT), after Kokoro macOS build finishes
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update-nightly-swift:
+    name: "Update Package.swift for Nightly Branch"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout nightly branch
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        # zizmor: ignore[artipacked]
+        with:
+          ref: nightly
+        continue-on-error: true
+        id: checkout_nightly
+
+      - name: Fallback to main branch if nightly does not exist
+        if: steps.checkout_nightly.outcome == 'failure'
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        # zizmor: ignore[artipacked]
+        with:
+          ref: main
+
+      - name: Ensure local nightly branch
+        run: git checkout -B nightly
+
+      - name: Fetch Nightly Checksums and Update Package.swift
+        run: |
+          set -e
+          GCS_BASE="https://storage.googleapis.com/litert/litert_lm/swift/nightly"
+
+          PKG_VERSION=$(grep '^VERSION =' version.bzl | cut -d'"' -f2)
+          TARGET_DATE=$(TZ='America/Los_Angeles' date +%Y%m%d)
+
+          IOS_ZIP_NAME="CLiteRTLM_${PKG_VERSION}-${TARGET_DATE}.xcframework.zip"
+          MAC_ZIP_NAME="CLiteRTLM_mac_${PKG_VERSION}-${TARGET_DATE}.xcframework.zip"
+
+          echo "Checking for ${IOS_ZIP_NAME}.sha256..."
+          if ! curl -f -sI "${GCS_BASE}/${IOS_ZIP_NAME}.sha256" > /dev/null; then
+            # Fallback to previous day if today's build is still pending
+            TARGET_DATE=$(TZ='America/Los_Angeles' date -d "yesterday" +%Y%m%d 2>/dev/null || date -v-1d +%Y%m%d)
+            IOS_ZIP_NAME="CLiteRTLM_${PKG_VERSION}-${TARGET_DATE}.xcframework.zip"
+            MAC_ZIP_NAME="CLiteRTLM_mac_${PKG_VERSION}-${TARGET_DATE}.xcframework.zip"
+          fi
+
+          echo "Using target date: ${TARGET_DATE}"
+          echo "TARGET_DATE=${TARGET_DATE}" >> "$GITHUB_ENV"
+          echo "PKG_VERSION=${PKG_VERSION}" >> "$GITHUB_ENV"
+
+          echo "Fetching checksums directly from GCS..."
+          IOS_CHECKSUM=$(curl -f -sL "${GCS_BASE}/${IOS_ZIP_NAME}.sha256" | awk '{print $1}')
+          MAC_CHECKSUM=$(curl -f -sL "${GCS_BASE}/${MAC_ZIP_NAME}.sha256" | awk '{print $1}')
+
+          echo "iOS Checksum: ${IOS_CHECKSUM}"
+          echo "macOS Checksum: ${MAC_CHECKSUM}"
+
+          # Update Package.swift with GCS URLs and new checksums
+          python3 -c "
+          import re
+
+          ios_url = '${GCS_BASE}/${IOS_ZIP_NAME}'
+          mac_url = '${GCS_BASE}/${MAC_ZIP_NAME}'
+          ios_sum = '${IOS_CHECKSUM}'
+          mac_sum = '${MAC_CHECKSUM}'
+
+          with open('Package.swift', 'r') as f:
+              content = f.read()
+
+          # Replace CLiteRTLM url and checksum
+          content = re.sub(
+              r'(\.binaryTarget\(\s*name:\s*\"CLiteRTLM\",\s*url:\s*\")[^\"]+(\",\s*checksum:\s*\")[^\"]+(\"\s*\))',
+              r'\g<1>' + ios_url + r'\g<2>' + ios_sum + r'\g<3>',
+              content
+          )
+
+          # Replace CLiteRTLM_mac url and checksum
+          content = re.sub(
+              r'(\.binaryTarget\(\s*name:\s*\"CLiteRTLM_mac\",\s*url:\s*\")[^\"]+(\",\s*checksum:\s*\")[^\"]+(\"\s*\))',
+              r'\g<1>' + mac_url + r'\g<2>' + mac_sum + r'\g<3>',
+              content
+          )
+
+          with open('Package.swift', 'w') as f:
+              f.write(content)
+          "
+
+      - name: Commit, Tag, and Push to nightly
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Package.swift
+
+          TAG_NAME="${PKG_VERSION}-nightly.${TARGET_DATE}"
+
+          if ! git diff --cached --quiet; then
+            git commit -m "[Nightly] Update Swift Package checksums for $(TZ='America/Los_Angeles' date +%Y-%m-%d) [skip ci]"
+            git push origin HEAD:nightly
+            git tag -f "${TAG_NAME}"
+            git push origin "${TAG_NAME}" --force
+            echo "Successfully updated Package.swift on nightly branch and pushed tag ${TAG_NAME}."
+          else
+            echo "Checksums are unchanged. Nothing to commit."
+          fi

@@ -1,0 +1,226 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "runtime/components/constrained_decoding/llg_fc_tool_calls.h"
+
+#include <string>
+#include <vector>
+
+#include "absl/algorithm/container.h"  // from @com_google_absl
+
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/constrained_decoding/llg_tool_call_utils.h"
+#include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
+#include "runtime/components/constrained_decoding/tool_utils.h"
+
+namespace litert::lm {
+namespace {
+
+std::string GenerateFcValueRule(const nlohmann::ordered_json& prop_schema,
+                                bool is_req, absl::string_view rule_prefix,
+                                std::vector<std::string>& tool_blocks);
+
+ToolFormatConfig GetFcConfig() {
+  // See `SanitizeLarkRuleName` for why `-object` uses a hyphen separator.
+  // Nested objects use this config too, so their properties are in
+  // alphabetical order like the tool's arguments.
+  return ToolFormatConfig{
+      .pair_separator = ":",
+      .rule_suffix = "-object",
+      .start_wrap = "{",
+      .end_wrap = "}",
+      .generate_value_rule = GenerateFcValueRule,
+      .alphabetical_properties = true,
+  };
+}
+
+std::string GenerateFcValueRule(const nlohmann::ordered_json& prop_schema,
+                                bool /*is_req*/, absl::string_view rule_prefix,
+                                std::vector<std::string>& tool_blocks) {
+  std::string rule;
+  if (prop_schema.contains("enum") && prop_schema["enum"].is_array()) {
+    std::vector<std::string> enum_vals;
+    for (const auto& val : prop_schema["enum"]) {
+      if (val.is_string()) {
+        enum_vals.push_back(absl::StrFormat(R"(fc_esc_open "%s" fc_esc_close)",
+                                            val.get<std::string>()));
+      } else if (val.is_number() || val.is_boolean()) {
+        enum_vals.push_back(absl::StrFormat(R"("%s")", val.dump()));
+      }
+    }
+    if (!enum_vals.empty()) {
+      rule = absl::StrFormat("(%s)", absl::StrJoin(enum_vals, " | "));
+    }
+  }
+
+  if (rule.empty()) {
+    rule = AppendTypeOrUnionRules(prop_schema, rule_prefix, GetFcConfig(),
+                                  /*map_key=*/"IDENTIFIER",
+                                  /*fallback_rule=*/"json_value", tool_blocks);
+  }
+
+  if (rule.empty()) {
+    rule = "json_value";
+  }
+
+  if (prop_schema.contains("nullable") &&
+      prop_schema["nullable"].is_boolean() &&
+      prop_schema["nullable"].get<bool>() && rule != "json_value" &&
+      rule != "NULL") {
+    return absl::StrFormat("(%s | NULL)", rule);
+  }
+
+  return rule;
+}
+
+std::string GetFcGrammar(const LlgConstraintsOptions& options) {
+  return absl::StrFormat(R"(
+fc_esc_open: %s
+fc_esc_close: %s
+
+json_value: string | NUMBER | BOOLEAN | NULL | object | array
+
+string: fc_esc_open /(.|\n)*/ fc_esc_close
+array: "[" [json_value ("," json_value)*] "]"
+object: "{" [pair ("," pair)*] "}"
+pair: IDENTIFIER ":" json_value
+IDENTIFIER: /[a-zA-Z_][a-zA-Z0-9_]*/
+
+// Primitives (Standard JSON)
+// INTEGER is NUMBER without the fraction and exponent groups. Parameters
+// declared as "type": "integer" bind to it so the model cannot emit 1000.0
+// or 1e3 where an integer is required.
+INTEGER: /-?(?:0|[1-9]\d*)/
+NUMBER: /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/
+BOOLEAN: "true" | "false"
+NULL: "null")",
+                         options.open_quote, options.close_quote);
+}
+
+std::string GetFcFunctionBlock(const std::vector<std::string>& tool_call_cases,
+                               const LlgConstraintsOptions& options) {
+  return absl::StrFormat(
+      R"((fc_start (%s) fc_end)+ fc_resp
+fc_start: %s
+fc_end: %s
+fc_resp: %s
+)",
+      absl::StrJoin(tool_call_cases, " | "), options.code_fence_start,
+      options.code_fence_end, options.function_response_start);
+}
+
+}  // namespace
+
+absl::StatusOr<std::string> CreateLarkGrammarForFcToolCalls(
+    const nlohmann::ordered_json& tools, const LlgConstraintsOptions& options) {
+  const nlohmann::ordered_json& tools_array = GetToolsArray(tools);
+  if (!tools_array.is_array()) {
+    return absl::InvalidArgumentError("tools must be an array.");
+  }
+  std::vector<std::string> tool_names;
+  std::vector<std::string> tool_blocks;
+
+  for (const auto& tool : tools_array) {
+    if (!tool.contains("name") || !tool["name"].is_string()) {
+      continue;
+    }
+    std::string tool_name = tool["name"].get<std::string>();
+    tool_names.push_back(tool_name);
+    AppendToolRules(tool, tool_name, GetFcConfig(), tool_blocks);
+  }
+
+  const std::vector<std::string>& allowed_names =
+      options.allowed_function_names;
+
+  std::vector<std::string> tool_call_cases;
+  if (!allowed_names.empty()) {
+    for (const auto& allowed_name : allowed_names) {
+      if (!absl::c_linear_search(tool_names, allowed_name)) {
+        return absl::InvalidArgumentError(absl::StrFormat(
+            "Allowed function '%s' not found in provided tools.",
+            allowed_name));
+      }
+      tool_call_cases.push_back(absl::StrFormat(
+          R"("call:" "%s" %s-object)", allowed_name,
+          SanitizeLarkRuleName(allowed_name)));
+    }
+  } else {
+    tool_call_cases.reserve(tool_names.size());
+    for (const auto& tool_name : tool_names) {
+      tool_call_cases.push_back(absl::StrFormat(
+          R"("call:" "%s" %s-object)", tool_name,
+          SanitizeLarkRuleName(tool_name)));
+    }
+  }
+
+  std::string json_grammar = GetFcGrammar(options);
+  std::string function_block = GetFcFunctionBlock(tool_call_cases, options);
+  std::string text_only_block = GetTextOnlyBlock(options);
+
+  std::string start_rule;
+  switch (options.constraint_mode) {
+    case LlgConstraintMode::kTextOnly: {
+      return text_only_block;
+    }
+    case LlgConstraintMode::kFunctionCallsOnly: {
+      if (tool_call_cases.empty()) {
+        return absl::InvalidArgumentError(
+            "No tools provided for FunctionCallsOnly mode.");
+      }
+      // Like FST's FUNCTION_CALL_ONLY mode, the model may also end its turn
+      // without a call, e.g. once it has the tool responses it needs.
+      start_rule = absl::StrFormat(
+          R"(
+start: function_block_opt
+function_block_opt: function_block |
+function_block: %s
+)",
+          function_block);
+      break;
+    }
+    case LlgConstraintMode::kTextAndOrFunctionCalls: {
+      if (tool_call_cases.empty()) {
+        return text_only_block;
+      }
+      start_rule = absl::StrCat(
+          GetStartRule(options, "TEXT_CONTENT? function_block_opt"),
+          absl::StrFormat(R"(TEXT_CONTENT: /(.|\n)+/
+function_block_opt: function_block |
+function_block: %s
+)",
+                          function_block));
+      break;
+    }
+    case LlgConstraintMode::kFunctionCallsRequired: {
+      if (tool_call_cases.empty()) {
+        return absl::InvalidArgumentError(
+            "No tools provided for FunctionCallsRequired mode.");
+      }
+      // Function call is required immediately (call-first, no text preamble).
+      start_rule = absl::StrCat("start: ", function_block, "\n");
+      break;
+    }
+  }
+
+  return absl::StrCat(absl::StrJoin(tool_blocks, "\n"), "\n", json_grammar,
+                      "\n", start_rule);
+}
+
+}  // namespace litert::lm

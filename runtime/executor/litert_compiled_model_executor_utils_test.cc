@@ -14,10 +14,16 @@
 
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
+#include <functional>
+#include <ios>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -25,24 +31,51 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "flatbuffers/vector.h"  // from @flatbuffers
+#include "litert/c/litert_common.h"  // from @litert
+#include "litert/c/options/litert_gpu_options.h"  // from @litert
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
+#include "litert/cc/litert_common.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#if !defined(LITERT_DISABLE_NPU)
+#include "litert/cc/options/litert_google_tensor_options.h"  // from @litert
+#include "litert/cc/options/litert_mediatek_options.h"  // from @litert
+#include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
+#endif  // !defined(LITERT_DISABLE_NPU)
+#include "litert/core/model/model.h"  // from @litert
+#include "litert/core/util/flatbuffer_tools.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/file_util.h"
+#include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "schema/core/litertlm_header.h"
+#include "schema/core/litertlm_header_schema_generated.h"
+#include "tensorflow/compiler/mlir/lite/allocation.h"  // from @org_tensorflow
+#include "tflite/schema/schema_generated.h"  // from @litert
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
@@ -51,7 +84,97 @@ namespace {
 using ::testing::_;  // NOLINT: Required by ASSERT_OK_AND_ASSIGN().
 using ::testing::ElementsAre;
 using ::testing::Pair;
+using ::testing::TestParamInfo;
+using ::testing::TestWithParam;
+using ::testing::Values;
 using ::testing::status::StatusIs;
+
+constexpr uint64_t kLiteRtLmPrefixSize = 32;
+constexpr uint64_t kLiteRtLmSectionAlignment = 16 * 1024;
+
+uint64_t AlignLiteRtLmSection(uint64_t offset) {
+  return ((offset + kLiteRtLmSectionAlignment - 1) /
+          kLiteRtLmSectionAlignment) *
+         kLiteRtLmSectionAlignment;
+}
+
+void BuildAotTestHeader(flatbuffers::FlatBufferBuilder& builder,
+                        uint64_t prefill_begin, uint64_t prefill_end,
+                        uint64_t aux_begin, uint64_t aux_end) {
+  builder.Clear();
+  auto prefill_model_type = schema::CreateKeyValuePair(
+      builder, "model_type",
+      proto::LlmMetadata::TfLiteModelType_Name(
+          proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  auto prefill_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{
+          prefill_model_type});
+  auto prefill_section = schema::CreateSectionObject(
+      builder, prefill_items, prefill_begin, prefill_end,
+      schema::AnySectionDataType_TFLiteModel);
+
+  auto aux_model_type =
+      schema::CreateKeyValuePair(builder, "model_type",
+                                 proto::LlmMetadata::TfLiteModelType_Name(
+                                     proto::LlmMetadata::TF_LITE_AUX));
+  auto aux_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{aux_model_type});
+  auto aux_section =
+      schema::CreateSectionObject(builder, aux_items, aux_begin, aux_end,
+                                  schema::AnySectionDataType_TFLiteModel);
+
+  auto sections = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::SectionObject>>{prefill_section,
+                                                              aux_section});
+  auto section_metadata = schema::CreateSectionMetadata(builder, sections);
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  builder.Finish(metadata);
+}
+
+void WriteAotTestModel(const std::filesystem::path& path,
+                       litert::BufferRef<uint8_t> model_buffer) {
+  flatbuffers::FlatBufferBuilder builder;
+  BuildAotTestHeader(builder, 0, 0, 0, 0);
+  const uint64_t prefill_begin =
+      AlignLiteRtLmSection(kLiteRtLmPrefixSize + builder.GetSize());
+  const uint64_t prefill_end = prefill_begin + model_buffer.Size();
+  const uint64_t aux_begin = AlignLiteRtLmSection(prefill_end);
+  const uint64_t aux_end = aux_begin + model_buffer.Size();
+  BuildAotTestHeader(builder, prefill_begin, prefill_end, aux_begin, aux_end);
+
+  std::ofstream file(path, std::ios::binary);
+  ASSERT_TRUE(file.good());
+  file.write("LITERTLM", 8);
+  const uint32_t major_version = 1;
+  const uint32_t minor_version = 0;
+  const uint32_t patch_version = 0;
+  const uint32_t padding = 0;
+  file.write(reinterpret_cast<const char*>(&major_version), 4);
+  file.write(reinterpret_cast<const char*>(&minor_version), 4);
+  file.write(reinterpret_cast<const char*>(&patch_version), 4);
+  file.write(reinterpret_cast<const char*>(&padding), 4);
+  const uint64_t header_end = kLiteRtLmPrefixSize + builder.GetSize();
+  file.write(reinterpret_cast<const char*>(&header_end), 8);
+  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+             builder.GetSize());
+  file.write(std::string(prefill_begin - header_end, '\0').data(),
+             prefill_begin - header_end);
+  file.write(reinterpret_cast<const char*>(model_buffer.Data()),
+             model_buffer.Size());
+  file.write(std::string(aux_begin - prefill_end, '\0').data(),
+             aux_begin - prefill_end);
+  file.write(reinterpret_cast<const char*>(model_buffer.Data()),
+             model_buffer.Size());
+  ASSERT_TRUE(file.good());
+}
+
+bool IsFileBacked(const ::litert::Model& model) {
+  const auto& flatbuffer =
+      ::litert::internal::GetTflFlatbuffer(*model.Get()).FlatbufferModel();
+  const auto* allocation = flatbuffer.allocation();
+  return allocation != nullptr &&
+         allocation->type() == tflite::Allocation::Type::kMMap;
+}
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      GetModelSignaturesFromInputOutputNames_Gemma2JAX) {
@@ -196,6 +319,32 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetKVCacheRootNames_KvCacheC) {
   EXPECT_EQ(v_root_name, "kv_cache_c_");
 }
 
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest, IsLinearAttentionStateName) {
+  EXPECT_TRUE(IsLinearAttentionStateName("kv_cache_c_0"));
+  EXPECT_TRUE(IsLinearAttentionStateName("kv_cache_r_12"));
+  EXPECT_FALSE(IsLinearAttentionStateName("kv_cache_k_0"));
+  EXPECT_FALSE(IsLinearAttentionStateName("kv_cache_v_0"));
+  EXPECT_FALSE(IsLinearAttentionStateName("k_cache_0"));
+  EXPECT_FALSE(IsLinearAttentionStateName("input_pos"));
+  EXPECT_FALSE(IsLinearAttentionStateName(""));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetKVCacheRootNames_HybridConvAndKVCache) {
+  // Hybrid models like LFM start with conv cache (kv_cache_c_0) followed by
+  // attention layers (kv_cache_k_2, kv_cache_v_2). Standard KV cache names
+  // should take precedence.
+  std::vector<absl::string_view> input_names = {"kv_cache_c_0", "kv_cache_c_1",
+                                                "kv_cache_k_2", "kv_cache_v_2"};
+  std::vector<absl::string_view> output_names = {};
+  std::string k_root_name;
+  std::string v_root_name;
+  ASSERT_OK(
+      GetKVCacheRootNames(input_names, output_names, k_root_name, v_root_name));
+  EXPECT_EQ(k_root_name, "kv_cache_k_");
+  EXPECT_EQ(v_root_name, "kv_cache_v_");
+}
+
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      FillSingleBufferCacheParamTensor) {
   LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
@@ -278,6 +427,135 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   EXPECT_THAT(work_groups, ElementsAre(Pair("prefill_128", 100)));
 }
 
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_CautiousUpgradeTopLevel) {
+  SortedPrefillSignatureMap prefill_runner_set = {
+      {512, "prefill_512"}, {128, "prefill_128"}, {32, "prefill_32"}};
+  // Remainder 256 >= 512/2 -> Upgrade to 512
+  ASSERT_OK_AND_ASSIGN(auto work_groups,
+                       GetOptimizedPrefillWorkGroups(prefill_runner_set, 768));
+  EXPECT_THAT(work_groups,
+              ElementsAre(Pair("prefill_512", 512), Pair("prefill_512", 256)));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_CpuGreedyChunking) {
+  SortedPrefillSignatureMap prefill_runner_set = {{1024, "prefill_1024"},
+                                                  {128, "prefill_128"}};
+  // For 512 tokens with greedy chunking enabled (CPU), cascades to 4x 128
+  // instead of 1x 1024.
+  ASSERT_OK_AND_ASSIGN(auto work_groups,
+                       GetOptimizedPrefillWorkGroups(
+                           prefill_runner_set, 512,
+                           /*max_prefill_sequence_length=*/std::nullopt,
+                           /*use_greedy_chunking=*/true));
+  EXPECT_THAT(work_groups,
+              ElementsAre(Pair("prefill_128", 128), Pair("prefill_128", 128),
+                          Pair("prefill_128", 128), Pair("prefill_128", 128)));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_CpuGreedyCascadesRemainder) {
+  SortedPrefillSignatureMap prefill_runner_set = {
+      {512, "prefill_512"}, {128, "prefill_128"}, {32, "prefill_32"}};
+  // For 768 tokens (512 + 256): 1 full chunk of 512, remainder 256 cascades to
+  // 2x 128 instead of upgrading to a second 512 chunk.
+  ASSERT_OK_AND_ASSIGN(auto work_groups,
+                       GetOptimizedPrefillWorkGroups(
+                           prefill_runner_set, 768,
+                           /*max_prefill_sequence_length=*/std::nullopt,
+                           /*use_greedy_chunking=*/true));
+  EXPECT_THAT(work_groups,
+              ElementsAre(Pair("prefill_512", 512), Pair("prefill_128", 128),
+                          Pair("prefill_128", 128)));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_DeepCascadeUpgrade) {
+  SortedPrefillSignatureMap prefill_runner_set = {
+      {512, "prefill_512"}, {128, "prefill_128"}, {32, "prefill_32"}};
+  // Remainder 80 < 512/2, but 80 >= 128/2 -> Cascade and upgrade to 128
+  ASSERT_OK_AND_ASSIGN(auto work_groups,
+                       GetOptimizedPrefillWorkGroups(prefill_runner_set, 592));
+  EXPECT_THAT(work_groups,
+              ElementsAre(Pair("prefill_512", 512), Pair("prefill_128", 80)));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_FallbackOverride) {
+  SortedPrefillSignatureMap prefill_runner_set = {
+      {512, "prefill_512"}, {384, "prefill_384"}, {128, "prefill_128"}};
+  // Remainder 256 >= 512/2, BUT next chunk 384 > 512/2. So fallback to 384!
+  // At 384, Remainder 256 >= 384/2. Upgrades to 384.
+  ASSERT_OK_AND_ASSIGN(auto work_groups,
+                       GetOptimizedPrefillWorkGroups(prefill_runner_set, 768));
+  EXPECT_THAT(work_groups,
+              ElementsAre(Pair("prefill_512", 512), Pair("prefill_384", 256)));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_NoUpgradeAfterFallback) {
+  SortedPrefillSignatureMap prefill_runner_set = {
+      {512, "prefill_512"}, {384, "prefill_384"}, {128, "prefill_128"}};
+  // Remainder 128. Fallback triggered at 512 because 384 > 256.
+  // At 384, 128 < 384/2, so no upgrade.
+  // Ends up using perfectly fitting 128.
+  ASSERT_OK_AND_ASSIGN(auto work_groups,
+                       GetOptimizedPrefillWorkGroups(prefill_runner_set, 640));
+  EXPECT_THAT(work_groups,
+              ElementsAre(Pair("prefill_512", 512), Pair("prefill_128", 128)));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_MultipleFullChunksThenUpgrade) {
+  SortedPrefillSignatureMap prefill_runner_set = {
+      {100, "prefill_100"}, {30, "prefill_30"}, {10, "prefill_10"}};
+  // 2 full 100 chunks. Remainder 80 >= 100/2. Upgrade to a third 100 chunk!
+  ASSERT_OK_AND_ASSIGN(auto work_groups,
+                       GetOptimizedPrefillWorkGroups(prefill_runner_set, 280));
+  EXPECT_THAT(work_groups,
+              ElementsAre(Pair("prefill_100", 100), Pair("prefill_100", 100),
+                          Pair("prefill_100", 80)));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_DenseTierCascadeTrap) {
+  SortedPrefillSignatureMap prefill_runner_set = {{600, "prefill_600"},
+                                                  {500, "prefill_500"}};
+  // Input 599. Remainder 599. Next size 500.
+  // 500 * 2 >= 600, but 599 > 500!
+  // Fallback is skipped! Upgrades to 600 instead of outputting {{500, 500},
+  // {500, 99}}.
+  ASSERT_OK_AND_ASSIGN(auto work_groups,
+                       GetOptimizedPrefillWorkGroups(prefill_runner_set, 599));
+  EXPECT_THAT(work_groups, ElementsAre(Pair("prefill_600", 599)));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_MaxPrefillSequenceLengthAdapts) {
+  SortedPrefillSignatureMap prefill_runner_set = {
+      {512, "prefill_512"}, {256, "prefill_256"}, {128, "prefill_128"}};
+  // input_length = 200, but max_prefill_sequence_length = 256.
+  // 512 runner is filtered out, adapting to 256 runner.
+  ASSERT_OK_AND_ASSIGN(
+      auto work_groups,
+      GetOptimizedPrefillWorkGroups(prefill_runner_set, 200,
+                                    /*max_prefill_sequence_length=*/256));
+  EXPECT_THAT(work_groups, ElementsAre(Pair("prefill_256", 200)));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetOptimizedPrefillWorkGroups_MaxPrefillSequenceLengthExceededError) {
+  SortedPrefillSignatureMap prefill_runner_set = {
+      {512, "prefill_512"}, {256, "prefill_256"}, {128, "prefill_128"}};
+  // input_length = 300, max_prefill_sequence_length = 256.
+  // 512 runner filtered out. 256 runner covers 256 tokens, remaining 44 tokens
+  // cannot fit in 0 capacity.
+  EXPECT_THAT(GetOptimizedPrefillWorkGroups(
+                  prefill_runner_set, 300, /*max_prefill_sequence_length=*/256),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetPrefillRunnerSetFromModel) {
   auto model_path =
       std::filesystem::path(::testing::SrcDir()) /
@@ -287,8 +565,9 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetPrefillRunnerSetFromModel) {
   ASSERT_OK_AND_ASSIGN(auto model_resources,
                        BuildLiteRtCompiledModelResources(*model_assets));
   ASSERT_NE(model_resources, nullptr);
-  ASSERT_OK_AND_ASSIGN(auto litert_model, model_resources->GetTFLiteModel(
-                                              ModelType::kTfLitePrefillDecode));
+  ASSERT_OK_AND_ASSIGN(auto litert_model,
+                       model_resources->GetTFLiteModel(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
   ASSERT_NE(litert_model, nullptr);
 
   ASSERT_OK_AND_ASSIGN(
@@ -296,6 +575,186 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetPrefillRunnerSetFromModel) {
       GetPrefillRunnerSetFromModel(*litert_model, "prefill",
                                    /*input_positions_name=*/"input_pos"));
   EXPECT_THAT(prefill_runner_set, ElementsAre(Pair(160, "prefill")));
+}
+
+class GetPrefillRunnerSetFromCompiledModelTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    auto model_path =
+        std::filesystem::path(::testing::SrcDir()) /
+        "litert_lm/runtime/testdata/test_lm.task";
+    ASSERT_OK_AND_ASSIGN(auto model_assets,
+                         ModelAssets::Create(model_path.string()));
+    ASSERT_OK_AND_ASSIGN(model_resources_,
+                         BuildLiteRtCompiledModelResources(model_assets));
+    ASSERT_NE(model_resources_, nullptr);
+    ASSERT_OK_AND_ASSIGN(auto model_buffer_view,
+                         model_resources_->GetTFLiteModelBuffer(
+                             proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+    ::litert::BufferRef<uint8_t> model_buffer(
+        reinterpret_cast<const uint8_t*>(model_buffer_view.data()),
+        model_buffer_view.size());
+
+    LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+    env_.emplace(std::move(env));
+    LITERT_ASSERT_OK_AND_ASSIGN(::litert::Options compilation_options,
+                                ::litert::Options::Create());
+    compilation_options.SetHardwareAccelerators(::litert::HwAccelerators::kCpu);
+    LITERT_ASSERT_OK_AND_ASSIGN(auto compiled_model,
+                                ::litert::CompiledModel::Create(
+                                    *env_, model_buffer, compilation_options));
+    compiled_model_.emplace(std::move(compiled_model));
+  }
+
+  std::unique_ptr<ModelResources> model_resources_;
+  std::optional<::litert::Environment> env_;
+  std::optional<::litert::CompiledModel> compiled_model_;
+};
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest, ReturnsPrefillSignatures) {
+  ASSERT_OK_AND_ASSIGN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(*compiled_model_, "prefill",
+                                   /*input_positions_name=*/"input_pos"));
+  EXPECT_THAT(prefill_runner_set, ElementsAre(Pair(160, "prefill")));
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       MatchesFlatbufferModelOverload) {
+  ASSERT_OK_AND_ASSIGN(auto litert_model,
+                       model_resources_->GetTFLiteModel(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  ASSERT_NE(litert_model, nullptr);
+  ASSERT_OK_AND_ASSIGN(
+      auto expected,
+      GetPrefillRunnerSetFromModel(*litert_model, "prefill",
+                                   /*input_positions_name=*/"input_pos"));
+  ASSERT_OK_AND_ASSIGN(auto actual, GetPrefillRunnerSetFromModel(
+                                        *compiled_model_, "prefill",
+                                        /*input_positions_name=*/"input_pos"));
+  EXPECT_EQ(actual, expected);
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       MatchingSelectedSignatureIsKept) {
+  const std::vector<std::string> selected_signatures = {"prefill"};
+  ASSERT_OK_AND_ASSIGN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(*compiled_model_, "prefill",
+                                   /*input_positions_name=*/"input_pos",
+                                   selected_signatures));
+  EXPECT_THAT(prefill_runner_set, ElementsAre(Pair(160, "prefill")));
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       NonMatchingSelectedSignatureFiltersAll) {
+  // A non-matching selected signature filters out all prefill runners.
+  const std::vector<std::string> selected_signatures = {"decode"};
+  ASSERT_OK_AND_ASSIGN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(*compiled_model_, "prefill",
+                                   /*input_positions_name=*/"input_pos",
+                                   selected_signatures));
+  EXPECT_TRUE(prefill_runner_set.empty());
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       NonMatchingSignatureNameBaseReturnsEmpty) {
+  ASSERT_OK_AND_ASSIGN(
+      auto prefill_runner_set,
+      GetPrefillRunnerSetFromModel(*compiled_model_, "nonexistent_prefix",
+                                   /*input_positions_name=*/"input_pos"));
+  EXPECT_TRUE(prefill_runner_set.empty());
+}
+
+TEST_F(GetPrefillRunnerSetFromCompiledModelTest,
+       MissingInputPositionsTensorReturnsError) {
+  EXPECT_FALSE(
+      GetPrefillRunnerSetFromModel(*compiled_model_, "prefill",
+                                   /*input_positions_name=*/"nonexistent_input")
+          .ok());
+}
+
+// The checksum fake LM: `logits [1, W, 32]`, with W = 1 for `decode` and W = 4
+// for `verify`.
+constexpr char kChecksumFakeLmPath[] =
+    "litert_lm/runtime/testdata/checksum_fake_lm.tflite";
+constexpr int kChecksumFakeLmVocabSize = 32;
+
+class CreateFP16OutputBufferTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+    env_.emplace(std::move(env));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto compiled_model,
+        ::litert::CompiledModel::Create(
+            *env_,
+            (std::filesystem::path(::testing::SrcDir()) / kChecksumFakeLmPath)
+                .string(),
+            ::litert::HwAccelerators::kCpu));
+    compiled_model_.emplace(std::move(compiled_model));
+  }
+
+  // Checks that `CreateFP16OutputBuffer()` creates a float16 `logits` buffer
+  // of shape [1, `width`, 32] for `signature_key`, with the buffer type and
+  // size that the compiled model requires.
+  void ExpectFP16LogitsBuffer(absl::string_view signature_key, int width) {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto signature,
+                                compiled_model_->FindSignature(signature_key));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        size_t signature_index,
+        compiled_model_->GetSignatureIndex(signature_key));
+    const auto& output_names = signature.OutputNames();
+    size_t output_index = 0;
+    while (output_index < output_names.size() &&
+           output_names[output_index] != "logits") {
+      ++output_index;
+    }
+    ASSERT_LT(output_index, output_names.size());
+
+    ASSERT_OK_AND_ASSIGN(
+        TensorBuffer buffer,
+        CreateFP16OutputBuffer(*env_, *compiled_model_, signature_index,
+                               "logits", output_index));
+
+    LITERT_ASSERT_OK_AND_ASSIGN(RankedTensorType tensor_type,
+                                buffer.TensorType());
+    EXPECT_EQ(tensor_type.ElementType(), ElementType::Float16);
+    EXPECT_THAT(tensor_type.Layout().Dimensions(),
+                ElementsAre(1, width, kChecksumFakeLmVocabSize));
+    LITERT_ASSERT_OK_AND_ASSIGN(auto requirements,
+                                compiled_model_->GetOutputBufferRequirements(
+                                    signature_index, "logits"));
+    LITERT_ASSERT_OK_AND_ASSIGN(auto supported_types,
+                                requirements.SupportedTypes());
+    ASSERT_FALSE(supported_types.empty());
+    LITERT_ASSERT_OK_AND_ASSIGN(auto buffer_type, buffer.BufferType());
+    EXPECT_EQ(buffer_type, supported_types[0]);
+    LITERT_ASSERT_OK_AND_ASSIGN(size_t required_size,
+                                requirements.BufferSize());
+    LITERT_ASSERT_OK_AND_ASSIGN(size_t size, buffer.Size());
+    EXPECT_EQ(size, required_size);
+  }
+
+  std::optional<::litert::Environment> env_;
+  std::optional<::litert::CompiledModel> compiled_model_;
+};
+
+TEST_F(CreateFP16OutputBufferTest, CreatesDecodeLogitsBuffer) {
+  ExpectFP16LogitsBuffer("decode", /*width=*/1);
+}
+
+TEST_F(CreateFP16OutputBufferTest, CreatesVerifyLogitsBuffer) {
+  ExpectFP16LogitsBuffer("verify", /*width=*/4);
+}
+
+TEST_F(CreateFP16OutputBufferTest, FailsForAnUnknownOutput) {
+  LITERT_ASSERT_OK_AND_ASSIGN(size_t signature_index,
+                              compiled_model_->GetSignatureIndex("decode"));
+  EXPECT_FALSE(CreateFP16OutputBuffer(*env_, *compiled_model_, signature_index,
+                                      "unknown_output", /*output_index=*/0)
+                   .ok());
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest, InitializeAttentionMask_Float32) {
@@ -394,7 +853,8 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, FillAttentionMask_Float32) {
   // channel_size = 10
   // i = 0: current_step = 5. Fills indices [0, 5] with 0.0f.
   // i = 1: current_step = 6. Fills indices [10, 16] with 0.0f.
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/5, /*steps=*/2));
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/5, /*steps=*/2,
+                              proto::ATTENTION_MASK_TYPE_CAUSAL));
 
   auto lock = litert::TensorBufferScopedLock::Create(
       *mask_buffer, litert::TensorBuffer::LockMode::kRead);
@@ -429,7 +889,8 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   // channel_size = 10
   // i = 0: current_step = 5. Fills indices [0, 5] with 0.0f.
   // i = 1: current_step = 6. Fills indices [10, 16] with 0.0f.
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/5, /*steps=*/2));
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/5, /*steps=*/2,
+                              proto::ATTENTION_MASK_TYPE_CAUSAL));
 
   auto lock = litert::TensorBufferScopedLock::Create(
       *mask_buffer, litert::TensorBuffer::LockMode::kRead);
@@ -466,7 +927,8 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, FillAttentionMask_Bool) {
   // i = 0: current_step = 2. Fills indices [0, 2] with true.
   // i = 1: current_step = 3. Fills indices [8, 11] with true.
   // i = 2: current_step = 4. Fills indices [16, 20] with true.
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/2, /*steps=*/3));
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/2, /*steps=*/3,
+                              proto::ATTENTION_MASK_TYPE_CAUSAL));
 
   auto lock = litert::TensorBufferScopedLock::Create(
       *mask_buffer, litert::TensorBuffer::LockMode::kRead);
@@ -478,6 +940,186 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, FillAttentionMask_Bool) {
       EXPECT_TRUE(mask_ptr[i]) << " at index " << i;
     } else {
       EXPECT_FALSE(mask_ptr[i]) << " at index " << i;
+    }
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     InitializeAndFillAttentionMask_Float32) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 4, 1, 10}));
+  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(float) * 40);
+  ASSERT_TRUE(mask_buffer);
+
+  // Pre-fill with unmasked values (0.0f) to verify masked entries are reset.
+  {
+    auto write_lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kWrite);
+    ASSERT_TRUE(write_lock);
+    float* mask_ptr = static_cast<float*>(write_lock->second);
+    for (int i = 0; i < 40; ++i) {
+      mask_ptr[i] = 0.0f;
+    }
+  }
+
+  ASSERT_OK(InitializeAndFillAttentionMask(*mask_buffer, /*is_f16=*/false,
+                                           /*start_timestep=*/5, /*steps=*/2,
+                                           proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    float* mask_ptr = static_cast<float*>(lock->second);
+    float init_val = -0.7f * std::numeric_limits<float>::max();
+
+    for (int i = 0; i < 40; ++i) {
+      if ((i >= 0 && i <= 5) || (i >= 10 && i <= 16)) {
+        EXPECT_EQ(mask_ptr[i], 0.0f) << " at index " << i;
+      } else {
+        EXPECT_EQ(mask_ptr[i], init_val) << " at index " << i;
+      }
+    }
+  }
+
+  // Reuse the same buffer with a narrower range and is_f16 = true to verify
+  // stale unmasked entries from the prior step are reset to -45824.0f.
+  ASSERT_OK(InitializeAndFillAttentionMask(*mask_buffer, /*is_f16=*/true,
+                                           /*start_timestep=*/2, /*steps=*/1,
+                                           proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    float* mask_ptr = static_cast<float*>(lock->second);
+
+    for (int i = 0; i < 40; ++i) {
+      if (i >= 0 && i <= 2) {
+        EXPECT_EQ(mask_ptr[i], 0.0f) << " at index " << i;
+      } else {
+        EXPECT_EQ(mask_ptr[i], -45824.0f) << " at index " << i;
+      }
+    }
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     InitializeAndFillAttentionMask_Float16) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 4, 1, 10}));
+  RankedTensorType ranked_tensor_type(ElementType::Float16, std::move(layout));
+  auto mask_buffer = TensorBuffer::CreateManaged(
+      env, ::litert::TensorBufferType::kHostMemory, ranked_tensor_type,
+      sizeof(tflite::half) * 40);
+  ASSERT_TRUE(mask_buffer);
+
+  ASSERT_OK(InitializeAndFillAttentionMask(*mask_buffer, /*is_f16=*/true,
+                                           /*start_timestep=*/5, /*steps=*/2,
+                                           proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    tflite::half* mask_ptr = static_cast<tflite::half*>(lock->second);
+
+    for (int i = 0; i < 40; ++i) {
+      if ((i >= 0 && i <= 5) || (i >= 10 && i <= 16)) {
+        EXPECT_FLOAT_EQ(static_cast<float>(mask_ptr[i]), 0.0f)
+            << " at index " << i;
+      } else {
+        EXPECT_FLOAT_EQ(static_cast<float>(mask_ptr[i]), -45824.0f)
+            << " at index " << i;
+      }
+    }
+  }
+
+  // Reuse the same buffer with a narrower range to verify stale 0.0f entries
+  // from the prior step are reset to -45824.0f.
+  ASSERT_OK(InitializeAndFillAttentionMask(*mask_buffer, /*is_f16=*/true,
+                                           /*start_timestep=*/2, /*steps=*/1,
+                                           proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    tflite::half* mask_ptr = static_cast<tflite::half*>(lock->second);
+
+    for (int i = 0; i < 40; ++i) {
+      if (i >= 0 && i <= 2) {
+        EXPECT_FLOAT_EQ(static_cast<float>(mask_ptr[i]), 0.0f)
+            << " at index " << i;
+      } else {
+        EXPECT_FLOAT_EQ(static_cast<float>(mask_ptr[i]), -45824.0f)
+            << " at index " << i;
+      }
+    }
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     InitializeAndFillAttentionMask_Bool) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 3, 1, 8}));
+  RankedTensorType ranked_tensor_type(ElementType::Bool, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(bool) * 24);
+  ASSERT_TRUE(mask_buffer);
+
+  // Pre-fill with true since CreateManaged starts zeroed.
+  {
+    auto write_lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kWrite);
+    ASSERT_TRUE(write_lock);
+    bool* mask_ptr = static_cast<bool*>(write_lock->second);
+    for (int i = 0; i < 24; ++i) {
+      mask_ptr[i] = true;
+    }
+  }
+
+  ASSERT_OK(InitializeAndFillAttentionMask(*mask_buffer, /*is_f16=*/false,
+                                           /*start_timestep=*/2, /*steps=*/3,
+                                           proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    bool* mask_ptr = static_cast<bool*>(lock->second);
+
+    for (int i = 0; i < 24; ++i) {
+      if ((i >= 0 && i <= 2) || (i >= 8 && i <= 11) || (i >= 16 && i <= 20)) {
+        EXPECT_TRUE(mask_ptr[i]) << " at index " << i;
+      } else {
+        EXPECT_FALSE(mask_ptr[i]) << " at index " << i;
+      }
+    }
+  }
+
+  // Reuse the same buffer with a narrower range to verify stale true entries
+  // from the prior step are reset to false.
+  ASSERT_OK(InitializeAndFillAttentionMask(*mask_buffer, /*is_f16=*/false,
+                                           /*start_timestep=*/1, /*steps=*/1,
+                                           proto::ATTENTION_MASK_TYPE_CAUSAL));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    bool* mask_ptr = static_cast<bool*>(lock->second);
+
+    for (int i = 0; i < 24; ++i) {
+      if (i >= 0 && i <= 1) {
+        EXPECT_TRUE(mask_ptr[i]) << " at index " << i;
+      } else {
+        EXPECT_FALSE(mask_ptr[i]) << " at index " << i;
+      }
     }
   }
 }
@@ -501,7 +1143,8 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   // i = 0: current_step = 2. Fills indices [0, 2] with true.
   // i = 1: current_step = 3. Fills indices [8, 11] with true.
   // i = 2: current_step = 4. Fills indices [16, 20] with true.
-  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/2, /*steps=*/3));
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/2, /*steps=*/3,
+                              proto::ATTENTION_MASK_TYPE_CAUSAL));
 
   auto lock = litert::TensorBufferScopedLock::Create(
       *mask_buffer, litert::TensorBuffer::LockMode::kRead);
@@ -519,6 +1162,522 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   }
 }
 
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest, FillAttentionMask_Bidirectional) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 7, 1, 10}));
+  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(float) * 70);
+  ASSERT_TRUE(mask_buffer);
+
+  ASSERT_OK(InitializeAttentionMask(*mask_buffer, /*is_f16=*/false));
+
+  std::vector<int> token_ids = {1, 2, 3, 4, 5, 6, 7};
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/7,
+                              proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL,
+                              token_ids));
+
+  auto lock = litert::TensorBufferScopedLock::Create(
+      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock);
+  float* mask_ptr = static_cast<float*>(lock->second);
+
+  // All queries (q=0 to 6) should attend to [0, 6]
+  for (int q = 0; q < 7; ++q) {
+    int offset = q * 10;
+    for (int i = 0; i < 10; ++i) {
+      if (i <= 6) {
+        EXPECT_EQ(mask_ptr[offset + i], 0.0f) << "q=" << q << ", k=" << i;
+      } else {
+        EXPECT_LT(mask_ptr[offset + i], -1000.0f) << "q=" << q << ", k=" << i;
+      }
+    }
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     FillAttentionMask_Bidirectional_SlidingWindow) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 7, 1, 10}));
+  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(float) * 70);
+  ASSERT_TRUE(mask_buffer);
+
+  ASSERT_OK(InitializeAttentionMask(*mask_buffer, /*is_f16=*/false));
+
+  std::vector<int> token_ids = {1, 2, 3, 4, 5, 6, 7};
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/7,
+                              proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL,
+                              token_ids,
+                              /*sliding_window_size=*/2));
+
+  auto lock = litert::TensorBufferScopedLock::Create(
+      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock);
+  float* mask_ptr = static_cast<float*>(lock->second);
+
+  // For q=0 to 6, expected unmasked keys satisfy std::abs(q - k) < 2 and k <= 6
+  for (int q = 0; q < 7; ++q) {
+    int offset = q * 10;
+    for (int k = 0; k < 10; ++k) {
+      bool expected_unmasked = (std::abs(q - k) < 2) && (k <= 6);
+      if (expected_unmasked) {
+        EXPECT_EQ(mask_ptr[offset + k], 0.0f) << "q=" << q << ", k=" << k;
+      } else {
+        EXPECT_LT(mask_ptr[offset + k], -1000.0f) << "q=" << q << ", k=" << k;
+      }
+    }
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     FillAttentionMask_VisionBidirectional) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 8, 1, 10}));
+  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(float) * 80);
+  ASSERT_TRUE(mask_buffer);
+
+  ASSERT_OK(InitializeAttentionMask(*mask_buffer, /*is_f16=*/false));
+
+  std::vector<int> token_ids = {10, -1, -1, -3, -1, -1, 12, 13};
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/8,
+                              proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL,
+                              token_ids));
+
+  auto lock = litert::TensorBufferScopedLock::Create(
+      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock);
+  float* mask_ptr = static_cast<float*>(lock->second);
+
+  // q = 0: Expected unmasked: 0
+  int offset = 0;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k == 0);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=0, k=" << k;
+  }
+
+  // q = 1: Expected unmasked: 0, 1, 2
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k <= 2);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=1, k=" << k;
+  }
+
+  // q = 2: Expected unmasked: 0, 1, 2
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k <= 2);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=2, k=" << k;
+  }
+
+  // q = 3: Expected unmasked: 0, 1, 2, 3
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k <= 3);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=3, k=" << k;
+  }
+
+  // q = 4: Expected unmasked: 0, 1, 2, 3, 4, 5
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k <= 5);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=4, k=" << k;
+  }
+
+  // q = 5: Expected unmasked: 0, 1, 2, 3, 4, 5
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k <= 5);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=5, k=" << k;
+  }
+
+  // q = 6: Expected unmasked: 0 to 6
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k <= 6);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=6, k=" << k;
+  }
+
+  // q = 7: Expected unmasked: 0 to 7
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k <= 7);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=7, k=" << k;
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     FillAttentionMask_Causal_SlidingWindow) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 3, 1, 10}));
+  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(float) * 30);
+  ASSERT_TRUE(mask_buffer);
+
+  ASSERT_OK(InitializeAttentionMask(*mask_buffer, /*is_f16=*/false));
+
+  // start_timestep = 2, steps = 3. (q = 2, 3, 4).
+  // sliding_window_size = 2.
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/2, /*steps=*/3,
+                              proto::ATTENTION_MASK_TYPE_CAUSAL,
+                              /*token_ids=*/std::nullopt,
+                              /*sliding_window_size=*/2));
+
+  auto lock = litert::TensorBufferScopedLock::Create(
+      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock);
+  float* mask_ptr = static_cast<float*>(lock->second);
+
+  // q = 2: Expected unmasked: [1, 2].
+  int offset = 0;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k >= 1 && k <= 2);
+    if (expected_unmasked) {
+      EXPECT_EQ(mask_ptr[offset + k], 0.0f) << "q=2, k=" << k;
+    } else {
+      EXPECT_LT(mask_ptr[offset + k], -1000.0f) << "q=2, k=" << k;
+    }
+  }
+
+  // q = 3: Expected unmasked: [2, 3].
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k >= 2 && k <= 3);
+    if (expected_unmasked) {
+      EXPECT_EQ(mask_ptr[offset + k], 0.0f) << "q=3, k=" << k;
+    } else {
+      EXPECT_LT(mask_ptr[offset + k], -1000.0f) << "q=3, k=" << k;
+    }
+  }
+
+  // q = 4: Expected unmasked: [3, 4].
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k >= 3 && k <= 4);
+    if (expected_unmasked) {
+      EXPECT_EQ(mask_ptr[offset + k], 0.0f) << "q=4, k=" << k;
+    } else {
+      EXPECT_LT(mask_ptr[offset + k], -1000.0f) << "q=4, k=" << k;
+    }
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     FillAttentionMask_VisionBidirectional_SlidingWindow) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 8, 1, 10}));
+  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(float) * 80);
+  ASSERT_TRUE(mask_buffer);
+
+  ASSERT_OK(InitializeAttentionMask(*mask_buffer, /*is_f16=*/false));
+
+  std::vector<int> token_ids = {10, -1, -1, -3, -1, -1, 12, 13};
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/8,
+                              proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL,
+                              token_ids,
+                              /*sliding_window_size=*/2));
+
+  auto lock = litert::TensorBufferScopedLock::Create(
+      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock);
+  float* mask_ptr = static_cast<float*>(lock->second);
+
+  // q = 0: Expected unmasked: 0
+  int offset = 0;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k == 0);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=0, k=" << k;
+  }
+
+  // q = 1: Expected unmasked: 0, 1, 2
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k <= 2);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=1, k=" << k;
+  }
+
+  // q = 2: Expected unmasked: 1, 2
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k >= 1 && k <= 2);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=2, k=" << k;
+  }
+
+  // q = 3: Expected unmasked: 2, 3
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k >= 2 && k <= 3);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=3, k=" << k;
+  }
+
+  // q = 4: Expected unmasked: 3, 4, 5
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k == 3 || k == 4 || k == 5);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=4, k=" << k;
+  }
+
+  // q = 5: Expected unmasked: 4, 5
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k == 4 || k == 5);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=5, k=" << k;
+  }
+
+  // q = 6: Expected unmasked: 5, 6
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k >= 5 && k <= 6);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=6, k=" << k;
+  }
+
+  // q = 7: Expected unmasked: 6, 7
+  offset += 10;
+  for (int k = 0; k < 10; ++k) {
+    bool expected_unmasked = (k >= 6 && k <= 7);
+    EXPECT_EQ(mask_ptr[offset + k] == 0.0f, expected_unmasked)
+        << "q=7, k=" << k;
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     FillAttentionMask_VisionBidirectional_EmptyTokensFails) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 2, 1, 10}));
+  RankedTensorType ranked_tensor_type(ElementType::Float32, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(float) * 20);
+  ASSERT_TRUE(mask_buffer);
+
+  EXPECT_THAT(FillAttentionMask(*mask_buffer, /*start_timestep=*/5, /*steps=*/2,
+                                proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL,
+                                /*token_ids=*/std::nullopt),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     FillAttentionMask_RingBuffer_Prefill_Causal) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+
+  // Shape: [1, 1, chunk_len=4, S + chunk_len=12] where S = 8.
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 1, 4, 12}));
+  RankedTensorType ranked_tensor_type(ElementType::Bool, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(bool) * 48);
+  ASSERT_TRUE(mask_buffer);
+
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/4,
+                              proto::ATTENTION_MASK_TYPE_CAUSAL,
+                              /*token_ids=*/std::nullopt,
+                              /*sliding_window_size=*/8,
+                              RingBufferAttentionMaskMode::kPrefill));
+
+  auto lock = litert::TensorBufferScopedLock::Create(
+      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock);
+  bool* mask_ptr = static_cast<bool*>(lock->second);
+
+  // For start_timestep = 0:
+  // Cache columns [0..7]: all false.
+  // Chunk columns [8..11]: causal mask for i in [0..3].
+  for (int i = 0; i < 4; ++i) {
+    int row_offset = i * 12;
+    for (int col = 0; col < 8; ++col) {
+      EXPECT_FALSE(mask_ptr[row_offset + col])
+          << "i=" << i << ", cache col=" << col;
+    }
+    for (int j = 0; j < 4; ++j) {
+      bool expected = (j <= i);
+      EXPECT_EQ(mask_ptr[row_offset + 8 + j], expected)
+          << "i=" << i << ", chunk col=" << j;
+    }
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     FillAttentionMask_RingBuffer_Prefill_VisionBidirectional) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+
+  // Shape: [1, 1, chunk_len=6, S + chunk_len=14] where S = 8.
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 1, 6, 14}));
+  RankedTensorType ranked_tensor_type(ElementType::Bool, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(bool) * 84);
+  ASSERT_TRUE(mask_buffer);
+
+  // token_ids: token 0 is text, tokens 1..3 are vision (-1), tokens 4..5 are
+  // text.
+  std::vector<int> token_ids = {10, -1, -1, -1, 11, 12};
+  ASSERT_OK(FillAttentionMask(
+      *mask_buffer, /*start_timestep=*/0, /*steps=*/6,
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL, token_ids,
+      /*sliding_window_size=*/8, RingBufferAttentionMaskMode::kPrefill));
+
+  auto lock = litert::TensorBufferScopedLock::Create(
+      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock);
+  bool* mask_ptr = static_cast<bool*>(lock->second);
+
+  // Row 0 (i=0, text token): attends to chunk col 8 (j=0) only.
+  EXPECT_TRUE(mask_ptr[0 * 14 + 8 + 0]);
+  EXPECT_FALSE(mask_ptr[0 * 14 + 8 + 1]);
+
+  // Row 1 (i=1, vision token): attends to chunk cols 8, 9, 10, 11 (j=0..3).
+  EXPECT_TRUE(mask_ptr[1 * 14 + 8 + 0]);
+  EXPECT_TRUE(mask_ptr[1 * 14 + 8 + 1]);
+  EXPECT_TRUE(mask_ptr[1 * 14 + 8 + 2]);
+  EXPECT_TRUE(mask_ptr[1 * 14 + 8 + 3]);
+  EXPECT_FALSE(mask_ptr[1 * 14 + 8 + 4]);
+
+  // Row 2 (i=2, vision token): attends to chunk cols 8, 9, 10, 11 (j=0..3).
+  EXPECT_TRUE(mask_ptr[2 * 14 + 8 + 0]);
+  EXPECT_TRUE(mask_ptr[2 * 14 + 8 + 1]);
+  EXPECT_TRUE(mask_ptr[2 * 14 + 8 + 2]);
+  EXPECT_TRUE(mask_ptr[2 * 14 + 8 + 3]);
+  EXPECT_FALSE(mask_ptr[2 * 14 + 8 + 4]);
+
+  // Row 3 (i=3, vision token): attends to chunk cols 8, 9, 10, 11 (j=0..3).
+  EXPECT_TRUE(mask_ptr[3 * 14 + 8 + 0]);
+  EXPECT_TRUE(mask_ptr[3 * 14 + 8 + 1]);
+  EXPECT_TRUE(mask_ptr[3 * 14 + 8 + 2]);
+  EXPECT_TRUE(mask_ptr[3 * 14 + 8 + 3]);
+  EXPECT_FALSE(mask_ptr[3 * 14 + 8 + 4]);
+
+  // Row 4 (i=4, text token): causal up to j=4.
+  EXPECT_TRUE(mask_ptr[4 * 14 + 8 + 4]);
+  EXPECT_FALSE(mask_ptr[4 * 14 + 8 + 5]);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     FillAttentionMask_RingBuffer_Decode) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+
+  // Decode mask shape: [1, 1, 1, S=8].
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 1, 1, 8}));
+  RankedTensorType ranked_tensor_type(ElementType::Bool, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(bool) * 8);
+  ASSERT_TRUE(mask_buffer);
+
+  // Decode step at start_timestep = 3, window size = 8.
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/3, /*steps=*/1,
+                              proto::ATTENTION_MASK_TYPE_CAUSAL,
+                              /*token_ids=*/std::nullopt,
+                              /*sliding_window_size=*/8,
+                              RingBufferAttentionMaskMode::kDecode));
+
+  auto lock = litert::TensorBufferScopedLock::Create(
+      *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(lock);
+  bool* mask_ptr = static_cast<bool*>(lock->second);
+
+  // Slots 0..3 are attended, slots 4..7 are not yet written in cache.
+  for (int k = 0; k < 8; ++k) {
+    bool expected = (k <= 3);
+    EXPECT_EQ(mask_ptr[k], expected) << "k=" << k;
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     FillAttentionMask_RingBuffer_Verifier) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+
+  // Verifier mask shape: [1, 1, steps=4, S=1028] where sliding_window_size =
+  // 1024.
+  auto layout = ::litert::Layout(::litert::Dimensions({1, 1, 4, 1028}));
+  RankedTensorType ranked_tensor_type(ElementType::Bool, std::move(layout));
+  auto mask_buffer =
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  ranked_tensor_type, sizeof(bool) * 4 * 1028);
+  ASSERT_TRUE(mask_buffer);
+
+  // 1. Initial verification at start_timestep = 0:
+  ASSERT_OK(FillAttentionMask(*mask_buffer, /*start_timestep=*/0, /*steps=*/4,
+                              proto::ATTENTION_MASK_TYPE_CAUSAL,
+                              /*token_ids=*/std::nullopt,
+                              /*sliding_window_size=*/1024,
+                              RingBufferAttentionMaskMode::kVerify));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    bool* mask_ptr = static_cast<bool*>(lock->second);
+
+    for (int step = 0; step < 4; ++step) {
+      int row_offset = step * 1028;
+      for (int col = 0; col < 1028; ++col) {
+        bool expected = (col <= step);
+        EXPECT_EQ(mask_ptr[row_offset + col], expected)
+            << "step=" << step << ", col=" << col;
+      }
+    }
+  }
+
+  // 2. Verification after wrap-around at start_timestep = 1500:
+  ASSERT_OK(FillAttentionMask(
+      *mask_buffer, /*start_timestep=*/1500, /*steps=*/4,
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL,
+      /*token_ids=*/std::nullopt,
+      /*sliding_window_size=*/1024, RingBufferAttentionMaskMode::kVerify));
+
+  {
+    auto lock = litert::TensorBufferScopedLock::Create(
+        *mask_buffer, litert::TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock);
+    bool* mask_ptr = static_cast<bool*>(lock->second);
+
+    for (int step = 0; step < 4; ++step) {
+      int query_step = 1500 + step;
+      int row_offset = step * 1028;
+      for (int col = 0; col < 1028; ++col) {
+        int diff = query_step - col;
+        int distance = ((diff % 1028) + 1028) % 1028;
+        bool expected = (distance <= 1023) && (distance <= query_step) &&
+                        (distance <= (1028 - 4));
+        EXPECT_EQ(mask_ptr[row_offset + col], expected)
+            << "step=" << step << ", col=" << col;
+      }
+    }
+  }
+}
+
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
      BuildModelResourcesTaskBundleFromPath) {
   auto model_path =
@@ -531,7 +1690,146 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   ASSERT_OK_AND_ASSIGN(auto model_resources,
                        BuildLiteRtCompiledModelResources(*model_assets));
   ASSERT_NE(model_resources, nullptr);
-  ASSERT_OK(model_resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+  ASSERT_OK(model_resources->GetTFLiteModel(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+}
+
+// Writes a .litertlm file whose header declares a per-layer embedder section
+// that extends far past the end of the file: the section is present but can
+// never be mapped. This mirrors a truncated download or an mmap failure on
+// device, where engine creation used to succeed and every inference then
+// failed with "No per-layer embeddings found in inputs".
+absl::Status WriteTruncatedPerLayerEmbedderModel(
+    const std::filesystem::path& path) {
+  flatbuffers::FlatBufferBuilder builder;
+  auto model_type = schema::CreateKeyValuePair(
+      builder, "model_type",
+      TfLiteModelTypeToWireString(
+          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
+  auto items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{model_type});
+  auto section = schema::CreateSectionObject(
+      builder, items, /*begin_offset=*/kLiteRtLmPrefixSize,
+      /*end_offset=*/1 << 20, schema::AnySectionDataType_TFLiteModel);
+  auto section_metadata = schema::CreateSectionMetadata(
+      builder,
+      builder.CreateVector(
+          std::vector<flatbuffers::Offset<schema::SectionObject>>{section}));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  builder.Finish(metadata);
+
+  std::ofstream file(path, std::ios::binary);
+  if (!file.good()) {
+    return absl::InternalError("Failed to open test model file for writing.");
+  }
+  file.write("LITERTLM", 8);
+  const uint32_t major_version = 1;
+  const uint32_t minor_version = 0;
+  const uint32_t patch_version = 0;
+  const uint32_t padding = 0;
+  file.write(reinterpret_cast<const char*>(&major_version), 4);
+  file.write(reinterpret_cast<const char*>(&minor_version), 4);
+  file.write(reinterpret_cast<const char*>(&patch_version), 4);
+  file.write(reinterpret_cast<const char*>(&padding), 4);
+  const uint64_t header_end = kLiteRtLmPrefixSize + builder.GetSize();
+  file.write(reinterpret_cast<const char*>(&header_end), 8);
+  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+             builder.GetSize());
+  if (!file.good()) {
+    return absl::InternalError("Failed to write test model file.");
+  }
+  return absl::OkStatus();
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     InitializeEmbeddingLookupsFailsWhenPerLayerEmbedderCannotBeMapped) {
+  const auto model_path = std::filesystem::path(::testing::TempDir()) /
+                          "truncated_per_layer_embedder.litertlm";
+  ASSERT_OK(WriteTruncatedPerLayerEmbedderModel(model_path));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       BuildLiteRtCompiledModelResources(model_assets));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
+  std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
+  // The per-layer embedder section exists but cannot be mapped, so executor
+  // creation must fail instead of silently running without it.
+  EXPECT_THAT(
+      InitializeEmbeddingLookups(env, *model_resources, embedding_lookup,
+                                 per_layer_embedding_lookup),
+      StatusIs(absl::StatusCode::kInternal));
+  EXPECT_EQ(per_layer_embedding_lookup, nullptr);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     InitializeEmbeddingLookupsSkipsAbsentEmbedders) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       BuildLiteRtCompiledModelResources(model_assets));
+
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  std::unique_ptr<EmbeddingLookupManager> embedding_lookup;
+  std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup;
+  // Embedder sections that are genuinely absent are optional.
+  EXPECT_OK(InitializeEmbeddingLookups(env, *model_resources, embedding_lookup,
+                                       per_layer_embedding_lookup));
+  EXPECT_EQ(embedding_lookup, nullptr);
+  EXPECT_EQ(per_layer_embedding_lookup, nullptr);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     AotNpuOverrideEnablesFileBackedLoading) {
+  const auto source_model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto source_file,
+                       ScopedFile::Open(source_model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto source_loader,
+                       LitertLmLoader::Create(std::move(source_file)));
+  auto model_buffer =
+      source_loader->GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
+  ASSERT_GT(model_buffer.Size(), 0);
+
+  const auto aot_model_path = std::filesystem::path(::testing::TempDir()) /
+                              "aot_file_backed_override.litertlm";
+  WriteAotTestModel(aot_model_path, model_buffer);
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(aot_model_path.string()));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      BuildLiteRtCompiledModelResources(
+          model_assets, /*enable_file_backed_model_loading=*/false,
+          /*enable_file_backed_for_aot_npu=*/true));
+  ASSERT_OK_AND_ASSIGN(const auto* model,
+                       model_resources->GetTFLiteModel(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_TRUE(IsFileBacked(*model));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GenericNpuOverrideKeepsBufferBackedLoading) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      BuildLiteRtCompiledModelResources(
+          model_assets, /*enable_file_backed_model_loading=*/false,
+          /*enable_file_backed_for_aot_npu=*/true));
+  ASSERT_OK_AND_ASSIGN(const auto* model,
+                       model_resources->GetTFLiteModel(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_FALSE(IsFileBacked(*model));
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
@@ -548,7 +1846,8 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   ASSERT_OK_AND_ASSIGN(auto model_resources,
                        BuildLiteRtCompiledModelResources(*model_assets));
   ASSERT_NE(model_resources, nullptr);
-  ASSERT_OK(model_resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+  ASSERT_OK(model_resources->GetTFLiteModel(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
@@ -564,7 +1863,8 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   ASSERT_OK_AND_ASSIGN(auto model_resources,
                        BuildLiteRtCompiledModelResources(*model_assets));
   ASSERT_NE(model_resources, nullptr);
-  ASSERT_OK(model_resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+  ASSERT_OK(model_resources->GetTFLiteModel(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
@@ -581,7 +1881,8 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
   ASSERT_OK_AND_ASSIGN(auto model_resources,
                        BuildLiteRtCompiledModelResources(*model_assets));
   ASSERT_NE(model_resources, nullptr);
-  ASSERT_OK(model_resources->GetTFLiteModel(ModelType::kTfLitePrefillDecode));
+  ASSERT_OK(model_resources->GetTFLiteModel(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
 }
 
 TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
@@ -721,8 +2022,9 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetGpuModelCacheData_WithCache) {
   executor_settings.SetScopedProgramCacheFile(prog_file_ptr);
   executor_settings.SetScopedCacheFile(weight_file_ptr);
 
-  ASSERT_OK_AND_ASSIGN(auto cache_data,
-                       GetGpuModelCacheData(executor_settings, "test_cache"));
+  ASSERT_OK_AND_ASSIGN(
+      auto cache_data,
+      GetGpuModelCacheData(executor_settings, /*cache_name=*/""));
 
   ASSERT_OK(cache_data.program_cache_file);
   ASSERT_OK(cache_data.weight_cache_file);
@@ -737,7 +2039,7 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetGpuModelCacheData_WithCache) {
   ASSERT_OK_AND_ASSIGN(std::string expected_metadata_id,
                        GetFileCacheIdentifier(model_path.string()));
   std::string expected_cache_key =
-      absl::StrCat("test_lm.task", "test_cache", "_", expected_metadata_id);
+      absl::StrCat("test_lm.task", "_", expected_metadata_id);
   EXPECT_EQ(cache_data.cache_key, expected_cache_key);
 }
 
@@ -787,8 +2089,9 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetGpuModelCacheData_WithFd) {
   executor_settings.SetScopedProgramCacheFile(program_cache_file_ptr);
   executor_settings.SetScopedCacheFile(weight_cache_file_ptr);
 
-  ASSERT_OK_AND_ASSIGN(auto cache_data,
-                       GetGpuModelCacheData(executor_settings, "test_cache"));
+  ASSERT_OK_AND_ASSIGN(
+      auto cache_data,
+      GetGpuModelCacheData(executor_settings, /*cache_name=*/""));
 
   ASSERT_OK(cache_data.program_cache_file);
   ASSERT_OK(cache_data.weight_cache_file);
@@ -802,6 +2105,1039 @@ TEST(LlmLiteRTCompiledModelExecutorUtilsTest, GetGpuModelCacheData_WithFd) {
 
   std::string expected_cache_key = absl::StrCat("fd_", expected_metadata_id);
   EXPECT_EQ(cache_data.cache_key, expected_cache_key);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetGpuModelCacheData_UnresolvablePathFallsBackToFd) {
+  // Back the model with a real file (for a valid fd), but reference it by a
+  // path that cannot be resolved via stat() -- this mimics the sandboxed
+  // AiCoreIsolatedService, where the model is a virtual/relative MDD path.
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.task";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(std::string expected_metadata_id,
+                       GetFileCacheIdentifier(model_file));
+
+  constexpr absl::string_view kUnresolvablePath =
+      "/nonexistent/dir/virtual_model.task";
+  ASSERT_OK_AND_ASSIGN(
+      auto model_assets,
+      ModelAssets::Create(std::make_shared<ScopedFile>(std::move(model_file)),
+                          kUnresolvablePath));
+
+  class StubExecutorSettings : public ExecutorSettingsBase {
+   public:
+    explicit StubExecutorSettings(const ModelAssets& model_assets)
+        : ExecutorSettingsBase(model_assets) {}
+  };
+  StubExecutorSettings executor_settings(model_assets);
+  executor_settings.SetCacheDir("/dummy/cache/dir");
+
+  // Provide valid cache fds so a cache key is generated.
+  std::string temp_program_cache =
+      (std::filesystem::path(::testing::TempDir()) / "fb_program_cache.bin")
+          .string();
+  std::string temp_weight_cache =
+      (std::filesystem::path(::testing::TempDir()) / "fb_weight_cache.bin")
+          .string();
+  {
+    std::ofstream touch1(temp_program_cache);
+    std::ofstream touch2(temp_weight_cache);
+  }
+  ASSERT_OK_AND_ASSIGN(auto program_cache_file,
+                       ScopedFile::OpenWritable(temp_program_cache));
+  ASSERT_OK_AND_ASSIGN(auto weight_cache_file,
+                       ScopedFile::OpenWritable(temp_weight_cache));
+  executor_settings.SetScopedProgramCacheFile(
+      std::make_shared<ScopedFile>(std::move(program_cache_file)));
+  executor_settings.SetScopedCacheFile(
+      std::make_shared<ScopedFile>(std::move(weight_cache_file)));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto cache_data,
+      GetGpuModelCacheData(executor_settings, /*cache_name=*/""));
+
+  // The key falls back to the fd-based identifier while keeping the
+  // (unresolvable) path's basename.
+  std::string expected_cache_key =
+      absl::StrCat("virtual_model.task", "_", expected_metadata_id);
+  EXPECT_EQ(cache_data.cache_key, expected_cache_key);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetGpuModelCacheData_UnresolvablePathNoFdReturnsError) {
+  constexpr absl::string_view kUnresolvablePath =
+      "/nonexistent/dir/virtual_model.task";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(kUnresolvablePath));
+
+  class StubExecutorSettings : public ExecutorSettingsBase {
+   public:
+    explicit StubExecutorSettings(const ModelAssets& model_assets)
+        : ExecutorSettingsBase(model_assets) {}
+  };
+  StubExecutorSettings executor_settings(model_assets);
+  executor_settings.SetCacheDir("/dummy/cache/dir");
+
+  // No model fd is available, so the original unresolvable-path error is
+  // propagated instead of being masked.
+  auto cache_data = GetGpuModelCacheData(executor_settings, "test_cache");
+  EXPECT_FALSE(cache_data.ok());
+  EXPECT_EQ(cache_data.status().code(), absl::StatusCode::kInternal);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetGpuModelCacheData_ResolvablePathPrefersPathOverFd) {
+  // Provide BOTH a resolvable path and a valid fd. The cache key must be
+  // derived from the path identifier -- a regression guard ensuring the path
+  // remains preferred (no fd-first reordering that would change existing keys).
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.task";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto model_assets,
+      ModelAssets::Create(std::make_shared<ScopedFile>(std::move(model_file)),
+                          model_path.string()));
+
+  class StubExecutorSettings : public ExecutorSettingsBase {
+   public:
+    explicit StubExecutorSettings(const ModelAssets& model_assets)
+        : ExecutorSettingsBase(model_assets) {}
+  };
+  StubExecutorSettings executor_settings(model_assets);
+  executor_settings.SetCacheDir("/dummy/cache/dir");
+
+  std::string temp_program_cache =
+      (std::filesystem::path(::testing::TempDir()) / "rp_program_cache.bin")
+          .string();
+  std::string temp_weight_cache =
+      (std::filesystem::path(::testing::TempDir()) / "rp_weight_cache.bin")
+          .string();
+  {
+    std::ofstream touch1(temp_program_cache);
+    std::ofstream touch2(temp_weight_cache);
+  }
+  ASSERT_OK_AND_ASSIGN(auto program_cache_file,
+                       ScopedFile::OpenWritable(temp_program_cache));
+  ASSERT_OK_AND_ASSIGN(auto weight_cache_file,
+                       ScopedFile::OpenWritable(temp_weight_cache));
+  executor_settings.SetScopedProgramCacheFile(
+      std::make_shared<ScopedFile>(std::move(program_cache_file)));
+  executor_settings.SetScopedCacheFile(
+      std::make_shared<ScopedFile>(std::move(weight_cache_file)));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto cache_data,
+      GetGpuModelCacheData(executor_settings, /*cache_name=*/""));
+
+  ASSERT_OK_AND_ASSIGN(std::string expected_metadata_id,
+                       GetFileCacheIdentifier(model_path.string()));
+  std::string expected_cache_key =
+      absl::StrCat("test_lm.task", "_", expected_metadata_id);
+  EXPECT_EQ(cache_data.cache_key, expected_cache_key);
+}
+
+ModelAssets CreateDummyModelAssets() {
+  absl::StatusOr<ModelAssets> assets = ModelAssets::Create("dummy_path");
+  if (!assets.ok()) {
+    std::abort();
+  }
+  return *std::move(assets);
+}
+
+class DummyExecutorSettings : public ExecutorSettingsBase {
+ public:
+  DummyExecutorSettings() : ExecutorSettingsBase(CreateDummyModelAssets()) {}
+};
+
+LiteRtDelegatePrecision GetGpuPrecision(const litert::GpuOptions& gpu_options) {
+  LiteRtDelegatePrecision precision;
+  EXPECT_EQ(LrtGetGpuAcceleratorCompilationOptionsPrecision(&precision,
+                                                            gpu_options.Get()),
+            kLiteRtStatusOk);
+  return precision;
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetCpuOptions_ConfigureSuccessfully) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_options, litert::CpuOptions::Create());
+  EXPECT_OK(SetCpuOptions(cpu_options, 8));
+}
+
+#if !defined(LITERT_DISABLE_NPU)
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetNpuOptions_MapsPerformanceModeToVendorOptions) {
+  using QualcommPerfMode = qualcomm::QualcommOptions::HtpPerformanceMode;
+  using GoogleTensorPerfMode =
+      google_tensor::GoogleTensorOptions::PerformanceMode;
+  struct TestCase {
+    NpuPerformanceMode mode;
+    QualcommPerfMode expected_qualcomm_mode;
+    GoogleTensorPerfMode expected_google_tensor_mode;
+  };
+  const TestCase kTestCases[] = {
+      {NpuPerformanceMode::kExtremePowerSaver,
+       QualcommPerfMode::kExtremePowerSaver,
+       GoogleTensorPerfMode::kExtremePowerSaver},
+      {NpuPerformanceMode::kPowerSaver, QualcommPerfMode::kPowerSaver,
+       GoogleTensorPerfMode::kPowerSaver},
+      {NpuPerformanceMode::kBalanced, QualcommPerfMode::kBalanced,
+       GoogleTensorPerfMode::kBalanced},
+      {NpuPerformanceMode::kHighPerformance, QualcommPerfMode::kHighPerformance,
+       GoogleTensorPerfMode::kHighPerformance},
+      {NpuPerformanceMode::kSustainedHighPerformance,
+       QualcommPerfMode::kSustainedHighPerformance,
+       GoogleTensorPerfMode::kSustainedPerformance},
+      {NpuPerformanceMode::kBurst, QualcommPerfMode::kBurst,
+       GoogleTensorPerfMode::kBurst},
+  };
+  for (const TestCase& test_case : kTestCases) {
+    SCOPED_TRACE(::testing::Message() << "mode: " << test_case.mode);
+    LITERT_ASSERT_OK_AND_ASSIGN(auto options, litert::Options::Create());
+    EXPECT_OK(SetNpuOptions({.performance_mode = test_case.mode}, options));
+
+    auto qualcomm_options = options.GetOptions<qualcomm::QualcommOptions>();
+    ASSERT_TRUE(qualcomm_options.HasValue());
+    EXPECT_EQ(qualcomm_options.Value().GetHtpPerformanceMode(),
+              test_case.expected_qualcomm_mode);
+
+    auto google_tensor_options =
+        options.GetOptions<google_tensor::GoogleTensorOptions>();
+    ASSERT_TRUE(google_tensor_options.HasValue());
+    EXPECT_EQ(google_tensor_options.Value().GetPerformanceMode(),
+              test_case.expected_google_tensor_mode);
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetNpuOptions_VendorDefaultPerformanceModeLeavesOptionsUnset) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto options, litert::Options::Create());
+  EXPECT_OK(SetNpuOptions(
+      {.performance_mode = NpuPerformanceMode::kVendorDefault}, options));
+
+  auto qualcomm_options = options.GetOptions<qualcomm::QualcommOptions>();
+  ASSERT_TRUE(qualcomm_options.HasValue());
+  EXPECT_EQ(qualcomm_options.Value().GetHtpPerformanceMode(),
+            qualcomm::QualcommOptions::HtpPerformanceMode::kDefault);
+}
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetNpuOptions_MapsPerformanceControlToQualcommPerfCtrlMode) {
+  using PerfCtrlMode = qualcomm::QualcommOptions::HtpPerfCtrlMode;
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto options, litert::Options::Create());
+    EXPECT_OK(SetNpuOptions(NpuOptions{}, options));
+    auto qualcomm_options = options.GetOptions<qualcomm::QualcommOptions>();
+    ASSERT_TRUE(qualcomm_options.HasValue());
+    EXPECT_EQ(qualcomm_options.Value().GetHtpPerfCtrlMode(),
+              PerfCtrlMode::kManual);
+  }
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto options, litert::Options::Create());
+    EXPECT_OK(SetNpuOptions(
+        {.performance_control = NpuPerformanceControl::kPerInference},
+        options));
+    auto qualcomm_options = options.GetOptions<qualcomm::QualcommOptions>();
+    ASSERT_TRUE(qualcomm_options.HasValue());
+    EXPECT_EQ(qualcomm_options.Value().GetHtpPerfCtrlMode(),
+              PerfCtrlMode::kAuto);
+    // The performance mode is applied independently.
+    EXPECT_EQ(qualcomm_options.Value().GetHtpPerformanceMode(),
+              qualcomm::QualcommOptions::HtpPerformanceMode::kBurst);
+  }
+}
+
+struct MediatekSdkVersionTestCase {
+  std::string test_name;
+  MediatekSdkVersion input_version;
+  mediatek::MediatekOptions::NeronSDKVersion expected_version;
+};
+
+class LlmLiteRTCompiledModelExecutorMediatekSdkVersionTest
+    : public TestWithParam<MediatekSdkVersionTestCase> {};
+
+TEST_P(LlmLiteRTCompiledModelExecutorMediatekSdkVersionTest,
+       SetNpuOptionsMapsMediatekSdkVersion) {
+  const MediatekSdkVersionTestCase& test_case = GetParam();
+  LITERT_ASSERT_OK_AND_ASSIGN(auto options, litert::Options::Create());
+  EXPECT_OK(SetNpuOptions(
+      {.mediatek_options = {.sdk_version = test_case.input_version}},
+      options));
+  auto mediatek_options = options.GetOptions<mediatek::MediatekOptions>();
+  ASSERT_TRUE(mediatek_options.HasValue());
+  EXPECT_EQ(mediatek_options.Value().GetNeronSDKVersionType(),
+            test_case.expected_version);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MediatekSdkVersions, LlmLiteRTCompiledModelExecutorMediatekSdkVersionTest,
+    Values(
+        MediatekSdkVersionTestCase{
+            "Default", MediatekSdkVersion::kDefault,
+            mediatek::MediatekOptions::NeronSDKVersion::kVersion8},
+        MediatekSdkVersionTestCase{
+            "V7", MediatekSdkVersion::kVersion7,
+            mediatek::MediatekOptions::NeronSDKVersion::kVersion7},
+        MediatekSdkVersionTestCase{
+            "V8", MediatekSdkVersion::kVersion8,
+            mediatek::MediatekOptions::NeronSDKVersion::kVersion8},
+        MediatekSdkVersionTestCase{
+            "V9", MediatekSdkVersion::kVersion9,
+            mediatek::MediatekOptions::NeronSDKVersion::kVersion9}),
+    [](const TestParamInfo<MediatekSdkVersionTestCase>& info) {
+      return info.param.test_name;
+    });
+#endif  // !defined(LITERT_DISABLE_NPU)
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetCommonGpuOptions_SetsAllCommonOptions) {
+  DummyExecutorSettings executor_settings;
+  LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
+
+  EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options));
+
+  bool constant_sharing = false;
+  EXPECT_EQ(LrtGetGpuOptionsConstantTensorsSharing(&constant_sharing,
+                                                   gpu_options.Get()),
+            kLiteRtStatusOk);
+  EXPECT_TRUE(constant_sharing);
+
+  bool madvise = false;
+  EXPECT_EQ(LrtGetGpuAcceleratorCompilationOptionsMadviseOriginalSharedTensors(
+                &madvise, gpu_options.Get()),
+            kLiteRtStatusOk);
+  EXPECT_TRUE(madvise);
+
+  bool convert_weights = false;
+  EXPECT_EQ(LrtGetGpuAcceleratorRuntimeOptionsConvertWeightsOnGpu(
+                &convert_weights, gpu_options.Get()),
+            kLiteRtStatusOk);
+  EXPECT_TRUE(convert_weights);
+
+  bool use_ir_model = true;
+  EXPECT_EQ(LrtGetGpuOptionsUseIrModel(&use_ir_model, gpu_options.Get()),
+            kLiteRtStatusOk);
+  EXPECT_FALSE(use_ir_model);
+
+  executor_settings.SetUseIrModel(true);
+  EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options));
+  EXPECT_EQ(LrtGetGpuOptionsUseIrModel(&use_ir_model, gpu_options.Get()),
+            kLiteRtStatusOk);
+  EXPECT_TRUE(use_ir_model);
+
+  bool prefer_texture = false;
+  EXPECT_EQ(LrtGetGpuAcceleratorCompilationOptionsPreferTextureWeights(
+                &prefer_texture, gpu_options.Get()),
+            kLiteRtStatusOk);
+#if defined(__APPLE__)
+  EXPECT_FALSE(prefer_texture);
+  bool use_metal_argument_buffers = true;
+  EXPECT_EQ(
+      LrtGetGpuOptionsUseMetalArgumentBuffers(&use_metal_argument_buffers,
+                                              gpu_options.Get()),
+      kLiteRtStatusOk);
+  EXPECT_FALSE(use_metal_argument_buffers);
+#else
+  EXPECT_TRUE(prefer_texture);
+  bool use_metal_argument_buffers = true;
+  EXPECT_EQ(
+      LrtGetGpuOptionsUseMetalArgumentBuffers(&use_metal_argument_buffers,
+                                              gpu_options.Get()),
+      kLiteRtStatusErrorNotFound);
+#endif
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetCommonGpuOptions_DefaultAndFallbackPrecisions) {
+  DummyExecutorSettings executor_settings;
+
+  // Without fallback_activation_data_type specified, defaults to FLOAT32.
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
+    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options));
+    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp32);
+  }
+
+  // With FLOAT32 fallback specified, configures kFp32.
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
+    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
+                                  ActivationDataType::FLOAT32));
+    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp32);
+  }
+
+  // With FLOAT16, INT16, and INT8 fallback specified, configures kFp16.
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
+    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
+                                  ActivationDataType::FLOAT16));
+    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp16);
+  }
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
+    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
+                                  ActivationDataType::INT16));
+    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp16);
+  }
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
+    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
+                                  ActivationDataType::INT8));
+    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp16);
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetCommonGpuOptions_ExplicitActivationPrecisionOverride) {
+  DummyExecutorSettings executor_settings;
+
+  // Explicit FLOAT32 overrides fallback of FLOAT16/INT8.
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
+    executor_settings.SetActivationDataType(ActivationDataType::FLOAT32);
+    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
+                                  ActivationDataType::FLOAT16));
+    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp32);
+  }
+
+  // Explicit INT8 or FLOAT16 overrides fallback of FLOAT32.
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
+    executor_settings.SetActivationDataType(ActivationDataType::INT8);
+    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
+                                  ActivationDataType::FLOAT32));
+    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp16);
+  }
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
+    executor_settings.SetActivationDataType(ActivationDataType::FLOAT16);
+    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
+                                  ActivationDataType::FLOAT32));
+    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp16);
+  }
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetCommonGpuOptions_MixedPrecisionOverride) {
+  DummyExecutorSettings executor_settings;
+  executor_settings.SetEnableMixedPrecision(true);
+
+  // Mixed precision overrides FLOAT16 fallback to FP32.
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
+    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
+                                  ActivationDataType::FLOAT16));
+    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp32);
+  }
+
+  // Mixed precision overrides explicit FLOAT16 activation type to FP32.
+  {
+    LITERT_ASSERT_OK_AND_ASSIGN(auto gpu_options, litert::GpuOptions::Create());
+    executor_settings.SetActivationDataType(ActivationDataType::FLOAT16);
+    EXPECT_OK(SetCommonGpuOptions(executor_settings, gpu_options,
+                                  ActivationDataType::FLOAT16));
+    EXPECT_EQ(GetGpuPrecision(gpu_options), kLiteRtDelegatePrecisionFp32);
+  }
+}
+
+// A fake ModelResources whose weight-section lookup and backing file can be
+// configured per test. Only the members exercised by GetExternalWeightResources
+// are meaningful; all other lookups return errors.
+class FakeExternalWeightModelResources : public ModelResources {
+ public:
+  FakeExternalWeightModelResources(
+      absl::StatusOr<std::pair<size_t, size_t>> section_offset,
+      std::optional<ScopedFile> scoped_file)
+      : section_offset_(std::move(section_offset)),
+        scoped_file_(std::move(scoped_file)) {}
+  ~FakeExternalWeightModelResources() override = default;
+
+  // Serves `model_buffer` from GetTFLiteModelBuffer so that the external
+  // buffer groups declared by the model drive the section lookup.
+  void SetModelBuffer(std::string model_buffer) {
+    model_buffer_ = std::move(model_buffer);
+  }
+
+  // Registers the TFLiteWeights section of another model type. Model types
+  // without a registered section use the constructor's `section_offset`.
+  void SetWeightsSection(proto::LlmMetadata::TfLiteModelType model_type,
+                         std::pair<size_t, size_t> offsets) {
+    weights_sections_[model_type] = offsets;
+  }
+
+  absl::StatusOr<std::pair<size_t, size_t>> GetWeightsSectionOffset(
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (const auto it = weights_sections_.find(model_type);
+        it != weights_sections_.end()) {
+      return it->second;
+    }
+    return section_offset_;
+  }
+
+  absl::StatusOr<std::reference_wrapper<ScopedFile>> GetScopedFile() override {
+    if (!scoped_file_.has_value()) {
+      return absl::UnimplementedError("No scoped file.");
+    }
+    return std::ref(*scoped_file_);
+  }
+
+  absl::StatusOr<const litert::Model*> GetTFLiteModel(
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    return absl::UnimplementedError("Unimplemented");
+  }
+
+  absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (!model_buffer_.has_value()) {
+      return absl::UnimplementedError("Unimplemented");
+    }
+    return absl::string_view(*model_buffer_);
+  }
+
+  absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    return absl::UnimplementedError("Unimplemented");
+  }
+
+  std::optional<std::string> GetTFLiteModelBackendConstraint(
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    return std::nullopt;
+  }
+
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    return std::nullopt;
+  }
+
+  absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override {
+    return absl::UnimplementedError("Unimplemented");
+  }
+
+  absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override {
+    return absl::UnimplementedError("Unimplemented");
+  }
+
+  absl::StatusOr<const proto::ExecutorMetadata*> GetExecutorMetadata()
+      override {
+    return absl::UnimplementedError("Unimplemented");
+  }
+
+ private:
+  absl::StatusOr<std::pair<size_t, size_t>> section_offset_;
+  std::optional<ScopedFile> scoped_file_;
+  std::optional<std::string> model_buffer_;
+  absl::flat_hash_map<proto::LlmMetadata::TfLiteModelType,
+                      std::pair<size_t, size_t>>
+      weights_sections_;
+};
+
+// Serializes a minimal TFLite model that declares the given external buffer
+// groups (and nothing else).
+std::string BuildModelWithExternalBufferGroups(
+    const std::vector<std::string>& group_names) {
+  flatbuffers::FlatBufferBuilder builder;
+  std::vector<flatbuffers::Offset<tflite::ExternalBufferGroup>> groups;
+  groups.reserve(group_names.size());
+  for (const std::string& name : group_names) {
+    groups.push_back(
+        tflite::CreateExternalBufferGroup(builder, builder.CreateString(name)));
+  }
+  flatbuffers::Offset<
+      flatbuffers::Vector<flatbuffers::Offset<tflite::ExternalBufferGroup>>>
+      groups_vector;
+  if (!groups.empty()) {
+    groups_vector = builder.CreateVector(groups);
+  }
+  tflite::ModelBuilder model_builder(builder);
+  model_builder.add_version(3);
+  if (!groups.empty()) {
+    model_builder.add_external_buffer_groups(groups_vector);
+  }
+  tflite::FinishModelBuffer(builder, model_builder.Finish());
+  return std::string(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+                     builder.GetSize());
+}
+
+// Returns the path to the shared test .task model.
+std::string TestModelPath() {
+  return (std::filesystem::path(::testing::SrcDir()) /
+          "litert_lm/runtime/testdata/test_lm.task")
+      .string();
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_SectionNotFound) {
+  // A missing section means the model simply has no external weights, so an
+  // empty result (not an error) is expected.
+  FakeExternalWeightModelResources resources(
+      absl::NotFoundError("No weights section."), /*scoped_file=*/std::nullopt);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto external_weights,
+      GetExternalWeightResources(resources,
+                                 proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_FALSE(external_weights.scoped_file.has_value());
+  EXPECT_TRUE(external_weights.sections.empty());
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_SectionUnimplemented) {
+  // Resource formats that do not support external weight sections report
+  // kUnimplemented, which is also treated as "no external weights".
+  FakeExternalWeightModelResources resources(
+      absl::UnimplementedError("Not supported."), /*scoped_file=*/std::nullopt);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto external_weights,
+      GetExternalWeightResources(resources,
+                                 proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_FALSE(external_weights.scoped_file.has_value());
+  EXPECT_TRUE(external_weights.sections.empty());
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_SectionErrorPropagated) {
+  // Any other lookup error is a real failure and must be surfaced.
+  FakeExternalWeightModelResources resources(
+      absl::InvalidArgumentError("Bad section."), /*scoped_file=*/std::nullopt);
+
+  EXPECT_THAT(GetExternalWeightResources(
+                  resources, proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_SectionPresent) {
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(TestModelPath()));
+
+  // The section spans the byte range [100, 250), i.e. offset 100, length 150.
+  FakeExternalWeightModelResources resources(
+      std::pair<size_t, size_t>(100, 250), std::move(scoped_file));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto external_weights,
+      GetExternalWeightResources(resources,
+                                 proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  ASSERT_TRUE(external_weights.scoped_file.has_value());
+  EXPECT_TRUE(external_weights.scoped_file->IsValid());
+  ASSERT_TRUE(external_weights.sections.contains("tflite_weights"));
+  const auto& section = external_weights.sections.at("tflite_weights");
+  EXPECT_EQ(section.offset, 100);
+  EXPECT_EQ(section.length, 150);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_ModelWithoutExternalBuffersIgnoresSections) {
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(TestModelPath()));
+  FakeExternalWeightModelResources resources(
+      std::pair<size_t, size_t>(100, 250), std::move(scoped_file));
+  // A model with embedded weights declares no external buffer groups, so no
+  // section is attached even if the container happens to have one.
+  resources.SetModelBuffer(BuildModelWithExternalBufferGroups({}));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto external_weights,
+      GetExternalWeightResources(resources,
+                                 proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_FALSE(external_weights.scoped_file.has_value());
+  EXPECT_TRUE(external_weights.sections.empty());
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_MapsOtherModelWeightGroup) {
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(TestModelPath()));
+  FakeExternalWeightModelResources resources(
+      std::pair<size_t, size_t>(100, 250), std::move(scoped_file));
+  // "tflite_weights" resolves to the model's own TFLiteWeights section and
+  // "tflite_weights:<model_type>" to the TFLiteWeights section of that model.
+  resources.SetModelBuffer(BuildModelWithExternalBufferGroups(
+      {"tflite_weights", "tflite_weights:tf_lite_embedder"}));
+  resources.SetWeightsSection(proto::LlmMetadata::TF_LITE_EMBEDDER,
+                              {1000, 1600});
+
+  ASSERT_OK_AND_ASSIGN(
+      auto external_weights,
+      GetExternalWeightResources(resources,
+                                 proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  ASSERT_TRUE(external_weights.scoped_file.has_value());
+  EXPECT_TRUE(external_weights.scoped_file->IsValid());
+  ASSERT_EQ(external_weights.sections.size(), 2);
+  EXPECT_EQ(external_weights.sections.at("tflite_weights").offset, 100);
+  EXPECT_EQ(external_weights.sections.at("tflite_weights").length, 150);
+  const auto& other =
+      external_weights.sections.at("tflite_weights:tf_lite_embedder");
+  EXPECT_EQ(other.offset, 1000);
+  EXPECT_EQ(other.length, 600);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_OtherModelWeightGroupOnly) {
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(TestModelPath()));
+  // E.g. an embedder whose only large weight (the embedding table) is stored in
+  // the prefill/decode model's TFLiteWeights section: it has no TFLiteWeights
+  // section of its own.
+  FakeExternalWeightModelResources resources(
+      absl::NotFoundError("No weights section."), std::move(scoped_file));
+  resources.SetModelBuffer(BuildModelWithExternalBufferGroups(
+      {"tflite_weights:tf_lite_prefill_decode"}));
+  resources.SetWeightsSection(proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+                              {1000, 1600});
+
+  ASSERT_OK_AND_ASSIGN(auto external_weights,
+                       GetExternalWeightResources(
+                           resources, proto::LlmMetadata::TF_LITE_EMBEDDER));
+  ASSERT_TRUE(external_weights.scoped_file.has_value());
+  ASSERT_EQ(external_weights.sections.size(), 1);
+  const auto& other =
+      external_weights.sections.at("tflite_weights:tf_lite_prefill_decode");
+  EXPECT_EQ(other.offset, 1000);
+  EXPECT_EQ(other.length, 600);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetExternalWeightResources_UnsupportedGroupIsSkipped) {
+  ASSERT_OK_AND_ASSIGN(auto scoped_file, ScopedFile::Open(TestModelPath()));
+  FakeExternalWeightModelResources resources(
+      std::pair<size_t, size_t>(100, 250), std::move(scoped_file));
+  // A group name the runtime cannot resolve is skipped (the weight loader
+  // reports the missing data when the model is compiled), while the model's
+  // own section is still attached. "tflite_weightsfoo" lacks the ':' separator
+  // and must not be treated as a reference to model type "foo".
+  resources.SetModelBuffer(BuildModelWithExternalBufferGroups(
+      {"tflite_weights", "unsupported", "tflite_weightsfoo"}));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto external_weights,
+      GetExternalWeightResources(resources,
+                                 proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  ASSERT_EQ(external_weights.sections.size(), 1);
+  EXPECT_TRUE(external_weights.sections.contains("tflite_weights"));
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     SetExternalWeightOptions_NoExternalWeights) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto compilation_options,
+                              litert::Options::Create());
+  FakeExternalWeightModelResources resources(
+      absl::NotFoundError("No weights section."), /*scoped_file=*/std::nullopt);
+
+  // With no external weights, the call is a no-op that still succeeds.
+  EXPECT_OK(SetExternalWeightOptions(resources,
+                                     proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+                                     compilation_options));
+}
+
+// NOTE: The "external weights present" branch of SetExternalWeightOptions is
+// not unit-tested here. It forwards to
+// litert::Options::SetExternalWeightScopedFile, which takes ownership of the
+// weight source but only reclaims it when the Options object is built into a
+// compiled model, something a unit test does not do. Exercising it therefore
+// leaks the source and trips the heap checker. The substantive logic of that
+// branch (locating the section and duplicating the backing file) is covered by
+// GetExternalWeightResources_SectionPresent.
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetAttentionMaskParams_NullMetadata) {
+  auto params = GetAttentionMaskParams(/*executor_metadata=*/nullptr);
+  EXPECT_EQ(params.global_type, proto::ATTENTION_MASK_TYPE_CAUSAL);
+  EXPECT_EQ(params.local_type, proto::ATTENTION_MASK_TYPE_CAUSAL);
+  EXPECT_FALSE(params.sliding_window_size.has_value());
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetAttentionMaskParams_EmptyMetadata) {
+  proto::ExecutorMetadata metadata;
+  auto params = GetAttentionMaskParams(&metadata);
+  EXPECT_EQ(params.global_type, proto::ATTENTION_MASK_TYPE_CAUSAL);
+  EXPECT_EQ(params.local_type, proto::ATTENTION_MASK_TYPE_CAUSAL);
+  EXPECT_FALSE(params.sliding_window_size.has_value());
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetAttentionMaskParams_WithSettings) {
+  proto::ExecutorMetadata metadata;
+  auto* mask_settings = metadata.mutable_llm_executor_metadata()
+                            ->mutable_attention_mask_settings();
+  mask_settings->set_attention_mask_type(
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL);
+  mask_settings->set_local_attention_mask_type(
+      proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL);
+  mask_settings->set_sliding_window_size(512);
+
+  auto params = GetAttentionMaskParams(&metadata);
+  EXPECT_EQ(params.global_type,
+            proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL);
+  EXPECT_EQ(params.local_type, proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL);
+  ASSERT_TRUE(params.sliding_window_size.has_value());
+  EXPECT_EQ(*params.sliding_window_size, 512);
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     GetAttentionMaskParams_LocalPolicyFallback) {
+  proto::ExecutorMetadata metadata;
+  auto* mask_settings = metadata.mutable_llm_executor_metadata()
+                            ->mutable_attention_mask_settings();
+  mask_settings->set_attention_mask_type(
+      proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL);
+
+  auto params = GetAttentionMaskParams(&metadata);
+  EXPECT_EQ(params.global_type, proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL);
+  EXPECT_EQ(params.local_type, proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL);
+  EXPECT_FALSE(params.sliding_window_size.has_value());
+}
+
+TEST(LlmLiteRTCompiledModelExecutorUtilsTest,
+     ShouldSkipGlobalCausalAttentionMask) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, ::litert::Environment::Create({}));
+  auto bool_layout = ::litert::Layout(::litert::Dimensions({1, 1, 1, 128}));
+  RankedTensorType bool_tensor_type(ElementType::Bool, std::move(bool_layout));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto bool_host_mask,
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  bool_tensor_type, sizeof(bool) * 128));
+
+  auto float_layout = ::litert::Layout(::litert::Dimensions({1, 1, 1, 128}));
+  RankedTensorType float_tensor_type(ElementType::Float32,
+                                     std::move(float_layout));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto float_host_mask,
+      TensorBuffer::CreateManaged(env, ::litert::TensorBufferType::kHostMemory,
+                                  float_tensor_type, sizeof(float) * 128));
+
+  ModelSignatures signatures;
+  signatures.input_tokens = "tokens";
+  signatures.input_positions = "input_pos";
+  signatures.input_attn_mask = "mask";
+  signatures.input_int32_param = "param_tensor";
+  signatures.output_logits = "logits";
+
+  AttentionMaskParams causal_params;
+  causal_params.global_type = proto::ATTENTION_MASK_TYPE_CAUSAL;
+
+  // Pruned boolean mask on GPU with single-buffer cache params should be
+  // skipped.
+  EXPECT_TRUE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      causal_params, &bool_host_mask));
+
+  // CPU backend must never skip initializing/filling the host attention mask.
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::CPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      causal_params, &bool_host_mask));
+
+  // Float attention masks are not pruned by Flash SDPA and must not be skipped.
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      causal_params, &float_host_mask));
+
+  // Null mask buffer or disabled single-buffer cache must not skip.
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      causal_params, /*attn_mask_buffer=*/nullptr));
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/false, signatures,
+      causal_params, &bool_host_mask));
+
+  // Bidirectional and vision-bidirectional masks must not be skipped.
+  AttentionMaskParams bidirectional_params;
+  bidirectional_params.global_type = proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL;
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      bidirectional_params, &bool_host_mask));
+
+  AttentionMaskParams vision_bidirectional_params;
+  vision_bidirectional_params.global_type =
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true, signatures,
+      vision_bidirectional_params, &bool_host_mask));
+
+  // Models with a separate local attention mask only skip when the local mask
+  // buffer is also a pruned boolean causal mask on host memory.
+  ModelSignatures local_mask_signatures = signatures;
+  local_mask_signatures.input_attn_mask_local = "local_mask";
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, causal_params, &bool_host_mask,
+      /*attn_mask_local_buffer=*/nullptr));
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, causal_params, &bool_host_mask, &float_host_mask));
+  EXPECT_TRUE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, causal_params, &bool_host_mask, &bool_host_mask));
+
+  // Non-causal local_type must prevent skipping even when global_type is causal
+  // and both masks are boolean host buffers.
+  AttentionMaskParams local_bidirectional_params = causal_params;
+  local_bidirectional_params.local_type =
+      proto::ATTENTION_MASK_TYPE_BIDIRECTIONAL;
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, local_bidirectional_params, &bool_host_mask,
+      &bool_host_mask));
+
+  AttentionMaskParams local_vision_bidirectional_params = causal_params;
+  local_vision_bidirectional_params.local_type =
+      proto::ATTENTION_MASK_TYPE_VISION_BIDIRECTIONAL;
+  EXPECT_FALSE(ShouldSkipGlobalCausalAttentionMask(
+      Backend::GPU, /*gpu_optimized_single_buffer_cache=*/true,
+      local_mask_signatures, local_vision_bidirectional_params, &bool_host_mask,
+      &bool_host_mask));
+}
+
+TEST(ModelContainsSdpaTest, ReturnsTrueForCustomSdpa) {
+  tflite::ModelT model;
+  auto opcode = std::make_unique<tflite::OperatorCodeT>();
+  opcode->builtin_code = tflite::BuiltinOperator_CUSTOM;
+  opcode->custom_code = "odml.scaled_dot_product_attention";
+  model.operator_codes.push_back(std::move(opcode));
+
+  auto subgraph = std::make_unique<tflite::SubGraphT>();
+  auto op = std::make_unique<tflite::OperatorT>();
+  op->opcode_index = 0;
+  subgraph->operators.push_back(std::move(op));
+  model.subgraphs.push_back(std::move(subgraph));
+
+  flatbuffers::FlatBufferBuilder builder;
+  auto packed = tflite::Model::Pack(builder, &model);
+  tflite::FinishModelBuffer(builder, packed);
+
+  const tflite::Model* packed_model =
+      tflite::GetModel(builder.GetBufferPointer());
+  EXPECT_TRUE(ModelContainsSdpa(packed_model));
+}
+
+TEST(ModelContainsSdpaTest, ReturnsTrueForSdpaTransposed) {
+  tflite::ModelT model;
+  auto opcode = std::make_unique<tflite::OperatorCodeT>();
+  opcode->builtin_code = tflite::BuiltinOperator_CUSTOM;
+  opcode->custom_code = "odml.sdpa_transposed";
+  model.operator_codes.push_back(std::move(opcode));
+
+  auto subgraph = std::make_unique<tflite::SubGraphT>();
+  auto op = std::make_unique<tflite::OperatorT>();
+  op->opcode_index = 0;
+  subgraph->operators.push_back(std::move(op));
+  model.subgraphs.push_back(std::move(subgraph));
+
+  flatbuffers::FlatBufferBuilder builder;
+  auto packed = tflite::Model::Pack(builder, &model);
+  tflite::FinishModelBuffer(builder, packed);
+
+  const tflite::Model* packed_model =
+      tflite::GetModel(builder.GetBufferPointer());
+  EXPECT_TRUE(ModelContainsSdpa(packed_model));
+}
+
+TEST(ModelContainsSdpaTest, ReturnsTrueForStableHloCompositeSdpa) {
+  tflite::ModelT model;
+  auto opcode = std::make_unique<tflite::OperatorCodeT>();
+  opcode->builtin_code = tflite::BuiltinOperator_STABLEHLO_COMPOSITE;
+  model.operator_codes.push_back(std::move(opcode));
+
+  auto subgraph = std::make_unique<tflite::SubGraphT>();
+  auto op = std::make_unique<tflite::OperatorT>();
+  op->opcode_index = 0;
+  tflite::StableHLOCompositeOptionsT composite_options;
+  composite_options.name = "odml.scaled_dot_product_attention";
+  op->builtin_options_2.Set(std::move(composite_options));
+  subgraph->operators.push_back(std::move(op));
+  model.subgraphs.push_back(std::move(subgraph));
+
+  flatbuffers::FlatBufferBuilder builder;
+  auto packed = tflite::Model::Pack(builder, &model);
+  tflite::FinishModelBuffer(builder, packed);
+
+  const tflite::Model* packed_model =
+      tflite::GetModel(builder.GetBufferPointer());
+  EXPECT_TRUE(ModelContainsSdpa(packed_model));
+}
+
+TEST(ModelContainsSdpaTest, ReturnsFalseForNonSdpaModel) {
+  tflite::ModelT model;
+  auto opcode = std::make_unique<tflite::OperatorCodeT>();
+  opcode->builtin_code = tflite::BuiltinOperator_ADD;
+  model.operator_codes.push_back(std::move(opcode));
+
+  auto subgraph = std::make_unique<tflite::SubGraphT>();
+  auto op = std::make_unique<tflite::OperatorT>();
+  op->opcode_index = 0;
+  subgraph->operators.push_back(std::move(op));
+  model.subgraphs.push_back(std::move(subgraph));
+
+  flatbuffers::FlatBufferBuilder builder;
+  auto packed = tflite::Model::Pack(builder, &model);
+  tflite::FinishModelBuffer(builder, packed);
+
+  const tflite::Model* packed_model =
+      tflite::GetModel(builder.GetBufferPointer());
+  EXPECT_FALSE(ModelContainsSdpa(packed_model));
+}
+
+TEST(ModelContainsSdpaTest, ReturnsFalseForNullModel) {
+  EXPECT_FALSE(ModelContainsSdpa(nullptr));
+}
+
+TEST(ModelResourcesContainSdpaTest, ReturnsTrueWhenPrefillDecodeHasSdpa) {
+  tflite::ModelT model;
+  auto opcode = std::make_unique<tflite::OperatorCodeT>();
+  opcode->builtin_code = tflite::BuiltinOperator_CUSTOM;
+  opcode->custom_code = "odml.scaled_dot_product_attention";
+  model.operator_codes.push_back(std::move(opcode));
+
+  auto subgraph = std::make_unique<tflite::SubGraphT>();
+  auto op = std::make_unique<tflite::OperatorT>();
+  op->opcode_index = 0;
+  subgraph->operators.push_back(std::move(op));
+  model.subgraphs.push_back(std::move(subgraph));
+
+  flatbuffers::FlatBufferBuilder builder;
+  auto packed = tflite::Model::Pack(builder, &model);
+  tflite::FinishModelBuffer(builder, packed);
+
+  std::string model_buffer(
+      reinterpret_cast<const char*>(builder.GetBufferPointer()),
+      builder.GetSize());
+
+  class FakeSdpaModelResources : public ModelResources {
+   public:
+    explicit FakeSdpaModelResources(std::string buffer)
+        : buffer_(std::move(buffer)) {}
+
+    bool HasTFLiteModel(
+        proto::LlmMetadata::TfLiteModelType model_type) override {
+      return model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE;
+    }
+
+    absl::StatusOr<const Model*> GetTFLiteModel(
+        proto::LlmMetadata::TfLiteModelType model_type) override {
+      return absl::UnimplementedError("Not implemented");
+    }
+
+    absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+        proto::LlmMetadata::TfLiteModelType model_type) override {
+      if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
+        return buffer_;
+      }
+      return absl::NotFoundError("Model not found");
+    }
+
+    absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override {
+      return absl::UnimplementedError("Not implemented");
+    }
+
+    absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override {
+      return absl::UnimplementedError("Not implemented");
+    }
+
+   private:
+    std::string buffer_;
+  };
+
+  FakeSdpaModelResources resources(std::move(model_buffer));
+  EXPECT_TRUE(ModelResourcesContainSdpa(resources));
 }
 
 }  // namespace

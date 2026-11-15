@@ -47,6 +47,12 @@ absl::Status ParseJsError(const val& result) {
 
 namespace litert::lm {
 
+ReadableStreamDataStream::~ReadableStreamDataStream() {
+  if (js_stream_wrapper_["close"].typeOf().as<std::string>() == "function") {
+    js_stream_wrapper_.call<void>("close");
+  }
+}
+
 absl::Status ReadableStreamDataStream::ReadAndDiscard(void* buffer,
                                                       uint64_t offset,
                                                       uint64_t size) {
@@ -83,7 +89,7 @@ absl::Status ReadableStreamDataStream::Discard(uint64_t offset, uint64_t size) {
   if (size == 0) {
     return absl::OkStatus();
   }
-  val result = js_stream_wrapper_.call<val>("discard", offset, size).await();
+  val result = js_stream_wrapper_.call<val>("discard", offset, size);
 
   ABSL_RETURN_IF_ERROR(ParseJsError(result));
   return absl::OkStatus();

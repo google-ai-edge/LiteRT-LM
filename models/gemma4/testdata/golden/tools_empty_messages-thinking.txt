@@ -1,0 +1,4 @@
+<|turn>system
+<|think|>
+<|tool>declaration:get_weather{description:<|"|>Get current weather for a location.<|"|>,parameters:{properties:{location:{description:<|"|>City name<|"|>,type:<|"|>STRING<|"|>}},required:[<|"|>location<|"|>],type:<|"|>OBJECT<|"|>}}<tool|><turn|>
+<|turn>model

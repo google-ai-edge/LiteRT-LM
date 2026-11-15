@@ -12,27 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 include(ExternalProject)
+include(${LITERTLM_TFLITE_PACKAGE_DIR}/tflite_config.cmake)
 
-set(TFLITE_EXT_PREFIX       "${EXTERNAL_PROJECT_BINARY_DIR}/tensorflow" CACHE INTERNAL "")
-set(TFLITE_INSTALL_PREFIX   "${TFLITE_EXT_PREFIX}/install" CACHE INTERNAL "")
-set(TFLITE_INCLUDE_DIR      "${TFLITE_INSTALL_PREFIX}/include" CACHE INTERNAL "")
-set(TFLITE_LIB_DIR          "${TFLITE_INSTALL_PREFIX}/lib" CACHE INTERNAL "")
-set(TFLITE_SRC_DIR          "${TFLITE_EXT_PREFIX}/src/tflite_external/tensorflow/lite" CACHE INTERNAL "")
-set(TFLITE_BUILD_DIR        "${TFLITE_EXT_PREFIX}/src/tflite_external-build" CACHE INTERNAL "TFLite Build Directory")
-set(TENSORFLOW_SOURCE_DIR   "${TFLITE_EXT_PREFIX}/src/tflite_external" CACHE INTERNAL "")
-set(TFLITE_STATIC_LIB       "${TFLITE_BUILD_DIR}/libtensorflow-lite.a" CACHE INTERNAL "")
-set(RUY_INCLUDE_DIR         "${EXTERNAL_PROJECT_BINARY_DIR}/tflite_external-build" CACHE INTERNAL "")
+setup_external_install_structure("${LITERTLM_TFLITE_INSTALL_PREFIX}")
 
-set(XNNPACK_SOURCE_DIR "${TFLITE_BUILD_DIR}/xnnpack" CACHE INTERNAL "")
-set(XNNPACK_BINARY_DIR "${TFLITE_BUILD_DIR}/_deps/xnnpack-build" CACHE INTERNAL "")
-set(XNNPACK_INCLUDE_DIR "${TFLITE_BUILD_DIR}/xnnpack/include" CACHE INTERNAL "")
-set(XNNPACK_LIB_DIR "${TFLITE_BUILD_DIR}/_deps/xnnpack-build" CACHE INTERNAL "")
+set(LITERTLM_TFLITE_TAG "fadb2ca7b5c17ba3b9380f32487cef62eebcf2c9" CACHE STRING "TFLite git tag")
 
-setup_external_install_structure("${TFLITE_INSTALL_PREFIX}")
+# TFLite's CMake build fetches Eigen by cloning gitlab.com, which is frequently
+# rate limited on CI ("GitLab is currently unable to handle this request due to
+# load"). ml_dtypes is cloned with its Eigen submodule, also from gitlab.com.
+# Download pinned archives from the TensorFlow mirror instead.
+# tflite_patcher.cmake adds these as the URL / URL_HASH of
+# tensorflow/lite/tools/cmake/modules/{eigen,ml_dtypes}.cmake, but only if the
+# module doesn't already declare a URL and its GIT_TAG matches the archive's
+# commit. Otherwise the module is left unchanged, so bumping
+# LITERTLM_TFLITE_TAG can't silently build against stale archives.
+set(LITERTLM_TFLITE_EIGEN_URL
+    "https://storage.googleapis.com/mirror.tensorflow.org/gitlab.com/libeigen/eigen/-/archive/ea13a98decd497a8c5588fb5de71b57bcf10d864/eigen-ea13a98decd497a8c5588fb5de71b57bcf10d864.tar.gz"
+    CACHE STRING "Eigen archive URL used by the TFLite build")
+set(LITERTLM_TFLITE_EIGEN_URL_HASH
+    "SHA256=35c6126e246585d9cf6600b65471582c2701aae64b784a6fd19168a90cfc841e"
+    CACHE STRING "Eigen archive hash used by the TFLite build")
+set(LITERTLM_TFLITE_ML_DTYPES_URL
+    "https://storage.googleapis.com/mirror.tensorflow.org/github.com/jax-ml/ml_dtypes/archive/00d98cd92ade342fef589c0470379abb27baebe9/ml_dtypes-00d98cd92ade342fef589c0470379abb27baebe9.tar.gz"
+    CACHE STRING "ml_dtypes archive URL used by the TFLite build")
+set(LITERTLM_TFLITE_ML_DTYPES_URL_HASH
+    "SHA256=f6e5880666661351e6cd084ac4178ddc4dabcde7e9a73722981c0d1500cf5937"
+    CACHE STRING "ml_dtypes archive hash used by the TFLite build")
 
-if(NOT EXISTS "${TFLITE_STATIC_LIB}")
+if(NOT EXISTS "${LITERTLM_TFLITE_STATIC_LIB}")
     message(STATUS "TFLite not found. Configuring external build...")
 
     ExternalProject_Add(
@@ -43,105 +52,118 @@ if(NOT EXISTS "${TFLITE_STATIC_LIB}")
             gtest_external
             opencl_headers_external
             protobuf_external
-            tokenizers-cpp_external
+            sentencepiece_external
         GIT_REPOSITORY  https://github.com/tensorflow/tensorflow.git
-        GIT_TAG         862baf45439c742ac3a9d43e88088943bd3a582d # Updated on 2026-03-18
-        PREFIX          "${TFLITE_EXT_PREFIX}"
+        GIT_TAG         ${LITERTLM_TFLITE_TAG}
+        PREFIX          "${LITERTLM_TFLITE_EXT_PREFIX}"
         SOURCE_SUBDIR   "tensorflow/lite"
-
+        UPDATE_COMMAND
+            git fetch origin ${LITERTLM_TFLITE_TAG}
+            COMMAND git reset --hard FETCH_HEAD
+            COMMAND git clean -dfx
         PATCH_COMMAND
-            git checkout -- . && git clean -df
-
-            COMMAND ${CMAKE_COMMAND}
-                -DTFLITE_SRC_DIR=${TFLITE_SRC_DIR}
-                -DTFLITE_BUILD_DIR=${TFLITE_BUILD_DIR}
-                -DTFLITE_PACKAGE_DIR=${TFLITE_PACKAGE_DIR}
-                -DTENSORFLOW_SOURCE_DIR=${TENSORFLOW_SOURCE_DIR}
-                -DFLATC_EXECUTABLE=${FLATC_EXECUTABLE}
-                -DFLATBUFFERS_INCLUDE_DIR=${FLATBUFFERS_INCLUDE_DIR}
-                -DABSL_INCLUDE_DIR=${ABSL_INCLUDE_DIR}
-                -DPROTOBUF_PACKAGE_DIR=${PROTOBUF_PACKAGE_DIR}
-                -DPROTOBUF_INCLUDE_DIR=${PROTOBUF_INCLUDE_DIR}
-                -DLITERTLM_PATCHES_DIR=${LITERTLM_PATCHES_DIR}
-
-                -DLITERTLM_PROJECT_ROOT=${LITERTLM_PROJECT_ROOT}
-                -DLITERTLM_PACKAGES_DIR=${LITERTLM_PACKAGES_DIR}
-                -DLITERTLM_MODULES_DIR=${LITERTLM_MODULES_DIR}
-                -P "${LITERTLM_PACKAGES_DIR}/tflite/tflite_patcher.cmake"
-
+            ${CMAKE_COMMAND}
+            "-DLITERTLM_ORCHESTRATION_PHASE=${LITERTLM_ORCHESTRATION_PHASE}"
+            "-DLITERTLM_EXTERNAL_PROJECT_BIN_DIR=${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}"
+            "-DLITERTLM_MODULES_DIR=${LITERTLM_MODULES_DIR}"
+            "-DLITERTLM_CMAKE_PACKAGES_DIR=${LITERTLM_CMAKE_PACKAGES_DIR}"
+            "-DLITERTLM_PROJECT_ROOT=${LITERTLM_PROJECT_ROOT}"
+            "-DLITERTLM_TFLITE_PACKAGE_DIR=${LITERTLM_TFLITE_PACKAGE_DIR}"
+            "-DLITERTLM_TFLITE_CONFIG_PATH=${LITERTLM_TFLITE_CONFIG_PATH}"
+            "-DLITERTLM_ABSL_PACKAGE_DIR=${LITERTLM_ABSL_PACKAGE_DIR}"
+            "-DLITERTLM_ABSL_CONFIG_PATH=${LITERTLM_ABSL_CONFIG_PATH}"
+            "-DLITERTLM_FLATBUFFERS_PACKAGE_DIR=${LITERTLM_FLATBUFFERS_PACKAGE_DIR}"
+            "-DLITERTLM_FLATBUFFERS_CONFIG_PATH=${LITERTLM_FLATBUFFERS_CONFIG_PATH}"
+            "-DLITERTLM_PROTOBUF_PACKAGE_DIR=${LITERTLM_PROTOBUF_PACKAGE_DIR}"
+            "-DLITERTLM_PROTOBUF_CONFIG_PATH=${LITERTLM_PROTOBUF_CONFIG_PATH}"
+            "-DLITERTLM_HOST_PROTOC_BIN_DIR=${LITERTLM_HOST_PROTOC_BIN_DIR}"
+            "-DLITERTLM_HOST_PROTOC=${LITERTLM_HOST_PROTOC}"
+            "-DLITERTLM_TFLITE_SRC_DIR=${LITERTLM_TFLITE_SRC_DIR}"
+            "-DLITERTLM_TFLITE_BUILD_DIR=${LITERTLM_TFLITE_BUILD_DIR}"
+            "-DLITERTLM_TFLITE_PACKAGE_DIR=${LITERTLM_TFLITE_PACKAGE_DIR}"
+            "-DLITERTLM_TENSORFLOW_SRC_DIR=${LITERTLM_TENSORFLOW_SRC_DIR}"
+            "-DLITERTLM_FLATC_EXECUTABLE=${LITERTLM_FLATC_EXECUTABLE}"
+            "-DLITERTLM_PATCHES_DIR=${LITERTLM_PATCHES_DIR}"
+            "-DLITERTLM_TFLITE_EIGEN_URL=${LITERTLM_TFLITE_EIGEN_URL}"
+            "-DLITERTLM_TFLITE_EIGEN_URL_HASH=${LITERTLM_TFLITE_EIGEN_URL_HASH}"
+            "-DLITERTLM_TFLITE_ML_DTYPES_URL=${LITERTLM_TFLITE_ML_DTYPES_URL}"
+            "-DLITERTLM_TFLITE_ML_DTYPES_URL_HASH=${LITERTLM_TFLITE_ML_DTYPES_URL_HASH}"
+            -P "${LITERTLM_CMAKE_PACKAGES_DIR}/tflite/tflite_patcher.cmake"
         CMAKE_ARGS
             ${LITERTLM_TOOLCHAIN_FILE}
             ${LITERTLM_TOOLCHAIN_ARGS}
-            -DCMAKE_INSTALL_PREFIX=${TFLITE_INSTALL_PREFIX}
-            -DCMAKE_INSTALL_LIBDIR=lib
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-            -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-            -DCMAKE_POLICY_DEFAULT_CMP0169=OLD
-            -DCMAKE_POLICY_DEFAULT_CMP0170=OLD
-            -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}
-            -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-
-            
-            -Dabsl_DIR=${ABSL_INSTALL_PREFIX}/lib/cmake/absl
-            -D_abseil-cpp_LICENSE_FILE:FILEPATH=${ABSL_SRC_DIR}/absl_external/LICENSE
-            -DABSL_INCLUDE_DIR=${ABSL_INCLUDE_DIR}
-            -DABSL_PACKAGE_DIR=${ABSL_PACKAGE_DIR}
-
-            -DPROTOBUF_PACKAGE_DIR=${PROTOBUF_PACKAGE_DIR}
-            -DPROTO_PROTOC_EXECUTABLE=${PROTO_PROTOC_EXECUTABLE}
-            -DPROTOBUF_INCLUDE_DIR=${PROTOBUF_INCLUDE_DIR}
-            -Dprotobuf_BINARY_DIR=${PROTO_BIN_DIR}
-            -Dprotobuf_BUILD_PROTOC_BINARIES=OFF
-            -Dprotobuf_SOURCE_DIR=${PROTO_SRC_DIR}
-            -DPROTO_INSTALL_PREFIX=${PROTO_INSTALL_PREFIX}
-            -DPROTO_SRC_DIR=${PROTO_SRC_DIR}
-            -DPROTO_INCLUDE_DIR=${PROTO_INCLUDE_DIR}
-            -DPROTO_LIB_DIR=${PROTO_LIB_DIR}
-
-            -DFLATBUFFERS_INCLUDE_DIR=${FLATBUFFERS_INCLUDE_DIR}
-            -DFLATBUFFERS_BUILD_FLATC=OFF
-            -DFLATBUFFERS_INSTALL=OFF
-            -DFlatBuffers_BINARY_DIR=${FLATBUFFERS_BIN_DIR}
-            -DFLATBUFFERS_PROJECT_DIR=${FLATBUFFERS_SRC_DIR}/flatbuffers_external
-            -DFlatBuffers_SOURCE_DIR=${FLATBUFFERS_SRC_DIR}/flatbuffers_external
-            -D_flatbuffers_LICENSE_FILE=${FLATBUFFERS_SRC_DIR}/flatbuffers_external/LICENSE
-            -DFLATC_PATHS=${FLATBUFFERS_BIN_DIR}
-            -DFLATBUFFERS_FLATC_EXECUTABLE=${FLATC_EXECUTABLE}
-            -Dflatbuffers_DIR=${FLATBUFFERS_INSTALL_PREFIX}/lib/cmake/flatbuffers
-            -DFLATC_TARGET=${FLATC_EXECUTABLE}
-            -DFLATC_EXECUTABLE=${FLATC_EXECUTABLE}
-            -DFLATBUFFERS_PACKAGE_DIR=${FLATBUFFERS_PACKAGE_DIR}
-
-            -DPNG_FOUND=ON
-            -DPNG_LIBRARY=${libpng_lib_BINARY_DIR}/libpng.a
-            -DPNG_PNG_INCLUDE_DIR=${libpng_lib_SOURCE_DIR}
-
-            -DTFLITE_ENABLE_INSTALL=OFF
-            -DTFLITE_ENABLE_XNNPACK=ON
-            -DTFLITE_ENABLE_RESOURCE_VARIABLE=OFF
-            -DXNNPACK_SET_VERBOSITY=OFF
-            -DTFLITE_ENABLE_GPU=OFF
-
-            -DTFLITE_SRC_DIR=${TFLITE_SRC_DIR}
-            -DTFLITE_BUILD_DIR=${TFLITE_BUILD_DIR}
-            -DTENSORFLOW_SOURCE_DIR=${TENSORFLOW_SOURCE_DIR}
-            -DTFLITE_HOST_TOOLS_DIR=${FLATBUFFERS_BIN_DIR}
-            -DTFLITE_PACKAGE_DIR=${TFLITE_PACKAGE_DIR}
-            -DLITERTLM_PACKAGES_DIR=${LITERTLM_PACKAGES_DIR}
-            -DLITERTLM_MODULES_DIR=${LITERTLM_MODULES_DIR}
-            -DLITERTLM_PROJECT_ROOT=${LITERTLM_PROJECT_ROOT}
-            -DLITERTLM_ABSL_LIBRARIES=${ABSL_LIBS_FLAT}
-            -DLITERTLM_PROTO_LIBRARIES=${PROTO_LIBS_FLAT}
-            -DLITERTLM_PROTO_INCLUDE_DIRS=${PROTO_INCLUDE_DIR}
-            -DLITERTLM_PROTOC_EXECUTABLE=${PROTO_PROTOC_EXECUTABLE}
+            "-DLITERTLM_ORCHESTRATION_PHASE=${LITERTLM_ORCHESTRATION_PHASE}"
+            "-DLITERTLM_BIN_EXT=${LITERTLM_BIN_EXT}"
+            "-DLITERTLM_STATIC_LIB_EXT=${LITERTLM_STATIC_LIB_EXT}"
+            "-DLITERTLM_DYN_LIB_EXT=${LITERTLM_DYN_LIB_EXT}"
+            "-DLITERTLM_LIB_PREFIX=${LITERTLM_LIB_PREFIX}"
+            "-DLITERTLM_EXTERNAL_PROJECT_BIN_DIR=${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}"
+            "-DLITERTLM_MODULES_DIR=${LITERTLM_MODULES_DIR}"
+            "-DLITERTLM_CMAKE_PACKAGES_DIR=${LITERTLM_CMAKE_PACKAGES_DIR}"
+            "-DLITERTLM_TARGET_MAP_DIR=${LITERTLM_TARGET_MAP_DIR}"
+            "-DLITERTLM_PROJECT_ROOT=${LITERTLM_PROJECT_ROOT}"
+            "-DLITERTLM_TFLITE_PACKAGE_DIR=${LITERTLM_TFLITE_PACKAGE_DIR}"
+            "-DLITERTLM_TFLITE_CONFIG_PATH=${LITERTLM_TFLITE_CONFIG_PATH}"
+            "-DLITERTLM_ABSL_PACKAGE_DIR=${LITERTLM_ABSL_PACKAGE_DIR}"
+            "-DLITERTLM_ABSL_CONFIG_PATH=${LITERTLM_ABSL_CONFIG_PATH}"
+            "-DLITERTLM_FLATBUFFERS_PACKAGE_DIR=${LITERTLM_FLATBUFFERS_PACKAGE_DIR}"
+            "-DLITERTLM_FLATBUFFERS_CONFIG_PATH=${LITERTLM_FLATBUFFERS_CONFIG_PATH}"
+            "-DLITERTLM_PROTOBUF_PACKAGE_DIR=${LITERTLM_PROTOBUF_PACKAGE_DIR}"
+            "-DLITERTLM_PROTOBUF_CONFIG_PATH=${LITERTLM_PROTOBUF_CONFIG_PATH}"
+            "-DLITERTLM_HOST_PROTOC_BIN_DIR=${LITERTLM_HOST_PROTOC_BIN_DIR}"
+            "-DLITERTLM_HOST_PROTOC=${LITERTLM_HOST_PROTOC}"
+            "-DCMAKE_INSTALL_PREFIX=${LITERTLM_TFLITE_INSTALL_PREFIX}"
+            "-DCMAKE_INSTALL_LIBDIR=lib"
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+            "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+            "-DCMAKE_POLICY_DEFAULT_CMP0169=OLD"
+            "-DCMAKE_POLICY_DEFAULT_CMP0170=OLD"
+            "-DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}"
+            "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
+            "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"
+            "-DPNG_FOUND=ON"
+            "-DPNG_LIBRARY=${libpng_lib_BINARY_DIR}/libpng.a"
+            "-DPNG_PNG_INCLUDE_DIR=${libpng_lib_SOURCE_DIR}"
+            "-DTFLITE_ENABLE_INSTALL=OFF"
+            "-DTFLITE_ENABLE_XNNPACK=ON"
+            "-DTFLITE_ENABLE_RESOURCE_VARIABLE=OFF"
+            "-DXNNPACK_SET_VERBOSITY=OFF"
+            "-DTFLITE_ENABLE_GPU=OFF"
+            "-DTFLITE_HOST_TOOLS_DIR=${FLATBUFFERS_BIN_DIR}"
+            "-DTFLITE_PACKAGE_DIR=${LITERTLM_TFLITE_PACKAGE_DIR}"
+            "-DLITERTLM_PROJECT_ROOT=${LITERTLM_PROJECT_ROOT}"
+            "-DLITERTLM_ABSL_LIBRARIES=${LITERTLM_ABSL_LIBS_FLAT}"
+            "-DLITERTLM_PROTOBUF_LIBRARIES=${LITERTLM_PROTOBUF_LIBS_FLAT}"
+            "-DLITERTLM_PROTOBUF_INCLUDE_DIRS=${LITERTLM_PROTOBUF_INCLUDE_DIR}"
+            "-DLITERTLM_PROTOC_EXECUTABLE=${LITERTLM_HOST_PROTOC}"
+            "-DLITERTLM_TFLITE_SRC_DIR=${LITERTLM_TFLITE_SRC_DIR}"
+            "-DLITERTLM_TFLITE_BUILD_DIR=${LITERTLM_TFLITE_BUILD_DIR}"
+            "-DLITERTLM_TFLITE_PACKAGE_DIR=${LITERTLM_TFLITE_PACKAGE_DIR}"
+            "-DLITERTLM_TENSORFLOW_SRC_DIR=${LITERTLM_TENSORFLOW_SRC_DIR}"
+            "-DLITERTLM_FLATC_EXECUTABLE=${LITERTLM_FLATC_EXECUTABLE}"
+            "-DLITERTLM_PATCHES_DIR=${LITERTLM_PATCHES_DIR}"
     )
-else()
-    message(STATUS "[LiteRTLM] TFLite found at: ${TFLITE_STATIC_LIB}")
-    if(NOT TARGET tflite_external)
-        add_custom_target(tflite_external)
-    endif()
+    block()
+        set(LITERTLM_GENERATE_TARGET_MAP OFF CACHE BOOL "Disable target map generation for TFLite external project" FORCE)
+        if(LITERTLM_GENERATE_TARGET_MAP)
+            ExternalProject_Add_Step(tflite_external generate_target_map
+                COMMAND ${CMAKE_COMMAND}
+                    "-DDEP_NAME=tflite"
+                    "-DSEARCH_DIR=${LITERTLM_TFLITE_BUILD_DIR}"
+                    "-DSEARCH_STR=LITERTLM_TFLITE_BUILD_DIR"
+                    "-DOUTPUT_FILE=${LITERTLM_TFLITE_TARGET_MAP_PATH}"
+                    -P ${LITERTLM_SCRIPTS_DIR}/generate_target_map.cmake
+                DEPENDEES install
+                BYPRODUCTS ${LITERTLM_TFLITE_TARGET_MAP_PATH}
+            )
+        endif()
+    endblock()
 endif()
 
-include(${TFLITE_PACKAGE_DIR}/tflite_aggregate.cmake)
+if(NOT TARGET tflite_external)
+    add_custom_target(tflite_external)
+endif()
+
+include(${LITERTLM_TFLITE_AGGREGATE_PATH})
 generate_tflite_aggregate()

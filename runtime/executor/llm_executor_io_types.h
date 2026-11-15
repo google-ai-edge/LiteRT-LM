@@ -25,12 +25,10 @@
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/types/span.h"  // from @com_google_absl
-#include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/components/logits_processor/constrained_decoding/constrained_decoder.h"
-#include "runtime/components/logits_processor/logits_processor.h"
+#include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 
 namespace litert::lm {
 
@@ -288,28 +286,35 @@ class ExecutorAudioData {
   ExecutorAudioData() = default;
 
   // Constructor that moves optional TensorBuffers
-  // embeddings: Flattened audio embedding matrix with shape
+  // projected_audio_embeddings: Flattened audio embedding matrix with shape
   //   [audio_tokens_num, model_dimension].
   // per_layer_embeddings: Flattened audio per layer embeddings tensor with
   //   shape [stack_size, audio_tokens_num, per_layer_embedding_dimension].
   // valid_tokens: The number of valid tokens in the audio embeddings.
   ExecutorAudioData(
-      std::optional<::litert::TensorBuffer>&& embeddings,
+      std::optional<::litert::TensorBuffer>&& projected_audio_embeddings,
       std::optional<::litert::TensorBuffer>&& per_layer_embeddings,
       int valid_tokens = -1);
 
   // Getters:
-  absl::StatusOr<const ::litert::TensorBuffer*> GetEmbeddingsPtr() const;
-  absl::StatusOr<::litert::TensorBuffer*> GetMutableEmbeddingsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetProjectedAudioEmbeddingsPtr()
+      const;
+  absl::StatusOr<::litert::TensorBuffer*>
+  GetMutableProjectedAudioEmbeddingsPtr();
   absl::StatusOr<const ::litert::TensorBuffer*> GetPerLayerEmbeddingsPtr()
       const;
   absl::StatusOr<::litert::TensorBuffer*> GetMutablePerLayerEmbeddingsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetAudioEmbeddingsPtr() const;
+  absl::StatusOr<::litert::TensorBuffer*> GetMutableAudioEmbeddingsPtr();
   int GetValidTokens() const;
 
   // Setters:
-  void SetEmbeddings(std::optional<::litert::TensorBuffer>&& embeddings);
+  void SetProjectedAudioEmbeddings(
+      std::optional<::litert::TensorBuffer>&& projected_audio_embeddings);
   void SetPerLayerEmbeddings(
       std::optional<::litert::TensorBuffer>&& per_layer_embeddings);
+  void SetAudioEmbeddings(
+      std::optional<::litert::TensorBuffer>&& audio_embeddings);
   void SetValidTokens(int valid_tokens);
 
   // Duplicates the ExecutorAudioData. This method relies on the
@@ -318,8 +323,9 @@ class ExecutorAudioData {
   absl::StatusOr<ExecutorAudioData> Duplicate() const;
 
  private:
-  std::optional<::litert::TensorBuffer> embeddings_;
+  std::optional<::litert::TensorBuffer> projected_audio_embeddings_;
   std::optional<::litert::TensorBuffer> per_layer_embeddings_;
+  std::optional<::litert::TensorBuffer> audio_embeddings_;
 
   // The number of valid tokens in the audio embeddings. This is used to
   // determine the number of audio tokens to be actually used.
@@ -355,6 +361,10 @@ class ExecutorInputs {
       const;
   absl::StatusOr<::litert::TensorBuffer*>
   GetMutableVisionPerLayerEmbeddingsPtr();
+  absl::StatusOr<const ::litert::TensorBuffer*> GetProjectedAudioEmbeddingsPtr()
+      const;
+  absl::StatusOr<::litert::TensorBuffer*>
+  GetMutableProjectedAudioEmbeddingsPtr();
   absl::StatusOr<const ::litert::TensorBuffer*> GetAudioEmbeddingsPtr() const;
   absl::StatusOr<::litert::TensorBuffer*> GetMutableAudioEmbeddingsPtr();
   absl::StatusOr<const ::litert::TensorBuffer*> GetAudioPerLayerEmbeddingsPtr()
@@ -429,24 +439,70 @@ class ExecutorDecodeParams {
  public:
   ExecutorDecodeParams() = default;
 
-  // Sets the logits processor list. The caller retains ownership of the
-  // processors and must ensure it outlives the ExecutorDecodeParams.
-  void SetLogitsProcessorList(std::vector<LogitsProcessor*> logits_processors);
+  // Sets the constrained decoder. The caller retains ownership of the decoder
+  // and must ensure it outlives the ExecutorDecodeParams.
+  void SetConstrainedDecoder(ConstrainedDecoder* constrained_decoder) {
+    constrained_decoder_ = constrained_decoder;
+  }
 
-  // Returns the logits processor list if it exists. Otherwise, returns an
-  // empty span.
-  absl::Span<LogitsProcessor* const> GetLogitsProcessorList() const;
+  // Returns the constrained decoder if it exists. Otherwise, returns nullptr.
+  ConstrainedDecoder* GetConstrainedDecoder() const {
+    return constrained_decoder_;
+  }
 
-  // Returns the constraint decoder if it exists. Otherwise, returns nullptr.
-  //
-  // TODO(b/517779380): Remove this method once the logits processor is fully
-  // supported in the hand-written path.
-  ConstrainedDecoder* GetConstraintDecoder() const;
+  // Sets an optional cancellation flag for the decode process. (eg. for
+  // diffusion-llm).
+  void SetCancelled(const std::atomic<bool>* cancelled) {
+    cancelled_ = cancelled;
+  }
+
+  // Returns the cancellation flag if set, otherwise nullptr.
+  const std::atomic<bool>* GetCancelled() const { return cancelled_; }
+
+  // Sets the speculative decoding configuration for this decode step. See
+  // `SpeculativeDecodingConfig`; an unset mode inherits the engine's
+  // speculative decoding configuration.
+  void SetSpeculativeDecodingConfig(
+      const SpeculativeDecodingConfig& speculative_decoding_config) {
+    speculative_decoding_config_ = speculative_decoding_config;
+  }
+
+  // Returns the speculative decoding configuration for this decode step.
+  const SpeculativeDecodingConfig& GetSpeculativeDecodingConfig() const {
+    return speculative_decoding_config_;
+  }
+
+  // Sets the most tokens the caller takes from this decode step and the ones
+  // after it before the response ends (its output or context limit): an
+  // executor that runs steps ahead of its caller stops there.
+  void SetMaxNumTokensToEmit(int max_num_tokens_to_emit) {
+    max_num_tokens_to_emit_ = max_num_tokens_to_emit;
+  }
+
+  // Returns the most tokens the caller takes, if it said.
+  std::optional<int> GetMaxNumTokensToEmit() const {
+    return max_num_tokens_to_emit_;
+  }
 
  private:
-  std::vector<LogitsProcessor*> logits_processors_;
+  ConstrainedDecoder* constrained_decoder_ = nullptr;
+  const std::atomic<bool>* cancelled_ = nullptr;
+  SpeculativeDecodingConfig speculative_decoding_config_;
+  std::optional<int> max_num_tokens_to_emit_;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params);
+
+// The result of `LlmExecutorBase::VerifyDraft()`.
+struct DraftVerificationResult {
+  // The new context tokens, in order: the accepted prefix of the draft, then
+  // the token decoded after it (a correction of the first rejected draft token,
+  // or the token after the whole draft), unless the last accepted draft token
+  // was verified without decoding a token after it. The last token is the new
+  // pending token, as with `Decode()`.
+  std::vector<int> tokens;
+  // The number of leading `tokens` that come from the draft.
+  int num_accepted = 0;
+};
 
 }  // namespace litert::lm
 

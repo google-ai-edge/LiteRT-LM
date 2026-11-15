@@ -15,7 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_MEMORY_MAPPED_FILE_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_MEMORY_MAPPED_FILE_H_
 
-#include "support/util/memory_mapped_file.h"  // from @litert
+#include "support/util/memory_mapped_file.h"
 
 namespace litert::lm {
 using MemoryMappedFile = ::litert::support::MemoryMappedFile;

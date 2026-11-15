@@ -21,13 +21,20 @@ from google.protobuf import text_format
 
 from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
+from runtime.proto import any2any_metadata_pb2
+from runtime.proto import embedding_metadata_pb2
+from runtime.proto import executor_metadata_pb2
 from runtime.proto import llm_metadata_pb2
+from runtime.proto import speech2text_metadata_pb2
+from runtime.proto import text2image_metadata_pb2
+from runtime.proto import text2speech_metadata_pb2
 
 # --- ANSI Escape Code Definitions ---
 ANSI_BOLD = "\033[1m"
 ANSI_RESET = "\033[0m"
 # --- Indentation Constants ---
 INDENT_SPACES = 2
+_DUMP_CHUNK_SIZE_BYTES = 1024 * 1024
 
 
 def print_boxed_title(
@@ -167,27 +174,33 @@ def _get_tflite_weight_filename(
   return f"{file_name}.weight"
 
 
-def _dump_llm_metadata_proto(
+def _dump_proto_section(
     file_stream: IO[bytes],
     section_object: schema.SectionObject,
     dump_files_dir: str | None,
     output_stream: IO[str],
+    proto_cls: Any,
+    on_parsed: Any = None,
 ) -> Optional[str]:
-  """Dumps LlmMetadataProto section content."""
+  """Dumps a protobuf metadata section content."""
   file_stream.seek(section_object.BeginOffset())
   proto_data = file_stream.read(
       section_object.EndOffset() - section_object.BeginOffset()
   )
-  llm_metadata = llm_metadata_pb2.LlmMetadata()
-  llm_metadata.ParseFromString(proto_data)
-  output_stream.write(f"{' ' * INDENT_SPACES}<<<<<<<< start of LlmMetadata\n")
-  debug_str = text_format.MessageToString(llm_metadata)
+  proto_msg = proto_cls()
+  proto_msg.ParseFromString(proto_data)
+  proto_name = proto_cls.__name__
+  output_stream.write(f"{' ' * INDENT_SPACES}<<<<<<<< start of {proto_name}\n")
+  debug_str = text_format.MessageToString(proto_msg)
   for line in debug_str.splitlines():
     output_stream.write(f"{' ' * (INDENT_SPACES * 2)}{line}\n")
-  output_stream.write(f"{' ' * INDENT_SPACES}>>>>>>>> end of LlmMetadata\n")
+  output_stream.write(f"{' ' * INDENT_SPACES}>>>>>>>> end of {proto_name}\n")
+
+  if on_parsed is not None:
+    on_parsed(proto_msg)
 
   if dump_files_dir:
-    file_name = "LlmMetadataProto.pbtext"
+    file_name = f"{proto_name}Proto.pbtext"
     file_path = os.path.join(dump_files_dir, file_name)
     with litertlm_core.open_file(file_path, "w") as f_out:
       f_out.write(debug_str)
@@ -196,6 +209,161 @@ def _dump_llm_metadata_proto(
     )
     return file_name
   return None
+
+
+def _dump_llm_metadata_proto(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    dump_files_dir: str | None,
+    output_stream: IO[str],
+    jinja_prompt_template_path: Optional[str] = None,
+) -> Optional[str]:
+  """Dumps LlmMetadataProto section content."""
+
+  def _extract_jinja(llm_metadata: llm_metadata_pb2.LlmMetadata) -> None:
+    if not jinja_prompt_template_path:
+      return
+    if (
+        not llm_metadata.HasField("jinja_prompt_template")
+        or not llm_metadata.jinja_prompt_template
+    ):
+      raise ValueError(
+          "Model LlmMetadata does not contain a jinja_prompt_template."
+      )
+    parent_dir = os.path.dirname(os.path.abspath(jinja_prompt_template_path))
+    if parent_dir:
+      os.makedirs(parent_dir, exist_ok=True)
+    with litertlm_core.open_file(jinja_prompt_template_path, "w") as f_jinja:
+      f_jinja.write(llm_metadata.jinja_prompt_template)
+
+  return _dump_proto_section(
+      file_stream,
+      section_object,
+      dump_files_dir,
+      output_stream,
+      llm_metadata_pb2.LlmMetadata,
+      on_parsed=_extract_jinja,
+  )
+
+
+def _dump_executor_metadata_proto(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    dump_files_dir: str | None,
+    output_stream: IO[str],
+) -> Optional[str]:
+  """Dumps ExecutorMetadataProto section content."""
+  return _dump_proto_section(
+      file_stream,
+      section_object,
+      dump_files_dir,
+      output_stream,
+      executor_metadata_pb2.ExecutorMetadata,
+  )
+
+
+def _dump_embedding_metadata_proto(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    dump_files_dir: str | None,
+    output_stream: IO[str],
+) -> Optional[str]:
+  """Dumps EmbeddingMetadataProto section content."""
+  return _dump_proto_section(
+      file_stream,
+      section_object,
+      dump_files_dir,
+      output_stream,
+      embedding_metadata_pb2.EmbeddingMetadata,
+  )
+
+
+def _dump_speech2text_metadata_proto(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    dump_files_dir: str | None,
+    output_stream: IO[str],
+) -> Optional[str]:
+  """Dumps Speech2TextMetadataProto section content."""
+  return _dump_proto_section(
+      file_stream,
+      section_object,
+      dump_files_dir,
+      output_stream,
+      speech2text_metadata_pb2.Speech2TextMetadata,
+  )
+
+
+def _dump_text2speech_metadata_proto(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    dump_files_dir: str | None,
+    output_stream: IO[str],
+) -> Optional[str]:
+  """Dumps Text2SpeechMetadataProto section content."""
+  return _dump_proto_section(
+      file_stream,
+      section_object,
+      dump_files_dir,
+      output_stream,
+      text2speech_metadata_pb2.Text2SpeechMetadata,
+  )
+
+
+def _dump_text2image_metadata_proto(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    dump_files_dir: str | None,
+    output_stream: IO[str],
+) -> Optional[str]:
+  """Dumps Text2ImageMetadataProto section content."""
+  return _dump_proto_section(
+      file_stream,
+      section_object,
+      dump_files_dir,
+      output_stream,
+      text2image_metadata_pb2.Text2ImageMetadata,
+  )
+
+
+def _dump_any2any_metadata_proto(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    dump_files_dir: str | None,
+    output_stream: IO[str],
+) -> Optional[str]:
+  """Dumps Any2AnyMetadataProto section content."""
+  return _dump_proto_section(
+      file_stream,
+      section_object,
+      dump_files_dir,
+      output_stream,
+      any2any_metadata_pb2.Any2AnyMetadata,
+  )
+
+
+def _dump_section_bytes(
+    file_stream: IO[bytes],
+    section_object: schema.SectionObject,
+    file_path: str,
+    chunk_size: int = _DUMP_CHUNK_SIZE_BYTES,
+) -> None:
+  """Copies a section's byte range from file_stream to file_path in chunks."""
+  begin_offset = section_object.BeginOffset()
+  end_offset = section_object.EndOffset()
+  if end_offset < begin_offset:
+    raise ValueError(
+        f"Invalid section offsets: begin={begin_offset}, end={end_offset}"
+    )
+  file_stream.seek(begin_offset)
+  remaining = end_offset - begin_offset
+  with litertlm_core.open_file(file_path, "wb") as f_out:
+    while remaining > 0:
+      chunk = file_stream.read(min(chunk_size, remaining))
+      if not chunk:
+        break
+      f_out.write(chunk)
+      remaining -= len(chunk)
 
 
 def _dump_section_content(
@@ -210,13 +378,7 @@ def _dump_section_content(
   if dump_files_dir:
     file_name = get_filename_fn(section_object, section_index)
     file_path = os.path.join(dump_files_dir, file_name)
-    file_stream.seek(section_object.BeginOffset())
-    with litertlm_core.open_file(file_path, "wb") as f_out:
-      f_out.write(
-          file_stream.read(
-              section_object.EndOffset() - section_object.BeginOffset()
-          )
-      )
+    _dump_section_bytes(file_stream, section_object, file_path)
     output_stream.write(
         f"{' ' * INDENT_SPACES}{file_name} dumped to: {file_path}\n"
     )
@@ -285,13 +447,7 @@ def _dump_generic_section(
     file_extension = _get_generic_section_file_extension(data_type_str)
     file_name = f"Section{section_index}_{data_type_str}{file_extension}"
     file_path = os.path.join(dump_files_dir, file_name)
-    file_stream.seek(section_object.BeginOffset())
-    with litertlm_core.open_file(file_path, "wb") as f_out:
-      f_out.write(
-          file_stream.read(
-              section_object.EndOffset() - section_object.BeginOffset()
-          )
-      )
+    _dump_section_bytes(file_stream, section_object, file_path)
     output_stream.write(
         f"{' ' * INDENT_SPACES}Section{section_index}_{data_type_str} dumped"
         f" to: {file_path}\n"
@@ -370,7 +526,8 @@ def kvp_to_dict(kvp: schema.KeyValuePair) -> dict[str, Any]:
     kvp: The KeyValuePair flatbuffer table object to convert.
 
   Returns:
-    A dictionary with 'key' (str or None), 'value' (extracted Any value or None),
+    A dictionary with 'key' (str or None), 'value' (extracted Any value or
+    None),
     and 'value_type' (str description of the union type).
   """
   key_bytes = kvp.Key()
@@ -438,7 +595,10 @@ def _write_model_toml(
 
 
 def peek_litertlm_file(
-    litertlm_path: str, dump_files_dir: Optional[str], output_stream: IO[str]
+    litertlm_path: str,
+    dump_files_dir: Optional[str],
+    output_stream: IO[str],
+    jinja_prompt_template_path: Optional[str] = None,
 ) -> None:
   """Reads and prints information from a LiteRT-LM file.
 
@@ -446,6 +606,8 @@ def peek_litertlm_file(
     litertlm_path: The path to the LiteRT-LM file.
     dump_files_dir: Optional directory to dump section contents.
     output_stream: The stream to write the output to.
+    jinja_prompt_template_path: Optional path where jinja_prompt_template will
+      be unpacked.
   """
   metadata = read_litertlm_header(litertlm_path, output_stream)
   with litertlm_core.open_file(litertlm_path, "rb") as file_stream:
@@ -474,6 +636,7 @@ def peek_litertlm_file(
     if dump_files_dir:
       os.makedirs(dump_files_dir, exist_ok=True)
 
+    extracted_jinja = False
     if num_sections == 0 or section_metadata is None:
       output_stream.write(" " * INDENT_SPACES + "<None>\n")
     else:
@@ -519,6 +682,8 @@ def peek_litertlm_file(
                 model_type = item_dict["value"]
               elif item_dict["key"] == "backend_constraint":
                 backend_constraint = item_dict["value"]
+              elif item_dict["key"] == "sha256":
+                continue
               else:
                 section_metadata_items.append(item_dict)
 
@@ -534,10 +699,44 @@ def peek_litertlm_file(
             section_info["backend_constraint"] = backend_constraint
 
         data_type = section_object.DataType()
-        dumped_file_name = None
         if data_type == schema.AnySectionDataType.LlmMetadataProto:
+          extracted_jinja = True
           section_info["section_type"] = "LlmMetadata"
           dumped_file_name = _dump_llm_metadata_proto(
+              file_stream,
+              section_object,
+              dump_files_dir,
+              output_stream,
+              jinja_prompt_template_path,
+          )
+        elif data_type == schema.AnySectionDataType.ExecutorMetadataProto:
+          section_info["section_type"] = "ExecutorMetadata"
+          dumped_file_name = _dump_executor_metadata_proto(
+              file_stream, section_object, dump_files_dir, output_stream
+          )
+        elif data_type == schema.AnySectionDataType.EmbeddingMetadataProto:
+          section_info["section_type"] = "EmbeddingMetadata"
+          dumped_file_name = _dump_embedding_metadata_proto(
+              file_stream, section_object, dump_files_dir, output_stream
+          )
+        elif data_type == schema.AnySectionDataType.Speech2TextMetadataProto:
+          section_info["section_type"] = "Speech2TextMetadata"
+          dumped_file_name = _dump_speech2text_metadata_proto(
+              file_stream, section_object, dump_files_dir, output_stream
+          )
+        elif data_type == schema.AnySectionDataType.Text2SpeechMetadataProto:
+          section_info["section_type"] = "Text2SpeechMetadata"
+          dumped_file_name = _dump_text2speech_metadata_proto(
+              file_stream, section_object, dump_files_dir, output_stream
+          )
+        elif data_type == schema.AnySectionDataType.Text2ImageMetadataProto:
+          section_info["section_type"] = "Text2ImageMetadata"
+          dumped_file_name = _dump_text2image_metadata_proto(
+              file_stream, section_object, dump_files_dir, output_stream
+          )
+        elif data_type == schema.AnySectionDataType.Any2AnyMetadataProto:
+          section_info["section_type"] = "Any2AnyMetadata"
+          dumped_file_name = _dump_any2any_metadata_proto(
               file_stream, section_object, dump_files_dir, output_stream
           )
         elif data_type == schema.AnySectionDataType.TFLiteModel:
@@ -580,6 +779,12 @@ def peek_litertlm_file(
           toml_sections.append(section_info)
 
         output_stream.write("\n")
+
+    if jinja_prompt_template_path and not extracted_jinja:
+      raise ValueError(
+          "Model does not contain an LlmMetadata section to extract"
+          " jinja_prompt_template."
+      )
 
     if dump_files_dir:
       _write_model_toml(dump_files_dir, toml_system_metadata, toml_sections)

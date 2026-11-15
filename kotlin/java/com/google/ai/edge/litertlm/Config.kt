@@ -35,6 +35,90 @@ data class Channel(val channelName: String, val start: String, val end: String) 
 }
 
 /**
+ * Configuration for repetition penalty.
+ *
+ * When multiple penalties are configured and active, the order of application to output logits
+ * during decoding is:
+ * 1. Multiplicative penalty ([repetitionPenalty])
+ * 2. Subtractive penalties ([presencePenalty] and [frequencyPenalty])
+ *
+ * @property repetitionPenalty A multiplicative penalty applied to a token's logit if that token has
+ *   appeared at least once inside the generated window history (e.g., 1.0 = no penalty, 1.2 =
+ *   moderate penalty). Positive logits are divided by this parameter, and negative logits are
+ *   multiplied (HuggingFace style). Must be >= 1.0f; values less than 1.0f are automatically
+ *   clamped to 1.0f during execution. Defaults to 1.0f when `null`.
+ * @property presencePenalty A scalar subtracted from a token's logit if that token has appeared at
+ *   least once inside the generated window history. Positive values discourage repetition, while
+ *   negative values reward repeating tokens (OpenAI style). Defaults to 0.0f when `null`.
+ * @property frequencyPenalty A scalar subtracted from a token's logit, scaled linearly by the
+ *   number of times that token has previously appeared inside the generated window history.
+ *   Positive values discourage repetition, while negative values reward repeating tokens (OpenAI
+ *   style). Defaults to 0.0f when `null`.
+ * @property windowSize The maximum number of recent tokens in generation history to consider when
+ *   computing penalization. Tokens generated prior to this window are forgotten. A value of 0 means
+ *   tracking all infinite generation history. Must be >= 0; negative values are clamped to 0 during
+ *   execution. Defaults to 0 when `null`.
+ */
+data class RepetitionPenaltyConfig
+@JvmOverloads
+constructor(
+  val repetitionPenalty: Float? = null,
+  val presencePenalty: Float? = null,
+  val frequencyPenalty: Float? = null,
+  val windowSize: Int? = null,
+) {
+  init {
+    require(repetitionPenalty == null || repetitionPenalty >= 1.0f) {
+      "repetitionPenalty should be >= 1.0, but got $repetitionPenalty."
+    }
+    require(windowSize == null || windowSize >= 0) {
+      "windowSize should be >= 0, but got $windowSize."
+    }
+  }
+}
+
+/**
+ * Configuration for no repeat ngram banning.
+ *
+ * When [noRepeatNgramSize] is set greater than 0, any sequence of tokens (an ngram of that exact
+ * length) generated during decoding or present inside the window history can only occur at most
+ * once. If generating a candidate token would complete a repeating ngram, that candidate token's
+ * logit is set to -inf.
+ *
+ * @property noRepeatNgramSize The size of ngrams (consecutive token sequences) that are banned from
+ *   repeating within the generation history window. If set > 0, when generating the next token
+ *   would complete an already observed [noRepeatNgramSize] sequence, the logit of the candidate
+ *   token is set to -inf. If set <= 0, no repeat ngram banning is disabled. Negative values are
+ *   clamped to 0. Defaults to 0 when `null`.
+ * @property windowSize The maximum number of recent tokens in generation history to consider when
+ *   checking for repeating ngrams. Tokens generated prior to this window are forgotten. A value of
+ *   0 means tracking all infinite generation history. Must be >= 0; negative values are clamped
+ *   to 0. If [windowSize] is greater than 0 but less than [noRepeatNgramSize], it is automatically
+ *   clamped to [noRepeatNgramSize] during execution so that the ngrams can fit and be tracked.
+ *   Defaults to 0 when `null`.
+ */
+data class NoRepeatNgramConfig
+@JvmOverloads
+constructor(val noRepeatNgramSize: Int? = null, val windowSize: Int? = null) {
+  init {
+    require(noRepeatNgramSize == null || noRepeatNgramSize >= 0) {
+      "noRepeatNgramSize should be >= 0, but got $noRepeatNgramSize."
+    }
+    require(windowSize == null || windowSize >= 0) {
+      "windowSize should be >= 0, but got $windowSize."
+    }
+  }
+}
+
+/**
+ * Configuration for suppressing specific tokens during decoding.
+ *
+ * @property suppressTokens A list of token IDs to suppress. Banned tokens will have their logit set
+ *   to -inf.
+ */
+data class SuppressTokensConfig(val suppressTokens: Collection<Int>)
+
+/**
  * Configuration for thinking/reasoning generation.
  *
  * @property enableThinking Whether thinking/reasoning generation is enabled.
@@ -72,6 +156,25 @@ sealed class Backend(val name: String) {
    *   containing the libraries.
    */
   data class NPU(val nativeLibraryDir: String = "") : Backend("NPU")
+
+  class GOOGLE_TENSOR : Backend("GOOGLE_TENSOR_ARTISAN")
+}
+
+/**
+ * Supported activation data types for inference.
+ *
+ * Note: Support depends on the specific model architecture and target backend/delegate. Most models
+ * support [FLOAT16] and [FLOAT32] (when not overriding, GPU backends typically default to [FLOAT16]
+ * to optimize throughput and memory bandwidth, while CPU backends typically default to [FLOAT32]).
+ * Setting an activation data type not supported by the model or backend (e.g., [INT8] on a standard
+ * float model) will cause [Engine.initialize] to fail with an exception (e.g., tensor type mismatch
+ * or unsupported sampler).
+ */
+enum class ActivationDataType(val value: Int) {
+  FLOAT32(0),
+  FLOAT16(1),
+  INT16(2),
+  INT8(3),
 }
 
 /**
@@ -90,8 +193,21 @@ sealed class Backend(val name: String) {
  * @property cacheDir The directory for placing cache files. It should be a directory with write
  *   access. If not set, it uses the directory of the [modelPath]. Set to ":nocache" to disable
  *   caching at all.
+ * @property activationDataType Optional activation data type override for inference (e.g., FLOAT32,
+ *   FLOAT16). When `null`, use the default value from the model or the engine (typically [FLOAT16]
+ *   for GPU backends and [FLOAT32] for CPU backends). Note: If the specified activation data type
+ *   is not supported by the model or backend, [Engine.initialize] will fail with an exception at
+ *   initialization time.
+ * @property speculativeDecodingConfig The default speculative decoding (e.g. MTP) configuration of
+ *   the engine's conversations and sessions; each of them can override any field with its own
+ *   `speculativeDecodingConfig`. Fields left `null` use the runtime defaults (mode
+ *   [SpeculativeDecodingMode.OFF]). [SpeculativeDecodingMode.ON] and
+ *   [SpeculativeDecodingMode.ADAPTIVE] load the drafter when the engine is initialized. If set, it
+ *   takes precedence over the deprecated [ExperimentalFlags.enableSpeculativeDecoding].
  */
-data class EngineConfig(
+data class EngineConfig
+@JvmOverloads
+constructor(
   val modelPath: String,
   val backend: Backend = Backend.CPU(),
   val visionBackend: Backend? = null,
@@ -99,6 +215,8 @@ data class EngineConfig(
   val maxNumTokens: Int? = null,
   val maxNumImages: Int? = null,
   val cacheDir: String? = null,
+  val activationDataType: ActivationDataType? = null,
+  val speculativeDecodingConfig: SpeculativeDecodingConfig? = null,
 ) {
   init {
     require(maxNumTokens == null || maxNumTokens > 0) {
@@ -131,9 +249,28 @@ data class EngineConfig(
  * @property prefillPrefaceOnInit Whether to prefill the preface on initialization. Defaults to
  *   false. Note that this will make createConversation() take longer to finish, so you may want to
  *   call it in a background thread.
- * @property maxOutputToken The maximum number of output tokens per decode step. When `null`, use
- *   the default value from the model or the engine.
+ * @property maxOutputToken The maximum number of output tokens per decode step. For thinking
+ *   models, both thinking (reasoning) tokens and the final response tokens count towards this
+ *   limit. When `null`, use the default value from the model or the engine.
  * @property thinkingConfig Configuration for thinking/reasoning generation.
+ * @property enableResponseFormat Whether to enable response format (constrained decoding). If true,
+ *   initializes the constraint provider LLGuidance.
+ * @property enableSpeculativeDecoding Deprecated. Use [speculativeDecodingConfig] instead (`true`
+ *   is mode [SpeculativeDecodingMode.ON]; `false` is mode [SpeculativeDecodingMode.OFF]). Whether
+ *   to enable speculative decoding for this conversation.
+ *     - If `null` (default): Inherits the engine's speculative decoding setting.
+ *     - If `true`: Explicitly enables speculative decoding for this conversation. If the engine was
+ *       initialized without speculative decoding enabled, requesting `true` triggers lazy
+ *       initialization of the speculative decoding drafter (e.g. MTP) on first use.
+ *     - If `false`: Explicitly disables speculative decoding for this conversation even if the
+ *       engine was initialized with speculative decoding enabled.
+ *
+ * @property chatTemplate An optional Jinja chat template string to override the default template
+ *   defined in the model metadata for this conversation. If null, the conversation uses the
+ *   template defined in the model metadata.
+ * @property speculativeDecodingConfig The speculative decoding configuration for this conversation,
+ *   which overrides [EngineConfig.speculativeDecodingConfig]. Fields left `null` inherit the
+ *   engine's values. Its mode takes precedence over the deprecated [enableSpeculativeDecoding].
  */
 data class ConversationConfig
 @JvmOverloads
@@ -149,6 +286,11 @@ constructor(
   val prefillPrefaceOnInit: Boolean = false,
   val maxOutputToken: Int? = null,
   val thinkingConfig: ThinkingConfig? = null,
+  val enableResponseFormat: Boolean = false,
+  @Deprecated("Use speculativeDecodingConfig (mode ON or OFF) instead.")
+  val enableSpeculativeDecoding: Boolean? = null,
+  val chatTemplate: String? = null,
+  val speculativeDecodingConfig: SpeculativeDecodingConfig? = null,
 ) {
   init {
     require(maxOutputToken == null || maxOutputToken > 0) {
@@ -192,8 +334,72 @@ data class LoraConfig(val loraPath: String? = null, val audioLoraPath: String? =
  * @property samplerConfig Configuration for the sampling process. If `null`, then uses the engine's
  *   default values.
  * @property loraConfig Configuration for LoRA weights.
+ * @property enableSpeculativeDecoding Deprecated. Use [speculativeDecodingConfig] instead (`true`
+ *   is mode [SpeculativeDecodingMode.ON]; `false` is mode [SpeculativeDecodingMode.OFF]). Whether
+ *   to enable speculative decoding for this session.
+ *     - If `null` (default): Inherits the engine's speculative decoding setting.
+ *     - If `true`: Explicitly enables speculative decoding for this session. If the engine was
+ *       initialized without speculative decoding enabled, requesting `true` triggers lazy
+ *       initialization of the speculative decoding drafter (e.g. MTP) on first use.
+ *     - If `false`: Explicitly disables speculative decoding for this session even if the engine
+ *       was initialized with speculative decoding enabled.
+ *
+ * @property speculativeDecodingConfig The speculative decoding configuration for this session,
+ *   which overrides [EngineConfig.speculativeDecodingConfig]. Fields left `null` inherit the
+ *   engine's values. Its mode takes precedence over the deprecated [enableSpeculativeDecoding].
  */
-data class SessionConfig(
+data class SessionConfig
+@JvmOverloads
+constructor(
   val samplerConfig: SamplerConfig? = null,
   val loraConfig: LoraConfig? = null,
+  @Deprecated("Use speculativeDecodingConfig (mode ON or OFF) instead.")
+  val enableSpeculativeDecoding: Boolean? = null,
+  val speculativeDecodingConfig: SpeculativeDecodingConfig? = null,
 )
+
+/**
+ * Speculative decoding (e.g. MTP) configuration.
+ *
+ * Set on [EngineConfig] as the default of the engine's conversations and sessions, and on
+ * [ConversationConfig] or [SessionConfig] as an override. Fields left `null` inherit the engine's
+ * values (on the engine: the runtime defaults).
+ *
+ * @property mode How speculative decoding is used. The runtime default is
+ *   [SpeculativeDecodingMode.OFF].
+ * @property lenience The lenience factor c in [0, 1] of the speculative decoding acceptance test.
+ *   **Any c > 0 gives up the quality guarantee of speculative decoding.** With c = 0 (the runtime
+ *   default), speculative decoding is lossless: emitted tokens follow the sampling distribution p,
+ *   the same as without speculative decoding. With c > 0, a drafted token that differs from the
+ *   verifier's sample is still accepted with probability c, so emitted tokens follow (1 - c) * p +
+ *   c * delta(draft) and can differ from what the model itself would produce. Only set c > 0 if
+ *   lower output quality is an acceptable price for speed; c = 1 accepts every drafted token. The
+ *   NPU backend does not support lenience and stays exact.
+ */
+data class SpeculativeDecodingConfig
+@JvmOverloads
+constructor(val mode: SpeculativeDecodingMode? = null, val lenience: Float? = null) {
+  init {
+    require(lenience == null || (lenience >= 0f && lenience <= 1f)) {
+      "lenience must be in [0, 1] or null, but got $lenience."
+    }
+  }
+}
+
+/**
+ * Speculative decoding (e.g. MTP) mode.
+ *
+ * The modes match the values of the `--speculative_decoding` flag of the LiteRT-LM CLI (`off`, `on`
+ * and `adaptive`). The integer [value]s match `LiteRtLmSpeculativeDecodingMode` in the C API.
+ */
+enum class SpeculativeDecodingMode(val value: Int) {
+  /** Never speculate. */
+  OFF(0),
+  /** Speculate on every decode step. */
+  ON(1),
+  /**
+   * Speculate only while it is measured to be faster than plain decoding. Backends that do not
+   * support adaptive speculation speculate on every decode step, like [ON].
+   */
+  ADAPTIVE(2),
+}

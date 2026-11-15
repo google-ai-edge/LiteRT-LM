@@ -15,3 +15,4 @@
  */
 
 export * from './fakes.js';
+export * from './webgpu.js';

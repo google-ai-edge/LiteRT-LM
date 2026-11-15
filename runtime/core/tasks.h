@@ -18,26 +18,39 @@
 #include <atomic>
 #include <limits>
 #include <optional>
+#include <random>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
-#include "runtime/components/logits_processor/constrained_decoding/constraint.h"
-#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
-#include "runtime/components/logits_processor/repetition_penalty_config.h"
-#include "runtime/components/logits_processor/suppress_tokens_config.h"
+#include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
+#include "runtime/components/constrained_decoding/repetition_penalty_config.h"
+#include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/sampler.h"
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/speculative_decoding_mode.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm::Tasks {
 
 using ::litert::support::Tokenizer;
+
+// A sampler that the caller runs on the logits returned by the executor
+// (external sampling), with the random number generator that supplies the
+// uniform values of its sampling calls. The caller owns both, so that the
+// random sequence continues across calls.
+struct ExternalSampler {
+  Sampler* absl_nonnull sampler;
+  std::default_random_engine* absl_nonnull rng;
+};
 
 absl::StatusOr<Responses> Prefill(LlmExecutor& executor, ExecutorInputs& inputs,
                                   bool wait_for_completion,
@@ -47,7 +60,7 @@ absl::StatusOr<Responses> Decode(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
     std::optional<BenchmarkInfo>& benchmark_info,
-    std::optional<Sampler*> sampler,
+    std::optional<ExternalSampler> sampler,
     RepetitionPenaltyConfig repetition_penalty_config,
     NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
@@ -57,7 +70,9 @@ absl::StatusOr<Responses> Decode(
     int max_output_tokens = std::numeric_limits<int>::max(),
     std::optional<int> thinking_token_budget = std::nullopt,
     const std::vector<int>& thinking_end_token_ids = {},
-    const std::vector<int>& thinking_start_token_ids = {});
+    const std::vector<int>& thinking_start_token_ids = {},
+    const SpeculativeDecodingConfig& speculative_decoding_config = {},
+    absl::Span<const int> draft_token_ids = {});
 
 absl::StatusOr<Responses> Score(
     LlmExecutor& executor, Tokenizer& tokenizer,

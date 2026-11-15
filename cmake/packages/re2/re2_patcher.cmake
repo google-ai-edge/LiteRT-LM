@@ -12,22 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+include("${LITERTLM_MODULES_DIR}/utils.cmake")
+include("${LITERTLM_RE2_CONFIG_PATH}")
+include("${LITERTLM_ABSL_CONFIG_PATH}")
 
 message(STATUS "[LiteRTLM] Patching RE2...")
 
-set(ROOT_LIST "${RE2_SRC_DIR}/CMakeLists.txt")
+set(ROOT_LIST "${LITERTLM_RE2_SRC_DIR}/CMakeLists.txt")
 
-if(EXISTS "${ROOT_LIST}")
-    file(READ "${ROOT_LIST}" ROOT_CONTENT)
-
-    string(REPLACE 
-        "set(RE2_CXX_VERSION cxx_std_17)" 
-        "set(RE2_CXX_VERSION cxx_std_20)" 
-        ROOT_CONTENT "${ROOT_CONTENT}"
-    )
-
-    file(WRITE "${ROOT_LIST}" "${ROOT_CONTENT}")
-    message(STATUS "[LiteRTLM] RE2 CMakeLists.txt patching successful.")
-else()
-    message(FATAL_ERROR "Could not find RE2 CMakeLists.txt at ${ROOT_LIST}")
-endif()
+patch_file_content("${ROOT_LIST}"
+    "set(RE2_CXX_VERSION cxx_std_17)"
+    "set(RE2_CXX_VERSION cxx_std_20)"
+    FALSE
+)

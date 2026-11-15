@@ -117,7 +117,7 @@ absl::Status SetCpuAffinity(const std::vector<int>& cpu_affinity_cores) {
         absl::StrCat("Failed to set CPU affinity: ", strerror(errno)));
   }
 
-  ABSL_LOG(INFO) << "Successfully set CPU affinity.";
+  ABSL_VLOG(1) << "Successfully set CPU affinity.";
   return absl::OkStatus();
 }
 

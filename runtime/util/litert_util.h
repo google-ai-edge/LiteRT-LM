@@ -20,7 +20,9 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/engine/embedding_engine_settings.h"
 #include "runtime/engine/engine_settings.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/magic_number_configs_helper.h"
 
 namespace litert::lm {
@@ -34,6 +36,14 @@ struct OwnedEnvironment {
 // The caller takes ownership of the environment and its helper.
 absl::StatusOr<OwnedEnvironment> CreateEnvironment(
     EngineSettings& engine_settings, ModelResources* model_resources);
+
+absl::StatusOr<OwnedEnvironment> CreateEnvironment(
+    EmbeddingEngineSettings& settings, ModelResources* model_resources);
+
+// Returns true if the model's main prefill/decode TFLite model stores its
+// weights in a separate TFLiteWeights section. Always returns false for
+// data-stream-backed assets.
+absl::StatusOr<bool> ModelHasExternalWeights(const ModelAssets& model_assets);
 
 }  // namespace litert::lm
 

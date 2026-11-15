@@ -14,36 +14,49 @@
  * limitations under the License.
  */
 
-import {LiteRtLm, loadLiteRtLm, unloadLiteRtLm, type Wasm} from '@litert-lm/core';
+import {ActivationDataType, LiteRtLm, loadLiteRtLm, unloadLiteRtLm, type Wasm} from '@litert-lm/core';
 // Placeholder for internal dependency on trusted resource url
+
+import {Cleanup} from './cleanup.js';
+import {createStreamingModelAssets} from './stream_utils.js';
+import {unwrapWasmResult} from './wasm_binding_types.js';
 
 describe('LlmExecutorSettings', () => {
   let liteRtLm: LiteRtLm;
+  let cleanup: Cleanup;
   let modelAssets: Wasm.ModelAssets;
   let engineSettings: Wasm.EngineSettings;
   let llmExecutorSettings: Wasm.LlmExecutorSettings;
 
   beforeAll(async () => {
     unloadLiteRtLm();
-    liteRtLm = await loadLiteRtLm(trustedResourceUrl`/wasm`);
+    liteRtLm = await loadLiteRtLm('/wasm');
   });
 
-  beforeEach(() => {
-    modelAssets = liteRtLm.liteRtLmWasm.ModelAssets.create('/path/to/model');
-    engineSettings = liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-        modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU);
+  beforeEach(async () => {
+    cleanup = new Cleanup();
+    ({modelAssets} = await createStreamingModelAssets(
+         new Blob([]), liteRtLm.liteRtLmWasm, cleanup));
+    engineSettings = unwrapWasmResult(
+        await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+            modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU));
     llmExecutorSettings = engineSettings.getMutableMainExecutorSettings();
   });
 
   afterEach(() => {
     // Do not delete llmExecutorSettings, as it is owned by engineSettings.
     engineSettings.delete();
-    modelAssets.delete();
+    cleanup.run();
   });
 
   it('sets and gets max num tokens', () => {
     llmExecutorSettings.setMaxNumTokens(100);
     expect(llmExecutorSettings.getMaxNumTokens()).toBe(100);
+  });
+
+  it('sets and gets max num images', () => {
+    llmExecutorSettings.setMaxNumImages(7);
+    expect(llmExecutorSettings.getMaxNumImages()).toBe(7);
   });
 
   it('sets and gets backend config CPU', () => {
@@ -58,22 +71,22 @@ describe('LlmExecutorSettings', () => {
 
   it('sets and gets backend config GPU', () => {
     const gpuConfig = {
-      max_top_k: 1,
+      max_top_k: 42,
       external_tensor_mode: true,
     };
     llmExecutorSettings.setBackendConfigGpu(gpuConfig);
     expect(llmExecutorSettings.getBackendConfigGpu()).toEqual(gpuConfig);
   });
 
-  it('throws error if getting CPU config when GPU config is set', () => {
+  it('returns an error if getting CPU config when GPU config is set', () => {
     const gpuConfig = {
-      max_top_k: 1,
+      max_top_k: 42,
       external_tensor_mode: true,
     };
     llmExecutorSettings.setBackendConfigGpu(gpuConfig);
-    expect(() => {
-      llmExecutorSettings.getBackendConfigCpu();
-    }).toThrowError(/Backend config is not valid/);
+    const result = llmExecutorSettings.getBackendConfigCpu();
+    expect(result).toEqual(jasmine.any(Error));
+    expect((result as Error).message).toMatch(/Backend config is not valid/);
   });
 
   it('sets and gets sampler backend', () => {
@@ -84,6 +97,25 @@ describe('LlmExecutorSettings', () => {
     llmExecutorSettings.setSamplerBackend(liteRtLm.liteRtLmWasm.Backend.GPU);
     expect(llmExecutorSettings.getSamplerBackend())
         .toBe(liteRtLm.liteRtLmWasm.Backend.GPU);
+  });
+
+  it('leaves activation data type unset by default', () => {
+    expect(llmExecutorSettings.getActivationDataType()).toBeUndefined();
+  });
+
+  it('sets and gets activation data type', () => {
+    const wasmTypes = liteRtLm.liteRtLmWasm.ActivationDataType;
+    expect(wasmTypes.FLOAT32.value).toBe(ActivationDataType.FLOAT32);
+    expect(wasmTypes.FLOAT16.value).toBe(ActivationDataType.FLOAT16);
+    expect(wasmTypes.INT16.value).toBe(ActivationDataType.INT16);
+    expect(wasmTypes.INT8.value).toBe(ActivationDataType.INT8);
+
+    for (const wasmType of
+             [wasmTypes.FLOAT32, wasmTypes.FLOAT16, wasmTypes.INT16,
+              wasmTypes.INT8]) {
+      llmExecutorSettings.setActivationDataType(wasmType);
+      expect(llmExecutorSettings.getActivationDataType()).toBe(wasmType);
+    }
   });
 
   it('sets and gets advanced settings', () => {

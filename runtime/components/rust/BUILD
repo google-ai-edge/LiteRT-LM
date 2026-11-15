@@ -60,4 +60,5 @@ rust_cxx_bridge(
 rust_test(
     name = "minijinja_template_test",
     crate = ":minijinja_template",
+    tags = ["noandroid"],
 )

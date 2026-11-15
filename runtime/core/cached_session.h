@@ -22,11 +22,12 @@
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/core/prefix_cache.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -106,10 +107,57 @@ class CachedSession {
   // Waits until the Session is done.
   absl::Status WaitUntilDone() { return session_->WaitUntilDone(); }
 
+  // Resets the PrefixCache and rewinds the underlying Session to step 0.
+  absl::Status Reset();
+
   // Returns the config of the contained Session.
   const SessionConfig& GetSessionConfig() const {
     return session_->GetSessionConfig();
   }
+
+  // Returns the current step of the contained Session.
+  absl::StatusOr<int> GetCurrentStep() const {
+    return session_->GetCurrentStep();
+  }
+
+  // Returns the benchmark info of the contained Session.
+  absl::StatusOr<BenchmarkInfo> GetBenchmarkInfo() {
+    return session_->GetBenchmarkInfo();
+  }
+
+  // Returns the mutable benchmark info of the contained Session.
+  absl::StatusOr<BenchmarkInfo*> GetMutableBenchmarkInfo() {
+    return session_->GetMutableBenchmarkInfo();
+  }
+
+  // Clones the CachedSession along with its underlying Session and prefix
+  // cache.
+  absl::StatusOr<std::unique_ptr<CachedSession>> Clone() const;
+
+  // Clones the CachedSession asynchronously along with its underlying Session
+  // and prefix cache.
+  absl::StatusOr<std::unique_ptr<CachedSession>> CloneAsync(
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) const;
+
+  // Runs text scoring on the target texts. This function is meant to be used
+  // for evaluation after the session has already been prefilled with context.
+  // Note that `target_text` is only the candidate text to be evaluated against
+  // the prefilled context; it should not include the whole prefill (unlike what
+  // `RunPrefill` expects).
+  absl::StatusOr<Responses> RunTextScoring(
+      const std::vector<absl::string_view>& target_text,
+      bool store_token_lengths);
+
+  // Asynchronously runs text scoring on the target texts. This function is
+  // meant to be used for evaluation after the session has already been
+  // prefilled with context. Note that `target_text` is only the candidate text
+  // to be evaluated against the prefilled context; it should not include the
+  // whole prefill (unlike what `RunPrefillAsync` expects).
+  absl::StatusOr<std::unique_ptr<SessionInterface::TaskController>>
+  RunTextScoringAsync(
+      const std::vector<absl::string_view>& target_text,
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback,
+      bool store_token_lengths);
 
   // Sets whether to insert a BOS token ID at the beginning of the prefill
   // contents.

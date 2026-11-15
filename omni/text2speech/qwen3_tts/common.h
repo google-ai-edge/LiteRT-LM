@@ -1,0 +1,78 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2SPEECH_QWEN3_TTS_COMMON_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2SPEECH_QWEN3_TTS_COMMON_H_
+
+#include <string>
+
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+
+namespace litert::omni::tts {
+namespace qwen3_tts {
+
+constexpr int kTtsBos = 151672;
+constexpr int kTtsEos = 151673;
+constexpr int kTtsPad = 151671;
+
+constexpr int kCodecVocab = 3072;
+constexpr int kCodecPad = 2148;
+constexpr int kCodecBos = 2149;
+constexpr int kCodecEos = 2150;
+constexpr int kCodecThink = 2154;
+constexpr int kCodecNoThink = 2155;
+constexpr int kCodecThinkBos = 2156;
+constexpr int kCodecThinkEos = 2157;
+
+constexpr int kHiddenDim = 1024;
+constexpr int kNumCodeGroups = 16;
+// Vocabulary size of each residual codebook predicted by the MTP drafter.
+constexpr int kMtpVocab = 2048;
+// Prefix of the per-codebook LM head signatures (`head_0` .. `head_14`) in the
+// MTP drafter model.
+constexpr absl::string_view kMtpHeadPrefix = "head_";
+constexpr int kFrameChunkSize = 75;
+constexpr int kVocoderOverlapContext = 25;
+constexpr int kAudioSampleRateHz = 24000;
+constexpr float kNegInf = -1e9f;
+constexpr absl::string_view kPromptTemplate =
+    "<|im_start|>assistant\n%s<|im_end|>\n<|im_start|>assistant\n";
+}  // namespace qwen3_tts
+
+// Resolves a BCP-47 language tag (e.g. "en-US", "zh-CN", "cmn", "pt-BR") or
+// language name (e.g. "english", "chinese") to the canonical language name
+// understood by `GetLanguageId()`, or "auto".
+//
+// args
+// - language: Language tag or name string view.
+//
+// returns
+// - Canonical language name on success, or absl::InvalidArgumentError if
+// unsupported.
+absl::StatusOr<std::string> ResolveQwen3TtsLanguage(absl::string_view language);
+
+// Resolves a language name to its corresponding codec language ID.
+//
+// args
+// - language: Language name string view (e.g. "english", "chinese").
+//
+// returns
+// - Integer language ID on success, or absl::InvalidArgumentError if
+// unsupported.
+absl::StatusOr<int> GetLanguageId(absl::string_view language);
+
+}  // namespace litert::omni::tts
+
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2SPEECH_QWEN3_TTS_COMMON_H_

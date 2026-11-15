@@ -14,31 +14,49 @@
 
 #include "runtime/components/model_resources.h"
 
+#include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
+#include <fstream>
+#include <ios>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/model_resources_task.h"
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/scoped_file.h"
+#include "schema/core/litertlm_header.h"
+#include "schema/core/litertlm_header_schema_generated.h"
 
 namespace {
 
+using ::absl_testing::IsOkAndHolds;
+using ::absl_testing::StatusIs;
 using ::litert::lm::LitertLmLoader;
 using ::litert::lm::ModelAssetBundleResources;
 using ::litert::lm::ModelResourcesLitertLm;
 using ::litert::lm::ModelResourcesTask;
-using ::litert::lm::ModelType;
-using ::litert::lm::ModelTypeToString;
+using ::litert::lm::ParseLlmTfLiteModelType;
 using ::litert::lm::ScopedFile;
-using ::litert::lm::StringToModelType;
+using ::litert::lm::TfLiteModelTypeToWireString;
+using ::litert::lm::proto::EmbeddingMetadata;
+using ::litert::lm::proto::LlmMetadata;
+using ::testing::AnyOf;
+namespace schema = ::litert::lm::schema;
 
 #ifdef ENABLE_SENTENCEPIECE_TOKENIZER
 TEST(ModelResourcesTest, InitializeWithFileBackedLiteRtModel) {
@@ -50,15 +68,15 @@ TEST(ModelResourcesTest, InitializeWithFileBackedLiteRtModel) {
                        LitertLmLoader::Create(std::move(model_file)));
 
   const auto expected_model_size =
-      loader->GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size();
+      loader->GetTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE).Size();
   ASSERT_GT(expected_model_size, 0);
 
   auto model_resources = ModelResourcesLitertLm::Create(
       std::move(loader), /*enable_file_backed_model_loading=*/true);
   ASSERT_OK(model_resources);
 
-  auto tflite_model =
-      model_resources.value()->GetTFLiteModel(ModelType::kTfLitePrefillDecode);
+  auto tflite_model = model_resources.value()->GetTFLiteModel(
+      LlmMetadata::TF_LITE_PREFILL_DECODE);
   ASSERT_OK(tflite_model);
   ASSERT_GT(tflite_model.value()->GetNumSignatures(), 0);
 }
@@ -72,19 +90,25 @@ TEST(ModelResourcesTest, InitializeWithValidLitertLmLoader) {
   ASSERT_OK_AND_ASSIGN(auto loader,
                        LitertLmLoader::Create(std::move(model_file.value())));
   ASSERT_GT(loader->GetSentencePieceTokenizer()->Size(), 0);
-  ASSERT_GT(loader->GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size(), 0);
+  ASSERT_GT(loader->GetTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE).Size(),
+            0);
 
   auto model_resources = ModelResourcesLitertLm::Create(std::move(loader));
   ASSERT_OK(model_resources);
 
-  auto tflite_model =
-      model_resources.value()->GetTFLiteModel(ModelType::kTfLitePrefillDecode);
+  auto tflite_model = model_resources.value()->GetTFLiteModel(
+      LlmMetadata::TF_LITE_PREFILL_DECODE);
   ASSERT_OK(tflite_model);
   ASSERT_GT(tflite_model.value()->GetNumSignatures(), 0);
 
   auto tokenizer = model_resources.value()->GetTokenizer();
   ASSERT_OK(tokenizer);
   ASSERT_NE(tokenizer.value(), nullptr);
+
+  auto prefill_tokenizer = model_resources.value()->GetTokenizer(
+      LlmMetadata::TF_LITE_PREFILL_DECODE);
+  ASSERT_OK(prefill_tokenizer);
+  ASSERT_NE(prefill_tokenizer.value(), nullptr);
 }
 
 TEST(ModelResourcesTest, InitializeWithExternalWeights) {
@@ -96,15 +120,16 @@ TEST(ModelResourcesTest, InitializeWithExternalWeights) {
   ASSERT_OK_AND_ASSIGN(auto loader,
                        LitertLmLoader::Create(std::move(model_file.value())));
   ASSERT_GT(loader->GetSentencePieceTokenizer()->Size(), 0);
-  ASSERT_GT(loader->GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size(), 0);
-  ASSERT_GT(loader->GetTFLiteWeights(ModelType::kTfLitePrefillDecode).Size(),
+  ASSERT_GT(loader->GetTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE).Size(),
             0);
+  ASSERT_GT(
+      loader->GetTFLiteWeights(LlmMetadata::TF_LITE_PREFILL_DECODE).Size(), 0);
 
   auto model_resources = ModelResourcesLitertLm::Create(std::move(loader));
   ASSERT_OK(model_resources);
 
-  auto tflite_model =
-      model_resources.value()->GetTFLiteModel(ModelType::kTfLitePrefillDecode);
+  auto tflite_model = model_resources.value()->GetTFLiteModel(
+      LlmMetadata::TF_LITE_PREFILL_DECODE);
   ASSERT_OK(tflite_model);
   ASSERT_GT(tflite_model.value()->GetNumSignatures(), 0);
 
@@ -149,8 +174,8 @@ TEST(ModelResourcesTest, InitializeWithValidModelAssetBundleResources) {
       std::move(model_asset_bundle_resources.value()));
   ASSERT_OK(model_resources);
 
-  auto tflite_model =
-      model_resources.value()->GetTFLiteModel(ModelType::kTfLitePrefillDecode);
+  auto tflite_model = model_resources.value()->GetTFLiteModel(
+      LlmMetadata::TF_LITE_PREFILL_DECODE);
   ASSERT_OK(tflite_model);
   ASSERT_GT(tflite_model.value()->GetNumSignatures(), 0);
 
@@ -172,12 +197,12 @@ TEST(ModelResourcesTest, GetTFLiteModelNotFound) {
   ASSERT_OK(model_resources);
 
   // Attempt to get a model type that doesn't exist in the test file.
+  EXPECT_THAT(model_resources.value()->GetTFLiteModelBuffer(
+                  LlmMetadata::TF_LITE_EMBEDDER),
+              StatusIs(absl::StatusCode::kNotFound));
   EXPECT_THAT(
-      model_resources.value()->GetTFLiteModelBuffer(ModelType::kTfLiteEmbedder),
-      testing::status::StatusIs(absl::StatusCode::kNotFound));
-  EXPECT_THAT(
-      model_resources.value()->GetTFLiteModel(ModelType::kTfLiteEmbedder),
-      testing::status::StatusIs(absl::StatusCode::kNotFound));
+      model_resources.value()->GetTFLiteModel(LlmMetadata::TF_LITE_EMBEDDER),
+      StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST(ModelResourcesTest, GetTFLiteModelNotFoundTask) {
@@ -195,65 +220,222 @@ TEST(ModelResourcesTest, GetTFLiteModelNotFoundTask) {
   ASSERT_OK(model_resources);
 
   // Attempt to get a model type that doesn't exist in the test file.
-  auto tflite_model =
-      model_resources.value()->GetTFLiteModelBuffer(ModelType::kTfLiteEmbedder);
-  EXPECT_THAT(tflite_model,
-              testing::status::StatusIs(absl::StatusCode::kNotFound));
+  auto tflite_model = model_resources.value()->GetTFLiteModelBuffer(
+      LlmMetadata::TF_LITE_EMBEDDER);
+  EXPECT_THAT(tflite_model, StatusIs(absl::StatusCode::kNotFound));
 }
 #endif  // ENABLE_SENTENCEPIECE_TOKENIZER
 
-TEST(ModelTypeConversionTest, StringToModelType) {
-  auto result = StringToModelType("tf_lite_prefill_decode");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLitePrefillDecode);
+TEST(ModelResourcesTest, GetTFLiteModelSectionFileRegion) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
 
-  result = StringToModelType("TF_LITE_PREFILL_DECODE");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLitePrefillDecode);
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       ModelResourcesLitertLm::Create(std::move(loader)));
 
-  result = StringToModelType("tf_lite_embedder");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLiteEmbedder);
+  // Success case: model is present.
+  ASSERT_OK_AND_ASSIGN(auto file_region,
+                       model_resources->GetTFLiteModelSectionFileRegion(
+                           LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_GT(file_region.offset, 0);
+  EXPECT_GT(file_region.size, 0);
 
-  result = StringToModelType("TF_LITE_EMBEDDER");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLiteEmbedder);
+  // Compare with the size from GetTFLiteModelBuffer.
+  ASSERT_OK_AND_ASSIGN(auto model_buffer,
+                       model_resources->GetTFLiteModelBuffer(
+                           LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_EQ(file_region.size, model_buffer.size());
 
-  result = StringToModelType("tf_lite_per_layer_embedder");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLitePerLayerEmbedder);
-
-  result = StringToModelType("TF_LITE_PER_LAYER_EMBEDDER");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLitePerLayerEmbedder);
-
-  result = StringToModelType("TF_LITE_ARTISAN_TEXT_DECODER");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kArtisanTextDecoder);
-
-  result = StringToModelType("tf_lite_mtp_drafter");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLiteMtpDrafter);
-
-  result = StringToModelType("TF_LITE_MTP_DRAFTER");
-  ASSERT_OK(result);
-  EXPECT_EQ(result.value(), ModelType::kTfLiteMtpDrafter);
-
-  result = StringToModelType("unknown");
-  EXPECT_FALSE(result.ok());
+  // Error case: model type not found in the loader.
+  EXPECT_THAT(model_resources->GetTFLiteModelSectionFileRegion(
+                  LlmMetadata::TF_LITE_EMBEDDER),
+              StatusIs(absl::StatusCode::kNotFound));
 }
 
-TEST(ModelTypeConversionTest, ModelTypeToString) {
-  EXPECT_EQ(ModelTypeToString(ModelType::kTfLitePrefillDecode),
-            "TF_LITE_PREFILL_DECODE");
-  EXPECT_EQ(ModelTypeToString(ModelType::kTfLiteEmbedder), "TF_LITE_EMBEDDER");
-  EXPECT_EQ(ModelTypeToString(ModelType::kTfLitePerLayerEmbedder),
-            "TF_LITE_PER_LAYER_EMBEDDER");
-  EXPECT_EQ(ModelTypeToString(ModelType::kArtisanTextDecoder),
-            "TF_LITE_ARTISAN_TEXT_DECODER");
-  EXPECT_EQ(ModelTypeToString(ModelType::kTfLiteMtpDrafter),
-            "TF_LITE_MTP_DRAFTER");
-  EXPECT_EQ(ModelTypeToString(ModelType::kUnknown), "UNKNOWN");
+// Writes a .litertlm file whose header declares a per-layer embedder section
+// that extends far past the end of the file. The section is present, so the
+// loader must fail to map it rather than report it as missing.
+absl::StatusOr<std::string> WriteTruncatedPerLayerEmbedderModelFile() {
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) /
+                        "model_resources_truncated_per_layer_embedder.litertlm";
+
+  flatbuffers::FlatBufferBuilder builder(1024);
+  auto model_type = schema::CreateKeyValuePair(
+      builder, "model_type",
+      TfLiteModelTypeToWireString(LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
+  auto items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{model_type});
+  auto section = schema::CreateSectionObject(
+      builder, items, /*begin_offset=*/32, /*end_offset=*/1 << 20,
+      schema::AnySectionDataType_TFLiteModel);
+  auto empty_model_type = schema::CreateKeyValuePair(
+      builder, "model_type",
+      TfLiteModelTypeToWireString(LlmMetadata::TF_LITE_AUX));
+  auto empty_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{empty_model_type});
+  auto empty_section = schema::CreateSectionObject(
+      builder, empty_items, /*begin_offset=*/32, /*end_offset=*/32,
+      schema::AnySectionDataType_TFLiteModel);
+  auto section_metadata = schema::CreateSectionMetadata(
+      builder, builder.CreateVector(
+                   std::vector<flatbuffers::Offset<schema::SectionObject>>{
+                       section, empty_section}));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  builder.Finish(metadata);
+
+  std::ofstream file(test_file_path, std::ios::binary);
+  if (!file.good()) {
+    return absl::InternalError("Failed to open test model file for writing.");
+  }
+  file.write("LITERTLM", 8);
+  const uint32_t major_version = 1;
+  const uint32_t minor_version = 0;
+  const uint32_t patch_version = 0;
+  const uint32_t padding = 0;
+  file.write(reinterpret_cast<const char*>(&major_version), 4);
+  file.write(reinterpret_cast<const char*>(&minor_version), 4);
+  file.write(reinterpret_cast<const char*>(&patch_version), 4);
+  file.write(reinterpret_cast<const char*>(&padding), 4);
+  const uint64_t header_end_offset = 32 + builder.GetSize();
+  file.write(reinterpret_cast<const char*>(&header_end_offset), 8);
+  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+             builder.GetSize());
+  if (!file.good()) {
+    return absl::InternalError("Failed to write test model file.");
+  }
+  return test_file_path.string();
+}
+
+TEST(ModelResourcesTest, GetTFLiteModelPropagatesSectionMapFailure) {
+  ASSERT_OK_AND_ASSIGN(const std::string model_path,
+                       WriteTruncatedPerLayerEmbedderModelFile());
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       ModelResourcesLitertLm::Create(std::move(loader)));
+
+  // Present-but-unmappable sections report HasTFLiteModel() == true and
+  // surface the mapping error when loaded.
+  EXPECT_TRUE(
+      model_resources->HasTFLiteModel(LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
+  EXPECT_THAT(
+      model_resources->GetTFLiteModel(LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER),
+      StatusIs(absl::StatusCode::kInternal));
+  EXPECT_THAT(model_resources->GetTFLiteModelBuffer(
+                  LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER),
+              StatusIs(absl::StatusCode::kInternal));
+
+  // Sections that are absent from the header (or 0-byte sections) report
+  // HasTFLiteModel() == false and return kNotFound if queried directly.
+  EXPECT_FALSE(model_resources->HasTFLiteModel(LlmMetadata::TF_LITE_EMBEDDER));
+  EXPECT_THAT(model_resources->GetTFLiteModel(LlmMetadata::TF_LITE_EMBEDDER),
+              StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(
+      model_resources->GetTFLiteModelBuffer(LlmMetadata::TF_LITE_EMBEDDER),
+      StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_FALSE(model_resources->HasTFLiteModel(LlmMetadata::TF_LITE_AUX));
+  EXPECT_THAT(model_resources->GetTFLiteModel(LlmMetadata::TF_LITE_AUX),
+              StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(model_resources->GetTFLiteModelBuffer(LlmMetadata::TF_LITE_AUX),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+// File-backed loading maps the section itself (or falls back to the buffer
+// where that is unsupported). A section that fails to map must still not read
+// as a missing model.
+TEST(ModelResourcesTest,
+     GetTFLiteModelPropagatesSectionMapFailureWithFileBackedLoading) {
+  ASSERT_OK_AND_ASSIGN(const std::string model_path,
+                       WriteTruncatedPerLayerEmbedderModelFile());
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      ModelResourcesLitertLm::Create(
+          std::move(loader), /*enable_file_backed_model_loading=*/true));
+
+  EXPECT_THAT(
+      model_resources->GetTFLiteModel(LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER),
+      StatusIs(
+          AnyOf(absl::StatusCode::kUnavailable, absl::StatusCode::kInternal)));
+}
+
+TEST(ParseLlmTfLiteModelTypeTest, ParsesWireStringsCaseInsensitively) {
+  EXPECT_THAT(ParseLlmTfLiteModelType("tf_lite_prefill_decode"),
+              IsOkAndHolds(LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_THAT(ParseLlmTfLiteModelType("TF_LITE_PREFILL_DECODE"),
+              IsOkAndHolds(LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_THAT(ParseLlmTfLiteModelType("Tf_Lite_Embedder"),
+              IsOkAndHolds(LlmMetadata::TF_LITE_EMBEDDER));
+  EXPECT_THAT(ParseLlmTfLiteModelType("tf_lite_artisan_text_decoder"),
+              IsOkAndHolds(LlmMetadata::TF_LITE_ARTISAN_TEXT_DECODER));
+  EXPECT_THAT(ParseLlmTfLiteModelType("tf_lite_mtp_drafter"),
+              IsOkAndHolds(LlmMetadata::TF_LITE_MTP_DRAFTER));
+}
+
+TEST(ParseLlmTfLiteModelTypeTest, RejectsUnknownAndNonLlmTypes) {
+  EXPECT_THAT(ParseLlmTfLiteModelType("unknown"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  // The text encoder belongs to the embedding capability only.
+  EXPECT_THAT(ParseLlmTfLiteModelType("tf_lite_text_encoder"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(TfLiteModelTypeToWireStringTest, ReturnsLowercaseEnumName) {
+  EXPECT_EQ(TfLiteModelTypeToWireString(LlmMetadata::TF_LITE_PREFILL_DECODE),
+            "tf_lite_prefill_decode");
+  EXPECT_EQ(
+      TfLiteModelTypeToWireString(EmbeddingMetadata::TF_LITE_TEXT_ENCODER),
+      "tf_lite_text_encoder");
+}
+
+class MinimalModelResources : public ::litert::lm::ModelResources {
+ public:
+  absl::StatusOr<std::unique_ptr<::litert::lm::Tokenizer>> GetTokenizer()
+      override {
+    return absl::UnimplementedError("Minimal test tokenizer");
+  }
+  absl::StatusOr<const LlmMetadata*> GetLlmMetadata() override {
+    return &llm_metadata_;
+  }
+
+ private:
+  LlmMetadata llm_metadata_;
+};
+
+TEST(ModelResourcesTest, DefaultImplementationsForMinimalSubclass) {
+  MinimalModelResources resources;
+  EXPECT_FALSE(resources.HasTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_FALSE(resources.HasTFLiteModel("tf_lite_prefill_decode"));
+  EXPECT_FALSE(resources.HasTFLiteModel("unknown"));
+  EXPECT_THAT(resources.GetTFLiteModel(LlmMetadata::TF_LITE_PREFILL_DECODE),
+              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(
+      resources.GetTFLiteModelBuffer(LlmMetadata::TF_LITE_PREFILL_DECODE),
+      StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(resources.GetScopedFile(),
+              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(
+      resources.GetWeightsSectionOffset(LlmMetadata::TF_LITE_PREFILL_DECODE),
+      StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(resources.GetTFLiteModelSectionFileRegion(
+                  LlmMetadata::TF_LITE_PREFILL_DECODE),
+              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_EQ(resources.GetTFLiteModelBackendConstraint(
+                LlmMetadata::TF_LITE_PREFILL_DECODE),
+            std::nullopt);
+  EXPECT_EQ(resources.GetTFLiteModelPreferActivationType(
+                LlmMetadata::TF_LITE_PREFILL_DECODE),
+            std::nullopt);
+  EXPECT_THAT(resources.GetExecutorMetadata(),
+              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(resources.GetLlmMetadata(), ::absl_testing::IsOk());
 }
 
 }  // namespace

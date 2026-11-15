@@ -164,6 +164,16 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "litertlm_utils_test",
+    srcs = ["litertlm_utils_test.cc"],
+    deps = [
+        ":litertlm_header_schema",
+        ":litertlm_utils",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 flatbuffer_py_library(
     name = "litertlm_header_schema_py",
     srcs = ["litertlm_header_schema.fbs"],

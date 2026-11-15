@@ -21,11 +21,6 @@ import katexStylesText from 'katex/dist/katex.min.css?inline';
 export const katexStyles = unsafeCSS(katexStylesText);
 
 
-/** Sets the HTML content of an iframe using standard srcdoc. */
-export function setIframeHtml(iframe: HTMLIFrameElement, html: string) {
-  iframe.srcdoc = html;
-}
-
 /** Sets the HTML content of a sandboxed iframe using standard srcdoc and sandbox attribute. */
 export function setSandboxIframeHtml(iframe: HTMLIFrameElement, html: string) {
   iframe.setAttribute('sandbox', 'allow-scripts');
@@ -35,6 +30,11 @@ export function setSandboxIframeHtml(iframe: HTMLIFrameElement, html: string) {
 /** Registers the app service worker using standard navigator.serviceWorker. */
 export function registerAppServiceWorker(container: ServiceWorkerContainer): Promise<ServiceWorkerRegistration> {
   return container.register('./sw.js', {scope: './'});
+}
+
+/** Creates an object URL for a media blob using standard URL.createObjectURL. */
+export function createObjectUrl(blob: Blob): string {
+  return URL.createObjectURL(blob);
 }
 
 /** Renders HTML using standard unsafeHTML. */

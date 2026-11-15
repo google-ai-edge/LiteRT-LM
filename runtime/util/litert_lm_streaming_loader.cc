@@ -22,10 +22,14 @@
 #include <string>
 #include <utility>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/components/model_resources.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "schema/core/litertlm_header_schema_generated.h"
@@ -33,14 +37,24 @@
 
 namespace litert::lm {
 
-absl::Status LitertLmStreamingLoader::LoadHeader() {
+absl::Status LitertLmStreamingLoader::LoadHeader(bool preserve_stream) {
   if (header_loaded_) {
     return absl::OkStatus();
   }
 
+  auto read_fn = [&](void* buffer, size_t offset, size_t size) {
+    return preserve_stream ? data_stream_->ReadAndPreserve(buffer, offset, size)
+                           : data_stream_->ReadAndDiscard(buffer, offset, size);
+  };
+
   HeaderPreamble header_preamble;
-  ABSL_RETURN_IF_ERROR(data_stream_->ReadAndDiscard(&header_preamble, 0,
-                                                    sizeof(HeaderPreamble)));
+  ABSL_RETURN_IF_ERROR(read_fn(&header_preamble, 0, sizeof(HeaderPreamble)));
+  ABSL_VLOG(1) << "[StreamingLoader]: Loaded preamble. Magic: "
+               << std::string(header_preamble.magic, 8)
+               << ", version: " << header_preamble.major_version << "."
+               << header_preamble.minor_version << "."
+               << header_preamble.patch_version
+               << ", header_end_offset: " << header_preamble.header_end_offset;
 
   // Check the magic number.
   std::string magic_str(header_preamble.magic, 8);
@@ -71,9 +85,8 @@ absl::Status LitertLmStreamingLoader::LoadHeader() {
   // Read the rest of the header from the stream.
   size_t remaining_size = header_size - sizeof(HeaderPreamble);
   if (remaining_size > 0) {
-    ABSL_RETURN_IF_ERROR(
-        data_stream_->ReadAndDiscard(header_data.get() + sizeof(HeaderPreamble),
-                                     sizeof(HeaderPreamble), remaining_size));
+    ABSL_RETURN_IF_ERROR(read_fn(header_data.get() + sizeof(HeaderPreamble),
+                                 sizeof(HeaderPreamble), remaining_size));
   }
 
   // Read the LiteRTLM header from the buffer.
@@ -85,11 +98,18 @@ absl::Status LitertLmStreamingLoader::LoadHeader() {
   ordered_section_info_.reserve(objects->size());
   for (size_t i = 0; i < objects->size(); ++i) {
     const schema::SectionObject* section = objects->Get(i);
+    ABSL_VLOG(1) << "[StreamingLoader]: Section " << i
+                 << ", type: " << static_cast<int>(section->data_type())
+                 << ", begin: " << section->begin_offset()
+                 << ", end: " << section->end_offset();
     ABSL_ASSIGN_OR_RETURN(auto key_and_section_hint,
                           ExtractBufferKeyAndTfLiteSectionHint(section));
+    section_hints_map_[key_and_section_hint.first] =
+        key_and_section_hint.second;
     ordered_section_info_.push_back(
         {section, key_and_section_hint.first,
-         key_and_section_hint.second.backend_constraint, nullptr, header_});
+         key_and_section_hint.second.backend_constraint,
+         key_and_section_hint.second.prefer_activation_type, nullptr, header_});
   }
 
   // Sort by section begin offset since this is the order the stream will
@@ -135,12 +155,57 @@ LitertLmStreamingLoader::GetNextSection() {
       section_info.section,
       section_info.buffer_key,
       section_info.backend_constraint,
+      section_info.prefer_activation_type,
       std::move(sub_stream),
       section_info.header,
   };
 
   next_section_index_++;
   return std::move(return_val);
+}
+
+std::optional<std::string>
+LitertLmStreamingLoader::GetTFLiteModelBackendConstraint(
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return GetTFLiteModelBackendConstraint(
+      TfLiteModelTypeToWireString(model_type));
+}
+
+std::optional<std::string>
+LitertLmStreamingLoader::GetTFLiteModelBackendConstraint(
+    absl::string_view model_type_str) {
+  BufferKey key(schema::AnySectionDataType_TFLiteModel, model_type_str);
+  auto it = section_hints_map_.find(key);
+  if (it != section_hints_map_.end()) {
+    return it->second.backend_constraint;
+  }
+  ABSL_LOG(WARNING) << "TFLite model type: " << model_type_str
+                    << " not found for backend constraints. Skipping.";
+  return std::nullopt;
+}
+
+std::optional<std::string>
+LitertLmStreamingLoader::GetTFLiteModelPreferActivationType(
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  return GetTFLiteModelPreferActivationType(
+      TfLiteModelTypeToWireString(model_type));
+}
+
+std::optional<std::string>
+LitertLmStreamingLoader::GetTFLiteModelPreferActivationType(
+    absl::string_view model_type_str) {
+  BufferKey key(schema::AnySectionDataType_TFLiteModel, model_type_str);
+  auto it = section_hints_map_.find(key);
+  if (it != section_hints_map_.end()) {
+    return it->second.prefer_activation_type;
+  }
+  ABSL_LOG(WARNING)
+      << "TFLite model type: " << model_type_str
+      << " not found for prefer activation type. Use system's "
+         "default backend activation type. System's default activation "
+         "type for Text decoder is fp16. Vision encoder and audio encoder "
+         "default is fp32.";
+  return std::nullopt;
 }
 
 }  // namespace litert::lm

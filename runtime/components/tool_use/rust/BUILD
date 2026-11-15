@@ -13,7 +13,7 @@
 # limitations under the License.
 
 load("//:rust_cxx_bridge.bzl", "rust_cxx_bridge")
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 package(
     default_visibility = [
@@ -32,6 +32,7 @@ rust_library(
     name = "fc_parser",
     srcs = [
         "fc_parser.rs",
+        "fc_parser_test.rs",
     ],
     deps = [
         "//runtime/components/tool_use/antlr/generated:antlr_fc_tool_call_parser",
@@ -66,6 +67,7 @@ rust_library(
     name = "parsers",
     srcs = [
         "parsers.rs",
+        "parsers_test.rs",
     ],
     deps = [
         ":python_parser",
@@ -89,4 +91,16 @@ rust_cxx_bridge(
         ],
         "//conditions:default": [],
     }),
+)
+
+rust_test(
+    name = "fc_parser_test",
+    crate = ":fc_parser",
+    tags = ["noandroid"],
+)
+
+rust_test(
+    name = "parsers_test",
+    crate = ":parsers",
+    tags = ["noandroid"],
 )

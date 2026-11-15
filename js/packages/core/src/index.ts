@@ -21,14 +21,18 @@ export * from './orchestration/chat_interface.js';
 export * from './orchestration/auto_tool_chat.js';
 export * from './orchestration/webmcp_tool.js';
 
-export {Backend} from './wasm_binding_types.js';
+export {ActivationDataType, Backend} from './wasm_binding_types.js';
+export * from './speculative_decoding_config.js';
+export {type ModelInput, type ResolvedModel, type ResolvedModelInput, resolveModel, type ResolveModelOptions} from './model_input.js';
+export {type HuggingFaceModelRef, type HuggingFaceUri, type ModelSource, parseHuggingFaceUri, type ResolvedHuggingFaceModel, toHuggingFaceUri} from './model-cache/index.js';
 export * from './engine_settings.js';
 export * from './engine.js';
 export * from './session.js';
 export * from './conversation.js';
 export * from './session_config.js';
 export * from './conversation_config.js';
-
+export * from './embedding_engine_settings.js';
+export * from './embedding_engine.js';
 
 export * as Wasm from './wasm_binding_types.js';
 export * from './types.js';

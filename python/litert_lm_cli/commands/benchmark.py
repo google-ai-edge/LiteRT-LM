@@ -27,7 +27,7 @@ from litert_lm_cli import model
 
 try:
   # pylint: disable=g-import-not-at-top
-  from litert_lm.adb import adb_benchmark  # pytype: disable=import-error
+  from litert_lm.adb import adb_benchmark  # pyrefly: ignore[missing-import]
 
   _HAS_ADB = True
 except ImportError:
@@ -41,11 +41,16 @@ def run_benchmark(
     decode_tokens: int = 256,
     is_android: bool = False,
     backend: str | None = None,
-    enable_speculative_decoding: bool | None = None,
+    speculative_decoding: str | None = None,
     max_num_tokens: int | None = None,
     cache: str | None = None,
     cpu_thread_count: int | None = None,
     activation_data_type: litert_lm.ActivationDataType | None = None,
+    ringbuffers_local_attention: bool | None = None,
+    gpu_decode_steps_per_sync: int | None = None,
+    enable_ynnpack: bool | None = None,
+    runs: int = 1,
+    skip_warmup: bool = False,
 ) -> None:
   """Benchmarks the model."""
   if not model_obj.exists():
@@ -59,11 +64,41 @@ def run_benchmark(
     return
 
   try:
+    speculative_decoding = common.normalize_speculative_decoding(
+        model.resolve_config_option(
+            speculative_decoding, model_obj, "speculative_decoding"
+        )
+    )
+    speculative_decoding_config = model.speculative_decoding_config_from_mode(
+        speculative_decoding
+    )
+    cache = model.resolve_config_option(cache, model_obj, "cache")
+    activation_data_type_opt = model.resolve_config_option(
+        activation_data_type, model_obj, "activation_data_type"
+    )
+    if isinstance(activation_data_type_opt, str):
+      activation_data_type_val = litert_lm.ActivationDataType.from_str(
+          activation_data_type_opt
+      )
+    else:
+      activation_data_type_val = activation_data_type_opt
+    enable_ynnpack = model.resolve_config_option(
+        enable_ynnpack, model_obj, "enable_ynnpack"
+    )
+
     backend_val = model.parse_backend(
-        backend, model_obj=model_obj, cpu_thread_count=cpu_thread_count
+        backend,
+        model_obj=model_obj,
+        cpu_thread_count=cpu_thread_count,
+        gpu_decode_steps_per_sync=gpu_decode_steps_per_sync,
     )
     assert backend_val is not None
     cache_dir_val = common.cache_dir_value_from_cache_mode(cache)
+
+    # For CLI benchmarking, we default to enabling ringbuffers when they are
+    # available, for best results.
+    if ringbuffers_local_attention is None:
+      ringbuffers_local_attention = True
 
     if is_android:
       if not _HAS_ADB:
@@ -83,9 +118,11 @@ def run_benchmark(
           prefill_tokens=prefill_tokens,
           decode_tokens=decode_tokens,
           cache_dir=cache_dir_val,
-          enable_speculative_decoding=enable_speculative_decoding,
+          speculative_decoding_config=speculative_decoding_config,
           max_num_tokens=max_num_tokens,
-          activation_data_type=activation_data_type,
+          activation_data_type=activation_data_type_val,
+          use_ringbuffers_local_attention=ringbuffers_local_attention,
+          enable_ynnpack=enable_ynnpack,
       )
 
     click.echo(
@@ -98,30 +135,54 @@ def run_benchmark(
     if max_num_tokens is not None:
       click.echo(f"Max number of tokens       : {max_num_tokens}")
 
-    spec_dec_str = "auto"
-    if enable_speculative_decoding is True:
-      spec_dec_str = "true"
-    elif enable_speculative_decoding is False:
-      spec_dec_str = "false"
+    spec_dec_str = speculative_decoding or "auto"
     click.echo(f"Cache                      : {cache or 'disk'}")
     click.echo(f"Speculative decoding       : {spec_dec_str}")
     if is_android:
       click.echo("Target                     : Android")
 
-    result = benchmark_obj.run()
+    info_list = []
+
+    with benchmark_obj:
+      if not skip_warmup:
+        click.echo("Running warmup..")
+        benchmark_obj.run()
+
+      for i in range(runs):
+        click.echo(f"Running iteration {i + 1} of {runs}..")
+        result = benchmark_obj.run()
+        info_list.append(result)
+
+    if not info_list:
+      raise RuntimeError("No benchmark info collected")
+
+    avg_info = litert_lm.interfaces.BenchmarkInfo(
+        init_time_in_second=info_list[0].init_time_in_second,
+        time_to_first_token_in_second=sum(
+            i.time_to_first_token_in_second for i in info_list
+        ) / len(info_list),
+        last_prefill_token_count=info_list[-1].last_prefill_token_count,
+        last_prefill_tokens_per_second=sum(
+            i.last_prefill_tokens_per_second for i in info_list
+        ) / len(info_list),
+        last_decode_token_count=info_list[-1].last_decode_token_count,
+        last_decode_tokens_per_second=sum(
+            i.last_decode_tokens_per_second for i in info_list
+        ) / len(info_list),
+    )
 
     click.echo("----- Results -----")
     click.echo(
-        f"Prefill speed:        {result.last_prefill_tokens_per_second:.2f}"
+        f"Prefill speed:        {avg_info.last_prefill_tokens_per_second:.2f}"
         " tokens/s"
     )
     click.echo(
-        f"Decode speed:         {result.last_decode_tokens_per_second:.2f}"
+        f"Decode speed:         {avg_info.last_decode_tokens_per_second:.2f}"
         " tokens/s"
     )
-    click.echo(f"Init time:            {result.init_time_in_second:.4f} s")
+    click.echo(f"Init time:            {avg_info.init_time_in_second:.4f} s")
     click.echo(
-        f"Time to first token:  {result.time_to_first_token_in_second:.4f} s"
+        f"Time to first token:  {avg_info.time_to_first_token_in_second:.4f} s"
     )
 
   except Exception:  # pylint: disable=broad-exception-caught
@@ -131,7 +192,7 @@ def run_benchmark(
 
 @click.command(
     cls=help_formatter.ColorCommand,
-    help="""Benchmarks a LiteRT-LM model.
+    help="""Benchmarks a model.
   \b
   Examples:
     # Benchmark using a model ID from 'litert-lm list'
@@ -167,6 +228,17 @@ def run_benchmark(
         " chosen based on --prefill_tokens and --decode_tokens."
     ),
 )
+@click.option(
+    "--runs",
+    type=click.IntRange(min=1),
+    default=1,
+    help="The number of benchmarking iterations to run and average.",
+)
+@click.option(
+    "--skip-warmup",
+    is_flag=True,
+    help="Skip the warmup run before benchmarking.",
+)
 @common.common_inference_options
 def benchmark(
     model_reference: str | None = None,
@@ -174,7 +246,7 @@ def benchmark(
     decode_tokens: int = 256,
     backend: str | None = None,
     android: bool = False,
-    enable_speculative_decoding: bool | None = None,
+    speculative_decoding: str | None = None,
     verbose: bool = False,
     from_huggingface_repo: str | None = None,
     huggingface_token: str | None = None,
@@ -182,6 +254,11 @@ def benchmark(
     cache: str | None = None,
     cpu_thread_count: int | None = None,
     activation_data_type: str | None = None,
+    ringbuffers_local_attention: bool | None = None,
+    gpu_decode_steps_per_sync: int | None = None,
+    enable_ynnpack: bool | None = None,
+    runs: int = 1,
+    skip_warmup: bool = False,
 ) -> None:
   """Benchmarks a LiteRT-LM model.
 
@@ -193,8 +270,8 @@ def benchmark(
     decode_tokens: The number of tokens to decode.
     backend: The backend to use (cpu, gpu or npu).
     android: Run on Android via ADB.
-    enable_speculative_decoding: Speculative decoding mode (True, False, or None
-      for auto).
+    speculative_decoding: Speculative decoding mode ("on", "off", "adaptive", or
+      None for the model's configured value).
     verbose: Whether to enable verbose logging.
     from_huggingface_repo: The HuggingFace repository ID.
     huggingface_token: The HuggingFace API token.
@@ -202,6 +279,14 @@ def benchmark(
     cache: The cache mode to use (no, memory, or disk).
     cpu_thread_count: The number of threads to use for CPU backend.
     activation_data_type: The activation data type to use for inference.
+    ringbuffers_local_attention: Whether to use ringbuffers for local attention
+      KV cache to minimize memory usage.
+    gpu_decode_steps_per_sync: The number of decode steps per sync for GPU
+      backend. Only applied to supported GPU models. Otherwise, ignored.
+    enable_ynnpack: Whether to delegate supported CPU operations to YNNPACK
+      before XNNPACK.
+    runs: The number of benchmarking iterations to run and average.
+    skip_warmup: Skip the warmup run before benchmarking.
   """
   if verbose:
     litert_lm.set_min_log_severity(litert_lm.LogSeverity.VERBOSE)
@@ -221,6 +306,9 @@ def benchmark(
   else:
     model_obj = model.Model.from_model_reference(model_reference)
 
+  max_num_tokens = model.resolve_config_option(
+      max_num_tokens, model_obj, "max_num_tokens"
+  )
   if max_num_tokens is None:
     # Replicates the logic from
     # runtime/engine/engine_settings.cc
@@ -232,7 +320,7 @@ def benchmark(
       decode_tokens=decode_tokens,
       is_android=android,
       backend=backend,
-      enable_speculative_decoding=enable_speculative_decoding,
+      speculative_decoding=speculative_decoding,
       max_num_tokens=max_num_tokens,
       cache=cache,
       cpu_thread_count=cpu_thread_count,
@@ -241,6 +329,11 @@ def benchmark(
           if activation_data_type
           else None
       ),
+      ringbuffers_local_attention=ringbuffers_local_attention,
+      gpu_decode_steps_per_sync=gpu_decode_steps_per_sync,
+      enable_ynnpack=enable_ynnpack,
+      runs=runs,
+      skip_warmup=skip_warmup,
   )
 
 

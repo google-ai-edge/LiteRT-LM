@@ -96,6 +96,7 @@ TEST(FileUtilTest, GetFileCacheIdentifier) {
   EXPECT_EQ(parts[1], "9");
 
   EXPECT_FALSE(GetFileCacheIdentifier("non_existent_file").ok());
+  EXPECT_FALSE(GetFileCacheIdentifier(testing::TempDir()).ok());
 }
 
 TEST(FileUtilTest, GetFileCacheIdentifier_FromScopedFile) {
@@ -205,6 +206,24 @@ TEST(FileUtilTest, DeleteStaleCaches) {
   EXPECT_FALSE(FileExists(middle_identifier_cache));
   EXPECT_FALSE(FileExists(existing_gpu_cache));
   EXPECT_TRUE(FileExists(unrelated));
+}
+
+TEST(FileUtilTest, IsDirectoryWritable) {
+  EXPECT_FALSE(IsDirectoryWritable(""));
+  EXPECT_TRUE(IsDirectoryWritable(testing::TempDir()));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::string non_existent_dir,
+      JoinPath(testing::TempDir(), "non_existent_subdir_12345"));
+  EXPECT_FALSE(IsDirectoryWritable(non_existent_dir));
+
+  ASSERT_OK_AND_ASSIGN(
+      std::string temp_file,
+      JoinPath(testing::TempDir(), "temp_file_for_dir_test.txt"));
+  std::ofstream ofs(temp_file);
+  ofs << "data";
+  ofs.close();
+  EXPECT_FALSE(IsDirectoryWritable(temp_file));
 }
 
 }  // namespace

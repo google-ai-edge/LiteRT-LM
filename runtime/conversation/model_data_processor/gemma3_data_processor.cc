@@ -19,9 +19,9 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -30,21 +30,29 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
-#include "runtime/components/logits_processor/constrained_decoding/constraint.h"
-#include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
-#if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
-#include "runtime/components/logits_processor/constrained_decoding/gemma_model_constraint_provider.h"
-#endif
-#include "runtime/components/prompt_template.h"
+#include "runtime/components/constrained_decoding/constraint.h"
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+#include <variant>
+
+#include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
+#elif !defined(LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED)
+#include "runtime/components/constrained_decoding/constraint_provider.h"
+#include "runtime/components/constrained_decoding/llg_constraint_config.h"
+#include "runtime/components/constrained_decoding/llg_constraint_provider.h"
+#include "runtime/components/constrained_decoding/llg_python_tool_calls.h"
+#include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/components/tool_use/python_tool_format_utils.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/generic_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
-#include "runtime/conversation/prompt_utils.h"
+#include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"
-#include "sentencepiece_model.pb.h"  // from @sentencepiece
 
 namespace litert::lm {
 namespace {
@@ -105,66 +113,75 @@ Gemma3DataProcessor::Create(Gemma3DataProcessorConfig config,
                             const Tokenizer* tokenizer,
                             const std::vector<std::vector<int>>& stop_token_ids,
                             bool enable_constrained_decoding) {
-#if defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
+  ABSL_ASSIGN_OR_RETURN(auto audio_preprocessor,
+                        AudioPreprocessorMiniAudio::Create(
+                            AudioPreprocessorConfig::CreateDefaultUsmConfig()));
+
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+  ConstraintProviderPtr constraint_provider(
+      nullptr, &LiteRtLmGemmaModelConstraintProvider_Destroy);
+  if (enable_constrained_decoding) {
+    if (tokenizer == nullptr) {
+      return absl::InvalidArgumentError(
+          "Tokenizer must not be null when constrained decoding is enabled.");
+    }
+    if (tokenizer->GetTokenizerType() != TokenizerType::kSentencePiece) {
+      ABSL_LOG(WARNING)
+          << "Constrained decoding is only supported for SentencePiece "
+             "tokenizer.";
+    } else {
+      std::vector<const int*> stop_token_ids_ptrs;
+      std::vector<size_t> stop_token_lengths;
+      stop_token_ids_ptrs.reserve(stop_token_ids.size());
+      stop_token_lengths.reserve(stop_token_ids.size());
+      for (const auto& stop_tokens : stop_token_ids) {
+        stop_token_ids_ptrs.push_back(stop_tokens.data());
+        stop_token_lengths.push_back(stop_tokens.size());
+      }
+      auto sp_tokenizer =
+          reinterpret_cast<const SentencePieceTokenizer*>(tokenizer);
+      auto serialized_model_proto =
+          sp_tokenizer->GetProcessor().model_proto().SerializeAsString();
+      LiteRtLmGemmaModelConstraintProvider* provider =
+          LiteRtLmGemmaModelConstraintProvider_Create(
+              serialized_model_proto.data(), serialized_model_proto.size(),
+              stop_token_ids_ptrs.data(), stop_token_lengths.data(),
+              stop_token_ids.size());
+      if (provider == nullptr) {
+        return absl::InternalError(
+            "Failed to create GemmaModelConstraintProvider.");
+      }
+      constraint_provider.reset(provider);
+    }
+  }
+#elif defined(LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED)
   if (enable_constrained_decoding) {
     return absl::FailedPreconditionError(
         "Constrained decoding was disabled at build time.");
   }
-  ABSL_ASSIGN_OR_RETURN(auto audio_preprocessor,
-                        AudioPreprocessorMiniAudio::Create(
-                            AudioPreprocessorConfig::CreateDefaultUsmConfig()));
-  return absl::WrapUnique(
-      new Gemma3DataProcessor(config, preface, ImagePreprocessor::Create(),
-                              std::move(audio_preprocessor)));
+  ConstraintProviderPtr constraint_provider;
 #else
-  std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
-                  decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>
-      constraint_provider(nullptr,
-                          &LiteRtLmGemmaModelConstraintProvider_Destroy);
+  std::unique_ptr<ConstraintProvider> constraint_provider = nullptr;
   if (enable_constrained_decoding) {
-    std::vector<const int*> stop_token_ids_ptrs;
-    std::vector<size_t> stop_token_lengths;
-    stop_token_ids_ptrs.reserve(stop_token_ids.size());
-    stop_token_lengths.reserve(stop_token_ids.size());
-    for (const auto& stop_tokens : stop_token_ids) {
-      stop_token_ids_ptrs.push_back(stop_tokens.data());
-      stop_token_lengths.push_back(stop_tokens.size());
-    }
-    if (tokenizer->GetTokenizerType() != TokenizerType::kSentencePiece) {
-      return absl::InvalidArgumentError(
-          "Constrained decoding is only supported for SentencePiece "
-          "tokenizer.");
-    }
-    auto sp_tokenizer =
-        reinterpret_cast<const SentencePieceTokenizer*>(tokenizer);
-    auto serialized_model_proto =
-        sp_tokenizer->GetProcessor().model_proto().SerializeAsString();
-    LiteRtLmGemmaModelConstraintProvider* provider =
-        LiteRtLmGemmaModelConstraintProvider_Create(
-            serialized_model_proto.data(), serialized_model_proto.size(),
-            stop_token_ids_ptrs.data(), stop_token_lengths.data(),
-            stop_token_ids.size());
-    if (provider == nullptr) {
-      return absl::InternalError(
-          "Failed to create GemmaModelConstraintProvider.");
-    }
-    constraint_provider.reset(provider);
+    ABSL_ASSIGN_OR_RETURN(
+        constraint_provider,
+        CreateLlgToolCallConstraintProvider(
+            tokenizer, stop_token_ids, /*fallback_eos_token=*/"<eos>",
+            {config.code_fence_start, config.code_fence_end}));
   }
-  ABSL_ASSIGN_OR_RETURN(auto audio_preprocessor,
-                        AudioPreprocessorMiniAudio::Create(
-                            AudioPreprocessorConfig::CreateDefaultUsmConfig()));
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
+
   return absl::WrapUnique(new Gemma3DataProcessor(
       std::move(constraint_provider), config, preface,
       ImagePreprocessor::Create(), std::move(audio_preprocessor)));
-#endif
 }
 
 absl::StatusOr<ordered_json> Gemma3DataProcessor::MessageToTemplateInput(
     const ordered_json& message) const {
   // If the message doesn't contain any tool calls and isn't a tool message,
-  // then the template input is the same as the message.
+  // then normalize message content and return.
   if (!HasToolCalls(message) && !IsToolMessage(message)) {
-    return message;
+    return ModelDataProcessor::MessageToTemplateInput(message);
   }
 
   ordered_json template_input = ordered_json::object();
@@ -189,45 +206,24 @@ absl::StatusOr<ordered_json> Gemma3DataProcessor::MessageToTemplateInput(
         // If the content is an object, treat it as a single tool response.
         ABSL_ASSIGN_OR_RETURN(std::string formatted_tool_response,
                               FormatToolResponse(message["content"]));
-        template_input["content"] = formatted_tool_response;
+        template_input["content"] = ordered_json::array(
+            {{{"type", "text"}, {"text", std::move(formatted_tool_response)}}});
       } else {
-        // If the content is neither an array nor an object, pass it through
-        // unchanged.
-        template_input["content"] = message["content"];
+        template_input["content"] = NormalizeContent(message["content"]);
       }
     } else {
-      // If the role is not "tool", then pass through content unchanged.
-      template_input["content"] = message["content"];
+      template_input["content"] = NormalizeContent(message["content"]);
     }
   }
 
   // If the message contains tool calls, then convert them to Python and
   // add them to the template input.
   if (message.contains("tool_calls")) {
-    template_input["tool_calls"] = ordered_json::array();
-    for (const auto& tool_call : message["tool_calls"]) {
-      if (!tool_call.contains("function")) {
-        continue;
-      }
-      const nlohmann::ordered_json& function = tool_call["function"];
-      ordered_json tool_call_input = ordered_json::object();
-      tool_call_input["type"] = "function";
-      tool_call_input["function"]["name"] = function["name"];
-
-      if (function.contains("arguments")) {
-        if (function["arguments"].is_object()) {
-          for (const auto& [key, value] : function["arguments"].items()) {
-            ABSL_ASSIGN_OR_RETURN(std::string formatted_value,
-                                  FormatValueAsPython(value));
-            tool_call_input["function"]["arguments"][key] = formatted_value;
-          }
-        } else {
-          tool_call_input["function"]["arguments"] = function["arguments"];
-        }
-      }
-
-      template_input["tool_calls"].push_back(tool_call_input);
-    }
+    ABSL_ASSIGN_OR_RETURN(template_input["tool_calls"],
+                          FormatToolCalls(message["tool_calls"],
+                                          [](const nlohmann::ordered_json& v) {
+                                            return FormatValueAsPython(v);
+                                          }));
   }
 
   return template_input;
@@ -259,71 +255,38 @@ Gemma3DataProcessor::ToInputDataVectorImpl(
       {1, config_.image_tensor_height, config_.image_tensor_width, 3}));
   return ProcessMultimodalPrompt(
       rendered_template_prompt, messages, image_preprocessor_.get(),
-      audio_preprocessor_.get(), multi_config, image_preprocess_parameter);
-}
-
-absl::StatusOr<ModelDataProcessor::SingleTurnTemplateRenderResult>
-Gemma3DataProcessor::RenderSingleTurnTemplate(
-    std::vector<Message>& history, const Preface& preface,
-    const Message& message, const PromptTemplate& prompt_template,
-    bool current_is_appending_message, bool append_message,
-    std::optional<nlohmann::ordered_json> extra_context) const {
-  return RenderSingleTurnTemplateCommon(
-      *this, history, preface, message, prompt_template,
-      current_is_appending_message, append_message, extra_context,
-      /*push_dummy_user_message_to_preface=*/true);
+      audio_preprocessor_.get(), multi_config, image_preprocess_parameter,
+      /*visual_token_budget=*/std::nullopt, args.dry_run);
 }
 
 absl::StatusOr<Message> Gemma3DataProcessor::ToMessageImpl(
     const Responses& responses,
     const Gemma3DataProcessorArguments& args) const {
-  absl::string_view response_text = responses.GetTexts()[0];
-  ordered_json message = {{"role", "assistant"}};
-  if (preface_.has_value() && std::holds_alternative<JsonPreface>(*preface_) &&
-      !std::get<JsonPreface>(*preface_).tools.empty()) {
-    ABSL_ASSIGN_OR_RETURN(
-        ordered_json content_and_tool_calls,
-        ParseTextAndToolCalls(
-            response_text, config_.code_fence_start, config_.code_fence_end,
-            GetSyntaxType(config_.syntax_type),
-            {.escape_fence_strings = config_.escape_fence_strings,
-             .tool_code_regex = config_.tool_code_regex,
-             .return_error_on_parse_failure = ReturnErrorOnParseFailure()}));
-    if (content_and_tool_calls.contains("content")) {
-      message["content"] = content_and_tool_calls["content"];
-    }
-    if (content_and_tool_calls.contains("tool_calls")) {
-      message["tool_calls"] = content_and_tool_calls["tool_calls"];
-    }
-  } else {
-    message["content"] = ordered_json::array(
-        {{{"type", "text"}, {"text", std::string(response_text)}}});
-  }
-  return message;
+  return ResponseTextToMessage(
+      responses.GetTexts()[0], preface_, config_.code_fence_start,
+      config_.code_fence_end, GetSyntaxType(config_.syntax_type),
+      {.escape_fence_strings = config_.escape_fence_strings,
+       .tool_code_regex = config_.tool_code_regex,
+       .return_error_on_parse_failure = ReturnErrorOnParseFailure()});
 }
 
 absl::StatusOr<ordered_json> Gemma3DataProcessor::FormatTools(
     const ordered_json& tools) const {
-  if (!tools.is_array()) {
-    return absl::InvalidArgumentError("Tools must be an array.");
-  }
-  ordered_json formatted_tools = ordered_json::array();
-  for (const auto& tool : tools) {
-    ABSL_ASSIGN_OR_RETURN(std::string formatted_tool, FormatToolAsPython(tool));
-    formatted_tools.push_back(formatted_tool);
-  }
-  return formatted_tools;
+  return FormatToolsArray(tools, [](const nlohmann::ordered_json& t) {
+    return FormatToolAsPython(t);
+  });
 }
 
 absl::StatusOr<std::unique_ptr<Constraint>>
 Gemma3DataProcessor::CreateConstraint(
-    const nlohmann::ordered_json& tools) const {
-#if defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
+    const nlohmann::ordered_json& tools,
+    std::optional<ToolChoice> tool_choice) const {
+#if defined(LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED)
   return absl::FailedPreconditionError(
       "Constrained decoding is disabled at build time, but it was requested "
       "for inference.");
 #else
-  if (constraint_provider_c_ == nullptr) {
+  if (constraint_provider_ == nullptr) {
     return nullptr;
   }
   if (!tools.is_array()) {
@@ -337,6 +300,17 @@ Gemma3DataProcessor::CreateConstraint(
       functions.push_back(tool);
     }
   }
+
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+  // The FST path only supports the default "auto" tool choice, which
+  // matches its text and/or function calls constraint.
+  if (tool_choice.has_value() &&
+      !std::holds_alternative<ToolChoice::Auto>(tool_choice->choice)) {
+    return absl::FailedPreconditionError(
+        "tool_choice other than \"auto\" requires LLGuidance tool call "
+        "constraints. Build with "
+        "--define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 to enable them.");
+  }
   LiteRtLmGemmaModelConstraintOptions gemma_options = {
       .funcall_format = kLiteRtLmGemmaFuncallFormatPythonStyle,
       .code_fence_start = config_.code_fence_start.c_str(),
@@ -347,12 +321,30 @@ Gemma3DataProcessor::CreateConstraint(
   std::string functions_str = functions.dump();
   LiteRtLmConstraint* constraint =
       LiteRtLmGemmaModelConstraintProvider_CreateConstraintFromTools(
-          constraint_provider_c_.get(), functions_str.c_str(), &gemma_options);
+          constraint_provider_.get(), functions_str.c_str(), &gemma_options);
   if (constraint == nullptr) {
     return absl::InternalError("Failed to create constraint with tools.");
   }
   return absl::WrapUnique(reinterpret_cast<Constraint*>(constraint));
-#endif
+#else
+  LlgConstraintsOptions options;
+  options.funcall_format = FuncallFormat::kPython;
+  options.code_fence_start = config_.code_fence_start;
+  options.code_fence_end = config_.code_fence_end;
+  options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
+
+  if (tool_choice.has_value()) {
+    ABSL_RETURN_IF_ERROR(ApplyToolChoiceToOptions(*tool_choice, options));
+  }
+
+  ABSL_ASSIGN_OR_RETURN(
+      std::string lark_grammar,
+      CreateLarkGrammarForPythonToolCalls(functions, options));
+  return constraint_provider_->CreateConstraint(
+      LlGuidanceConstraintArg{.constraint_type = LlgConstraintType::kLark,
+                              .constraint_string = std::move(lark_grammar)});
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
+#endif  // LITERT_LM_TOOL_CALL_CONSTRAINTS_DISABLED
 }
 
 absl::string_view Gemma3DataProcessor::CodeFenceStart() const {

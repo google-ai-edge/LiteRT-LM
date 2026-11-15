@@ -12,17 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+include("${LITERTLM_MODULES_DIR}/utils.cmake")
+include("${LITERTLM_ABSL_CONFIG_PATH}")
 
 message(STATUS "[LiteRTLM] Injecting shim into Abseil-cpp root...")
 
-set(SRC_LIST "${ABSL_SRC_DIR}/absl/CMakeLists.txt")
-if(EXISTS "${SRC_LIST}")
-    file(READ "${SRC_LIST}" SRC_CONTENT)
+set(ROOT_LIST "${LITERTLM_ABSL_SRC_DIR}/absl/CMakeLists.txt")
+if(EXISTS "${ROOT_LIST}")
+    file(READ "${ROOT_LIST}" ROOT_CONTENT)
 
-    string(PREPEND SRC_CONTENT "include(${ABSL_PACKAGE_DIR}/absl_src_shim.cmake)\n")
+    string(PREPEND ROOT_CONTENT "include(${LITERTLM_ABSL_SHIM_PATH})\n")
 
-    file(WRITE "${SRC_LIST}" "${SRC_CONTENT}")
+    file(WRITE "${ROOT_LIST}" "${ROOT_CONTENT}")
     message(STATUS "[LiteRTLM] Injection successful.")
 else()
-    message(FATAL_ERROR "Could not find Abseil-cpp CMakeLists.txt at ${SRC_LIST}")
+    message(FATAL_ERROR "Could not find Abseil-cpp CMakeLists.txt at ${ROOT_LIST}")
 endif()

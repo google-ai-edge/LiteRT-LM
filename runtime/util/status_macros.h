@@ -15,7 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_STATUS_MACROS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_STATUS_MACROS_H_
 
-#include "support/util/status_macros.h"  // from @litert  // IWYU pragma: export
+#include "support/util/status_macros.h"  // IWYU pragma: export
 
 namespace litert::lm::internal {
 using StreamToStatusHelper = ::litert::support::internal::StreamToStatusHelper;

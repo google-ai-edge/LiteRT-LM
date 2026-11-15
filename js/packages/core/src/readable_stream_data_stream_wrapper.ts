@@ -14,353 +14,466 @@
  * limitations under the License.
  */
 
-class Slice {
-  data?: Uint8Array<ArrayBuffer>;
-  fullyDiscarded = false;
-  private discardedRegions: Array<[number, number]> = [];
+/**
+ * Result returned by ReadableStreamDataStreamWrapper methods to C++ Emval.
+ */
+export declare interface ReadableStreamDataStreamResult {
+  error?: Error;
+}
 
-  constructor(readonly size: number) {}
+/**
+ * Extern interface for the data stream wrapper methods invoked by C++
+ * (`ReadableStreamDataStream` in readable_stream_data_stream.cc).
+ */
+export declare interface ReadableStreamDataStreamWrapperInterface {
+  readAndDiscard(
+      destAddress: number, offset: number|bigint,
+      count: number|bigint): Promise<ReadableStreamDataStreamResult>;
+  readAndPreserve(
+      destAddress: number, offset: number|bigint,
+      count: number|bigint): Promise<ReadableStreamDataStreamResult>;
+  discard(offset: number|bigint, count: number|bigint):
+      ReadableStreamDataStreamResult;
+  /**
+   * Releases the underlying source. Called when the C++ stream is destroyed.
+   * Must be idempotent.
+   */
+  close(): void;
+}
 
-  discard(start: number, end: number) {
-    if (this.fullyDiscarded) return;
-    if (this.discardedRegions.length === 0) {
-      // No discarded regions yet, so add this one.
-      this.discardedRegions.push([start, end]);
-      this.checkFullyDiscarded();
-      return;
+/** Options for ReadableStreamDataStreamWrapper. */
+export declare interface ReadableStreamDataStreamWrapperOptions {
+  /**
+   * Maximum number of bytes that may be cached for later reads. Reads that
+   * would cache more fail with an error instead of growing memory without
+   * bound. Defaults to no limit.
+   */
+  maxCachedBytes?: number;
+  /**
+   * Logs a warning once the cache grows past this many bytes. Defaults to
+   * 1 GB.
+   */
+  warnCachedBytes?: number;
+}
+
+/** Statistics about a ReadableStreamDataStreamWrapper's memory use. */
+export declare interface ReadableStreamDataStreamWrapperStats {
+  /** Number of bytes read from the underlying stream so far. */
+  streamPosition: number;
+  /** Bytes currently held in cache slices. */
+  cachedBytes: number;
+  /** Largest value `cachedBytes` has reached. */
+  peakCachedBytes: number;
+}
+
+const DEFAULT_BYTES_PER_SLICE = 10_000_000;
+const DEFAULT_WARN_CACHED_BYTES = 1_000_000_000;
+/** Size of the scratch buffer used for BYOB reads. */
+const BYOB_SCRATCH_BYTES = 4 * 1024 * 1024;
+/** Number of released slice buffers kept for reuse. */
+const MAX_FREE_BUFFERS = 2;
+
+/** A set of half-open [start, end) ranges, kept sorted and merged. */
+export class RangeSet {
+  // Sorted, disjoint and non-adjacent, so both starts and ends are strictly
+  // increasing.
+  private readonly ranges: Array<[number, number]> = [];
+
+  add(start: number, end: number): void {
+    if (start >= end) return;
+    // Merge with every range that overlaps or touches [start, end).
+    const first = this.firstIndexWhereEndIsAtLeast(start);
+    let last = first;
+    while (last < this.ranges.length && this.ranges[last][0] <= end) {
+      start = Math.min(start, this.ranges[last][0]);
+      end = Math.max(end, this.ranges[last][1]);
+      last++;
     }
-
-    this.discardedRegions.push([start, end]);
-    this.discardedRegions.sort((a, b) => a[0] - b[0]);
-
-    // Merge overlapping regions.
-    const mergedRegions: Array<[number, number]> = [];
-    for (const region of this.discardedRegions) {
-      const lastRegion = mergedRegions[mergedRegions.length - 1];
-      if (!lastRegion || lastRegion[1] < region[0]) {
-        mergedRegions.push(region);
-      } else {
-        lastRegion[1] = Math.max(lastRegion[1], region[1]);
-      }
-    }
-    this.discardedRegions = mergedRegions;
-
-    this.checkFullyDiscarded();
+    this.ranges.splice(first, last - first, [start, end]);
   }
 
-  getDiscardedRegions(start = 0, end = this.size): Array<[number, number]> {
+  /** Returns the ranges that overlap [start, end). */
+  overlapping(start: number, end: number): Array<[number, number]> {
     const result: Array<[number, number]> = [];
-    for (const [rStart, rEnd] of this.discardedRegions) {
-      // If the region starts after the end of the requested range,
-      // no further regions will overlap.
-      if (rStart >= end) {
-        break;
-      }
-      // If the region ends before or at the start of the requested range, skip
-      // it.
-      if (rEnd <= start) {
-        continue;
-      }
-
-      result.push([rStart, rEnd]);
+    for (let i = this.firstIndexWhereEndIsAtLeast(start + 1);
+         i < this.ranges.length && this.ranges[i][0] < end; i++) {
+      result.push(this.ranges[i]);
     }
     return result;
   }
 
-  private checkFullyDiscarded() {
-    if (this.discardedRegions.length === 1 &&
-        this.discardedRegions[0][0] === 0 &&
-        this.discardedRegions[0][1] === this.size) {
-      this.fullyDiscarded = true;
-      this.data = undefined;
+  /** Returns true if every position in [start, end) is in the set. */
+  covers(start: number, end: number): boolean {
+    if (start >= end) return true;
+    const i = this.firstIndexWhereEndIsAtLeast(end);
+    return i < this.ranges.length && this.ranges[i][0] <= start;
+  }
+
+  /** Returns the parts of [start, end) that are not in the set. */
+  gaps(start: number, end: number): Array<[number, number]> {
+    const result: Array<[number, number]> = [];
+    let position = start;
+    for (const [rStart, rEnd] of this.overlapping(start, end)) {
+      if (rStart > position) result.push([position, rStart]);
+      position = Math.max(position, rEnd);
     }
+    if (position < end) result.push([position, end]);
+    return result;
+  }
+
+  private firstIndexWhereEndIsAtLeast(position: number): number {
+    let low = 0;
+    let high = this.ranges.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (this.ranges[mid][1] < position) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
   }
 }
 
 /**
  * Wraps a ReadableStream for use in LiteRT LM C++ streamed model loading.
+ *
+ * C++ reads the model through a random access interface, but a ReadableStream
+ * can only be read forward. Reads are served as follows:
+ *
+ * - Bytes the stream has not reached yet are read from the stream. If the read
+ *   discards them, they are copied straight to the wasm heap without being
+ *   cached, so loading a model in file order caches nothing.
+ * - Reading ahead of the stream caches the skipped bytes in fixed size slices
+ *   so they can be read later, except for bytes that have already been
+ *   discarded, which are dropped.
+ * - Reading bytes behind the stream copies them from the cache.
+ *
+ * Discarded bytes can not be read again. A slice's memory is released once
+ * all of its bytes have been discarded.
+ *
+ * If reading from the stream fails, the wrapper fails all later reads since
+ * its state no longer matches the stream.
  */
-export class ReadableStreamDataStreamWrapper {
-  private slices: Slice[] = [];
-  private streamDone = false;
-  private globalPosition = 0;
+export class ReadableStreamDataStreamWrapper implements
+    ReadableStreamDataStreamWrapperInterface {
+  /** Cached data, by slice index. Each buffer is `bytesPerSlice` long. */
+  private readonly slices = new Map<number, Uint8Array<ArrayBuffer>>();
+  private readonly discarded = new RangeSet();
+  /** Released slice buffers that can be reused. */
+  private readonly freeBuffers: Array<Uint8Array<ArrayBuffer>> = [];
 
-  private reader:
+  private readonly reader:
       {byobReader: ReadableStreamBYOBReader, defaultReader?: undefined}|{
         defaultReader: ReadableStreamDefaultReader<Uint8Array>,
         byobReader?: undefined
       };
-  private leftoverData?: Uint8Array;
+  /** Unconsumed part of the last chunk from the default reader. */
+  private leftover?: Uint8Array;
+  /** Buffer for BYOB reads. Replaced after each read, which transfers it. */
+  private byobScratch?: ArrayBuffer;
+
+  private streamPosition = 0;
+  /** The stream's length, once its end has been reached. */
+  private streamLength?: number;
+  private cachedBytes = 0;
+  private peakCachedBytes = 0;
+  private warnedAboutCacheSize = false;
+  private readonly maxCachedBytes: number;
+  private readonly warnCachedBytes: number;
+
   private isReading = false;
+  private closed = false;
+  /** The error that put the wrapper in a failed state, if any. */
+  private failure?: Error;
 
   constructor(
-      private readonly stream: ReadableStream<Uint8Array>,
+      stream: ReadableStream<Uint8Array>,
       // Heap is detached whenever it's resized, so we get it each time.
       private readonly getWasmHeap: () => Uint8Array,
-      readonly bytesPerSlice = 10_000_000) {
+      readonly bytesPerSlice = DEFAULT_BYTES_PER_SLICE,
+      options: ReadableStreamDataStreamWrapperOptions = {}) {
+    if (!Number.isSafeInteger(bytesPerSlice) || bytesPerSlice <= 0) {
+      throw new Error(
+          `bytesPerSlice must be a positive integer, got ${bytesPerSlice}`);
+    }
+    this.maxCachedBytes = options.maxCachedBytes ?? Infinity;
+    this.warnCachedBytes = options.warnCachedBytes ?? DEFAULT_WARN_CACHED_BYTES;
     try {
-      this.reader = {byobReader: this.stream.getReader({mode: 'byob'})};
+      this.reader = {byobReader: stream.getReader({mode: 'byob'})};
     } catch (e) {
-      this.reader = {defaultReader: this.stream.getReader()};
+      this.reader = {defaultReader: stream.getReader()};
     }
   }
 
-  private * getViews(start: number, end: number): IterableIterator<{
-    getView: () => Uint8Array<ArrayBuffer>,
-    discardView: () => void,
-    setView: (view: Uint8Array<ArrayBuffer>) => void,
-    checkReadable: () => void,
-  }> {
-    if (start >= end) {
-      return;
+  async readAndDiscard(
+      destAddress: number, offset: number|bigint,
+      count: number|bigint): Promise<ReadableStreamDataStreamResult> {
+    try {
+      await this.read(
+          destAddress >>> 0, toNumber(offset), toNumber(count),
+          /* discard= */ true);
+      return {};
+    } catch (e) {
+      return {error: toError(e)};
     }
+  }
 
-    // A scratch buffer for creating new slices if needed.
-    // If the slice is fully discarded, we'll reuse this buffer instead of
-    // creating a new one.
-    let scratchBuffer: Uint8Array<ArrayBuffer>|undefined;
-    let previousSlice: Slice|undefined;
-    let position = start;
-    while (position < end) {
-      const sliceIndex = Math.floor(position / this.bytesPerSlice);
-      const slicePosition = position % this.bytesPerSlice;
-      const sliceStartGlobalPosition = sliceIndex * this.bytesPerSlice;
+  async readAndPreserve(
+      destAddress: number, offset: number|bigint,
+      count: number|bigint): Promise<ReadableStreamDataStreamResult> {
+    try {
+      await this.read(
+          destAddress >>> 0, toNumber(offset), toNumber(count),
+          /* discard= */ false);
+      return {};
+    } catch (e) {
+      return {error: toError(e)};
+    }
+  }
 
-      let slice = this.slices[sliceIndex];
-      if (!slice) {
-        if (!previousSlice || !previousSlice.fullyDiscarded) {
-          // Make a new scratch buffer since the old one was assigned to the
-          // previous slice (or there is no previous slice).
-          scratchBuffer = new Uint8Array(this.bytesPerSlice);
-        }
-        slice = new Slice(this.bytesPerSlice);
-        slice.data = scratchBuffer;
-        this.slices[sliceIndex] = slice;
+  discard(offset: number|bigint, count: number|bigint):
+      ReadableStreamDataStreamResult {
+    try {
+      const start = toNumber(offset);
+      const length = toNumber(count);
+      if (length > 0) {
+        this.discardRange(start, start + length);
       }
-
-      const viewEnd =
-          Math.min(this.bytesPerSlice, end - sliceStartGlobalPosition);
-
-      const discardView = () => {
-        slice.discard(slicePosition, viewEnd);
-      };
-
-      const viewLength = viewEnd - slicePosition;
-
-      const setView = (view: Uint8Array<ArrayBuffer>) => {
-        // Necessary when a BYOB reader invalidates the buffer.
-        slice.data = new Uint8Array(view.buffer, 0, view.buffer.byteLength);
-        scratchBuffer = slice.data;
-      };
-
-      const checkReadable = () => {
-        const discardedRegions =
-            slice.getDiscardedRegions(slicePosition, viewEnd);
-        if (discardedRegions.length > 0) {
-          const globalDiscardedRegions = discardedRegions.map(
-              ([start, end]) => `[${start + sliceStartGlobalPosition}, ${
-                  end + sliceStartGlobalPosition}]`);
-          throw new Error(`Slice ${sliceIndex} for data at ${
-              position} overlaps discarded regions: [${
-              globalDiscardedRegions.join(', ')}]`);
-        }
-        if (!slice.data) {
-          throw new Error(
-              `No ArrayBuffer for slice ${sliceIndex} at position ${position}`);
-        }
-      };
-
-      const getView = () => {
-        checkReadable();
-        return new Uint8Array(
-            slice.data!.buffer, slice.data!.byteOffset + slicePosition,
-            slice.data!.byteOffset + viewLength);
-      };
-
-      yield {
-        getView,
-        discardView,
-        setView,
-        checkReadable,
-      };
-
-      previousSlice = slice;
-      position += viewLength;
+      return {};
+    } catch (e) {
+      return {error: toError(e)};
     }
   }
 
-  private async readInternal(
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.slices.clear();
+    this.freeBuffers.length = 0;
+    this.cachedBytes = 0;
+    this.leftover = undefined;
+    this.byobScratch = undefined;
+    const reader = this.reader.byobReader ?? this.reader.defaultReader;
+    // Cancelling stops any in-progress download. It rejects if the stream has
+    // already failed, in which case there is nothing to release.
+    reader.cancel().catch(() => {});
+  }
+
+  getStats(): ReadableStreamDataStreamWrapperStats {
+    return {
+      streamPosition: this.streamPosition,
+      cachedBytes: this.cachedBytes,
+      peakCachedBytes: this.peakCachedBytes,
+    };
+  }
+
+  private async read(
       destAddress: number, offset: number, count: number,
       discard: boolean): Promise<void> {
+    this.checkUsable();
     if (this.isReading) {
       throw new Error('Concurrent reads are not supported');
     }
+    if (count <= 0) return;
+    const end = offset + count;
+    this.checkNotDiscarded(offset, end);
+
     this.isReading = true;
     try {
-      // 1. Read and cache all unfetched data before the requested region.
-      for (const {getView, setView, checkReadable} of this.getViews(
-               this.globalPosition, offset)) {
-        checkReadable();
-        // We do not discard or change destAddress here as this is before the
-        // requested region.
-        const newView = await this.fillBufferFromStream(getView());
-        setView(newView);
-        if (newView.length === 0) {
-          break;  // Hit EOF early
+      // 1. Advance the stream to the requested range, caching the bytes in
+      // between unless they have already been discarded.
+      if (this.streamPosition < offset) {
+        await this.consume(offset - this.streamPosition, (bytes, position) => {
+          this.cache(bytes, position);
+        });
+      }
+
+      // 2. Copy the part of the range that is already cached.
+      const cachedEnd = Math.min(this.streamPosition, end);
+      for (const {index, start, end: viewEnd} of this.sliceViews(
+               offset, cachedEnd)) {
+        const data = this.slices.get(index);
+        if (!data) {
+          throw new Error(`No cached data for [${start}, ${viewEnd})`);
         }
+        const sliceStart = index * this.bytesPerSlice;
+        this.getWasmHeap().set(
+            data.subarray(start - sliceStart, viewEnd - sliceStart),
+            destAddress + start - offset);
       }
 
-      // 2. Copy cached data from existing slices. This may be a no-op if none
-      // of the requested region is cached.
-      const endOfCachedRead = Math.min(this.globalPosition, offset + count);
-      for (const {getView, discardView} of this.getViews(
-               offset, endOfCachedRead)) {
-        const view = getView();
-        this.getWasmHeap().set(view, destAddress);
-        if (discard) discardView();
-        destAddress += view.length;
+      // 3. Read the rest of the range from the stream, caching it only if it
+      // is being preserved.
+      const uncachedStart = Math.max(offset, this.streamPosition);
+      if (uncachedStart < end) {
+        await this.consume(end - uncachedStart, (bytes, position) => {
+          this.getWasmHeap().set(bytes, destAddress + position - offset);
+          if (!discard) this.cache(bytes, position);
+        });
       }
 
-      // 3. Read and optionally cache remaining unfetched data and copy it to
-      // the destination.
-      const startOfUncachedRead = Math.max(endOfCachedRead, offset);
-      for (const {getView, setView, discardView} of this.getViews(
-               startOfUncachedRead, offset + count)) {
-        // If we are already at EOF (e.g. from step 1 or a previous iteration
-        // here), stop reading
-        if (this.streamDone && this.globalPosition <= startOfUncachedRead)
-          break;
-        const newView = await this.fillBufferFromStream(getView());
-        setView(newView);
-        this.getWasmHeap().set(newView, destAddress);
-        if (discard) discardView();
-        destAddress += newView.length;
+      if (discard) {
+        this.discardRange(offset, end);
       }
     } finally {
       this.isReading = false;
     }
   }
 
-  private async fillBufferFromStream(buffer: Uint8Array<ArrayBuffer>):
-      Promise<Uint8Array<ArrayBuffer>> {
-    // Must read byteLength now as buffer will be invalidated.
-    const byteLength = buffer.byteLength;
-    if (byteLength === 0) {
-      return buffer;
-    }
-    const byteOffset = buffer.byteOffset;
-
-    let bytesRead = 0;
-    let arrayBuffer = buffer.buffer;
-    while (bytesRead < byteLength) {
-      if (this.streamDone &&
-          (!this.leftoverData || this.leftoverData.length === 0)) {
-        throw new Error(`Read from stream returned early EOF at position ${
-            this.globalPosition}. Expected ${
-            byteLength - bytesRead} more bytes.`);
+  /**
+   * Reads exactly `length` bytes from the stream, passing them to `sink` in
+   * order along with their position in the stream. The bytes passed to `sink`
+   * are only valid until it returns.
+   *
+   * Puts the wrapper in a failed state on error, since the bytes read so far
+   * are lost.
+   */
+  private async consume(
+      length: number,
+      sink: (bytes: Uint8Array, position: number) => void): Promise<void> {
+    try {
+      let remaining = length;
+      while (remaining > 0) {
+        const bytes = await this.readChunk(remaining);
+        if (this.closed) {
+          throw new Error('ReadableStreamDataStreamWrapper was closed');
+        }
+        if (!bytes) {
+          this.streamLength = this.streamPosition;
+          throw new Error(`Read from stream returned early EOF at position ${
+              this.streamPosition}. Expected ${remaining} more bytes.`);
+        }
+        sink(bytes, this.streamPosition);
+        this.streamPosition += bytes.length;
+        remaining -= bytes.length;
       }
+    } catch (e) {
+      this.failure ??= toError(e);
+      throw e;
+    }
+  }
 
+  /**
+   * Reads between 1 and `maxLength` bytes from the stream, or returns
+   * undefined at the end of the stream.
+   */
+  private async readChunk(maxLength: number): Promise<Uint8Array|undefined> {
+    while (true) {
       if (this.reader.byobReader) {
-        // Create a view of the remaining region to be written to. We have to
-        // do this each time since the BYOB reader will detach the view and
-        // its underlying ArrayBuffer.
+        this.byobScratch ??= new ArrayBuffer(BYOB_SCRATCH_BYTES);
         const view = new Uint8Array(
-            arrayBuffer, byteOffset + bytesRead, byteLength - bytesRead);
-        const result = await this.reader.byobReader.read(view);
-        if (result.done) {
-          this.streamDone = true;
-        }
-        if (!result.value) {
-          throw new Error('Read from stream returned null value');
-        }
-        this.globalPosition += result.value.byteLength;
-        bytesRead += result.value.byteLength;
-        arrayBuffer = result.value.buffer;
+            this.byobScratch, 0,
+            Math.min(maxLength, this.byobScratch.byteLength));
+        const {done, value} = await this.reader.byobReader.read(view);
+        // The read transfers the scratch buffer to `value`.
+        this.byobScratch = value?.buffer;
+        if (value && value.byteLength > 0) return value;
+        if (done) return undefined;
       } else {
-        let chunk: Uint8Array;
-        if (this.leftoverData && this.leftoverData.length > 0) {
-          chunk = this.leftoverData;
-          this.leftoverData = undefined;
-        } else {
-          const result = await this.reader.defaultReader.read();
-          if (result.done) {
-            this.streamDone = true;
-            if (!result.value) {
-              continue;
-            }
-          }
-          if (!result.value) {
-            throw new Error('Read from stream returned null value');
-          }
-          chunk = result.value;
+        let chunk = this.leftover;
+        this.leftover = undefined;
+        if (!chunk) {
+          const {done, value} = await this.reader.defaultReader.read();
+          if (done) return undefined;
+          chunk = value;
         }
-
-        const bytesNeeded = byteLength - bytesRead;
-        const bytesToCopy = Math.min(chunk.length, bytesNeeded);
-        const destView =
-            new Uint8Array(arrayBuffer, byteOffset + bytesRead, bytesToCopy);
-        destView.set(chunk.subarray(0, bytesToCopy));
-
-        if (chunk.length > bytesToCopy) {
-          this.leftoverData = chunk.subarray(bytesToCopy);
+        if (chunk.length > maxLength) {
+          this.leftover = chunk.subarray(maxLength);
+          return chunk.subarray(0, maxLength);
         }
-
-        this.globalPosition += bytesToCopy;
-        bytesRead += bytesToCopy;
+        if (chunk.length > 0) return chunk;
       }
     }
-
-    const result = new Uint8Array(arrayBuffer, byteOffset, bytesRead);
-
-    if (result.length !== byteLength) {
-      throw new Error(`Read from stream returned ${
-          result.length} bytes, expected ${byteLength}`);
-    }
-    return result;
   }
 
-  private doDiscard(offset: number, count: number): void {
-    for (const {discardView} of this.getViews(offset, offset + count)) {
-      discardView();
-    }
-  }
-
-  async readAndDiscard(
-      destAddress: number, offset: number|bigint,
-      count: number|bigint): Promise<{error?: Error}> {
-    try {
-      await this.readInternal(
-          destAddress >>> 0, toNumber(offset), toNumber(count), true);
-      return {};
-    } catch (e) {
-      return {error: e as Error};
+  /**
+   * Stores the bytes read from the stream at `position` in the cache, except
+   * for those that have been discarded.
+   */
+  private cache(bytes: Uint8Array, position: number): void {
+    const end = position + bytes.length;
+    for (const [start, gapEnd] of this.discarded.gaps(position, end)) {
+      for (const {index, start: viewStart, end: viewEnd} of this.sliceViews(
+               start, gapEnd)) {
+        const data = this.slices.get(index) ?? this.allocateSlice(index);
+        data.set(
+            bytes.subarray(viewStart - position, viewEnd - position),
+            viewStart - index * this.bytesPerSlice);
+      }
     }
   }
 
-  async readAndPreserve(
-      destAddress: number, offset: number|bigint,
-      count: number|bigint): Promise<{error?: Error}> {
-    try {
-      await this.readInternal(
-          destAddress >>> 0, toNumber(offset), toNumber(count), false);
-      return {};
-    } catch (e) {
-      return {error: e as Error};
+  private allocateSlice(index: number): Uint8Array<ArrayBuffer> {
+    const cachedBytes = this.cachedBytes + this.bytesPerSlice;
+    if (cachedBytes > this.maxCachedBytes) {
+      throw new Error(`Reading position ${
+          this.streamPosition} would cache ${cachedBytes} bytes, more than ${
+          this.maxCachedBytes} allowed. The model is being read too far out ` +
+                      'of order.');
+    }
+    const data = this.freeBuffers.pop() ?? new Uint8Array(this.bytesPerSlice);
+    this.slices.set(index, data);
+    this.cachedBytes = cachedBytes;
+    this.peakCachedBytes = Math.max(this.peakCachedBytes, cachedBytes);
+    if (!this.warnedAboutCacheSize && cachedBytes > this.warnCachedBytes) {
+      this.warnedAboutCacheSize = true;
+      console.warn(`Streamed model loading has cached ${
+          cachedBytes} bytes because the model is being read out of order.`);
+    }
+    return data;
+  }
+
+  private discardRange(start: number, end: number): void {
+    this.discarded.add(start, end);
+    for (const {index} of this.sliceViews(start, end)) {
+      const data = this.slices.get(index);
+      if (!data) continue;
+      const sliceStart = index * this.bytesPerSlice;
+      const sliceEnd = Math.min(
+          sliceStart + this.bytesPerSlice, this.streamLength ?? Infinity);
+      if (this.discarded.covers(sliceStart, sliceEnd)) {
+        this.slices.delete(index);
+        this.cachedBytes -= this.bytesPerSlice;
+        if (this.freeBuffers.length < MAX_FREE_BUFFERS) {
+          this.freeBuffers.push(data);
+        }
+      }
     }
   }
 
-  async discard(offset: number|bigint, count: number|bigint):
-      Promise<{error?: Error}> {
-    try {
-      this.doDiscard(toNumber(offset), toNumber(count));
-      return {};
-    } catch (e) {
-      return {error: e as Error};
+  private checkUsable(): void {
+    if (this.closed) {
+      throw new Error('ReadableStreamDataStreamWrapper is closed');
+    }
+    if (this.failure) {
+      throw new Error(`Reading from the stream previously failed: ${
+          this.failure.message}`);
+    }
+  }
+
+  private checkNotDiscarded(start: number, end: number): void {
+    const error = getDiscardedReadError(this.discarded, start, end);
+    if (error) throw error;
+  }
+
+  /** Splits [start, end) at slice boundaries. */
+  private *
+      sliceViews(start: number, end: number):
+          IterableIterator<{index: number, start: number, end: number}> {
+    let position = start;
+    while (position < end) {
+      const index = Math.floor(position / this.bytesPerSlice);
+      const viewEnd = Math.min((index + 1) * this.bytesPerSlice, end);
+      yield {index, start: position, end: viewEnd};
+      position = viewEnd;
     }
   }
 }
 
-function toNumber(val: number|bigint): number {
+/** Converts an offset or size from C++ to a number. */
+export function toNumber(val: number|bigint): number {
   if (typeof val === 'number') {
     return val;
   }
@@ -369,4 +482,21 @@ function toNumber(val: number|bigint): number {
         `BigInt value ${val} too large to be represented as a number`);
   }
   return Number(val);
+}
+
+/** Converts a caught value to an Error, which C++ expects. */
+export function toError(e: unknown): Error {
+  return e instanceof Error ? e : new Error(String(e));
+}
+
+/**
+ * Returns an error for a read of [start, end) if it overlaps `discarded`, or
+ * undefined if it doesn't.
+ */
+export function getDiscardedReadError(
+    discarded: RangeSet, start: number, end: number): Error|undefined {
+  const regions = discarded.overlapping(start, end);
+  if (regions.length === 0) return undefined;
+  return new Error(`Read of [${start}, ${end}) overlaps discarded regions: [${
+      regions.map(([rStart, rEnd]) => `[${rStart}, ${rEnd}]`).join(', ')}]`);
 }

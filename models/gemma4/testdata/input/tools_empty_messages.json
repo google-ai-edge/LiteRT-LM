@@ -1,0 +1,25 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a location.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "City name"
+            }
+          },
+          "required": [
+            "location"
+          ]
+        }
+      }
+    }
+  ],
+  "messages": [],
+  "add_generation_prompt": true
+}

@@ -75,54 +75,124 @@ public actor Engine {
     let visionBackendStr = engineConfig.visionBackend?.rawValue
     let audioBackendStr = engineConfig.audioBackend?.rawValue
 
-    let settings = litert_lm_engine_settings_create(
-      engineConfig.modelPath, backendStr, visionBackendStr, audioBackendStr)
-
-    guard let settings else {
-      throw LiteRTLMError.engine(.failedToCreateSettings)
+    let settings = try LiteRTLMError.create(
+      "litert_lm_engine_settings_create", { .engine(.failedToCreateSettings($0)) }
+    ) { out in
+      litert_lm_engine_settings_create(
+        engineConfig.modelPath, backendStr, visionBackendStr, audioBackendStr, out)
     }
 
     defer { litert_lm_engine_settings_delete(settings) }
 
+    let settingsError: (String) -> LiteRTLMError = { .engine(.failedToCreateSettings($0)) }
+
     if let maxNumTokens = engineConfig.maxNumTokens {
-      litert_lm_engine_settings_set_max_num_tokens(settings, Int32(maxNumTokens))
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_max_num_tokens(settings, Int32(maxNumTokens)),
+        "litert_lm_engine_settings_set_max_num_tokens", settingsError)
     }
     if let cacheDir = engineConfig.cacheDir {
-      litert_lm_engine_settings_set_cache_dir(settings, cacheDir)
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_cache_dir(settings, cacheDir),
+        "litert_lm_engine_settings_set_cache_dir", settingsError)
+    }
+    if let activationDataType = engineConfig.activationDataType {
+      let cActivationDataType: LiteRtLmActivationDataType
+      switch activationDataType {
+      case .float32:
+        cActivationDataType = kLiteRtLmActivationDataTypeFloat32
+      case .float16:
+        cActivationDataType = kLiteRtLmActivationDataTypeFloat16
+      case .int16:
+        cActivationDataType = kLiteRtLmActivationDataTypeInt16
+      case .int8:
+        cActivationDataType = kLiteRtLmActivationDataTypeInt8
+      }
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_activation_data_type(settings, cActivationDataType),
+        "litert_lm_engine_settings_set_activation_data_type", settingsError)
     }
     if let loraRank = engineConfig.loraRank {
-      litert_lm_engine_settings_set_lora_rank(settings, Int32(loraRank))
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_lora_rank(settings, Int32(loraRank)),
+        "litert_lm_engine_settings_set_lora_rank", settingsError)
       if loraRank > 0 {
         var ranks = [Int32(loraRank)]
         let status = litert_lm_engine_settings_set_supported_lora_ranks(settings, &ranks, 1)
-        guard status == 0 else {
-          throw LiteRTLMError.engine(.failedToSetSupportedLoraRanks)
+        guard status == kLiteRtLmStatusOk else {
+          let errorMsg = LiteRTLMError.consumeLastError() ?? ""
+          throw LiteRTLMError.engine(.failedToSetSupportedLoraRanks(errorMsg))
         }
       }
     }
     if let audioLoraRank = engineConfig.audioLoraRank {
-      litert_lm_engine_settings_set_audio_lora_rank(settings, Int32(audioLoraRank))
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_audio_lora_rank(settings, Int32(audioLoraRank)),
+        "litert_lm_engine_settings_set_audio_lora_rank", settingsError)
       if audioLoraRank > 0 {
         var ranks = [Int32(audioLoraRank)]
         let status = litert_lm_engine_settings_set_supported_audio_lora_ranks(settings, &ranks, 1)
-        guard status == 0 else {
-          throw LiteRTLMError.engine(.failedToSetSupportedAudioLoraRanks)
+        guard status == kLiteRtLmStatusOk else {
+          let errorMsg = LiteRTLMError.consumeLastError() ?? ""
+          throw LiteRTLMError.engine(.failedToSetSupportedAudioLoraRanks(errorMsg))
         }
       }
     }
     if let prefill = benchmarkPrefillTokens, let decode = benchmarkDecodeTokens {
-      litert_lm_engine_settings_enable_benchmark(settings)
-      litert_lm_engine_settings_set_num_prefill_tokens(settings, Int32(prefill))
-      litert_lm_engine_settings_set_num_decode_tokens(settings, Int32(decode))
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_enable_benchmark(settings),
+        "litert_lm_engine_settings_enable_benchmark", settingsError)
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_num_prefill_tokens(settings, Int32(prefill)),
+        "litert_lm_engine_settings_set_num_prefill_tokens", settingsError)
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_num_decode_tokens(settings, Int32(decode)),
+        "litert_lm_engine_settings_set_num_decode_tokens", settingsError)
     } else if ExperimentalFlags.enableBenchmark {
-      litert_lm_engine_settings_enable_benchmark(settings)
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_enable_benchmark(settings),
+        "litert_lm_engine_settings_enable_benchmark", settingsError)
     }
-    if let enableSpeculativeDecoding = ExperimentalFlags.enableSpeculativeDecoding {
-      litert_lm_engine_settings_set_enable_speculative_decoding(settings, enableSpeculativeDecoding)
+    // The engine's default speculative decoding config. The deprecated
+    // `ExperimentalFlags.enableSpeculativeDecoding` is used only when the config sets no mode.
+    var speculativeDecodingConfig = engineConfig.speculativeDecodingConfig
+    if speculativeDecodingConfig?.mode == nil,
+      let enableSpeculativeDecoding = ExperimentalFlags.legacyEnableSpeculativeDecoding
+    {
+      var config = speculativeDecodingConfig ?? SpeculativeDecodingConfig()
+      config.mode = enableSpeculativeDecoding ? .on : .off
+      speculativeDecodingConfig = config
+    }
+    if let speculativeDecodingConfig = speculativeDecodingConfig {
+      let cSpeculativeDecodingConfig = try makeCSpeculativeDecodingConfig(
+        speculativeDecodingConfig, settingsError)
+      defer { litert_lm_speculative_decoding_config_delete(cSpeculativeDecodingConfig) }
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_speculative_decoding_config(
+          settings, cSpeculativeDecodingConfig),
+        "litert_lm_engine_settings_set_speculative_decoding_config", settingsError)
+    }
+    if let visualTokenBudget = ExperimentalFlags.visualTokenBudget {
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_max_vision_tokens_per_image(settings, visualTokenBudget),
+        "litert_lm_engine_settings_set_max_vision_tokens_per_image", settingsError)
+    }
+    if let gpuEnableMetalResidencySet = ExperimentalFlags.gpuEnableMetalResidencySet {
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
+          settings, gpuEnableMetalResidencySet),
+        "litert_lm_engine_settings_set_gpu_enable_metal_residency_set", settingsError)
+    }
+    if let enableYnnpack = ExperimentalFlags.enableYnnpack {
+      try LiteRTLMError.check(
+        litert_lm_engine_settings_set_enable_ynnpack(settings, enableYnnpack),
+        "litert_lm_engine_settings_set_enable_ynnpack", settingsError)
     }
 
-    guard let engine = litert_lm_engine_create(settings) else {
-      throw LiteRTLMError.engine(.failedToCreateEngine)
+    let engine = try LiteRTLMError.create(
+      "litert_lm_engine_create", { .engine(.failedToCreateEngine($0)) }
+    ) { out in
+      litert_lm_engine_create(settings, out)
     }
 
     self.handle = engine
@@ -173,87 +243,227 @@ public actor Engine {
       messagesJsonStr = ""
     }
 
-    let cSessionConfig = litert_lm_session_config_create()
-    guard let cSessionConfig else {
-      throw LiteRTLMError.engine(.failedToCreateSessionConfig)
+    let sessionConfigError: (String) -> LiteRTLMError = {
+      .engine(.failedToCreateSessionConfig($0))
+    }
+
+    let cSessionConfig = try LiteRTLMError.create(
+      "litert_lm_session_config_create", sessionConfigError
+    ) { out in
+      litert_lm_session_config_create(out)
     }
     defer { litert_lm_session_config_delete(cSessionConfig) }
 
     if let samplerParams = conversationConfig.samplerConfig {
-      guard let cSamplerParams = litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopP) else {
-        throw LiteRTLMError.engine(.failedToCreateSessionConfig)
+      let cSamplerParams = try LiteRTLMError.create(
+        "litert_lm_sampler_params_create", sessionConfigError
+      ) { out in
+        litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopP, out)
       }
       defer { litert_lm_sampler_params_delete(cSamplerParams) }
 
-      litert_lm_sampler_params_set_top_k(cSamplerParams, Int32(samplerParams.topK))
-      litert_lm_sampler_params_set_top_p(cSamplerParams, samplerParams.topP)
-      litert_lm_sampler_params_set_temperature(cSamplerParams, samplerParams.temperature)
-      litert_lm_sampler_params_set_seed(cSamplerParams, Int32(samplerParams.seed))
+      try LiteRTLMError.check(
+        litert_lm_sampler_params_set_top_k(cSamplerParams, Int32(samplerParams.topK)),
+        "litert_lm_sampler_params_set_top_k", sessionConfigError)
+      try LiteRTLMError.check(
+        litert_lm_sampler_params_set_top_p(cSamplerParams, samplerParams.topP),
+        "litert_lm_sampler_params_set_top_p", sessionConfigError)
+      try LiteRTLMError.check(
+        litert_lm_sampler_params_set_temperature(cSamplerParams, samplerParams.temperature),
+        "litert_lm_sampler_params_set_temperature", sessionConfigError)
+      try LiteRTLMError.check(
+        litert_lm_sampler_params_set_seed(cSamplerParams, Int32(samplerParams.seed)),
+        "litert_lm_sampler_params_set_seed", sessionConfigError)
 
-      litert_lm_session_config_set_sampler_params(cSessionConfig, cSamplerParams)
+      try LiteRTLMError.check(
+        litert_lm_session_config_set_sampler_params(cSessionConfig, cSamplerParams),
+        "litert_lm_session_config_set_sampler_params", sessionConfigError)
     }
 
     if let loraPath = conversationConfig.loraPath {
       let status = litert_lm_session_config_set_lora_path(cSessionConfig, loraPath)
-      guard status == 0 else {
-        throw LiteRTLMError.engine(.failedToSetLoraPath)
+      guard status == kLiteRtLmStatusOk else {
+        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
+        throw LiteRTLMError.engine(.failedToSetLoraPath(errorMsg))
       }
     }
 
     if let audioLoraPath = conversationConfig.audioLoraPath {
       let status = litert_lm_session_config_set_audio_lora_path(cSessionConfig, audioLoraPath)
-      guard status == 0 else {
-        throw LiteRTLMError.engine(.failedToSetAudioLoraPath)
+      guard status == kLiteRtLmStatusOk else {
+        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
+        throw LiteRTLMError.engine(.failedToSetAudioLoraPath(errorMsg))
       }
     }
 
-    guard let cConversationConfig = litert_lm_conversation_config_create() else {
-      throw LiteRTLMError.engine(.failedToCreateConversationConfig)
+    if let speculativeDecodingConfig = conversationConfig.speculativeDecodingConfig {
+      let cSpeculativeDecodingConfig = try makeCSpeculativeDecodingConfig(
+        speculativeDecodingConfig, sessionConfigError)
+      defer { litert_lm_speculative_decoding_config_delete(cSpeculativeDecodingConfig) }
+      try LiteRTLMError.check(
+        litert_lm_session_config_set_speculative_decoding_config(
+          cSessionConfig, cSpeculativeDecodingConfig),
+        "litert_lm_session_config_set_speculative_decoding_config", sessionConfigError)
+    }
+
+    let conversationConfigError: (String) -> LiteRTLMError = {
+      .engine(.failedToCreateConversationConfig($0))
+    }
+
+    let cConversationConfig = try LiteRTLMError.create(
+      "litert_lm_conversation_config_create", conversationConfigError
+    ) { out in
+      litert_lm_conversation_config_create(out)
     }
     defer { litert_lm_conversation_config_delete(cConversationConfig) }
 
-    litert_lm_conversation_config_set_session_config(cConversationConfig, cSessionConfig)
+    try LiteRTLMError.check(
+      litert_lm_conversation_config_set_session_config(cConversationConfig, cSessionConfig),
+      "litert_lm_conversation_config_set_session_config", conversationConfigError)
     if !systemMessageJsonStr.isEmpty {
-      litert_lm_conversation_config_set_system_message(cConversationConfig, systemMessageJsonStr)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_system_message(
+          cConversationConfig, systemMessageJsonStr),
+        "litert_lm_conversation_config_set_system_message", conversationConfigError)
     }
     if !toolDescriptionJsonStr.isEmpty {
-      litert_lm_conversation_config_set_tools(cConversationConfig, toolDescriptionJsonStr)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_tools(cConversationConfig, toolDescriptionJsonStr),
+        "litert_lm_conversation_config_set_tools", conversationConfigError)
     }
     if !messagesJsonStr.isEmpty {
-      litert_lm_conversation_config_set_messages(cConversationConfig, messagesJsonStr)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_messages(cConversationConfig, messagesJsonStr),
+        "litert_lm_conversation_config_set_messages", conversationConfigError)
     }
-    litert_lm_conversation_config_set_enable_constrained_decoding(
-      cConversationConfig, ExperimentalFlags.enableConversationConstrainedDecoding)
-    litert_lm_conversation_config_set_stream_tool_calls(
-      cConversationConfig,
-      conversationConfig.enableToolCallStreaming
-        && ExperimentalFlags.enableConversationToolCallStreaming,
-      ExperimentalFlags.conversationToolCallStreamingChannelName)
+    if let chatTemplate = conversationConfig.chatTemplate {
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_prompt_template(cConversationConfig, chatTemplate),
+        "litert_lm_conversation_config_set_prompt_template", conversationConfigError)
+    }
+    if conversationConfig.enableResponseFormat {
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_constraint_provider(
+          cConversationConfig, kLiteRtLmConstraintProviderTypeLlGuidance),
+        "litert_lm_conversation_config_set_constraint_provider", conversationConfigError)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_enable_constrained_decoding(cConversationConfig, true),
+        "litert_lm_conversation_config_set_enable_constrained_decoding",
+        conversationConfigError)
+    } else {
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_enable_constrained_decoding(
+          cConversationConfig, ExperimentalFlags.enableConversationConstrainedDecoding),
+        "litert_lm_conversation_config_set_enable_constrained_decoding",
+        conversationConfigError)
+    }
+    try LiteRTLMError.check(
+      litert_lm_conversation_config_set_stream_tool_calls(
+        cConversationConfig,
+        conversationConfig.enableToolCallStreaming
+          && ExperimentalFlags.enableConversationToolCallStreaming,
+        ExperimentalFlags.conversationToolCallStreamingChannelName),
+      "litert_lm_conversation_config_set_stream_tool_calls", conversationConfigError)
+    if let filterChannelContentFromKvCache = ExperimentalFlags.filterChannelContentFromKvCache {
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_filter_channel_content_from_kv_cache(
+          cConversationConfig, filterChannelContentFromKvCache),
+        "litert_lm_conversation_config_set_filter_channel_content_from_kv_cache",
+        conversationConfigError)
+    }
 
     if let thinkingConfig = conversationConfig.thinkingConfig {
-      guard let cThinkingConfig = litert_lm_thinking_config_create() else {
-        throw LiteRTLMError.engine(.failedToCreateConversationConfig)
+      let cThinkingConfig = try LiteRTLMError.create(
+        "litert_lm_thinking_config_create", conversationConfigError
+      ) { out in
+        litert_lm_thinking_config_create(out)
       }
       defer { litert_lm_thinking_config_delete(cThinkingConfig) }
-      litert_lm_thinking_config_set_enable_thinking(cThinkingConfig, thinkingConfig.enableThinking)
-      litert_lm_thinking_config_set_thinking_token_budget(
-        cThinkingConfig, Int32(thinkingConfig.thinkingTokenBudget))
-      litert_lm_conversation_config_set_thinking_config(cConversationConfig, cThinkingConfig)
+      try LiteRTLMError.check(
+        litert_lm_thinking_config_set_enable_thinking(
+          cThinkingConfig, thinkingConfig.enableThinking),
+        "litert_lm_thinking_config_set_enable_thinking", conversationConfigError)
+      try LiteRTLMError.check(
+        litert_lm_thinking_config_set_thinking_token_budget(
+          cThinkingConfig, Int32(thinkingConfig.thinkingTokenBudget)),
+        "litert_lm_thinking_config_set_thinking_token_budget", conversationConfigError)
+      try LiteRTLMError.check(
+        litert_lm_conversation_config_set_thinking_config(cConversationConfig, cThinkingConfig),
+        "litert_lm_conversation_config_set_thinking_config", conversationConfigError)
     }
 
-    guard
-      let conversationHandle = litert_lm_conversation_create(
-        engineHandle, cConversationConfig)
-    else {
-      throw LiteRTLMError.engine(.failedToCreateConversation)
+    let conversationHandle = try LiteRTLMError.create(
+      "litert_lm_conversation_create", { .engine(.failedToCreateConversation($0)) }
+    ) { out in
+      litert_lm_conversation_create(engineHandle, cConversationConfig, out)
     }
 
-    return Conversation(handle: conversationHandle, toolManager: toolManager)
+    return Conversation(
+      handle: conversationHandle,
+      toolManager: toolManager,
+      automaticToolCalling: conversationConfig.automaticToolCalling,
+      engine: self,
+      enableResponseFormat: conversationConfig.enableResponseFormat,
+      visualTokenBudget: conversationConfig.visualTokenBudget)
+  }
+
+  /// Updates whether to enable Metal residency set on GPU at runtime.
+  ///
+  /// Note: This is an experimental API. To use it, call
+  /// `ExperimentalFlags.optIntoExperimentalAPIs()` first.
+  ///
+  /// - Parameter enable: Whether to enable Metal residency set on GPU.
+  /// - Throws: A `LiteRTLMError` if experimental APIs are not opted into, the engine is not
+  ///   initialized, or update fails.
+  public func updateGPUEnableMetalResidencySet(_ enable: Bool) throws {
+    guard ExperimentalFlags.optedIn else {
+      logger.error("LiteRTLM: Must opt into experimental APIs before calling this method.")
+      throw LiteRTLMError.engine(.notOptedIntoExperimentalAPIs)
+    }
+    guard let handle else {
+      throw LiteRTLMError.engine(.notInitialized)
+    }
+    let status =
+      litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
+        handle, enable)
+    guard status == kLiteRtLmStatusOk else {
+      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
+      throw LiteRTLMError.engine(.failedToUpdateGPUEnableMetalResidencySet(errorMsg))
+    }
   }
 
   deinit {
     if let handle = handle {
+      self.handle = nil
       litert_lm_engine_delete(handle)
     }
   }
+}
+
+/// Creates a C speculative decoding config holding the fields of `config`. The caller owns the
+/// returned config and must release it with `litert_lm_speculative_decoding_config_delete`.
+private func makeCSpeculativeDecodingConfig(
+  _ config: SpeculativeDecodingConfig, _ makeError: (String) -> LiteRTLMError
+) throws -> OpaquePointer {
+  let cConfig = try LiteRTLMError.create(
+    "litert_lm_speculative_decoding_config_create", makeError
+  ) { out in
+    litert_lm_speculative_decoding_config_create(out)
+  }
+  do {
+    if let mode = config.mode {
+      try LiteRTLMError.check(
+        litert_lm_speculative_decoding_config_set_mode(cConfig, mode.cValue),
+        "litert_lm_speculative_decoding_config_set_mode", makeError)
+    }
+    if let lenience = config.lenience {
+      try LiteRTLMError.check(
+        litert_lm_speculative_decoding_config_set_lenience(cConfig, lenience),
+        "litert_lm_speculative_decoding_config_set_lenience", makeError)
+    }
+  } catch {
+    litert_lm_speculative_decoding_config_delete(cConfig)
+    throw error
+  }
+  return cConfig
 }

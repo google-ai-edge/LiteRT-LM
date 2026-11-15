@@ -1,0 +1,650 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "omni/text2speech/qwen3_tts/qwen3_tts_acoustic_predictor_stage.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <iterator>
+#include <memory>
+#include <random>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "absl/algorithm/container.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/cleanup/cleanup.h"  // from @com_google_absl
+#include "absl/container/flat_hash_set.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/memory/memory.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/clock.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_api_types.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_element_type.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/base/litert_runner.h"
+#include "omni/base/model_resources.h"
+#include "omni/base/model_utils.h"
+#include "omni/base/stage.h"
+#include "omni/base/stateful_litert_runner.h"
+#include "omni/text2speech/qwen3_tts/common.h"
+#include "omni/text2speech/qwen3_tts/qwen3_tts_io_types.h"
+#include "omni/text2speech/qwen3_tts/qwen3_tts_model_config.h"
+#include "omni/text2speech/qwen3_tts/qwen3_tts_stop_criteria.h"
+#include "omni/utils/tensor_utils.h"
+#include "runtime/executor/llm_executor_io_types.h"
+#include "support/util/convert_tensor_buffer.h"
+
+namespace litert::omni::tts {
+namespace {
+
+float Float16BitsToFloat32(uint16_t h) {
+  const uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
+  const uint32_t exp = (h >> 10) & 0x1Fu;
+  const uint32_t mant = h & 0x03FFu;
+  if (exp == 0) {
+    if (mant == 0) {
+      float out = 0.0f;
+      std::memcpy(&out, &sign, sizeof(float));
+      return out;
+    }
+    const float v = std::ldexp(static_cast<float>(mant), -24);
+    return (sign != 0) ? -v : v;
+  }
+  const uint32_t bits = (exp == 31)
+                            ? (sign | 0x7F800000u | (mant << 13))
+                            : (sign | ((exp + 112u) << 23) | (mant << 13));
+  float out = 0.0f;
+  std::memcpy(&out, &bits, sizeof(float));
+  return out;
+}
+
+absl::Status ReadTalkerDecodeOutputAsFloat(TensorBuffer& buffer,
+                                           absl::Span<float> out) {
+  LITERT_ASSIGN_OR_RETURN(size_t packed_size, buffer.PackedSize());
+  if (packed_size == out.size() * sizeof(float)) {
+    LITERT_RETURN_IF_ERROR(buffer.Read<float>(out));
+    return absl::OkStatus();
+  }
+  if (packed_size == out.size() * sizeof(uint16_t)) {
+    std::vector<uint16_t> fp16_data(out.size());
+    LITERT_RETURN_IF_ERROR(buffer.Read<uint16_t>(absl::MakeSpan(fp16_data)));
+    for (size_t i = 0; i < out.size(); ++i) {
+      out[i] = Float16BitsToFloat32(fp16_data[i]);
+    }
+    return absl::OkStatus();
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Unexpected Talker decode output byte size: ", packed_size,
+                   " (expected ", out.size() * sizeof(float), " for FP32 or ",
+                   out.size() * sizeof(uint16_t), " for FP16)."));
+}
+
+}  // namespace
+
+absl::StatusOr<int> DeriveMtpCacheLen(const TensorBuffer& mask_buffer) {
+  LITERT_ASSIGN_OR_RETURN(const RankedTensorType mask_type,
+                          mask_buffer.TensorType());
+  if (mask_type.ElementType() != ElementType::Float32) {
+    return absl::InvalidArgumentError(
+        "MTP attention mask buffer element type must be Float32.");
+  }
+  const Span<const Layout::Dim> dims = mask_type.Layout().Dimensions();
+  if (dims.empty()) {
+    return absl::InvalidArgumentError(
+        "MTP attention mask tensor must have at least 1 dimension.");
+  }
+  for (size_t i = 0; i + 1 < dims.size(); ++i) {
+    if (dims[i] != 1) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("MTP attention mask leading dimension ", i,
+                       " must be 1, got ", dims[i], "."));
+    }
+  }
+  const int32_t cache_len = dims.back();
+  if (cache_len < qwen3_tts::kNumCodeGroups) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("MTP attention mask cache length (", cache_len,
+                     ") must be at least ", qwen3_tts::kNumCodeGroups, "."));
+  }
+  return static_cast<int>(cache_len);
+}
+
+absl::StatusOr<MtpStepOutputLayout> ResolveMtpStepOutputLayout(
+    size_t step_output_bytes) {
+  constexpr size_t kNumHeads = qwen3_tts::kNumCodeGroups - 1;
+  const size_t step_output_floats = step_output_bytes / sizeof(float);
+  if (step_output_bytes % sizeof(float) == 0) {
+    if (step_output_floats == kNumHeads * qwen3_tts::kMtpVocab) {
+      return MtpStepOutputLayout::kAllHeadsLogits;
+    }
+    if (step_output_floats == qwen3_tts::kHiddenDim) {
+      return MtpStepOutputLayout::kHiddenState;
+    }
+  }
+  return absl::InvalidArgumentError(absl::StrCat(
+      "Unexpected MTP step output size: ", step_output_bytes,
+      " bytes (expected ", qwen3_tts::kHiddenDim, " hidden or ",
+      kNumHeads * qwen3_tts::kMtpVocab, " all-heads logits floats)."));
+}
+
+absl::Status ValidateMtpHeadBuffers(
+    absl::string_view signature, const std::vector<TensorBuffer>& input_buffers,
+    const std::vector<TensorBuffer>& output_buffers) {
+  if (input_buffers.size() != 1 || output_buffers.size() != 1) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "MTP head signature ", signature, " must have 1 input and 1 output."));
+  }
+  ABSL_RETURN_IF_ERROR(ValidateFloatBuffer(
+      input_buffers[0], qwen3_tts::kHiddenDim,
+      absl::StrCat("MTP head signature ", signature, " input")));
+  ABSL_RETURN_IF_ERROR(ValidateFloatBuffer(
+      output_buffers[0], qwen3_tts::kMtpVocab,
+      absl::StrCat("MTP head signature ", signature, " output")));
+  return absl::OkStatus();
+}
+
+absl::StatusOr<int> ArgmaxMtpHeadLogits(const TensorBuffer& logits_buffer,
+                                        int head_idx) {
+  LITERT_ASSIGN_OR_RETURN(size_t logits_bytes, logits_buffer.PackedSize());
+  const size_t num_heads =
+      logits_bytes / (qwen3_tts::kMtpVocab * sizeof(float));
+  if (head_idx < 0 || static_cast<size_t>(head_idx) >= num_heads) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("MTP head index ", head_idx, " is out of range for a ",
+                     num_heads, "-head logits buffer."));
+  }
+  LITERT_ASSIGN_OR_RETURN(auto lock,
+                          TensorBufferScopedLock::Create<const float>(
+                              logits_buffer, TensorBuffer::LockMode::kRead));
+  const absl::Span<const float> logits =
+      absl::MakeConstSpan(lock.second, num_heads * qwen3_tts::kMtpVocab)
+          .subspan(head_idx * qwen3_tts::kMtpVocab, qwen3_tts::kMtpVocab);
+  return static_cast<int>(
+      std::distance(logits.begin(), absl::c_max_element(logits)));
+}
+
+absl::StatusOr<std::unique_ptr<Qwen3TtsAcousticPredictorStage>>
+Qwen3TtsAcousticPredictorStage::Create(
+    Stage<Qwen3TtsFrontendOutput>* absl_nonnull text_frontend,
+    const Qwen3TtsModelConfig& config,
+    std::shared_ptr<ModelResources> absl_nonnull resources) {
+  auto stage = absl::WrapUnique(new Qwen3TtsAcousticPredictorStage(
+      text_frontend, config, std::move(resources)));
+
+  // Retrieve LM Runner for Talker model.
+  LITERT_ASSIGN_OR_RETURN(stage->talker_runner_,
+                          stage->resources_->GetLmRunner("talker"));
+
+  // Retrieve auxiliary compiled models.
+  LITERT_ASSIGN_OR_RETURN(auto mtp_model,
+                          stage->resources_->GetCompiledModel("mtp"));
+  LITERT_ASSIGN_OR_RETURN(
+      stage->codec_embedding_model_,
+      stage->resources_->GetCompiledModel("codec_embedding"));
+  LITERT_ASSIGN_OR_RETURN(stage->mtp_embedding_model_,
+                          stage->resources_->GetCompiledModel("mtp_embedding"));
+
+  // Pre-allocate embedding model TensorBuffers
+  LITERT_ASSIGN_OR_RETURN(stage->codec_emb_input_buffers_,
+                          stage->codec_embedding_model_->CreateInputBuffers());
+  LITERT_ASSIGN_OR_RETURN(stage->codec_emb_output_buffers_,
+                          stage->codec_embedding_model_->CreateOutputBuffers());
+
+  LITERT_ASSIGN_OR_RETURN(stage->mtp_emb_input_buffers_,
+                          stage->mtp_embedding_model_->CreateInputBuffers());
+  LITERT_ASSIGN_OR_RETURN(stage->mtp_emb_output_buffers_,
+                          stage->mtp_embedding_model_->CreateOutputBuffers());
+
+  // Initialize MTP stateful runner
+  stage->mtp_model_ = std::move(mtp_model);
+  stage->mtp_runner_raw_ =
+      std::make_unique<LiteRtRunnerImpl>(stage->mtp_model_.get());
+  LITERT_ASSIGN_OR_RETURN(
+      stage->mtp_runner_,
+      StatefulLiteRtRunnerImpl::Create(
+          stage->mtp_runner_raw_.get(), /*signature_name=*/"",
+          /*num_non_state_inputs=*/3, /*num_non_state_outputs=*/1));
+
+  auto non_state_in_bufs = stage->mtp_runner_->GetNonStateInputBuffers();
+  if (non_state_in_bufs.size() < 3) {
+    return absl::InternalError(
+        "MTP model missing required non-state input buffers.");
+  }
+
+  ABSL_ASSIGN_OR_RETURN(stage->mtp_cache_len_,
+                        DeriveMtpCacheLen(non_state_in_bufs[2]));
+
+  ABSL_RETURN_IF_ERROR(stage->InitMtpHeads(*stage->mtp_model_));
+
+  return stage;
+}
+
+absl::Status Qwen3TtsAcousticPredictorStage::InitMtpHeads(
+    CompiledModel& mtp_model) {
+  auto step_outputs = mtp_runner_->GetNonStateOutputBuffers();
+  if (step_outputs.empty()) {
+    return absl::InternalError("MTP model has no non-state output buffer.");
+  }
+  LITERT_ASSIGN_OR_RETURN(size_t step_output_bytes,
+                          step_outputs[0].PackedSize());
+  ABSL_ASSIGN_OR_RETURN(const MtpStepOutputLayout layout,
+                        ResolveMtpStepOutputLayout(step_output_bytes));
+  if (layout == MtpStepOutputLayout::kAllHeadsLogits) {
+    ABSL_LOG(INFO) << "Qwen3-TTS MTP model emits all-heads logits per step; "
+                      "consider re-exporting with per-head signatures.";
+    return absl::OkStatus();
+  }
+
+  constexpr size_t kNumHeads = qwen3_tts::kNumCodeGroups - 1;
+  mtp_heads_.reserve(kNumHeads);
+  for (size_t i = 0; i < kNumHeads; ++i) {
+    const std::string signature = absl::StrCat(qwen3_tts::kMtpHeadPrefix, i);
+    MtpHead head;
+    LITERT_ASSIGN_OR_RETURN(head.signature_index,
+                            mtp_model.GetSignatureIndex(signature));
+    LITERT_ASSIGN_OR_RETURN(head.input_buffers,
+                            mtp_model.CreateInputBuffers(head.signature_index));
+    LITERT_ASSIGN_OR_RETURN(head.output_buffers, mtp_model.CreateOutputBuffers(
+                                                     head.signature_index));
+    ABSL_RETURN_IF_ERROR(ValidateMtpHeadBuffers(signature, head.input_buffers,
+                                                head.output_buffers));
+    mtp_heads_.push_back(std::move(head));
+  }
+  return absl::OkStatus();
+}
+
+absl::StatusOr<int> Qwen3TtsAcousticPredictorStage::PickMtpToken(
+    const TensorBuffer& step_output, int head_idx) {
+  if (mtp_heads_.empty()) {
+    return ArgmaxMtpHeadLogits(step_output, head_idx);
+  }
+
+  if (head_idx < 0 || static_cast<size_t>(head_idx) >= mtp_heads_.size()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("MTP head index ", head_idx, " is out of range for ",
+                     mtp_heads_.size(), " heads."));
+  }
+  MtpHead& head = mtp_heads_[head_idx];
+  {
+    LITERT_ASSIGN_OR_RETURN(auto lock,
+                            TensorBufferScopedLock::Create<const float>(
+                                step_output, TensorBuffer::LockMode::kRead));
+    LITERT_RETURN_IF_ERROR(head.input_buffers[0].Write<float>(
+        absl::MakeConstSpan(lock.second, qwen3_tts::kHiddenDim)));
+  }
+  LITERT_RETURN_IF_ERROR(mtp_model_->Run(
+      head.signature_index, head.input_buffers, head.output_buffers));
+  return ArgmaxMtpHeadLogits(head.output_buffers[0], /*head_idx=*/0);
+}
+
+// Runs the Talker model prefill step on input prompt embeddings to populate
+// the KV cache.
+absl::Status Qwen3TtsAcousticPredictorStage::RunPrefill(
+    const std::vector<float>& prefill, int p) {
+  LITERT_ASSIGN_OR_RETURN(auto buf, support::CreateTensorBuffer<float>(
+                                        {1, p, qwen3_tts::kHiddenDim}));
+  LITERT_RETURN_IF_ERROR(buf.Write<float>(
+      absl::MakeConstSpan(prefill).first(p * qwen3_tts::kHiddenDim)));
+  LITERT_ASSIGN_OR_RETURN(auto inputs, CreateExecutorInputsWithAudio(buf));
+  return talker_runner_->Prefill(inputs);
+}
+
+// Runs Multi-Token Predictor (MTP) model to generate remaining codebook tokens.
+absl::StatusOr<std::vector<int>> Qwen3TtsAcousticPredictorStage::RunMtp(
+    const std::vector<float>& hidden, int cb0) {
+  LITERT_RETURN_IF_ERROR(mtp_runner_->Reset());
+
+  std::vector<int> codes;
+  codes.reserve(qwen3_tts::kNumCodeGroups - 1);
+
+  std::vector<float> embed(qwen3_tts::kHiddenDim);
+  std::vector<float> mask(mtp_cache_len_, qwen3_tts::kNegInf);
+  for (int t = 0; t < qwen3_tts::kNumCodeGroups; ++t) {
+    auto non_state_inputs = mtp_runner_->GetNonStateInputBuffers();
+    if (non_state_inputs.size() < 3) {
+      return absl::InternalError("MTP runner missing non-state input buffers.");
+    }
+    auto& embed_buf = non_state_inputs[0];
+    auto& pos_buf = non_state_inputs[1];
+    auto& mask_buf = non_state_inputs[2];
+
+    if (t == 0) {
+      embed = hidden;
+    } else if (t == 1) {
+      ABSL_ASSIGN_OR_RETURN(embed, EmbedCodecToken(cb0));
+    } else {
+      int head_idx = t - 2;
+      int prev_code = codes[head_idx];
+      int32_t global_id = head_idx * qwen3_tts::kMtpVocab + prev_code;
+      LITERT_RETURN_IF_ERROR(mtp_emb_input_buffers_[0].Write<int32_t>(
+          absl::MakeConstSpan(&global_id, 1)));
+      LITERT_RETURN_IF_ERROR(mtp_embedding_model_->Run(
+          mtp_emb_input_buffers_, mtp_emb_output_buffers_));
+      LITERT_RETURN_IF_ERROR(mtp_emb_output_buffers_[0].Read<float>(
+          absl::MakeSpan(embed).first(qwen3_tts::kHiddenDim)));
+    }
+
+    LITERT_RETURN_IF_ERROR(embed_buf.Write<float>(absl::MakeConstSpan(embed)));
+    int32_t t_val = t;
+    LITERT_RETURN_IF_ERROR(
+        pos_buf.Write<int32_t>(absl::MakeConstSpan(&t_val, 1)));
+    // Causal mask: positions 0..t attend, the rest stay masked.
+    if (t < mtp_cache_len_) mask[t] = 0.0f;
+    LITERT_RETURN_IF_ERROR(mask_buf.Write<float>(absl::MakeConstSpan(mask)));
+
+    LITERT_ASSIGN_OR_RETURN(
+        auto step_outputs,
+        mtp_runner_->Step(/*non_state_inputs=*/{}, /*auto_commit_state=*/true));
+    if (step_outputs.empty()) {
+      return absl::InternalError("MTP step returned empty outputs.");
+    }
+
+    if (t >= 1) {
+      ABSL_ASSIGN_OR_RETURN(int picked_code,
+                            PickMtpToken(step_outputs[0], /*head_idx=*/t - 1));
+      codes.push_back(picked_code);
+    }
+  }
+
+  return codes;
+}
+
+// Embeds a single audio codec token ID using the codec embedding model.
+absl::StatusOr<std::vector<float>>
+Qwen3TtsAcousticPredictorStage::EmbedCodecToken(int code_id) {
+  int32_t cid = code_id;
+  LITERT_RETURN_IF_ERROR(
+      codec_emb_input_buffers_[0].Write<int32_t>(absl::MakeConstSpan(&cid, 1)));
+  LITERT_RETURN_IF_ERROR(codec_embedding_model_->Run(
+      codec_emb_input_buffers_, codec_emb_output_buffers_));
+  std::vector<float> vec(qwen3_tts::kHiddenDim);
+  LITERT_RETURN_IF_ERROR(codec_emb_output_buffers_[0].Read<float>(
+      absl::MakeSpan(vec).first(qwen3_tts::kHiddenDim)));
+  return vec;
+}
+
+// Embeds a sequence of MTP codebook token IDs using the MTP embedding model.
+absl::StatusOr<std::vector<float>>
+Qwen3TtsAcousticPredictorStage::EmbedMtpTokens(
+    const std::vector<int>& mtp_codes) {
+  std::vector<float> total_vec(qwen3_tts::kHiddenDim, 0.0f);
+  for (size_t i = 0; i < mtp_codes.size(); ++i) {
+    int32_t global_id = i * qwen3_tts::kMtpVocab + mtp_codes[i];
+    LITERT_RETURN_IF_ERROR(mtp_emb_input_buffers_[0].Write<int32_t>(
+        absl::MakeConstSpan(&global_id, 1)));
+    LITERT_RETURN_IF_ERROR(mtp_embedding_model_->Run(mtp_emb_input_buffers_,
+                                                     mtp_emb_output_buffers_));
+    std::vector<float> vec(qwen3_tts::kHiddenDim);
+    LITERT_RETURN_IF_ERROR(mtp_emb_output_buffers_[0].Read<float>(
+        absl::MakeSpan(vec).first(qwen3_tts::kHiddenDim)));
+    for (int d = 0; d < qwen3_tts::kHiddenDim; ++d) {
+      total_vec[d] += vec[d];
+    }
+  }
+  return total_vec;
+}
+
+int Qwen3TtsAcousticPredictorStage::PickToken(const std::vector<float>& logits,
+                                              bool do_sample) {
+  if (!do_sample) {
+    return std::distance(logits.begin(),
+                         std::max_element(logits.begin(), logits.end()));
+  }
+
+  std::vector<double> probs(logits.size());
+  double max_logit = -1e30;
+  for (float val : logits) {
+    if (val > max_logit) max_logit = val;
+  }
+  double temp = std::max(static_cast<double>(config_.temperature), 1e-6);
+
+  double sum_exp = 0.0;
+  for (size_t i = 0; i < logits.size(); ++i) {
+    if (logits[i] <= qwen3_tts::kNegInf / 2) {
+      probs[i] = 0.0;
+    } else {
+      probs[i] = std::exp((logits[i] - max_logit) / temp);
+      sum_exp += probs[i];
+    }
+  }
+
+  if (sum_exp <= 0.0) {
+    return 0;
+  }
+
+  for (size_t i = 0; i < probs.size(); ++i) {
+    probs[i] /= sum_exp;
+  }
+
+  int top_k = std::min(config_.top_k, static_cast<int>(probs.size()));
+  if (top_k > 0) {
+    std::vector<std::pair<double, int>> pairs(probs.size());
+    for (size_t i = 0; i < probs.size(); ++i) {
+      pairs[i] = {probs[i], static_cast<int>(i)};
+    }
+    absl::c_partial_sort(
+        pairs, pairs.begin() + top_k,
+        [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    double top_k_sum = 0.0;
+    for (int i = 0; i < top_k; ++i) {
+      top_k_sum += pairs[i].first;
+    }
+    for (int i = 0; i < top_k; ++i) {
+      pairs[i].first /= top_k_sum;
+    }
+
+    std::vector<double> top_k_probs(top_k);
+    for (int i = 0; i < top_k; ++i) {
+      top_k_probs[i] = pairs[i].first;
+    }
+    std::discrete_distribution<int> dist(top_k_probs.begin(),
+                                         top_k_probs.end());
+    return pairs[dist(rng_)].second;
+  }
+
+  std::discrete_distribution<int> dist(probs.begin(), probs.end());
+  return dist(rng_);
+}
+
+absl::Status Qwen3TtsAcousticPredictorStage::ScheduleInternal() {
+  absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
+  ABSL_VLOG(2)
+      << "[TRACE] Starting Qwen3TtsAcousticPredictorStage::ScheduleInternal";
+
+  auto frontend_out = text_frontend_.GetOutput();
+  if (absl::IsNotFound(frontend_out.status())) {
+    return absl::OkStatus();
+  } else if (!frontend_out.ok()) {
+    ABSL_LOG(ERROR) << "Frontend GetOutput error: " << frontend_out.status();
+    return frontend_out.status();
+  }
+  const auto& frontend = *frontend_out;
+  ABSL_VLOG(2) << "Acoustic stage got frontend output with prompt_len="
+               << frontend.prompt_len;
+
+  // 1. Reset Talker LM KV cache for new prompt
+  LITERT_RETURN_IF_ERROR(talker_runner_->Reset());
+  ABSL_VLOG(2) << "Acoustic stage reset talker_runner";
+
+  // 2. Prefill prompt embeddings
+  auto prefill_status =
+      RunPrefill(frontend.prompt_embeddings, frontend.prompt_len);
+  if (!prefill_status.ok()) {
+    ABSL_LOG(ERROR) << "RunPrefill failed: " << prefill_status;
+    return prefill_status;
+  }
+  ABSL_VLOG(2) << "Acoustic stage finished RunPrefill";
+
+  std::vector<std::vector<int>> chunk_frames;
+  std::vector<float> chunk_codec_features;
+
+  std::vector<float> suppress(qwen3_tts::kCodecVocab, 0.0f);
+  for (int i = qwen3_tts::kMtpVocab; i < qwen3_tts::kCodecVocab; ++i) {
+    suppress[i] = qwen3_tts::kNegInf;
+  }
+  suppress[qwen3_tts::kCodecEos] = 0.0f;
+
+  std::vector<float> cb0_logits(qwen3_tts::kCodecVocab);
+  std::vector<float> hidden(qwen3_tts::kHiddenDim);
+  absl::flat_hash_set<int> history;
+
+  int total_generated_frames = 0;
+  lm::ExecutorInputs next_inputs;
+  Qwen3TtsStopCriteria stop_criteria(frontend.trailing_len, config_.max_frames);
+
+  // Wall-clock accounting of the two model-bound phases, reported at VLOG(1)
+  // once per utterance.
+  absl::Duration talker_time;
+  absl::Duration mtp_time;
+  const absl::Time loop_start = absl::Now();
+
+  while (total_generated_frames < stop_criteria.FrameLimit()) {
+    const absl::Time decode_start = absl::Now();
+    auto decode_res = talker_runner_->Decode(next_inputs);
+    if (!decode_res.ok()) {
+      ABSL_LOG(ERROR) << "talker_runner_->Decode failed at frame "
+                      << total_generated_frames << ": " << decode_res.status();
+      return decode_res.status();
+    }
+    auto decode_logits_buf = std::move(*decode_res);
+    talker_time += absl::Now() - decode_start;
+
+    std::vector<float> raw_output(qwen3_tts::kCodecVocab +
+                                  qwen3_tts::kHiddenDim);
+    ABSL_RETURN_IF_ERROR(ReadTalkerDecodeOutputAsFloat(
+        decode_logits_buf, absl::MakeSpan(raw_output)));
+    std::copy(raw_output.begin(), raw_output.begin() + qwen3_tts::kCodecVocab,
+              cb0_logits.begin());
+    std::copy(raw_output.begin() + qwen3_tts::kCodecVocab, raw_output.end(),
+              hidden.begin());
+
+    std::vector<float> scores(qwen3_tts::kCodecVocab);
+    for (int i = 0; i < qwen3_tts::kCodecVocab; ++i) {
+      scores[i] = cb0_logits[i] + suppress[i];
+    }
+
+    if (total_generated_frames < 2) {
+      scores[qwen3_tts::kCodecEos] = qwen3_tts::kNegInf;
+    }
+
+    for (int token : history) {
+      if (scores[token] > 0) {
+        scores[token] /= config_.repetition_penalty;
+      } else {
+        scores[token] *= config_.repetition_penalty;
+      }
+    }
+
+    // Keep the Talker from locking into one (silence) token before it has
+    // spoken all the text.
+    if (const int suppressed = stop_criteria.SuppressedToken();
+        suppressed >= 0) {
+      scores[suppressed] = qwen3_tts::kNegInf;
+    }
+
+    int cb0 = PickToken(scores, config_.do_sample);
+    history.insert(cb0);
+
+    ABSL_VLOG(2) << "[TRACE] Generated frame " << total_generated_frames
+                 << " with cb0=" << cb0;
+    if (cb0 == qwen3_tts::kCodecEos) break;
+
+    const absl::Time mtp_start = absl::Now();
+    ABSL_ASSIGN_OR_RETURN(auto mtp_codes, RunMtp(hidden, cb0));
+    mtp_time += absl::Now() - mtp_start;
+    std::vector<int> frame;
+    frame.reserve(qwen3_tts::kNumCodeGroups);
+    frame.push_back(cb0);
+    frame.insert(frame.end(), mtp_codes.begin(), mtp_codes.end());
+    chunk_frames.push_back(std::move(frame));
+
+    ABSL_ASSIGN_OR_RETURN(auto codec_vec, EmbedCodecToken(cb0));
+    ABSL_ASSIGN_OR_RETURN(auto mtp_vec, EmbedMtpTokens(mtp_codes));
+
+    std::vector<float> embed(qwen3_tts::kHiddenDim);
+    for (int i = 0; i < qwen3_tts::kHiddenDim; ++i) {
+      float val = codec_vec[i] + mtp_vec[i];
+      embed[i] = val;
+      chunk_codec_features.push_back(val);
+    }
+
+    int step = total_generated_frames;
+    total_generated_frames++;
+
+    if (step < frontend.trailing_len) {
+      const float* tr_ptr =
+          frontend.trailing_embeddings.data() + step * qwen3_tts::kHiddenDim;
+      for (int i = 0; i < qwen3_tts::kHiddenDim; ++i) embed[i] += tr_ptr[i];
+    } else {
+      for (int i = 0; i < qwen3_tts::kHiddenDim; ++i)
+        embed[i] += frontend.tts_pad_embedding[i];
+    }
+
+    if (static_cast<int>(chunk_frames.size()) >= qwen3_tts::kFrameChunkSize) {
+      Qwen3TtsAcousticOutput out;
+      out.rvq_frames = std::move(chunk_frames);
+      out.codec_features = std::move(chunk_codec_features);
+      PushOutput(std::move(out));
+      chunk_frames.clear();
+      chunk_codec_features.clear();
+    }
+
+    if (stop_criteria.ShouldStop(step, cb0)) {
+      ABSL_VLOG(1) << "Qwen3-TTS stopped without EOS after "
+                   << total_generated_frames << " frames.";
+      break;
+    }
+
+    LITERT_ASSIGN_OR_RETURN(auto buf, support::CreateTensorBuffer<float>(
+                                          {1, 1, qwen3_tts::kHiddenDim}));
+    LITERT_RETURN_IF_ERROR(buf.Write<float>(absl::MakeConstSpan(embed)));
+    LITERT_ASSIGN_OR_RETURN(next_inputs, CreateExecutorInputsWithAudio(buf));
+  }
+
+  ABSL_VLOG(1) << "Qwen3-TTS acoustic loop: frames=" << total_generated_frames
+               << " total=" << absl::Now() - loop_start
+               << " talker=" << talker_time << " mtp=" << mtp_time;
+
+  if (!chunk_frames.empty()) {
+    Qwen3TtsAcousticOutput out;
+    out.rvq_frames = std::move(chunk_frames);
+    out.codec_features = std::move(chunk_codec_features);
+    PushOutput(std::move(out));
+  }
+
+  return absl::OkStatus();
+}
+
+void Qwen3TtsAcousticPredictorStage::Reset() {
+  WaitForStateThenSetState(State::kIdle, State::kRunning);
+  ClearOutputsThenSetState(State::kIdle);
+}
+
+}  // namespace litert::omni::tts

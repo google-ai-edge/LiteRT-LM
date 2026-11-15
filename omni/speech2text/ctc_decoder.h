@@ -1,0 +1,54 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_SPEECH2TEXT_CTC_DECODER_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_SPEECH2TEXT_CTC_DECODER_H_
+
+#include <memory>
+#include <optional>
+#include <vector>
+
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/speech2text/litert_speech_recognizer.h"
+#include "omni/speech2text/speech_recognizer.h"
+
+namespace litert::omni::asr {
+
+// Connectionist Temporal Classification (CTC) decoder implementation.
+class CtcDecoder : public LiteRtSpeechRecognizer::Decoder {
+ public:
+  static absl::StatusOr<std::unique_ptr<CtcDecoder>> Create(int vocab_size);
+
+  ~CtcDecoder() override = default;
+
+  // When `decode_range` is provided, logit frames
+  // `[floor(start_fraction * num_frames), round(valid_fraction * num_frames))`
+  // are reported, with timestamps relative to the first reported frame.
+  absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> Decode(
+      std::vector<::litert::TensorBuffer>& encoder_outputs,
+      std::optional<DecodeRange> decode_range) override;
+
+  // Decodes without `decode_range`.
+  using Decoder::Decode;
+
+ private:
+  explicit CtcDecoder(int vocab_size);
+
+  const int vocab_size_;
+};
+
+}  // namespace litert::omni::asr
+
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_SPEECH2TEXT_CTC_DECODER_H_

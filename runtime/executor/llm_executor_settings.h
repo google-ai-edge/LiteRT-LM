@@ -26,13 +26,18 @@
 #include <variant>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/log/log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/mtp_gating_policy.h"
+#include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/executor/ynnpack_mode.h"
 
 namespace litert::lm {
 
@@ -44,6 +49,10 @@ struct GpuArtisanConfig {
   bool wait_for_weight_uploads = false;
 
   // Number of decode steps per sync. Used by GPU only.
+  //
+  // Increasing the value might give better performance but can break logit
+  // processing features like repeated token penalties, and constrained
+  // decoding. Only increase if you are not using those.
   uint32_t num_decode_steps_per_sync = 1;
 
   // Sequence batch size for encoding. Used by GPU only. Number of input
@@ -60,9 +69,9 @@ struct GpuArtisanConfig {
   // Maximum top k, which is the max Top-K value supported for all
   // sessions created with the engine, used by GPU only. If a session with
   // Top-K value larger than this is being asked to be created, it will be
-  // rejected(throw error). The max top k will be 1, which means only greedy
-  // decoding is supported for any sessions created with this engine.
-  uint32_t max_top_k = 1;
+  // rejected(throw error). The max top k will be 64, which means limited
+  // sampling is supported by default.
+  uint32_t max_top_k = 64;
 
   // Enables decode logits.
   // AiCore uses decode logits, so this is enabled for AiCore.
@@ -78,13 +87,30 @@ struct GpuArtisanConfig {
   bool use_submodel = false;
 
   // Whether to prefer texture weights over buffers.
+  // We default to buffer weights on Apple platforms, and textures otherwise.
+  // MLDrift often overrides this internally, so this default is more for code
+  // consistency, since it should match LiteRT-LM's settings in other locations,
+  // like litert_lm/runtime/executor/litert_compiled_model_executor_utils.cc.
+#ifdef __APPLE__
+  bool prefer_texture_weights = false;
+#else
   bool prefer_texture_weights = true;
+#endif  // __APPLE__
 
   // Whether the backend should directly map host memory to the GPU if possible.
   bool set_enable_host_mapped_pointer = true;
 
   // Performs f32 convolutions instead of any 8 bit convolutions.
   bool disallow_8bit_convs = true;
+
+  // For low GPU memory with long contexts, use minimally sized ringbuffers for
+  // local attention. Prevents instantaneous rewinding, but saves a lot of
+  // memory, especially for large models.
+  bool use_autosized_ringbuffers = false;
+
+  // Number of draft tokens for speculative decoding.
+  // 0 selects automatic default gamma (2).
+  uint32_t num_draft_tokens = 0;
 };
 
 std::ostream& operator<<(std::ostream& os, const GpuArtisanConfig& config);
@@ -93,10 +119,10 @@ struct GpuConfig {
   // Maximum top k, which is the max Top-K value supported for all
   // sessions created with the engine, used by GPU only. If a session with
   // Top-K value larger than this is being asked to be created, it will be
-  // rejected(throw error). The default max top k will be 1, which
-  // means only greedy decoding is supported for any sessions created with
+  // rejected(throw error). The default max top k will be 64, which
+  // means limited sampling is supported for any sessions created with
   // this engine.
-  uint32_t max_top_k = 1;
+  uint32_t max_top_k = 64;
 
   // Whether to use external tensor mode.
   bool external_tensor_mode = false;
@@ -118,26 +144,65 @@ struct CpuConfig {
 
   // Number of threads. The default value is 4.
   uint32_t number_of_threads = 4;
+
+  // Whether YNNPACK should delegate supported operations before XNNPACK.
+  // Can be true (on), false (off), or auto (enabled only if SDPA ops are
+  // present).
+  YnnpackMode enable_ynnpack = YnnpackMode::kOff;
 };
 std::ostream& operator<<(std::ostream& os, const CpuConfig& config);
 
 struct NpuConfig {
+  // Whether the NPU backend is using LiteRT's generic compiler-plugin path
+  // instead of the specialized TF_LITE_AUX NPU executor.
+  bool use_generic_litert_compiler_plugin = false;
+
+  // For the following NPU options, std::nullopt means "not set by the user":
+  // the value is then taken from the model's LlmNpuExecutorMetadata if present
+  // (see LlmExecutorSettings::ResolveNpuSettings), and otherwise treated as
+  // false.
+
   // Whether to use NEON optimizations for greedy sampling on NPU.
-  bool enable_neon_for_npu_greedy_sampling = true;
+  std::optional<bool> enable_neon_for_npu_greedy_sampling = std::nullopt;
 
   // Whether to use manual mask update logic on NPU.
-  bool use_hw_masking_for_npu = true;
+  std::optional<bool> use_hw_masking_for_npu = std::nullopt;
 
   // Whether to use manual KV-cache update logic on NPU.
-  bool use_hw_cache_update_for_npu = true;
+  std::optional<bool> use_hw_cache_update_for_npu = std::nullopt;
 
   // Whether to use manual per-layer embedding lookup on NPU.
-  bool use_hw_ple_for_npu = true;
+  std::optional<bool> use_hw_ple_for_npu = std::nullopt;
 
   // Whether enable debug logging for NPU.
   bool enable_npu_debug_logging = false;
 };
 std::ostream& operator<<(std::ostream& os, const NpuConfig& config);
+
+// Key-value configuration for dynamically registered custom executor backends.
+// Unlike built-in backend configs, `CustomBackendConfig` starts empty so
+// user-specified options are forwarded directly to the custom backend without
+// intermediate core overrides.
+struct CustomBackendConfig {
+  absl::flat_hash_map<std::string, std::string> options;
+
+  void SetOption(absl::string_view key, absl::string_view value) {
+    options[std::string(key)] = std::string(value);
+  }
+
+  std::optional<absl::string_view> GetOption(absl::string_view key) const {
+    auto it = options.find(key);
+    if (it == options.end()) {
+      return std::nullopt;
+    }
+    return it->second;
+  }
+
+  // Parses "key=value" entries and inserts them into `options`.
+  absl::Status SetOptionsFromStrings(
+      const std::vector<std::string>& key_value_pairs);
+};
+std::ostream& operator<<(std::ostream& os, const CustomBackendConfig& config);
 
 // Optional advanced settings for the LLM executor.
 struct AdvancedSettings {
@@ -155,10 +220,16 @@ struct AdvancedSettings {
   // prefill_batch_sizes above with best match which means, a subgraph of
   // prefill will be chosen to have the smallest magic number greater than or
   // equal to the given prefill batch size.
-  // The numbers that replaced magic numbers must be less than magic numbers.
+  // By default, replacements must be less than their magic numbers.
   // Otherwise, default values less than magic numbers will be used that are
   // chosen by some heuristics.
   bool configure_magic_numbers = true;
+
+  // Experimental: allow max_num_tokens_ to exceed the exported context magic
+  // number. Only the context dimension may grow; prefill and decode batch
+  // limits still apply. The caller must ensure the model supports the requested
+  // positions. LiteRT rejects expansion of undersized constant buffers.
+  bool allow_context_length_expansion = false;
 
   // Whether to verify magic numbers when the model contains magic numbers and
   // test signatures.
@@ -185,8 +256,15 @@ struct AdvancedSettings {
   // use.
   bool gpu_madvise_original_shared_tensors = true;
 
+  // If true, the GPU backend will use MTLResidencySet to prevent memory
+  // swapping on macOS.
+  bool gpu_enable_metal_residency_set = false;
+
   // If true, the executor is running a benchmark.
   bool is_benchmark = false;
+
+  // If true, the executor enables per-op profiling.
+  bool enable_profiling = false;
 
   // Preferred WebGPU device name substring, case-insensitive.
   // If not empty, the adapter which the device name contains the substring will
@@ -254,8 +332,15 @@ struct AdvancedSettings {
   // (most OSS models), we would set this flag to true to ensure smooth UI.
   std::optional<bool> gpu_context_low_priority;
 
-  // If true, the executor enables speculative decoding.
-  bool enable_speculative_decoding = false;
+  // Deprecated: set the speculative decoding mode with
+  // `EngineSettings::SetSpeculativeDecodingConfig()` (or
+  // `LlmExecutorSettings::SetSpeculativeDecodingConfig()`) instead. Read only
+  // when that config sets no mode: true is equivalent to
+  // `SpeculativeDecodingMode::kOn` and false to
+  // `SpeculativeDecodingMode::kOff`.
+  [[deprecated(
+      "Use EngineSettings::SetSpeculativeDecodingConfig() instead.")]] bool
+      enable_speculative_decoding = false;
 
   // If true, the executor disables delegate clustering. Can be useful for cases
   // where the default model delegate partitioning is not optimal.
@@ -271,39 +356,32 @@ struct AdvancedSettings {
   // OSS models), we would set this flag to 4 to ensure smooth UI.
   std::optional<int> hint_kernel_batch_size;
 
-  bool operator==(const AdvancedSettings& other) const {
-    return prefill_batch_sizes == other.prefill_batch_sizes &&
-           num_output_candidates == other.num_output_candidates &&
-           configure_magic_numbers == other.configure_magic_numbers &&
-           verify_magic_numbers == other.verify_magic_numbers &&
-           clear_kv_cache_before_prefill ==
-               other.clear_kv_cache_before_prefill &&
-           num_logits_to_print_after_decode ==
-               other.num_logits_to_print_after_decode &&
-           gpu_madvise_original_shared_tensors ==
-               other.gpu_madvise_original_shared_tensors &&
-           is_benchmark == other.is_benchmark &&
-           preferred_device_substr == other.preferred_device_substr &&
-           num_threads_to_upload == other.num_threads_to_upload &&
-           num_threads_to_compile == other.num_threads_to_compile &&
-           convert_weights_on_gpu == other.convert_weights_on_gpu &&
-           wait_for_weights_conversion_complete_in_benchmark ==
-               other.wait_for_weights_conversion_complete_in_benchmark &&
-           optimize_shader_compilation == other.optimize_shader_compilation &&
-           cache_compiled_shaders_only == other.cache_compiled_shaders_only &&
-           share_constant_tensors == other.share_constant_tensors &&
-           sampler_handles_input == other.sampler_handles_input &&
-           allow_src_quantized_fc_conv_ops ==
-               other.allow_src_quantized_fc_conv_ops &&
-           hint_waiting_for_completion == other.hint_waiting_for_completion &&
-           gpu_context_low_priority == other.gpu_context_low_priority &&
-           enable_speculative_decoding == other.enable_speculative_decoding &&
-           disable_delegate_clustering == other.disable_delegate_clustering &&
-           hint_kernel_batch_size == other.hint_kernel_batch_size;
-  }
+  // If true, the executor will return an error if an invalid token id is
+  // sampled during decoding. If false, the llm executor will continue decoding
+  // with the invalid token id, which helps batch decoding to continue even if
+  // some of the candidates have EOS token.
+  // This feature is by default false. Applications can enable it by setting it
+  // to true if they want to ensure the quality of the decoded output.
+  bool error_on_invalid_sampled_token_id = false;
+
+  // Diagnostic override of the adaptive speculative decoding policy
+  // configuration, for tuning and benchmarking. If unset, the policy uses the
+  // `MtpGatingConfig` defaults.
+  std::optional<MtpGatingConfig> mtp_gating_config;
+
+  bool operator==(const AdvancedSettings& other) const = default;
 };
 std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings);
 
+// Default maximum number of images per prefill when vision is enabled and the
+// application does not set max_num_images. Backends that need a fixed-size
+// media embedding cache (e.g. GPU_ARTISAN) split a prefill with more images
+// into multiple prefills.
+inline constexpr uint32_t kDefaultMaxNumImages = 4;
+
+namespace proto {
+class LlmNpuExecutorMetadata;
+}  // namespace proto
 // Settings for the LLM executor.
 //
 // This class holds the settings for the LLM executor, including the
@@ -333,6 +411,9 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
   uint32_t GetLoraRank() const { return lora_rank_; }
   void SetLoraRank(uint32_t lora_rank) { lora_rank_ = lora_rank; }
 
+  int32_t GetPadTokenId() const { return pad_token_id_; }
+  void SetPadTokenId(int32_t pad_token_id) { pad_token_id_ = pad_token_id; }
+
   template <typename T>
   absl::StatusOr<const T> GetBackendConfig() const {
     if (std::holds_alternative<T>(backend_config_)) {
@@ -349,11 +430,39 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
     return absl::InvalidArgumentError("Backend config is not valid.");
   }
 
-  void SetBackendConfig(const std::variant<GpuArtisanConfig, GpuConfig,
-                                           CpuConfig, NpuConfig>& config) {
+  void SetBackendConfig(
+      const std::variant<GpuArtisanConfig, GpuConfig, CpuConfig, NpuConfig,
+                         CustomBackendConfig>& config) {
     backend_config_ = config;
   }
 
+  // Validates that `key` is prefixed with `<backend>.<option>` matching this
+  // executor's `GetBackend()`, strips the `<backend>.` prefix, and stores the
+  // unqualified `<option>` in `CustomBackendConfig`. Returns
+  // `InvalidArgumentError` if this `LlmExecutorSettings` is not configured for
+  // a custom backend, if `key` is not in `<backend>.<option>` format, or if
+  // `<backend>` does not match `GetBackend()`.
+  absl::Status SetCustomBackendOption(absl::string_view key,
+                                      absl::string_view value);
+
+  // Parses "<backend>.<option>=<value>" entries and applies them via
+  // `SetCustomBackendOption`.
+  absl::Status SetCustomBackendOptionsFromStrings(
+      const std::vector<std::string>& key_value_pairs);
+
+  // Returns the value for `key` if `backend_config_` holds
+  // `CustomBackendConfig` and contains `key` (supports both unqualified
+  // `<option>` and `<backend>.<option>` lookup).
+  std::optional<absl::string_view> GetCustomBackendOption(
+      absl::string_view key) const;
+
+  // Fills NPU options that are unset (std::nullopt) in the NpuConfig with the
+  // corresponding values from the model's NPU executor metadata. Options that
+  // were explicitly set by the user always take precedence. Fields that are
+  // absent from the metadata are left unchanged. Returns FailedPrecondition if
+  // the backend config is not an NpuConfig.
+  absl::Status ResolveNpuSettings(
+      const proto::LlmNpuExecutorMetadata& metadata);
   Backend GetSamplerBackend() const { return sampler_backend_; }
   void SetSamplerBackend(Backend sampler_backend) {
     sampler_backend_ = sampler_backend;
@@ -366,6 +475,22 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
     advanced_settings_ = advanced_settings;
   }
 
+  // Default speculative decoding (MTP) configuration of the engine. See
+  // `EngineSettings::SetSpeculativeDecodingConfig()`.
+  const SpeculativeDecodingConfig& GetSpeculativeDecodingConfig() const {
+    return speculative_decoding_config_;
+  }
+  void SetSpeculativeDecodingConfig(
+      const SpeculativeDecodingConfig& speculative_decoding_config) {
+    speculative_decoding_config_ = speculative_decoding_config;
+  }
+
+  // Returns the engine's speculative decoding mode: the mode of
+  // `GetSpeculativeDecodingConfig()` if set, otherwise `kOn` if the deprecated
+  // `AdvancedSettings::enable_speculative_decoding` is true, otherwise `kOff`.
+  // The MTP drafter is loaded at creation unless this is `kOff`.
+  SpeculativeDecodingMode GetEffectiveSpeculativeDecodingMode() const;
+
   absl::Status SetSupportedLoraRanks(const std::vector<uint32_t>& lora_ranks) {
     if (std::holds_alternative<GpuArtisanConfig>(backend_config_)) {
       std::get<GpuArtisanConfig>(backend_config_).supported_lora_ranks =
@@ -374,11 +499,19 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
     } else if (!lora_ranks.empty()) {
       // If lora_ranks is not empty, but the backend is not GpuArtisanConfig,
       // we log a warning and ignore the lora ranks.
-      LOG(ERROR) << "supported_lora_ranks is only supported for "
-                    "GpuArtisanConfig. The provided lora ranks will be "
-                    "ignored.";
+      ABSL_LOG(ERROR) << "supported_lora_ranks is only supported for "
+                         "GpuArtisanConfig. The provided lora ranks will be "
+                         "ignored.";
     }
     return absl::OkStatus();
+  }
+
+  // Selected signatures APIs.
+  const std::vector<std::string>& GetSelectedSignatures() const {
+    return selected_signatures_;
+  }
+  void SetSelectedSignatures(std::vector<std::string> selected_signatures) {
+    selected_signatures_ = std::move(selected_signatures);
   }
 
  private:
@@ -389,14 +522,20 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
   // the size of the kv-cache.
   uint32_t max_num_tokens_;
 
-  // Maximum number of images the model can handle.
-  uint32_t max_num_images_;
+  // Maximum number of images per prefill the model can handle. 0 means image
+  // input is disabled; EngineSettings::CreateDefault() resets it to
+  // kDefaultMaxNumImages when vision is enabled.
+  uint32_t max_num_images_ = kDefaultMaxNumImages;
 
   // LoRA rank. 0 means LoRA is disabled.
   uint32_t lora_rank_ = 0;
 
+  // The pad token id.
+  int32_t pad_token_id_ = -1;
+
   // Backend specific config.
-  std::variant<GpuArtisanConfig, GpuConfig, CpuConfig, NpuConfig>
+  std::variant<GpuArtisanConfig, GpuConfig, CpuConfig, NpuConfig,
+               CustomBackendConfig>
       backend_config_;
 
   // Backend to use for sampling.
@@ -404,6 +543,11 @@ class LlmExecutorSettings : public ExecutorSettingsBase {
 
   // Optional advanced settings.
   std::optional<AdvancedSettings> advanced_settings_;
+
+  // Default speculative decoding configuration of the engine.
+  SpeculativeDecodingConfig speculative_decoding_config_;
+
+  std::vector<std::string> selected_signatures_;
 
   // Declare the output stream operator as a friend such that it can be used
   // to print the LlmExecutorSettings private member.

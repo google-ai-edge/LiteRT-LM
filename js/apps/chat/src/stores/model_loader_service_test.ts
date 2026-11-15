@@ -14,11 +14,24 @@
  * limitations under the License.
  */
 
-import {Engine, getOrLoadGlobalLiteRtLm, LiteRtLm} from '@litert-lm/core';
+import {ActivationDataType, Backend, Engine, getOrLoadGlobalLiteRtLm, LiteRtLm, ResolvedModelInput, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
 import {EngineFake} from '@litert-lm/core/testing';
 
-import {ModelLoaderService} from './model_loader_service.js';
+import {getModelKey, ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
 import {SettingsStore} from './settings_store.js';
+
+/** Returns a fake cache that has a 3-byte model. */
+function fakeCache(): Cache {
+  return {
+    match: jasmine.createSpy().and.callFake(async () => ({
+                                              headers: new Headers(
+                                                  {'content-length': '3'}),
+                                              body: new Blob([
+                                                new Uint8Array([1, 2, 3])
+                                              ]).stream(),
+                                            })),
+  } as unknown as Cache;
+}
 
 describe('ModelLoaderService', () => {
   let settingsStore: SettingsStore;
@@ -41,7 +54,7 @@ describe('ModelLoaderService', () => {
     };
     fakeLoadWasm = async () => ({} as LiteRtLm);
     modelLoader = new ModelLoaderService(
-        () => {}, settingsStore, (msg: string) => {}, undefined, fakeEngineCreate,
+        () => {}, (msg: string) => {}, undefined, fakeEngineCreate,
         fakeLoadWasm);
   });
 
@@ -70,7 +83,7 @@ describe('ModelLoaderService', () => {
     let updateCalled = false;
     modelLoader = new ModelLoaderService(() => {
       updateCalled = true;
-    }, settingsStore, (msg: string) => {}, undefined, fakeEngineCreate, fakeLoadWasm);
+    }, (msg: string) => {}, undefined, fakeEngineCreate, fakeLoadWasm);
 
     const mockCache = {
       keys: jasmine.createSpy().and.resolveTo([
@@ -93,9 +106,36 @@ describe('ModelLoaderService', () => {
     await modelLoader.updateCacheSize();
 
     expect(window.caches.open).toHaveBeenCalledWith('litertlm-models');
-    expect(modelLoader.cachedModels.get('model1.litertlm')).toBe(1024);
-    expect(modelLoader.cachedModels.get('model2.litertlm')).toBe(2048);
+    expect(modelLoader.cachedModels.get('https://example.com/model1.litertlm'))
+        .toBe(1024);
+    expect(modelLoader.cachedModels.get('https://example.com/model2.litertlm'))
+        .toBe(2048);
     expect(updateCalled).toBeTrue();
+  });
+
+  it('adds up the cached GPU and CPU variants of a model', async () => {
+    window.localStorage.setItem('litertlm-hf-model-urls', JSON.stringify({
+      'hf://org/model': 'https://hf.co/model-gpu.litertlm',
+      'hf://org/model#backend=cpu': 'https://hf.co/model-cpu.litertlm',
+    }));
+    const mockCache = {
+      keys: jasmine.createSpy().and.resolveTo([
+        {url: 'https://hf.co/model-gpu.litertlm'},
+        {url: 'https://hf.co/model-cpu.litertlm'},
+      ]),
+      match: jasmine.createSpy().and.callFake(
+          async (req: {url: string}) => ({
+            headers: new Headers({
+              'content-length': req.url.includes('cpu') ? '200' : '100',
+            }),
+          })),
+    };
+    spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
+
+    await modelLoader.updateCacheSize();
+
+    expect(modelLoader.cachedModels.get('hf://org/model')).toBe(300);
+    window.localStorage.removeItem('litertlm-hf-model-urls');
   });
 
   it('deletes model from cache when confirmed', async () => {
@@ -104,8 +144,9 @@ describe('ModelLoaderService', () => {
     spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
     spyOn(modelLoader, 'updateCacheSize').and.resolveTo();
 
-    await modelLoader.deleteModelFromCache('model1.litertlm');
+    const deleted = await modelLoader.deleteModelFromCache('model1.litertlm');
 
+    expect(deleted).toBeTrue();
     expect(window.confirm).toHaveBeenCalled();
     expect(window.caches.open).toHaveBeenCalledWith('litertlm-models');
     expect(mockCache.delete).toHaveBeenCalledWith('model1.litertlm');
@@ -116,8 +157,9 @@ describe('ModelLoaderService', () => {
     spyOn(window, 'confirm').and.returnValue(false);
     spyOn(window.caches, 'open');
 
-    await modelLoader.deleteModelFromCache('model1.litertlm');
+    const deleted = await modelLoader.deleteModelFromCache('model1.litertlm');
 
+    expect(deleted).toBeFalse();
     expect(window.caches.open).not.toHaveBeenCalled();
   });
 
@@ -149,7 +191,7 @@ describe('ModelLoaderService', () => {
   it('loadModelWeights ignores overlapping calls', async () => {
     modelLoader.isModelLoading = true;
     spyOn(window.caches, 'open');
-    await modelLoader.loadModelWeights(async () => {});
+    await modelLoader.loadModelWeights(settingsStore.modelSettings, async () => {});
     expect(window.caches.open).not.toHaveBeenCalled();
   });
 
@@ -174,7 +216,7 @@ describe('ModelLoaderService', () => {
 
     const onModelLoaded = jasmine.createSpy('onModelLoaded').and.resolveTo();
 
-    await modelLoader.loadModelWeights(onModelLoaded);
+    await modelLoader.loadModelWeights(settingsStore.modelSettings, onModelLoaded);
 
     expect(window.caches.open).toHaveBeenCalledWith('litertlm-models');
     expect(mockCache.match)
@@ -211,7 +253,7 @@ describe('ModelLoaderService', () => {
 
     const onModelLoaded = jasmine.createSpy('onModelLoaded').and.resolveTo();
 
-    await modelLoader.loadModelWeights(onModelLoaded);
+    await modelLoader.loadModelWeights(settingsStore.modelSettings, onModelLoaded);
 
     expect(window.caches.open).toHaveBeenCalledWith('litertlm-models');
     expect(mockCache.match)
@@ -234,13 +276,32 @@ describe('ModelLoaderService', () => {
 
     const onModelLoaded = jasmine.createSpy('onModelLoaded').and.resolveTo();
 
-    await modelLoader.loadModelWeights(onModelLoaded);
+    await modelLoader.loadModelWeights(settingsStore.modelSettings, onModelLoaded);
 
     expect(window.fetch).toHaveBeenCalled();
     expect(modelLoader.engine).toBeNull();
     expect(onModelLoaded).not.toHaveBeenCalled();
     expect(modelLoader.isModelLoading).toBeFalse();
   });
+
+  it('loadModelWeights fails cleanly when the response has no body',
+     async () => {
+       settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
+       let latestStatus = '';
+       modelLoader = new ModelLoaderService(() => {}, (msg: string) => {
+         latestStatus = msg;
+       }, undefined, fakeEngineCreate, fakeLoadWasm);
+       const mockCache = {match: jasmine.createSpy().and.resolveTo(undefined)};
+       spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
+       spyOn(window, 'fetch').and.resolveTo(new Response(null));
+
+       await modelLoader.loadModelWeights(
+           settingsStore.modelSettings, async () => {});
+
+       expect(modelLoader.engine).toBeNull();
+       expect(latestStatus)
+           .toBe('Failed to load model: Model response body is empty.');
+     });
 
   it('loadModelWeights handles user cancellation', async () => {
     settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
@@ -252,13 +313,13 @@ describe('ModelLoaderService', () => {
 
     let latestStatus = '';
     modelLoader =
-        new ModelLoaderService(() => {}, settingsStore, (msg: string) => {
+        new ModelLoaderService(() => {}, (msg: string) => {
           latestStatus = msg;
         }, undefined, fakeEngineCreate, fakeLoadWasm);
 
     const onModelLoaded = jasmine.createSpy('onModelLoaded').and.resolveTo();
 
-    await modelLoader.loadModelWeights(onModelLoaded);
+    await modelLoader.loadModelWeights(settingsStore.modelSettings, onModelLoaded);
 
     expect(window.fetch).toHaveBeenCalled();
     expect(modelLoader.engine).toBeNull();
@@ -267,25 +328,276 @@ describe('ModelLoaderService', () => {
     expect(latestStatus).toBe('Model download cancelled by user.');
   });
 
+  describe('with hf:// models', () => {
+    const HF_URI = 'hf://litert-community/gemma-4-E2B-it-litert-lm';
+    const OLD_URL =
+        'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/0ld/gemma-4-E2B-it-gpu.litertlm';
+    const NEW_URL =
+        'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/new/gemma-4-E2B-it-gpu.litertlm';
+    let fakeResolve: jasmine.Spy<typeof resolveModel>;
+    let mockCache: jasmine.SpyObj<Cache>;
+
+    beforeEach(() => {
+      settingsStore.selectedModelPath = HF_URI;
+      fakeResolve = jasmine.createSpy('resolveModel').and.callFake(async () => {
+        const source = {url: NEW_URL, size: 3};
+        return {
+          model: source,
+          huggingFace: {
+            source,
+            repo: 'litert-community/gemma-4-E2B-it-litert-lm',
+            revision: 'web',
+            commit: 'new',
+            path: 'gemma-4-E2B-it-gpu.litertlm',
+          },
+        };
+      });
+      modelLoader = new ModelLoaderService(
+          () => {}, () => {}, undefined, fakeEngineCreate, fakeLoadWasm,
+          fakeResolve);
+      mockCache = jasmine.createSpyObj<Cache>(
+          'Cache', ['match', 'put', 'delete', 'keys']);
+      mockCache.match.and.resolveTo(undefined);
+      mockCache.put.and.resolveTo();
+      mockCache.delete.and.resolveTo(true);
+      mockCache.keys.and.resolveTo([]);
+      spyOn(window.caches, 'open').and.resolveTo(mockCache);
+    });
+
+    function modelResponse(): Response {
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: {'content-length': '3'},
+      });
+    }
+
+    /** Waits for the downloaded model to be cached. */
+    async function flush() {
+      await new Promise(resolve => setTimeout(resolve));
+    }
+
+    it('downloads and caches the file the model resolves to', async () => {
+      spyOn(window, 'fetch').and.resolveTo(modelResponse());
+
+      await modelLoader.loadModelWeights(
+          settingsStore.modelSettings, async () => {});
+      await flush();
+
+      expect(fakeResolve).toHaveBeenCalledOnceWith(HF_URI);
+      expect(window.fetch)
+          .toHaveBeenCalledOnceWith(NEW_URL, jasmine.anything());
+      expect(mockCache.put)
+          .toHaveBeenCalledOnceWith(NEW_URL, jasmine.any(Response));
+      expect(modelLoader.engine).not.toBeNull();
+    });
+
+    it('reports the cached file under the hf:// URI', async () => {
+      spyOn(window, 'fetch').and.resolveTo(modelResponse());
+      await modelLoader.loadModelWeights(
+          settingsStore.modelSettings, async () => {});
+      await flush();
+      mockCache.keys.and.resolveTo([new Request(NEW_URL)]);
+      mockCache.match.and.callFake(async () => modelResponse());
+
+      await modelLoader.updateCacheSize();
+
+      expect(modelLoader.cachedModels).toEqual(new Map([[HF_URI, 3]]));
+    });
+
+    it('loads the cached file without downloading it again', async () => {
+      mockCache.match.and.callFake(
+          async (request: RequestInfo|URL) =>
+              String(request) === NEW_URL ? modelResponse() : undefined);
+      spyOn(window, 'fetch');
+
+      await modelLoader.loadModelWeights(
+          settingsStore.modelSettings, async () => {});
+
+      expect(window.fetch).not.toHaveBeenCalled();
+      expect(modelLoader.engine).not.toBeNull();
+    });
+
+    it('replaces the previous file when the repo is updated', async () => {
+      window.localStorage.setItem(
+          'litertlm-hf-model-urls', JSON.stringify({[HF_URI]: OLD_URL}));
+      spyOn(window, 'fetch').and.resolveTo(modelResponse());
+
+      await modelLoader.loadModelWeights(
+          settingsStore.modelSettings, async () => {});
+      await flush();
+
+      expect(mockCache.put)
+          .toHaveBeenCalledOnceWith(NEW_URL, jasmine.any(Response));
+      expect(mockCache.delete).toHaveBeenCalledOnceWith(OLD_URL);
+    });
+
+    it('loads the last file if the model cannot be looked up', async () => {
+      window.localStorage.setItem(
+          'litertlm-hf-model-urls', JSON.stringify({[HF_URI]: OLD_URL}));
+      fakeResolve.and.rejectWith(new TypeError('Failed to fetch'));
+      spyOn(console, 'warn');
+      mockCache.match.and.callFake(
+          async (request: RequestInfo|URL) =>
+              String(request) === OLD_URL ? modelResponse() : undefined);
+      spyOn(window, 'fetch');
+
+      await modelLoader.loadModelWeights(
+          settingsStore.modelSettings, async () => {});
+
+      expect(window.fetch).not.toHaveBeenCalled();
+      expect(modelLoader.engine).not.toBeNull();
+    });
+
+    it('fails if the model cannot be looked up and was never loaded',
+       async () => {
+         fakeResolve.and.rejectWith(new TypeError('Failed to fetch'));
+         spyOn(console, 'error');
+
+         await modelLoader.loadModelWeights(
+             settingsStore.modelSettings, async () => {});
+
+         expect(modelLoader.engine).toBeNull();
+         expect(modelLoader.isModelLoading).toBeFalse();
+       });
+
+    it('deletes the cached file of a hf:// model', async () => {
+      window.localStorage.setItem(
+          'litertlm-hf-model-urls', JSON.stringify({[HF_URI]: NEW_URL}));
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(modelLoader, 'updateCacheSize').and.resolveTo();
+
+      expect(await modelLoader.deleteModelFromCache(HF_URI)).toBeTrue();
+      expect(mockCache.delete).toHaveBeenCalledOnceWith(NEW_URL);
+    });
+
+    it('deletes the default models\' old files', async () => {
+      const oldDefault =
+          'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm';
+      mockCache.keys.and.resolveTo([new Request(oldDefault)]);
+
+      await modelLoader.updateCacheSize();
+
+      expect(mockCache.delete)
+          .toHaveBeenCalledOnceWith(
+              jasmine.objectContaining({url: oldDefault}));
+      expect(modelLoader.cachedModels.size).toBe(0);
+    });
+  });
+
   it('imports custom model correctly', async () => {
     const mockCache = {
       put: jasmine.createSpy().and.resolveTo(true)
     };
     spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
     spyOn(modelLoader, 'updateCacheSize').and.resolveTo();
-    spyOn(settingsStore, 'saveSettings').and.callThrough();
 
     const file = new File(['model data'], 'custom-model.litertlm', {type: 'application/octet-stream'});
-    const path = await modelLoader.importCustomModel(file);
+    const customModel = await modelLoader.importCustomModel(file);
 
-    expect(path).toBe('https://local-model/custom-model.litertlm');
+    expect(customModel.path).toBe('https://local-model/custom-model.litertlm');
+    expect(customModel.name).toBe('custom-model');
+    expect(customModel.filename).toBe('custom-model.litertlm');
+    expect(customModel.size).toBe('0.00 GB');
     expect(window.caches.open).toHaveBeenCalledWith('litertlm-models');
     expect(mockCache.put).toHaveBeenCalled();
-    expect(settingsStore.customModels.length).toBe(1);
-    expect(settingsStore.customModels[0]!.name).toBe('custom-model');
-    expect(settingsStore.selectedModelPath).toBe(path);
-    expect(settingsStore.saveSettings).toHaveBeenCalled();
     expect(modelLoader.updateCacheSize).toHaveBeenCalled();
+  });
+
+  describe('addRemoteModel', () => {
+    let fakeResolve: jasmine.Spy<typeof resolveModel>;
+    let latestStatus: string;
+
+    beforeEach(() => {
+      latestStatus = '';
+      fakeResolve = jasmine.createSpy('resolveModel')
+                        .and.callFake(async model => ({model}));
+      modelLoader = new ModelLoaderService(
+          () => {}, (msg: string) => {
+            latestStatus = msg;
+          }, undefined, fakeEngineCreate, fakeLoadWasm, fakeResolve);
+    });
+
+    function resolvedHuggingFaceModel(
+        repo: `${string}/${string}`, path: string): ResolvedModelInput {
+      const source = {
+        url: `https://huggingface.co/${repo}/resolve/c0ffee/${path}`,
+        size: 2_500_000_000,
+        sha256: 'ab'.repeat(32),
+      };
+      return {
+        model: source,
+        huggingFace: {source, repo, revision: 'main', commit: 'c0ffee', path},
+      };
+    }
+
+    it('pins a Hugging Face repo to the file it resolves to', async () => {
+      fakeResolve.and.resolveTo(resolvedHuggingFaceModel(
+          'litert-community/SmolLM3-3B', 'SmolLM3-3B.litertlm'));
+
+      const model =
+          await modelLoader.addRemoteModel(' litert-community/SmolLM3-3B ');
+
+      expect(fakeResolve)
+          .toHaveBeenCalledOnceWith('hf://litert-community/SmolLM3-3B');
+      expect(model).toEqual({
+        name: 'SmolLM3-3B',
+        filename: 'SmolLM3-3B.litertlm',
+        path:
+            'https://huggingface.co/litert-community/SmolLM3-3B/resolve/c0ffee/SmolLM3-3B.litertlm',
+        size: '2.50 GB',
+      });
+      expect(latestStatus).toBe('Added SmolLM3-3B.');
+    });
+
+    it('names a model after its repo and file', async () => {
+      fakeResolve.and.resolveTo(
+          resolvedHuggingFaceModel('org/repo', 'repo_int4.litertlm'));
+      expect((await modelLoader.addRemoteModel('org/repo')).name)
+          .toBe('repo (repo_int4)');
+
+      fakeResolve.and.resolveTo(
+          resolvedHuggingFaceModel('org/repo', 'model.litertlm'));
+      expect((await modelLoader.addRemoteModel('org/repo')).name)
+          .toBe('repo');
+    });
+
+    it('adds a URL as is', async () => {
+      const model = await modelLoader.addRemoteModel(
+          'https://example.com/models/my-model.litertlm');
+
+      expect(model).toEqual({
+        name: 'my-model',
+        filename: 'my-model.litertlm',
+        path: 'https://example.com/models/my-model.litertlm',
+        size: '',
+      });
+    });
+
+    it('rejects text that is not a model reference', async () => {
+      spyOn(console, 'error');
+
+      await expectAsync(modelLoader.addRemoteModel('not a model'))
+          .toBeRejectedWithError(/isn't a URL or a Hugging Face repo/);
+      expect(fakeResolve).not.toHaveBeenCalled();
+      expect(latestStatus).toMatch(/^Failed to add model: /);
+    });
+
+    it('shows resolution errors in the status', async () => {
+      spyOn(console, 'error');
+      fakeResolve.and.rejectWith(new Error('no revision named main exists'));
+
+      await expectAsync(modelLoader.addRemoteModel('org/repo'))
+          .toBeRejectedWithError('no revision named main exists');
+      expect(latestStatus)
+          .toBe('Failed to add model: no revision named main exists');
+    });
+  });
+
+  it('keys models by their normalized URL', () => {
+    expect(getModelKey('https://local-model/my model.litertlm'))
+        .toBe('https://local-model/my%20model.litertlm');
+    expect(getModelKey('local-dir://dir/model.litertlm'))
+        .toBe('local-dir://dir/model.litertlm');
+    expect(getModelKey('not a url')).toBe('not a url');
   });
 
   it('loadModelWeights fails if local model is not in cache', async () => {
@@ -299,7 +611,7 @@ describe('ModelLoaderService', () => {
 
     const onModelLoaded = jasmine.createSpy('onModelLoaded').and.resolveTo();
 
-    await modelLoader.loadModelWeights(onModelLoaded);
+    await modelLoader.loadModelWeights(settingsStore.modelSettings, onModelLoaded);
 
     expect(window.caches.open).toHaveBeenCalledWith('litertlm-models');
     expect(mockCache.match).toHaveBeenCalledWith('https://local-model/missing-model.litertlm');
@@ -309,29 +621,7 @@ describe('ModelLoaderService', () => {
     expect(modelLoader.isModelLoading).toBeFalse();
   });
 
-  it('deletes local model from cache and settings when confirmed', async () => {
-    spyOn(window, 'confirm').and.returnValue(true);
-    const mockCache = {delete: jasmine.createSpy().and.resolveTo(true)};
-    spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
-    spyOn(modelLoader, 'updateCacheSize').and.resolveTo();
-    spyOn(settingsStore, 'saveSettings').and.callThrough();
 
-    settingsStore.customModels = [{
-      name: 'Local Model',
-      filename: 'local-model.litertlm',
-      path: 'https://local-model/local-model.litertlm',
-      size: '1.0 GB'
-    }];
-
-    await modelLoader.deleteModelFromCache('https://local-model/local-model.litertlm');
-
-    expect(window.confirm).toHaveBeenCalled();
-    expect(window.caches.open).toHaveBeenCalledWith('litertlm-models');
-    expect(mockCache.delete).toHaveBeenCalledWith('https://local-model/local-model.litertlm');
-    expect(settingsStore.customModels.length).toBe(0);
-    expect(settingsStore.saveSettings).toHaveBeenCalled();
-    expect(modelLoader.updateCacheSize).toHaveBeenCalled();
-  });
 
   it('loadModelWeights loads from local directory', async () => {
     settingsStore.selectedModelPath = 'local-dir://gemma.litertlm';
@@ -341,16 +631,270 @@ describe('ModelLoaderService', () => {
     mockLocalDirService.getFile.and.resolveTo(mockFile);
 
     modelLoader = new ModelLoaderService(
-        () => {}, settingsStore, (msg: string) => {}, mockLocalDirService,
+        () => {}, (msg: string) => {}, mockLocalDirService,
         fakeEngineCreate, fakeLoadWasm);
 
     const onModelLoaded = jasmine.createSpy('onModelLoaded').and.resolveTo();
 
-    await modelLoader.loadModelWeights(onModelLoaded);
+    await modelLoader.loadModelWeights(settingsStore.modelSettings, onModelLoaded);
 
     expect(mockLocalDirService.getFile).toHaveBeenCalledWith('local-dir://gemma.litertlm');
     expect(modelLoader.engine).toBeDefined();
     expect(onModelLoaded).toHaveBeenCalled();
     expect(modelLoader.isModelLoading).toBeFalse();
+  });
+
+  describe('needsModelReload', () => {
+    it('returns true when engine is null', () => {
+      modelLoader.engine = null;
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeTrue();
+    });
+
+    it('returns false after successful load', async () => {
+      const mockStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        }
+      });
+      const mockCache = {
+        match: jasmine.createSpy().and.resolveTo({
+          headers: new Headers({'content-length': '3'}),
+          body: mockStream,
+        })
+      };
+      spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
+
+      settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
+      settingsStore.contextLength = 2048;
+      settingsStore.topK = 32;
+
+      await modelLoader.loadModelWeights(settingsStore.modelSettings, async () => {});
+
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeFalse();
+    });
+
+    it('returns true when selectedModelPath changes', async () => {
+      const mockStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        }
+      });
+      const mockCache = {
+        match: jasmine.createSpy().and.resolveTo({
+          headers: new Headers({'content-length': '3'}),
+          body: mockStream,
+        })
+      };
+      spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
+
+      settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
+      await modelLoader.loadModelWeights(settingsStore.modelSettings, async () => {});
+
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeFalse();
+
+      settingsStore.selectedModelPath = 'https://example.com/different.litertlm';
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeTrue();
+    });
+
+    it('returns true when contextLength changes', async () => {
+      const mockStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        }
+      });
+      const mockCache = {
+        match: jasmine.createSpy().and.resolveTo({
+          headers: new Headers({'content-length': '3'}),
+          body: mockStream,
+        })
+      };
+      spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
+
+      settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
+      settingsStore.contextLength = 2048;
+      await modelLoader.loadModelWeights(settingsStore.modelSettings, async () => {});
+
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeFalse();
+
+      settingsStore.contextLength = 4096;
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeTrue();
+    });
+
+    it('returns true when topK changes under non-greedy sampler', async () => {
+      const mockStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        }
+      });
+      const mockCache = {
+        match: jasmine.createSpy().and.resolveTo({
+          headers: new Headers({'content-length': '3'}),
+          body: mockStream,
+        })
+      };
+      spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
+
+      settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
+      settingsStore.samplerType = 'top_k';
+      settingsStore.topK = 32;
+      await modelLoader.loadModelWeights(settingsStore.modelSettings, async () => {});
+
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeFalse();
+
+      settingsStore.topK = 64;
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeTrue();
+    });
+
+    it('returns false when topK changes under greedy sampler', async () => {
+      const mockStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        }
+      });
+      const mockCache = {
+        match: jasmine.createSpy().and.resolveTo({
+          headers: new Headers({'content-length': '3'}),
+          body: mockStream,
+        })
+      };
+      spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
+
+      settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
+      settingsStore.samplerType = 'greedy';
+      settingsStore.topK = 32;
+      await modelLoader.loadModelWeights(settingsStore.modelSettings, async () => {});
+
+      settingsStore.topK = 64;
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeFalse();
+    });
+  });
+
+  describe('engine settings', () => {
+    let createEngine: jasmine.Spy<typeof Engine.create>;
+
+    beforeEach(() => {
+      createEngine = jasmine.createSpy('createEngine')
+                         .and.callFake(
+                             async (settings, hint) =>
+                                 await EngineFake.create(settings, hint));
+      modelLoader = new ModelLoaderService(
+          () => {}, () => {}, undefined, createEngine, fakeLoadWasm);
+      settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
+    });
+
+    async function load() {
+      if (jasmine.isSpy(window.caches.open)) {
+        (window.caches.open as jasmine.Spy).and.resolveTo(fakeCache());
+      } else {
+        spyOn(window.caches, 'open').and.resolveTo(fakeCache());
+      }
+      await modelLoader.loadModelWeights(
+          settingsStore.modelSettings, async () => {});
+    }
+
+    it('enables speculative decoding if it is enabled', async () => {
+      settingsStore.enableSpeculativeDecoding = true;
+      await load();
+
+      expect(createEngine.calls.mostRecent().args[0].speculativeDecodingConfig)
+          .toEqual({mode: SpeculativeDecodingMode.ADAPTIVE});
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+          .toBeFalse();
+
+      settingsStore.enableSpeculativeDecoding = false;
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+          .toBeTrue();
+    });
+
+    it('does not enable speculative decoding if it is disabled', async () => {
+      await load();
+
+      expect(createEngine.calls.mostRecent().args[0].speculativeDecodingConfig)
+          .toBeUndefined();
+
+      settingsStore.enableSpeculativeDecoding = true;
+      expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+          .toBeTrue();
+    });
+
+    it('wires experimental modality backends and activation precision into Engine.create and needsModelReload',
+       async () => {
+         // Default GPU settings: backend omitted for text auto-detection,
+         // visionBackend & audioBackend = Backend.GPU, precision overrides omitted.
+         await load();
+         let callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.backend).toBeUndefined();
+         expect(callArgs.visionBackend).toBe(Backend.GPU);
+         expect(callArgs.audioBackend).toBe(Backend.GPU);
+         expect(callArgs.activationDataType).toBeUndefined();
+         expect(callArgs.visionActivationDataType).toBeUndefined();
+         expect(callArgs.audioActivationDataType).toBeUndefined();
+
+         // Changing any experimental backend or precision requires model reload.
+         settingsStore.textPrecision = 'fp32';
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeTrue();
+
+         settingsStore.visionBackend = 'cpu';
+         settingsStore.visionPrecision = 'fp16';  // ignored on CPU
+         settingsStore.audioBackend = 'gpu';
+         settingsStore.audioPrecision = 'fp16';
+         await load();
+
+         callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.backend).toBeUndefined();
+         expect(callArgs.activationDataType).toBe(ActivationDataType.FLOAT32);
+         expect(callArgs.visionBackend).toBe(Backend.CPU);
+         expect(callArgs.visionActivationDataType).toBeUndefined();
+         expect(callArgs.audioBackend).toBe(Backend.GPU);
+         expect(callArgs.audioActivationDataType)
+             .toBe(ActivationDataType.FLOAT16);
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeFalse();
+
+         // Non-GPU .litertlm with textBackend = 'cpu' passes Backend.CPU and
+         // omits GPU Artisan config and text activationDataType.
+         settingsStore.textBackend = 'cpu';
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeTrue();
+         await load();
+
+         callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.backend).toBe(Backend.CPU);
+         expect(callArgs.activationDataType).toBeUndefined();
+         expect(callArgs.mainExecutorSettings?.backendConfig).toBeUndefined();
+
+         // -gpu.litertlm models coerce textBackend back to GPU (backend omitted).
+         settingsStore.selectedModelPath =
+             'https://example.com/gemma-4-E2B-it-gpu.litertlm';
+         await load();
+         callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.backend).toBeUndefined();
+       });
+  });
+
+  describe('suppressKnownWasmWarnings', () => {
+    it('suppresses mel_filterbank and GetProfileSummary warnings while keeping others', () => {
+      const warnSpy = jasmine.createSpy('warn');
+      const fakeConsole = {warn: warnSpy};
+
+      suppressKnownWasmWarnings(fakeConsole);
+      // Calling again should be idempotent.
+      suppressKnownWasmWarnings(fakeConsole);
+
+      fakeConsole.warn(
+          'W1013 21:59:11.435000 2400640 mel_filterbank.cc:163] Missing 10 bands  starting at 0 in mel-frequency design. Perhaps too many channels or not enough frequency resolution in spectrum. (fft_length: 257 sample_rate: 16000 mel_channel_count: 128 lower_frequency_limit: 0 upper_frequency_limit: 8000');
+      fakeConsole.warn(
+          'W1013 21:59:09.739000 2400640 tasks.cc:612] Failed to get prefill profile summary: UNIMPLEMENTED: GetProfileSummary not implemented for backend: GpuArtisan\n=== Source Location Trace: ===\n./runtime/executor/llm_executor_base.h:250');
+      fakeConsole.warn('Some legitimate warning message');
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith('Some legitimate warning message');
+    });
   });
 });

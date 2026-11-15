@@ -14,60 +14,375 @@
 
 #include "runtime/components/model_resources_streaming.h"
 
+#include <cstdint>
+#include <cstring>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
-#include "runtime/components/model_resources.h"
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "litert/cc/litert_model.h"  // from @litert
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/token.pb.h"
+#include "runtime/util/data_stream.h"
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "tflite/schema/schema_generated.h"  // from @litert
 
 namespace litert::lm {
 namespace {
 
-TEST(ModelResourcesStreamingTest, GetTFLiteModel) {
-  ModelResourcesStreaming model_resources;
-  EXPECT_EQ(model_resources.GetTFLiteModel(ModelType::kUnknown).status().code(),
-            absl::StatusCode::kUnimplemented);
-}
+using ::testing::status::IsOkAndHolds;
+using ::testing::status::StatusIs;
 
-TEST(ModelResourcesStreamingTest, GetTFLiteModelBuffer) {
+class MemoryDataStream : public DataStream {
+ public:
+  explicit MemoryDataStream(std::string data) : data_(std::move(data)) {}
+
+  absl::Status ReadAndDiscard(void* buffer, uint64_t offset,
+                              uint64_t size) override {
+    return ReadAndPreserve(buffer, offset, size);
+  }
+
+  absl::Status ReadAndPreserve(void* buffer, uint64_t offset,
+                               uint64_t size) override {
+    if (offset + size > data_.size()) {
+      return absl::OutOfRangeError("Read beyond end of stream");
+    }
+    std::memcpy(buffer, data_.data() + offset, size);
+    return absl::OkStatus();
+  }
+
+  absl::Status Discard(uint64_t offset, uint64_t size) override {
+    return absl::OkStatus();
+  }
+
+ private:
+  std::string data_;
+};
+
+TEST(ModelResourcesStreamingTest, GetTFLiteModelNotFoundWhenUnset) {
   ModelResourcesStreaming model_resources;
   EXPECT_EQ(
-      model_resources.GetTFLiteModelBuffer(ModelType::kUnknown).status().code(),
-      absl::StatusCode::kUnimplemented);
+      model_resources
+          .GetTFLiteModel(proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED)
+          .status()
+          .code(),
+      absl::StatusCode::kNotFound);
 }
 
-TEST(ModelResourcesStreamingTest, GetScopedFile) {
+TEST(ModelResourcesStreamingTest, SetAndGetModelBuffer) {
+  ModelResourcesStreaming model_resources;
+  std::string dummy_bytes = "dummy_tflite_model_content";
+  model_resources.SetModelBuffer(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+      std::vector<char>(dummy_bytes.begin(), dummy_bytes.end()));
+
+  EXPECT_TRUE(model_resources.HasTFLiteModel(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  ASSERT_OK_AND_ASSIGN(auto buffer,
+                       model_resources.GetTFLiteModelBuffer(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_EQ(buffer, dummy_bytes);
+}
+
+TEST(ModelResourcesStreamingTest, EmptyModelBufferTreatedAsNotFound) {
+  ModelResourcesStreaming model_resources;
+  model_resources.SetModelBuffer(proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+                                 {});
+
+  EXPECT_FALSE(model_resources.HasTFLiteModel(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  EXPECT_EQ(
+      model_resources.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE)
+          .status()
+          .code(),
+      absl::StatusCode::kNotFound);
+  EXPECT_EQ(
+      model_resources
+          .GetTFLiteModelBuffer(proto::LlmMetadata::TF_LITE_PREFILL_DECODE)
+          .status()
+          .code(),
+      absl::StatusCode::kNotFound);
+}
+
+TEST(ModelResourcesStreamingTest, GetScopedFileUnimplementedWhenUnset) {
   ModelResourcesStreaming model_resources;
   EXPECT_EQ(model_resources.GetScopedFile().status().code(),
             absl::StatusCode::kUnimplemented);
 }
 
-TEST(ModelResourcesStreamingTest, GetWeightsSectionOffset) {
+TEST(ModelResourcesStreamingTest,
+     GetWeightsSectionOffsetUnimplementedWhenUnset) {
   ModelResourcesStreaming model_resources;
-  EXPECT_EQ(
-      model_resources.GetWeightsSectionOffset(ModelType::kUnknown)
-          .status()
-          .code(),
-      absl::StatusCode::kUnimplemented);
+  EXPECT_EQ(model_resources
+                .GetWeightsSectionOffset(
+                    proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED)
+                .status()
+                .code(),
+            absl::StatusCode::kUnimplemented);
 }
 
-TEST(ModelResourcesStreamingTest, GetTFLiteModelBackendConstraint) {
+TEST(ModelResourcesStreamingTest, SetAndGetTFLiteModelBackendConstraint) {
   ModelResourcesStreaming model_resources;
-  EXPECT_EQ(
-      model_resources.GetTFLiteModelBackendConstraint(ModelType::kUnknown),
-      std::nullopt);
+  EXPECT_EQ(model_resources.GetTFLiteModelBackendConstraint(
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+            std::nullopt);
+
+  model_resources.SetTFLiteModelBackendConstraint(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE, "gpu");
+  EXPECT_EQ(model_resources.GetTFLiteModelBackendConstraint(
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+            "gpu");
+  EXPECT_EQ(model_resources.GetTFLiteModelBackendConstraint(
+                proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED),
+            std::nullopt);
 }
 
-TEST(ModelResourcesStreamingTest, GetTokenizer) {
+TEST(ModelResourcesStreamingTest, SetAndGetTFLiteModelPreferActivationType) {
+  ModelResourcesStreaming model_resources;
+  EXPECT_EQ(model_resources.GetTFLiteModelPreferActivationType(
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+            std::nullopt);
+
+  model_resources.SetTFLiteModelPreferActivationType(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE, "fp16");
+  EXPECT_EQ(model_resources.GetTFLiteModelPreferActivationType(
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+            "fp16");
+  EXPECT_EQ(model_resources.GetTFLiteModelPreferActivationType(
+                proto::LlmMetadata::TF_LITE_MODEL_TYPE_UNSPECIFIED),
+            std::nullopt);
+}
+
+TEST(ModelResourcesStreamingTest, GetTokenizerUnimplemented) {
   ModelResourcesStreaming model_resources;
   EXPECT_EQ(model_resources.GetTokenizer().status().code(),
             absl::StatusCode::kUnimplemented);
 }
 
-TEST(ModelResourcesStreamingTest, GetLlmMetadata) {
+TEST(ModelResourcesStreamingTest, SetAndGetLlmMetadata) {
   ModelResourcesStreaming model_resources;
   EXPECT_EQ(model_resources.GetLlmMetadata().status().code(),
-            absl::StatusCode::kUnimplemented);
+            absl::StatusCode::kNotFound);
+
+  proto::LlmMetadata metadata;
+  metadata.set_max_num_tokens(2048);
+  model_resources.SetLlmMetadata(metadata);
+
+  ASSERT_OK_AND_ASSIGN(const auto* retrieved_metadata,
+                       model_resources.GetLlmMetadata());
+  EXPECT_EQ(retrieved_metadata->max_num_tokens(), 2048);
+}
+
+TEST(ModelResourcesStreamingTest, SetAndGetEmbeddingMetadata) {
+  ModelResourcesStreaming model_resources;
+  EXPECT_EQ(model_resources.GetEmbeddingMetadata().status().code(),
+            absl::StatusCode::kNotFound);
+
+  proto::EmbeddingMetadata metadata;
+  metadata.mutable_bos_token()->set_token_str("<bos>");
+  model_resources.SetEmbeddingMetadata(metadata);
+
+  ASSERT_OK_AND_ASSIGN(const auto* retrieved_metadata,
+                       model_resources.GetEmbeddingMetadata());
+  EXPECT_EQ(retrieved_metadata->bos_token().token_str(), "<bos>");
+}
+
+TEST(ModelResourcesStreamingTest, SetAndGetExecutorMetadata) {
+  ModelResourcesStreaming model_resources;
+  EXPECT_EQ(model_resources.GetExecutorMetadata().status().code(),
+            absl::StatusCode::kNotFound);
+
+  proto::ExecutorMetadata metadata;
+  metadata.mutable_llm_executor_metadata()
+      ->mutable_attention_mask_settings()
+      ->set_sliding_window_size(512);
+  model_resources.SetExecutorMetadata(metadata);
+
+  ASSERT_OK_AND_ASSIGN(const auto* retrieved_metadata,
+                       model_resources.GetExecutorMetadata());
+  EXPECT_EQ(retrieved_metadata->llm_executor_metadata()
+                .attention_mask_settings()
+                .sliding_window_size(),
+            512);
+}
+
+TEST(ModelResourcesStreamingTest, SetAndGetWeightsFromStream) {
+  ModelResourcesStreaming model_resources;
+  EXPECT_EQ(model_resources.GetWeightInMemoryMap(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            nullptr);
+
+  std::string weight_data = "raw_weights_bytes_12345678";
+  MemoryDataStream stream(weight_data);
+
+  ASSERT_TRUE(
+      model_resources
+          .SetWeightsFromStream(proto::LlmMetadata::TF_LITE_VISION_ENCODER,
+                                stream, weight_data.size())
+          .ok());
+
+  const auto* model_map = model_resources.GetWeightInMemoryMap(
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER);
+  ASSERT_NE(model_map, nullptr);
+  auto model_it = model_map->find("tflite_weights");
+  ASSERT_NE(model_it, model_map->end());
+  EXPECT_EQ(model_it->second.size(), weight_data.size());
+
+  // Non-streamed model type should return nullptr.
+  EXPECT_EQ(model_resources.GetWeightInMemoryMap(
+                proto::LlmMetadata::TF_LITE_EMBEDDER),
+            nullptr);
+}
+
+TEST(ModelResourcesStreamingTest, ReleaseWeightsDropsOnlyTheGivenModelType) {
+  ModelResourcesStreaming model_resources;
+
+  std::string vision_data = "vision_weights";
+  MemoryDataStream vision_stream(vision_data);
+  ASSERT_OK(model_resources.SetWeightsFromStream(
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER, vision_stream,
+      vision_data.size()));
+
+  std::string adapter_data = "adapter_weights";
+  MemoryDataStream adapter_stream(adapter_data);
+  ASSERT_OK(model_resources.SetWeightsFromStream(
+      proto::LlmMetadata::TF_LITE_VISION_ADAPTER, adapter_stream,
+      adapter_data.size()));
+
+  model_resources.ReleaseWeights(proto::LlmMetadata::TF_LITE_VISION_ENCODER);
+
+  EXPECT_EQ(model_resources.GetWeightInMemoryMap(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            nullptr);
+  EXPECT_NE(model_resources.GetWeightInMemoryMap(
+                proto::LlmMetadata::TF_LITE_VISION_ADAPTER),
+            nullptr);
+}
+
+TEST(ModelResourcesStreamingTest, ReleaseWeightsWithNothingStoredIsANoOp) {
+  ModelResourcesStreaming model_resources;
+  model_resources.ReleaseWeights(proto::LlmMetadata::TF_LITE_VISION_ENCODER);
+  EXPECT_EQ(model_resources.GetWeightInMemoryMap(
+                proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+            nullptr);
+}
+
+TEST(ModelResourcesStreamingTest, WeightsCanBeSetAgainAfterRelease) {
+  ModelResourcesStreaming model_resources;
+
+  std::string first_data = "first_weights";
+  MemoryDataStream first_stream(first_data);
+  ASSERT_OK(model_resources.SetWeightsFromStream(
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER, first_stream,
+      first_data.size()));
+  model_resources.ReleaseWeights(proto::LlmMetadata::TF_LITE_VISION_ENCODER);
+
+  std::string second_data = "second_weights_which_are_longer";
+  MemoryDataStream second_stream(second_data);
+  ASSERT_OK(model_resources.SetWeightsFromStream(
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER, second_stream,
+      second_data.size()));
+
+  const auto* model_map = model_resources.GetWeightInMemoryMap(
+      proto::LlmMetadata::TF_LITE_VISION_ENCODER);
+  ASSERT_NE(model_map, nullptr);
+  auto model_it = model_map->find("tflite_weights");
+  ASSERT_NE(model_it, model_map->end());
+  ASSERT_EQ(model_it->second.size(), second_data.size());
+  EXPECT_EQ(std::string(reinterpret_cast<const char*>(model_it->second.data()),
+                        model_it->second.size()),
+            second_data);
+}
+
+// Builds a TFLite flatbuffer that declares the external buffer groups
+// `group_names`.
+std::vector<char> BuildModelWithExternalBufferGroups(
+    const std::vector<std::string>& group_names) {
+  flatbuffers::FlatBufferBuilder fbb;
+  std::vector<flatbuffers::Offset<tflite::ExternalBufferGroup>> groups;
+  for (const std::string& name : group_names) {
+    groups.push_back(
+        tflite::CreateExternalBufferGroup(fbb, fbb.CreateString(name)));
+  }
+  const auto groups_offset = fbb.CreateVector(groups);
+  tflite::ModelBuilder model_builder(fbb);
+  model_builder.add_version(3);
+  model_builder.add_external_buffer_groups(groups_offset);
+  tflite::FinishModelBuffer(fbb, model_builder.Finish());
+  const char* data = reinterpret_cast<const char*>(fbb.GetBufferPointer());
+  return std::vector<char>(data, data + fbb.GetSize());
+}
+
+TEST(ModelResourcesStreamingTest, SetWeightsFromStreamSharesWeights) {
+  ModelResourcesStreaming model_resources;
+  // prefill_decode reads a payload stored once in the embedder's section.
+  model_resources.SetModelBuffer(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+      BuildModelWithExternalBufferGroups(
+          {"tflite_weights", "tflite_weights:tf_lite_embedder"}));
+  model_resources.SetModelBuffer(
+      proto::LlmMetadata::TF_LITE_EMBEDDER,
+      BuildModelWithExternalBufferGroups({"tflite_weights"}));
+
+  std::string embedder_data = "shared_embedding_table";
+  MemoryDataStream stream(embedder_data);
+  ASSERT_OK(model_resources.SetWeightsFromStream(
+      proto::LlmMetadata::TF_LITE_EMBEDDER, stream, embedder_data.size()));
+
+  const auto* embedder_map = model_resources.GetWeightInMemoryMap(
+      proto::LlmMetadata::TF_LITE_EMBEDDER);
+  ASSERT_NE(embedder_map, nullptr);
+  const auto* prefill_map = model_resources.GetWeightInMemoryMap(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
+  ASSERT_NE(prefill_map, nullptr);
+  auto shared_it = prefill_map->find("tflite_weights:tf_lite_embedder");
+  ASSERT_NE(shared_it, prefill_map->end());
+  EXPECT_EQ(shared_it->second.data(),
+            embedder_map->at("tflite_weights").data());
+  EXPECT_EQ(shared_it->second.size(), embedder_data.size());
+  // prefill_decode's own weights are not in host memory.
+  EXPECT_FALSE(prefill_map->contains("tflite_weights"));
+
+  // Releasing the embedder's weights drops the shared span too.
+  model_resources.ReleaseWeights(proto::LlmMetadata::TF_LITE_EMBEDDER);
+  prefill_map = model_resources.GetWeightInMemoryMap(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
+  EXPECT_TRUE(prefill_map == nullptr ||
+              !prefill_map->contains("tflite_weights:tf_lite_embedder"));
+}
+
+TEST(ModelResourcesStreamingTest, GetTFLiteModelLoadsAndCachesModel) {
+  ModelResourcesStreaming model_resources;
+  model_resources.SetModelBuffer(proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+                                 BuildModelWithExternalBufferGroups({}));
+
+  ASSERT_OK_AND_ASSIGN(const litert::Model* model,
+                       model_resources.GetTFLiteModel(
+                           proto::LlmMetadata::TF_LITE_PREFILL_DECODE));
+  ASSERT_NE(model, nullptr);
+  EXPECT_THAT(model_resources.GetTFLiteModel(
+                  proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+              IsOkAndHolds(model));
+}
+
+TEST(ModelResourcesStreamingTest, GetTFLiteModelFailsOnInvalidModelBuffer) {
+  ModelResourcesStreaming model_resources;
+  const std::string invalid_bytes = "not_a_tflite_model";
+  model_resources.SetModelBuffer(
+      proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+      std::vector<char>(invalid_bytes.begin(), invalid_bytes.end()));
+
+  EXPECT_THAT(model_resources.GetTFLiteModel(
+                  proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+              StatusIs(absl::StatusCode::kInternal));
 }
 
 }  // namespace

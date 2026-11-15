@@ -29,7 +29,7 @@ describe('Session', () => {
       'getMutableSamplerParams', 'getStopTokenIds', 'getStartTokenId',
       'getNumOutputCandidates', 'getSamplerBackend',
       'getApplyPromptTemplateInSession', 'getUseExternalSampler',
-      'getMaxOutputTokens'
+      'getMaxOutputTokens', 'getSpeculativeDecodingConfig'
     ]);
     mockWasmSessionConfig.getAudioModalityEnabled.and.returnValue(false);
     mockWasmSessionConfig.getVisionModalityEnabled.and.returnValue(false);
@@ -67,6 +67,8 @@ describe('Session', () => {
     mockWasmSessionConfig.getApplyPromptTemplateInSession.and.returnValue(false);
     mockWasmSessionConfig.getUseExternalSampler.and.returnValue(false);
     mockWasmSessionConfig.getMaxOutputTokens.and.returnValue(1024);
+    mockWasmSessionConfig.getSpeculativeDecodingConfig.and.returnValue(
+        {mode: undefined, lenience: undefined});
 
     mockWasmSession = jasmine.createSpyObj('WasmSession', [
       'getSessionConfig', 'runPrefill', 'runDecode', 'cancelProcess',
@@ -122,5 +124,25 @@ describe('Session', () => {
     await expectAsync(session.clone()).toBeRejectedWithError(/Session is busy/);
     finishPrefill();
     await p;
+  });
+
+  it('throws errors returned by Wasm', async () => {
+    const session = new Session(mockWasmSession, mockMutexes);
+    const prefillError = new Error('prefill failed');
+    mockWasmSession.runPrefill.and.returnValue(Promise.resolve(prefillError));
+    await expectAsync(session.runPrefill(['test']))
+        .toBeRejectedWith(prefillError);
+
+    const decodeError = new Error('decode failed');
+    mockWasmSession.runDecode.and.returnValue(Promise.resolve(decodeError));
+    await expectAsync(session.runDecode()).toBeRejectedWith(decodeError);
+
+    const cloneError = new Error('clone failed');
+    mockWasmSession.clone.and.returnValue(cloneError);
+    await expectAsync(session.clone()).toBeRejectedWith(cloneError);
+
+    // The session is not left busy.
+    mockWasmSession.runPrefill.and.returnValue(Promise.resolve());
+    await expectAsync(session.runPrefill(['test'])).toBeResolved();
   });
 });

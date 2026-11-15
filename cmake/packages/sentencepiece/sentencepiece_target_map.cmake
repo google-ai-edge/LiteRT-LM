@@ -14,7 +14,7 @@
 
 
 
-set(SENTENCEPIECE_TARGET_MAP
-    "sentencepiece_lib=${SENTENCE_LIB_DIR}/libsentencepiece.a"
-    "sentencepiece_train_lib=${SENTENCE_LIB_DIR}/libsentencepiece_train.a"
+set(LITERTLM_SENTENCEPIECE_TARGET_MAP
+    "sentencepiece_lib=${LITERTLM_SENTENCEPIECE_LIB_DIR}/libsentencepiece.a"
+    "sentencepiece_train_lib=${LITERTLM_SENTENCEPIECE_LIB_DIR}/libsentencepiece_train.a"
 )

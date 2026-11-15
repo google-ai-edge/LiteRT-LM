@@ -12,29 +12,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-include_guard(GLOBAL)
-
 message(STATUS "[LiteRTLM] Redirecting SentencePiece dependencies...")
+
+set(LITERTLM_SENTENCEPIECE_PACKAGE_DIR "${LITERTLM_SENTENCEPIECE_PACKAGE_DIR}" CACHE PATH "" FORCE)
+set(LITERTLM_SENTENCEPIECE_CONFIG_PATH "${LITERTLM_SENTENCEPIECE_CONFIG_PATH}" CACHE PATH "" FORCE)
+include("${LITERTLM_SENTENCEPIECE_CONFIG_PATH}")
+
+set(LITERTLM_ABSL_PACKAGE_DIR "${LITERTLM_ABSL_PACKAGE_DIR}" CACHE PATH "" FORCE)
+set(LITERTLM_ABSL_CONFIG_PATH "${LITERTLM_ABSL_CONFIG_PATH}" CACHE PATH "" FORCE)
+include("${LITERTLM_ABSL_CONFIG_PATH}")
+
+set(LITERTLM_PROTOBUF_PACKAGE_DIR "${LITERTLM_PROTOBUF_PACKAGE_DIR}" CACHE PATH "" FORCE)
+set(LITERTLM_PROTOBUF_CONFIG_PATH "${LITERTLM_PROTOBUF_CONFIG_PATH}" CACHE PATH "" FORCE)
+include("${LITERTLM_PROTOBUF_CONFIG_PATH}")
 
 set(SPM_USE_BUILTIN_PROTOBUF OFF CACHE BOOL "" FORCE)
 set(SPM_PROTOBUF_PROVIDER "package" CACHE STRING "" FORCE)
 set(SPM_ABSL_PROVIDER "package" CACHE STRING "" FORCE)
-set(Protobuf_INCLUDE_DIRS ${PROTO_INCLUDE_DIR} CACHE PATH "" FORCE)
-set(PROTOBUF_INCLUDE_DIR ${PROTO_INCLUDE_DIR} CACHE PATH "" FORCE)
-set(ABSL_SRC_FILE_PATH "${ABSL_SRC_DIR}/absl" CACHE PATH "" FORCE)
-set(ABSL_INLUDE_FILE_PATH "${ABSL_INCLUDE_DIR}" CACHE PATH "" FORCE)
+set(Protobuf_INCLUDE_DIRS ${LITERTLM_PROTOBUF_INCLUDE_DIR} CACHE PATH "" FORCE)
+set(PROTOBUF_INCLUDE_DIR ${LITERTLM_PROTOBUF_INCLUDE_DIR} CACHE PATH "" FORCE)
+set(ABSL_SRC_FILE_PATH "${LITERTLM_ABSL_SRC_DIR}/absl" CACHE PATH "" FORCE)
+set(ABSL_INLUDE_FILE_PATH "${LITERTLM_ABSL_INCLUDE_DIR}" CACHE PATH "" FORCE)
+
+set(PROTOC_EXECUTABLE "${LITERTLM_HOST_PROTOC}" CACHE PATH "" FORCE)
+set(PROTOC_EXE "${LITERTLM_HOST_PROTOC}" CACHE PATH "" FORCE)
+set(protobuf_generate_PROTOC_EXE "${LITERTLM_HOST_PROTOC}" CACHE PATH "" FORCE)
 
 include("${LITERTLM_MODULES_DIR}/utils.cmake")
-include("${ABSL_PACKAGE_DIR}/absl_aggregate.cmake")
-include("${PROTOBUF_PACKAGE_DIR}/protobuf_aggregate.cmake")
+include("${LITERTLM_ABSL_PACKAGE_DIR}/absl_aggregate.cmake")
+include("${LITERTLM_PROTOBUF_PACKAGE_DIR}/protobuf_aggregate.cmake")
 
 add_definitions(-D_GLIBCXX_USE_CXX11_ABI=1)
 
 generate_absl_aggregate()
 generate_protobuf_aggregate()
 
-include_directories(${ABSL_INCLUDE_DIR} ${PROTO_INCLUDE_DIR})
+include_directories(${LITERTLM_ABSL_INCLUDE_DIR} ${LITERTLM_PROTOBUF_INCLUDE_DIR})
 
 # [TODO] Refactor into macro for DRY principle.
 # --- Toolchain-Specific Linker Flags ---
@@ -54,6 +67,18 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         set(_LITERTLM_LINK_GROUP_START "-Wl,--start-group")
         set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
         set(_LITERTLM_SYSLIBS "-lz -ldl -llog")
+    elseif(WIN32)
+        if(MSVC)
+            # Clang-cl targeting MSVC ABI (uses lld-link.exe)
+            set(_LITERTLM_LINK_MULTIDEF "/FORCE:MULTIPLE")
+            set(_LITERTLM_SYSLIBS "")
+        else()
+            # Clang targeting GNU ABI / MinGW (uses ld or lld)
+            set(_LITERTLM_LINK_MULTIDEF "-Wl,--allow-multiple-definition")
+            set(_LITERTLM_LINK_GROUP_START "-Wl,--start-group")
+            set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
+            set(_LITERTLM_SYSLIBS "-lz") # No -lrt or -ldl on Windows
+        endif()
     else()
         # Linux / ELF Linker (GNU ld or LLD)
         set(_LITERTLM_LINK_MULTIDEF "-Wl,--allow-multiple-definition")
@@ -64,9 +89,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 elseif(MSVC)
     # MSVC Linker
     set(_LITERTLM_LINK_MULTIDEF "/FORCE:MULTIPLE")
-    set(_LITERTLM_SYSLIBS "") 
+    set(_LITERTLM_SYSLIBS "")
 endif()
 
-set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES} ${_LITERTLM_LINK_MULTIDEF} ${_LITERTLM_LINK_GROUP_START} ${_PROTOBUF_PAYLOAD} ${_ABSL_PAYLOAD} ${_LITERTLM_SYSLIBS} ${_LITERTLM_LINK_GROUP_END}"
+set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES} ${_LITERTLM_LINK_MULTIDEF} ${_LITERTLM_LINK_GROUP_START} ${_PROTOBUF_LINK_FLAGS} ${_ABSL_LINK_FLAGS} ${_LITERTLM_SYSLIBS} ${_LITERTLM_LINK_GROUP_END}"
     CACHE STRING "" FORCE
 )

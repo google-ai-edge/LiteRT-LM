@@ -24,7 +24,7 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 enum class Role(val value: String) {
   SYSTEM("system"), // represent the system
   USER("user"), // represent the user
-  MODEL("model"), // represent the model
+  MODEL("assistant"), // represent the model
   TOOL("tool"), // represent a tool response
 }
 

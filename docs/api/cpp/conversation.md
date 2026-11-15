@@ -354,7 +354,7 @@ templates. Here are a few examples:
 
 -   [`google-gemma-3n-e2b-it.jinja`](https://github.com/google-ai-edge/LiteRT-LM/blob/main/runtime/components/testdata/google-gemma-3n-e2b-it.jinja)
 -   [`HuggingFaceTB-SmolLM3-3B.jinja`](https://github.com/google-ai-edge/LiteRT-LM/blob/main/runtime/components/testdata/HuggingFaceTB-SmolLM3-3B.jinja)
--   [`Qwen-Qwen3-0.6B.jinja`](https://github.com/google-ai-edge/LiteRT-LM/blob/main/runtime/components/testdata/Qwen-Qwen3-0.6B.jinja)
+-   [`chat_template.jinja` (Qwen3)](https://github.com/google-ai-edge/LiteRT-LM/blob/main/models/qwen3/chat_template.jinja)
 
 The [Jinja template engine][Jinja] format should strictly match the structure
 expected by the instruction-tuned model. Typically, model releases include the

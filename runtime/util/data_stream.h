@@ -32,7 +32,7 @@ namespace litert::lm {
 // A `SubStream` is a view into a parent `DataStream`. It holds a weak pointer
 // to its parent, so it does not keep the parent alive. The user must ensure
 // that the parent `DataStream` outlives all of its `SubStream`s.
-class DataStream {
+class DataStream : public std::enable_shared_from_this<DataStream> {
  public:
   virtual ~DataStream() = default;
 
@@ -55,10 +55,10 @@ class DataStream {
   // `offset` + `size`).
   // Note that substreams cannot overlap regions in the parent stream, even if
   // the first substream is destroyed.
-  virtual absl::StatusOr<std::unique_ptr<DataStream>> OpenSubStream(
+  virtual absl::StatusOr<std::shared_ptr<DataStream>> OpenSubStream(
       uint64_t offset, uint64_t size);
 
- private:
+ protected:
   std::vector<std::pair<uint64_t, uint64_t>> locked_regions_;
 };
 
@@ -68,7 +68,7 @@ class DataStream {
 // that the parent `DataStream` outlives all of its `SubStream`s.
 class SubStream : public DataStream {
  public:
-  SubStream(DataStream* parent, uint64_t offset, uint64_t size)
+  SubStream(std::shared_ptr<DataStream> parent, uint64_t offset, uint64_t size)
       : parent_(parent), offset_(offset), size_(size) {}
 
   ~SubStream() override;
@@ -81,11 +81,11 @@ class SubStream : public DataStream {
 
   absl::Status Discard(uint64_t offset, uint64_t size) override;
 
-  absl::StatusOr<std::unique_ptr<DataStream>> OpenSubStream(
+  absl::StatusOr<std::shared_ptr<DataStream>> OpenSubStream(
       uint64_t offset, uint64_t size) override;
 
  private:
-  DataStream* parent_;
+  std::shared_ptr<DataStream> parent_;
   uint64_t offset_;
   uint64_t size_;
 

@@ -27,13 +27,13 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
-#include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
-#include "support/tokenizer/sentencepiece_tokenizer.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/metadata_util.h"
 #include "runtime/util/model_asset_bundle_resources.h"
 #include "runtime/util/status_macros.h"
+#include "support/tokenizer/sentencepiece_tokenizer.h"
 
 namespace litert::lm {
 
@@ -50,28 +50,43 @@ absl::StatusOr<std::unique_ptr<ModelResources>> ModelResourcesTask::Create(
   return model_resources;
 }
 
+bool ModelResourcesTask::HasTFLiteModel(
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  if (auto it = model_map_.find(model_type);
+      it != model_map_.end() && it->second != nullptr) {
+    return true;
+  }
+  std::string model_file =
+      litert::lm::proto::LlmMetadata::TfLiteModelType_Name(model_type);
+  auto buffer = model_asset_bundle_resources_->GetFile(model_file);
+  return buffer.ok() && !buffer->empty();
+}
+
 absl::StatusOr<absl::string_view> ModelResourcesTask::GetTFLiteModelBuffer(
-    ModelType model_type) {
-  std::string model_file = litert::lm::ModelTypeToString(model_type);
+    proto::LlmMetadata::TfLiteModelType model_type) {
+  std::string model_file =
+      litert::lm::proto::LlmMetadata::TfLiteModelType_Name(model_type);
   return model_asset_bundle_resources_->GetFile(model_file);
 };
 
 absl::StatusOr<const litert::Model*> ModelResourcesTask::GetTFLiteModel(
-    ModelType model_type) {
+    proto::LlmMetadata::TfLiteModelType model_type) {
   auto it = model_map_.find(model_type);
   if (it != model_map_.end()) {
     return it->second.get();
   }
 
-  std::string model_file = litert::lm::ModelTypeToString(model_type);
+  std::string model_file =
+      litert::lm::proto::LlmMetadata::TfLiteModelType_Name(model_type);
   auto buffer = model_asset_bundle_resources_->GetFile(model_file);
   if (!buffer.ok()) {
-    return absl::NotFoundError(absl::StrCat(ModelTypeToString(model_type),
-                                            " not found in the model."));
+    return absl::NotFoundError(
+        absl::StrCat(proto::LlmMetadata::TfLiteModelType_Name(model_type),
+                     " not found in the model."));
   }
-  ABSL_LOG(INFO) << "litert model size: " << buffer->size();
+  ABSL_VLOG(1) << "litert model size: " << buffer->size();
   auto buffer_ref = BufferRef<uint8_t>(buffer->data(), buffer->size());
-  LITERT_ASSIGN_OR_RETURN(auto model, Model::CreateFromBuffer(buffer_ref));
+  ABSL_ASSIGN_OR_RETURN(auto model, CreateLiteRtModelFromBuffer(buffer_ref));
   model_map_[model_type] = std::make_unique<Model>(std::move(model));
   return model_map_[model_type].get();
 }
@@ -91,9 +106,9 @@ absl::StatusOr<const proto::LlmMetadata*> ModelResourcesTask::GetLlmMetadata() {
                           ExtractOrConvertLlmMetadata(string_view));
     llm_metadata_ =
         std::make_unique<proto::LlmMetadata>(std::move(llm_metadata));
-    ABSL_LOG(INFO) << "The llm metadata: " << llm_metadata_->DebugString();
+    ABSL_VLOG(1) << "The llm metadata: " << llm_metadata_->DebugString();
   }
   return llm_metadata_.get();
-};
+}
 
 }  // namespace litert::lm

@@ -1,0 +1,1144 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "runtime/executor/llm_litert_verifier.h"
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <random>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "absl/algorithm/container.h"  // from @com_google_absl
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/functional/function_ref.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/memory/memory.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_element_type.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_model_types.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/constrained_decoding/constrained_decoder.h"
+#include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
+#include "runtime/components/constrained_decoding/logit_mask.h"
+#include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
+#include "runtime/components/sampler_params_util.h"
+#include "runtime/components/sampling_uniforms.h"
+#include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/litert/state.h"
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/llm_executor_settings_utils.h"
+#include "runtime/executor/nvidia_mtp_drafter_support.h"
+#include "runtime/executor/state_interface.h"
+#include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/sampler_params.pb.h"
+#include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/lora_util.h"
+#include "runtime/util/status_macros.h"
+
+namespace litert::lm {
+
+absl::Status ValidateDraftTokenIds(absl::Span<const int> draft_token_ids,
+                                   int vocab_size) {
+  if (draft_token_ids.empty()) {
+    return absl::InvalidArgumentError("The draft is empty.");
+  }
+  for (int token_id : draft_token_ids) {
+    if (token_id < 0 || token_id >= vocab_size) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "The draft token id ", token_id,
+          " is outside of the vocabulary of size ", vocab_size, "."));
+    }
+  }
+  return absl::OkStatus();
+}
+
+std::optional<int> SelectVerifyWidth(absl::Span<const int> widths,
+                                     int num_drafts, int position,
+                                     int kv_cache_size) {
+  // The policy minimizes the number of passes and then the padding.
+  std::optional<int> smallest_complete;
+  std::optional<int> largest;
+  for (int width : widths) {
+    if (position + width > kv_cache_size) {
+      continue;
+    }
+    if (width >= num_drafts + 1 &&
+        (!smallest_complete.has_value() || width < *smallest_complete)) {
+      smallest_complete = width;
+    }
+    if (!largest.has_value() || width > *largest) {
+      largest = width;
+    }
+  }
+  return smallest_complete.has_value() ? smallest_complete : largest;
+}
+
+VerifyPassOutcome EvaluateVerifyPass(absl::Span<const int> pass_tokens,
+                                     absl::Span<const int> drafts,
+                                     int num_draft_inputs) {
+  // Without lenience, no uniform is drawn.
+  return EvaluateVerifyPass(pass_tokens, drafts, num_draft_inputs,
+                            /*lenience=*/0.0f, [](int) { return 1.0; });
+}
+
+VerifyPassOutcome EvaluateVerifyPass(absl::Span<const int> pass_tokens,
+                                     absl::Span<const int> drafts,
+                                     int num_draft_inputs, float lenience,
+                                     absl::FunctionRef<double(int)> uniform) {
+  // The token after the last input checks one more draft token.
+  const int num_checked =
+      std::min(num_draft_inputs + 1, static_cast<int>(drafts.size()));
+  VerifyPassOutcome outcome;
+  while (outcome.num_accepted < num_checked) {
+    const int i = outcome.num_accepted;
+    if (pass_tokens[i] == drafts[i]) {
+      ++outcome.num_accepted;
+    } else if (lenience > 0.0f && uniform(i) < lenience) {
+      ++outcome.num_accepted;
+      ++outcome.num_lenient_accepted;
+    } else {
+      break;
+    }
+  }
+  // A draft token accepted after the last input becomes the pending token of
+  // the next pass.
+  if (outcome.num_accepted <= num_draft_inputs) {
+    outcome.next_token = pass_tokens[outcome.num_accepted];
+  }
+  return outcome;
+}
+
+namespace {
+
+constexpr absl::string_view kLogitsName = "logits";
+
+absl::StatusOr<int> GetVocabSizeFromLogitsTensor(TensorBuffer& logits_tensor) {
+  LITERT_ASSIGN_OR_RETURN(auto logits_tensor_type, logits_tensor.TensorType());
+  RET_CHECK_EQ(logits_tensor_type.Layout().Dimensions().size(), 3);
+  // logits tensor shape is [batch, seq, vocab].
+  return logits_tensor_type.Layout().Dimensions()[2];
+}
+
+constexpr absl::string_view kVerifySignaturePrefix = "verify";
+
+// Returns the dimensions of `type`.
+std::vector<int> Dims(const RankedTensorType& type) {
+  const auto& dims = type.Layout().Dimensions();
+  return std::vector<int>(dims.begin(), dims.end());
+}
+
+// The facts of the decode signature that verify signatures must agree with.
+struct DecodeSignatureFacts {
+  ModelSignatures signatures;
+  int vocab_size = 0;
+  // Sorted names of the KV cache inputs and outputs, and of the LoRA inputs.
+  std::vector<absl::string_view> state_inputs;
+  std::vector<absl::string_view> state_outputs;
+  std::vector<absl::string_view> lora_inputs;
+};
+
+// Returns the sorted names of `names` for which `keep` holds.
+template <typename Predicate>
+std::vector<absl::string_view> SortedNames(
+    const std::vector<absl::string_view>& names, Predicate keep) {
+  std::vector<absl::string_view> result;
+  for (absl::string_view name : names) {
+    if (keep(name)) {
+      result.push_back(name);
+    }
+  }
+  absl::c_sort(result);
+  return result;
+}
+
+absl::StatusOr<DecodeSignatureFacts> GetDecodeSignatureFacts(
+    const SimpleSignature& decode, const StateInterface& state) {
+  DecodeSignatureFacts facts;
+  ABSL_ASSIGN_OR_RETURN(facts.signatures,
+                        GetModelSignaturesFromInputOutputNames(
+                            decode.InputNames(), decode.OutputNames()));
+  LITERT_ASSIGN_OR_RETURN(
+      auto logits_type,
+      decode.OutputTensorType(facts.signatures.output_logits));
+  const std::vector<int> logits_dims = Dims(logits_type);
+  RET_CHECK_EQ(logits_dims.size(), 3);
+  facts.vocab_size = logits_dims[2];
+  auto in_state = [&](absl::string_view name) { return state.Contains(name); };
+  facts.state_inputs = SortedNames(decode.InputNames(), in_state);
+  facts.state_outputs = SortedNames(decode.OutputNames(), in_state);
+  facts.lora_inputs = SortedNames(decode.InputNames(), IsLoRABufferInputName);
+  return facts;
+}
+
+// Returns OK if the input `name` of `verify` has the element type and the
+// shape of decode's input `decode_name` ([1, 1, ...]), with `width` rows
+// instead of one. The embedding lookups that fill these inputs in a pass are
+// the ones that fill them in decode.
+absl::Status CheckRowsLikeDecodeInput(
+    const SimpleSignature& verify, const SimpleSignature& decode,
+    absl::string_view name, const std::optional<std::string>& decode_name,
+    int width) {
+  if (!decode_name.has_value()) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("It takes ", name, ", but decode doesn't."));
+  }
+  LITERT_ASSIGN_OR_RETURN(auto decode_type,
+                          decode.InputTensorType(*decode_name));
+  std::vector<int> expected_dims = Dims(decode_type);
+  if (expected_dims.size() < 3 || expected_dims[0] != 1 ||
+      expected_dims[1] != 1) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Decode's ", *decode_name, " must have the shape [1, 1, ...]."));
+  }
+  expected_dims[1] = width;
+  LITERT_ASSIGN_OR_RETURN(auto type, verify.InputTensorType(name));
+  if (Dims(type) != expected_dims ||
+      type.ElementType() != decode_type.ElementType()) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Its ", name, " must have the shape [",
+                     absl::StrJoin(expected_dims, ", "),
+                     "] and the element type of decode's ", *decode_name, "."));
+  }
+  return absl::OkStatus();
+}
+
+// Returns the width of the verify signature `verify`, or why draft
+// verification can't use it.
+absl::StatusOr<int> CheckVerifySignature(
+    const SimpleSignature& verify, const SimpleSignature& decode,
+    const DecodeSignatureFacts& decode_facts, const StateInterface& state,
+    bool has_embedding_lookup, bool has_per_layer_embedding_lookup) {
+  ABSL_ASSIGN_OR_RETURN(
+      ModelSignatures signatures,
+      GetModelSignaturesFromInputOutputNames(
+          verify.InputNames(), verify.OutputNames(), /*strict=*/false));
+
+  if (signatures.input_positions.empty()) {
+    return absl::FailedPreconditionError("It has no positions input.");
+  }
+  LITERT_ASSIGN_OR_RETURN(auto input_pos_type,
+                          verify.InputTensorType(signatures.input_positions));
+  const std::vector<int> input_pos_dims = Dims(input_pos_type);
+  if (input_pos_dims.size() != 1 || input_pos_dims[0] < 1) {
+    return absl::FailedPreconditionError(
+        "Its positions must have the shape [W] with W >= 1.");
+  }
+  // The verifier writes the positions and tokens as int32.
+  if (input_pos_type.ElementType() != ElementType::Int32) {
+    return absl::FailedPreconditionError("Its positions must be int32.");
+  }
+  const int width = input_pos_dims[0];
+
+  if (signatures.output_logits.empty()) {
+    return absl::FailedPreconditionError("It has no logits output.");
+  }
+  LITERT_ASSIGN_OR_RETURN(auto logits_type,
+                          verify.OutputTensorType(signatures.output_logits));
+  if (Dims(logits_type) !=
+      std::vector<int>{1, width, decode_facts.vocab_size}) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Its logits must have the shape [1, ", width, ", ",
+        decode_facts.vocab_size, "] (the vocabulary size of decode)."));
+  }
+
+  if (!signatures.input_tokens.empty()) {
+    // The verifier fills only the tokens of such signatures.
+    if (signatures.input_embeddings.has_value() ||
+        signatures.input_per_layer_embeddings.has_value()) {
+      return absl::FailedPreconditionError(
+          "It takes both tokens and embeddings.");
+    }
+    LITERT_ASSIGN_OR_RETURN(auto tokens_type,
+                            verify.InputTensorType(signatures.input_tokens));
+    if (Dims(tokens_type) != std::vector<int>{1, width}) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Its tokens must have the shape [1, ", width, "]."));
+    }
+    if (tokens_type.ElementType() != ElementType::Int32) {
+      return absl::FailedPreconditionError("Its tokens must be int32.");
+    }
+  } else if (!signatures.input_embeddings.has_value()) {
+    return absl::FailedPreconditionError(
+        "It takes neither tokens nor embeddings.");
+  } else if (!has_embedding_lookup) {
+    return absl::FailedPreconditionError(
+        "It takes embeddings, but the model has no embedding lookup.");
+  } else if (signatures.input_per_layer_embeddings.has_value() &&
+             !has_per_layer_embedding_lookup) {
+    return absl::FailedPreconditionError(
+        "It takes per-layer embeddings, but the model has no per-layer "
+        "embedding lookup.");
+  } else {
+    ABSL_RETURN_IF_ERROR(CheckRowsLikeDecodeInput(
+        verify, decode, *signatures.input_embeddings,
+        decode_facts.signatures.input_embeddings, width));
+    if (signatures.input_per_layer_embeddings.has_value()) {
+      ABSL_RETURN_IF_ERROR(CheckRowsLikeDecodeInput(
+          verify, decode, *signatures.input_per_layer_embeddings,
+          decode_facts.signatures.input_per_layer_embeddings, width));
+    }
+  }
+
+  if (signatures.input_attn_mask_local.has_value() ||
+      decode_facts.signatures.input_attn_mask_local.has_value()) {
+    return absl::FailedPreconditionError(
+        "Models with a local attention mask (ring-buffer KV caches) are not "
+        "supported.");
+  }
+  if (signatures.input_int32_param.has_value() !=
+      decode_facts.signatures.input_int32_param.has_value()) {
+    return absl::FailedPreconditionError(
+        "It must have a param tensor if and only if decode has one.");
+  }
+
+  auto in_state = [&](absl::string_view name) { return state.Contains(name); };
+  const std::vector<absl::string_view> state_inputs =
+      SortedNames(verify.InputNames(), in_state);
+  const std::vector<absl::string_view> state_outputs =
+      SortedNames(verify.OutputNames(), in_state);
+  bool same_kv_cache = state_inputs == decode_facts.state_inputs &&
+                       state_outputs == decode_facts.state_outputs;
+  for (absl::string_view name : state_inputs) {
+    if (!same_kv_cache) {
+      break;
+    }
+    LITERT_ASSIGN_OR_RETURN(auto type, verify.InputTensorType(name));
+    LITERT_ASSIGN_OR_RETURN(auto decode_type, decode.InputTensorType(name));
+    same_kv_cache = type == decode_type;
+  }
+  for (absl::string_view name : state_outputs) {
+    if (!same_kv_cache) {
+      break;
+    }
+    LITERT_ASSIGN_OR_RETURN(auto type, verify.OutputTensorType(name));
+    LITERT_ASSIGN_OR_RETURN(auto decode_type, decode.OutputTensorType(name));
+    same_kv_cache = type == decode_type;
+  }
+  if (!same_kv_cache) {
+    return absl::FailedPreconditionError(
+        "It must have the same KV cache tensors as decode.");
+  }
+
+  if (SortedNames(verify.InputNames(), IsLoRABufferInputName) !=
+      decode_facts.lora_inputs) {
+    return absl::FailedPreconditionError(
+        "It must have the same LoRA inputs as decode.");
+  }
+
+  // Every other input must be one that the verifier fills.
+  for (absl::string_view name : verify.InputNames()) {
+    if (state.Contains(name) || IsLoRABufferInputName(name) ||
+        name == signatures.input_positions || name == signatures.input_tokens ||
+        name == signatures.input_attn_mask ||
+        name == signatures.input_embeddings ||
+        name == signatures.input_per_layer_embeddings ||
+        name == signatures.input_int32_param) {
+      continue;
+    }
+    return absl::FailedPreconditionError(
+        absl::StrCat("It has an unknown input: ", name, "."));
+  }
+
+  if (width > state.GetNumEntries()) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Its width ", width, " exceeds the KV cache size ",
+                     state.GetNumEntries(), "."));
+  }
+  return width;
+}
+
+absl::StatusOr<bool> MaskAllowsToken(const LogitMask* mask, int token,
+                                     int vocab_size) {
+  constexpr float kDisallowed = -std::numeric_limits<float>::infinity();
+  if (token < 0 || token >= vocab_size) {
+    return false;
+  }
+  if (mask == nullptr) {
+    return true;
+  }
+  switch (mask->GetType()) {
+    case MaskType::kBitmap:
+      return static_cast<const BitmapLogitMask*>(mask)->IsAllowed(token);
+    case MaskType::kSparse:
+      // A sparse mask only disallows a token with a bias of -inf.
+      return absl::c_none_of(
+          static_cast<const SparseLogitMask*>(mask)->entries(),
+          [&](const SparseLogitMask::Entry& entry) {
+            return entry.token_id == token && entry.bias == kDisallowed;
+          });
+    case MaskType::kComposite:
+      for (const std::unique_ptr<LogitMask>& part :
+           static_cast<const CompositeLogitMask*>(mask)->masks()) {
+        ABSL_ASSIGN_OR_RETURN(const bool allowed,
+                              MaskAllowsToken(part.get(), token, vocab_size));
+        if (!allowed) {
+          return false;
+        }
+      }
+      return true;
+    case MaskType::kCustom:
+      break;
+  }
+  std::vector<float> logits(vocab_size, 0.0f);
+  ABSL_RETURN_IF_ERROR(mask->Apply(absl::MakeSpan(logits)));
+  return logits[token] != kDisallowed;
+}
+
+}  // namespace
+
+absl::StatusOr<std::vector<VerifySignatureInfo>> FindVerifySignatures(
+    CompiledModel& model, absl::string_view decode_signature_key,
+    const StateInterface& state,
+    absl::Span<const std::string> selected_signatures,
+    bool has_embedding_lookup, bool has_per_layer_embedding_lookup) {
+  LITERT_ASSIGN_OR_RETURN(auto keys, model.GetSignatureKeys());
+  LITERT_ASSIGN_OR_RETURN(SimpleSignature decode,
+                          model.FindSignature(decode_signature_key));
+  ABSL_ASSIGN_OR_RETURN(DecodeSignatureFacts decode_facts,
+                        GetDecodeSignatureFacts(decode, state));
+
+  std::vector<VerifySignatureInfo> infos;
+  for (absl::string_view key : keys) {
+    if (!absl::StartsWith(key, kVerifySignaturePrefix)) {
+      continue;
+    }
+    VerifySignatureInfo& info = infos.emplace_back();
+    info.key = std::string(key);
+    if (!selected_signatures.empty() &&
+        !absl::c_linear_search(selected_signatures, key)) {
+      info.status = absl::FailedPreconditionError(
+          "It is not among the selected signatures.");
+      continue;
+    }
+    LITERT_ASSIGN_OR_RETURN(SimpleSignature verify, model.FindSignature(key));
+    absl::StatusOr<int> width = CheckVerifySignature(
+        verify, decode, decode_facts, state, has_embedding_lookup,
+        has_per_layer_embedding_lookup);
+    if (width.ok()) {
+      info.width = *width;
+    } else {
+      info.status = width.status();
+    }
+  }
+  return infos;
+}
+
+DraftConstraintStates::DraftConstraintStates(const Constraint& constraint,
+                                             const Constraint::State& start)
+    : constraint_(&constraint), start_(&start) {
+  states_.push_back(nullptr);
+}
+
+DraftConstraintStates::DraftConstraintStates(
+    const Constraint& constraint, std::unique_ptr<Constraint::State> start)
+    : constraint_(&constraint), start_(start.get()) {
+  states_.push_back(std::move(start));
+}
+
+absl::StatusOr<const LogitMask*> DraftConstraintStates::NextMask() {
+  const int n = num_tokens();
+  if (masks_.size() <= n) {
+    masks_.resize(n + 1);
+  }
+  if (masks_[n] == nullptr) {
+    const Constraint::State& state = n == 0 ? *start_ : *states_[n];
+    ABSL_ASSIGN_OR_RETURN(masks_[n], constraint_->ComputeMask(state));
+  }
+  return masks_[n].get();
+}
+
+absl::Status DraftConstraintStates::Append(int token) {
+  // The verify pass needs the mask anyway, and computing it first spares
+  // constraints that need it to advance (e.g. LLGuidance) from computing it
+  // twice.
+  ABSL_RETURN_IF_ERROR(NextMask().status());
+  const int n = num_tokens();
+  ABSL_ASSIGN_OR_RETURN(
+      std::unique_ptr<Constraint::State> next_state,
+      AdvanceConstraintState(*constraint_, n == 0 ? *start_ : *states_[n],
+                             token));
+  states_.push_back(std::move(next_state));
+  return absl::OkStatus();
+}
+
+absl::StatusOr<absl::Span<const std::unique_ptr<LogitMask>>>
+DraftConstraintStates::PassMasks(int width) {
+  RET_CHECK_LE(num_tokens(), width);
+  if (num_tokens() < width) {
+    // Each appended draft token computed the mask of its row. The row after
+    // them, if the pass has one, still needs its mask.
+    ABSL_RETURN_IF_ERROR(NextMask().status());
+  }
+  // The padding rows have no masks.
+  masks_.resize(width);
+  return absl::MakeConstSpan(masks_);
+}
+
+absl::StatusOr<std::unique_ptr<Constraint::State>>
+DraftConstraintStates::TakeState(int n) {
+  RET_CHECK_GE(n, 0);
+  RET_CHECK_LE(n, num_tokens());
+  return std::move(states_[n]);
+}
+
+absl::StatusOr<std::unique_ptr<LlmLiteRtVerifier>> LlmLiteRtVerifier::Create(
+    Environment& env, CompiledModel& base_model,
+    absl::string_view signature_key,
+    const LlmExecutorSettings& executor_settings,
+    EmbeddingLookupManager* embedding_lookup,
+    EmbeddingLookupManager* per_layer_embedding_lookup,
+    const proto::ExecutorMetadata* executor_metadata, PassRunner pass_runner) {
+  const ActivationDataType activation_data_type =
+      executor_settings.GetActivationDataType().value_or(
+          ActivationDataType::FLOAT16);
+  const Backend backend = executor_settings.GetBackend();
+  // The sampler factory has no NPU sampler; GetSamplerBackend() falls back to
+  // the CPU sampler there unless a sampler backend is configured explicitly.
+  ABSL_ASSIGN_OR_RETURN(const Backend sampler_backend,
+                        GetSamplerBackend(executor_settings));
+  const bool use_fp16_precision =
+      backend == Backend::GPU &&
+      activation_data_type == ActivationDataType::FLOAT16;
+
+  LITERT_ASSIGN_OR_RETURN(SimpleSignature signature,
+                          base_model.FindSignature(signature_key));
+
+  // The KV cache buffers come with each pass (see `Run()`).
+  absl::flat_hash_map<absl::string_view, TensorBuffer> input_buffers;
+  for (absl::string_view input_name : signature.InputNames()) {
+    if (absl::StrContains(input_name, "kv")) {
+      continue;
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        auto input_buffer,
+        base_model.CreateInputBuffer(signature.Key(), input_name));
+    input_buffers.insert_or_assign(input_name, std::move(input_buffer));
+  }
+  LITERT_ASSIGN_OR_RETURN(size_t signature_index,
+                          base_model.GetSignatureIndex(signature.Key()));
+  absl::flat_hash_map<absl::string_view, TensorBuffer> output_buffers;
+  for (size_t i = 0; i < signature.OutputNames().size(); ++i) {
+    absl::string_view output_name = signature.OutputNames()[i];
+    if (absl::StrContains(output_name, "kv")) {
+      continue;
+    }
+    if (output_name == kLogitsName && use_fp16_precision) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto output_buffer,
+          CreateFP16OutputBuffer(env, base_model, signature_index, output_name,
+                                 i));
+      output_buffers.insert_or_assign(output_name, std::move(output_buffer));
+    } else {
+      LITERT_ASSIGN_OR_RETURN(
+          auto output_buffer,
+          base_model.CreateOutputBuffer(signature.Key(), output_name));
+      output_buffers.insert_or_assign(output_name, std::move(output_buffer));
+    }
+  }
+
+  ABSL_ASSIGN_OR_RETURN(ModelSignatures signatures,
+                        GetModelSignaturesFromInputOutputNames(
+                            signature.InputNames(), signature.OutputNames(),
+                            /*strict=*/false));
+  // Like decode, the positions input is `input_pos` or `positions`.
+  if (signatures.input_positions.empty()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Signature ", signature_key, " has no positions input."));
+  }
+  const std::string& positions_name = signatures.input_positions;
+  LITERT_ASSIGN_OR_RETURN(auto input_pos_tensor_type,
+                          signature.InputTensorType(positions_name));
+  // Expected shape: [W].
+  const auto& input_pos_dims = input_pos_tensor_type.Layout().Dimensions();
+  if (input_pos_dims.size() != 1) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "The ", positions_name, " input of signature ", signature_key,
+        " must have rank 1, got rank ", input_pos_dims.size(), "."));
+  }
+  const int width = input_pos_dims[0];
+  // Dynamic dimensions are negative.
+  if (width < 1) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "The ", positions_name, " input of signature ", signature_key,
+        " must have a static positive width, got ", width, "."));
+  }
+
+  auto logits = output_buffers.find(kLogitsName);
+  if (logits == output_buffers.end()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Signature ", signature_key, " has no ", kLogitsName, " output."));
+  }
+  ABSL_ASSIGN_OR_RETURN(int vocab_size,
+                        GetVocabSizeFromLogitsTensor(logits->second));
+
+  ActivationDataType logits_data_type;
+  {
+    LITERT_ASSIGN_OR_RETURN(auto logits_type, logits->second.TensorType());
+    if (logits_type.ElementType() == ElementType::Float16) {
+      logits_data_type = ActivationDataType::FLOAT16;
+    } else if (logits_type.ElementType() == ElementType::Float32) {
+      logits_data_type = ActivationDataType::FLOAT32;
+    } else {
+      return absl::InvalidArgumentError("Unsupported verifier logits type");
+    }
+  }
+
+  // On NVIDIA's TensorRT-RTX backend (Backend::NPU) the argmax runs on the
+  // device next to the logits; elsewhere this is CreateSampler().
+  ABSL_ASSIGN_OR_RETURN(
+      auto sampler, CreateMtpGreedySampler(
+                        backend, /*batch_size=*/1, GreedySamplerParams(), env,
+                        /*sequence_size=*/width, vocab_size, logits_data_type));
+  LITERT_ASSIGN_OR_RETURN(auto id_tensor,
+                          CreateTensorBuffer<int32_t>({1, width}));
+  if (signatures.input_tokens.empty()) {
+    if (!signatures.input_embeddings.has_value()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Signature ", signature_key,
+                       " takes neither tokens nor embeddings."));
+    }
+    if (embedding_lookup == nullptr) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Signature ", signature_key,
+                       " takes embeddings, but there is no embedding lookup."));
+    }
+    if (signatures.input_per_layer_embeddings.has_value() &&
+        per_layer_embedding_lookup == nullptr) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "Signature ", signature_key,
+          " takes per-layer embeddings, but there is no per-layer embedding "
+          "lookup."));
+    }
+  }
+  ABSL_ASSIGN_OR_RETURN(
+      auto mask_runner,
+      LiteRtLogitMaskRunner::Create(env, GetHwAcceleratorForBackend(backend)));
+
+  // Duplicates of the buffers to run the passes with, which avoid creating
+  // the buffer maps for each pass.
+  absl::flat_hash_map<absl::string_view, TensorBuffer> active_input_buffers;
+  for (const auto& [name, buffer] : input_buffers) {
+    LITERT_ASSIGN_OR_RETURN(auto dup, buffer.Duplicate());
+    active_input_buffers.insert_or_assign(name, std::move(dup));
+  }
+  absl::flat_hash_map<absl::string_view, TensorBuffer> active_output_buffers;
+  for (const auto& [name, buffer] : output_buffers) {
+    LITERT_ASSIGN_OR_RETURN(auto dup, buffer.Duplicate());
+    active_output_buffers.insert_or_assign(name, std::move(dup));
+  }
+
+  // Same default as the prefill's padding.
+  const int pad_token_id = std::max(executor_settings.GetPadTokenId(), 0);
+  if (pass_runner == nullptr) {
+    pass_runner =
+        [&base_model](
+            absl::string_view signature_key,
+            absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers,
+            absl::flat_hash_map<absl::string_view, TensorBuffer>&
+                output_buffers) -> absl::Status {
+      bool async = true;
+      LITERT_RETURN_IF_ERROR(base_model.RunAsync(signature_key, input_buffers,
+                                                 output_buffers, async));
+      return absl::OkStatus();
+    };
+  }
+  return absl::WrapUnique(new LlmLiteRtVerifier(
+      env, std::move(signature), std::move(pass_runner), embedding_lookup,
+      per_layer_embedding_lookup, width, vocab_size, pad_token_id,
+      std::move(signatures), GetAttentionMaskParams(executor_metadata),
+      logits_data_type, sampler_backend, std::move(sampler),
+      std::move(mask_runner), std::move(output_buffers),
+      std::move(active_input_buffers), std::move(active_output_buffers),
+      std::move(id_tensor)));
+}
+
+absl::Status LlmLiteRtVerifier::Run(
+    int position, absl::Span<const int> ids,
+    const LitertState::StateBuffers& state_buffers) {
+  const int num_tokens = ids.size();
+  if (num_tokens < 1 || num_tokens > width_) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("A pass of signature ", signature_.Key(), " takes 1 to ",
+                     width_, " tokens, got ", num_tokens, "."));
+  }
+  // Invalidates the tokens of the previous pass until this one has started.
+  num_pass_tokens_ = 0;
+
+  {
+    LITERT_ASSIGN_OR_RETURN(
+        auto input_pos_lock_and_addr,
+        TensorBufferScopedLock::Create(
+            active_input_buffers_[signatures_.input_positions],
+            TensorBuffer::LockMode::kWrite));
+    auto* input_pos_ptr = static_cast<int32_t*>(input_pos_lock_and_addr.second);
+    for (int i = 0; i < width_; ++i) {
+      // Like the prefill, the padding rows take position 0.
+      input_pos_ptr[i] = i < num_tokens ? position + i : 0;
+    }
+  }
+
+  // Only the rows of the tokens attend to anything.
+  if (signatures_.input_attn_mask.has_value()) {
+    auto& mask_buf = active_input_buffers_[*signatures_.input_attn_mask];
+    ABSL_RETURN_IF_ERROR(InitializeAndFillAttentionMask(
+        mask_buf, /*is_f16=*/false,
+        /*start_timestep=*/position,
+        /*steps=*/num_tokens, attn_params_.global_type));
+  }
+  if (signatures_.input_attn_mask_local.has_value()) {
+    auto& mask_buf = active_input_buffers_[*signatures_.input_attn_mask_local];
+    ABSL_RETURN_IF_ERROR(InitializeAndFillAttentionMask(
+        mask_buf, /*is_f16=*/false,
+        /*start_timestep=*/position,
+        /*steps=*/num_tokens, attn_params_.local_type,
+        /*token_ids=*/std::nullopt, attn_params_.sliding_window_size,
+        RingBufferAttentionMaskMode::kVerify));
+  }
+
+  if (!signatures_.input_tokens.empty()) {
+    ABSL_RETURN_IF_ERROR(FillTokens(ids));
+  } else {
+    ABSL_RETURN_IF_ERROR(
+        FillEmbeddings(*embedding_lookup_, *signatures_.input_embeddings, ids));
+    if (signatures_.input_per_layer_embeddings.has_value()) {
+      ABSL_RETURN_IF_ERROR(
+          FillEmbeddings(*per_layer_embedding_lookup_,
+                         *signatures_.input_per_layer_embeddings, ids));
+    }
+  }
+
+  for (const auto& [input_name, input_buffer] : state_buffers.input_buffers) {
+    LITERT_ASSIGN_OR_RETURN(auto dup, input_buffer.Duplicate());
+    active_input_buffers_.insert_or_assign(input_name, std::move(dup));
+  }
+  if (signatures_.input_int32_param.has_value()) {
+    // Only the rows of the tokens update the KV cache.
+    ABSL_RETURN_IF_ERROR(FillSingleBufferCacheParamTensor(
+        active_input_buffers_[*signatures_.input_int32_param], position,
+        num_tokens));
+  }
+
+  for (const auto& [output_name, output_buffer] :
+       state_buffers.output_buffers) {
+    LITERT_ASSIGN_OR_RETURN(auto dup, output_buffer.Duplicate());
+    active_output_buffers_.insert_or_assign(output_name, std::move(dup));
+  }
+  for (auto& [output_name, output_buffer] : active_output_buffers_) {
+    LITERT_RETURN_IF_ERROR(output_buffer.ClearEvent());
+  }
+
+  ABSL_RETURN_IF_ERROR(pass_runner_(signature_.Key(), active_input_buffers_,
+                                    active_output_buffers_));
+  num_pass_tokens_ = num_tokens;
+  return absl::OkStatus();
+}
+
+absl::Status LlmLiteRtVerifier::FillTokens(absl::Span<const int> ids) {
+  LITERT_ASSIGN_OR_RETURN(auto tokens_lock_and_addr,
+                          TensorBufferScopedLock::Create(
+                              active_input_buffers_[signatures_.input_tokens],
+                              TensorBuffer::LockMode::kWrite));
+  auto* tokens_ptr = static_cast<int32_t*>(tokens_lock_and_addr.second);
+  const int num_tokens = ids.size();
+  for (int i = 0; i < width_; ++i) {
+    tokens_ptr[i] = i < num_tokens ? ids[i] : pad_token_id_;
+  }
+  return absl::OkStatus();
+}
+
+absl::Status LlmLiteRtVerifier::FillEmbeddings(EmbeddingLookupManager& lookup,
+                                               absl::string_view name,
+                                               absl::Span<const int> ids) {
+  TensorBuffer& embeddings = active_input_buffers_[name];
+  ABSL_RETURN_IF_ERROR(
+      lookup.LookupPrefill(ids, &embeddings, /*token_offset=*/0));
+  const int num_tokens = ids.size();
+  if (num_tokens == width_) {
+    return absl::OkStatus();
+  }
+  // The padding rows keep finite values: zeros.
+  LITERT_ASSIGN_OR_RETURN(size_t packed_size, embeddings.PackedSize());
+  const size_t row_size = packed_size / width_;
+  LITERT_ASSIGN_OR_RETURN(auto embeddings_lock_and_addr,
+                          TensorBufferScopedLock::Create(
+                              embeddings, TensorBuffer::LockMode::kWrite));
+  auto* embeddings_ptr = static_cast<char*>(embeddings_lock_and_addr.second);
+  std::memset(embeddings_ptr + num_tokens * row_size, 0,
+              (width_ - num_tokens) * row_size);
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::vector<int>> LlmLiteRtVerifier::MaskAndSample(
+    absl::Span<const std::unique_ptr<LogitMask>> masks) {
+  if (num_pass_tokens_ == 0) {
+    return absl::FailedPreconditionError("No pass has been run.");
+  }
+  if (!masks.empty() && static_cast<int>(masks.size()) != width_) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Expected no masks or ", width_, " masks, got ", masks.size(), "."));
+  }
+  auto logits = active_output_buffers_.find(kLogitsName);
+  RET_CHECK(logits != active_output_buffers_.end());
+  if (!masks.empty()) {
+    ABSL_RETURN_IF_ERROR(mask_runner_->ApplySequence(logits->second, masks));
+  }
+  // One uniform per row, from the sampler's generator (typically the
+  // session's, see `UpdateSamplerConfig()`); zeros for the default greedy
+  // sampler.
+  uniforms_.resize(width_);
+  if (rand_gen_ == nullptr) {
+    rand_gen_ = own_rand_gen_.Get(sampler_params_.seed());
+  }
+  DrawSamplingUniforms(sampler_params_, *rand_gen_, absl::MakeSpan(uniforms_));
+  ABSL_RETURN_IF_ERROR(sampler_->SampleToIdAndScoreBuffer(
+      logits->second, id_tensor_, /*scores_tensor=*/nullptr, uniforms_));
+  LITERT_ASSIGN_OR_RETURN(auto id_vector,
+                          CopyFromTensorBuffer<int32_t>(id_tensor_));
+  RET_CHECK_EQ(static_cast<int>(id_vector.size()), width_);
+  // The tokens of the padding rows are meaningless.
+  id_vector.resize(num_pass_tokens_);
+  return id_vector;
+}
+
+absl::StatusOr<VerifyPassResult> LlmLiteRtVerifier::Verify(
+    int position, int pending_token, absl::Span<const int> drafts,
+    const LitertState::StateBuffers& state_buffers,
+    DraftConstraintStates* constraint_states) {
+  // Without lenience, no uniform is drawn.
+  return Verify(position, pending_token, drafts, state_buffers,
+                constraint_states, /*lenience=*/0.0f, [](int) { return 1.0; });
+}
+
+absl::StatusOr<VerifyPassResult> LlmLiteRtVerifier::Verify(
+    int position, int pending_token, absl::Span<const int> drafts,
+    const LitertState::StateBuffers& state_buffers,
+    DraftConstraintStates* constraint_states, float lenience,
+    absl::FunctionRef<double(int)> uniform) {
+  // 1. Start the pass over the pending token and up to W - 1 draft inputs. Row
+  // i of the pass predicts `drafts[i]`.
+  int num_draft_inputs = std::min(width_ - 1, static_cast<int>(drafts.size()));
+  std::vector<int> ids = {pending_token};
+  ids.insert(ids.end(), drafts.begin(), drafts.begin() + num_draft_inputs);
+  ABSL_RETURN_IF_ERROR(Run(position, ids, state_buffers));
+
+  // 2. While the pass runs, compute the mask of each row from the constraint
+  // state after `drafts[0, i)`. Exact verification only needs the states of
+  // the inputs. Lenience can also accept the draft token after them without
+  // sampling it, as the next pending token, so that token is appended too. A
+  // draft token whose transition fails ends the draft before it.
+  absl::Span<const std::unique_ptr<LogitMask>> masks;
+  // The number of draft tokens that the constraint allows.
+  int num_allowed = static_cast<int>(drafts.size());
+  if (constraint_states != nullptr) {
+    const int num_constrained =
+        lenience > 0.0f ? std::min(width_, static_cast<int>(drafts.size()))
+                        : num_draft_inputs;
+    RET_CHECK_LE(constraint_states->num_tokens(), num_constrained);
+    while (constraint_states->num_tokens() < num_constrained) {
+      ABSL_RETURN_IF_ERROR(constraint_states->NextMask().status());
+      if (!constraint_states->Append(drafts[constraint_states->num_tokens()])
+               .ok()) {
+        num_allowed = constraint_states->num_tokens();
+        break;
+      }
+    }
+    ABSL_ASSIGN_OR_RETURN(masks, constraint_states->PassMasks(width_));
+  }
+
+  // 3. Sample every row under its mask.
+  ABSL_ASSIGN_OR_RETURN(std::vector<int> pass_tokens, MaskAndSample(masks));
+
+  // 4. A sampled token always satisfies its mask, but a leniently accepted
+  // draft token differs from it. Some constraints (e.g. suppressed tokens)
+  // disallow tokens only through their masks, so the draft also ends before
+  // the first mismatching draft token that its row's mask disallows.
+  if (constraint_states != nullptr && lenience > 0.0f) {
+    const int num_checked = std::min(num_allowed, num_draft_inputs + 1);
+    for (int i = 0; i < num_checked; ++i) {
+      if (pass_tokens[i] == drafts[i]) {
+        continue;
+      }
+      ABSL_ASSIGN_OR_RETURN(
+          const bool allowed,
+          MaskAllowsToken(masks[i].get(), drafts[i], vocab_size_));
+      if (!allowed) {
+        num_allowed = i;
+        break;
+      }
+    }
+  }
+
+  // 5. Accept a prefix of the allowed draft tokens. The rows after the end of
+  // the draft followed a disallowed token, so their tokens are dropped.
+  if (num_allowed < static_cast<int>(drafts.size())) {
+    drafts = drafts.first(num_allowed);
+    num_draft_inputs = std::min(num_draft_inputs, num_allowed);
+  }
+  pass_tokens.resize(num_draft_inputs + 1);
+
+  VerifyPassResult result;
+  result.outcome = EvaluateVerifyPass(pass_tokens, drafts, num_draft_inputs,
+                                      lenience, uniform);
+  // 6. Return the constraint state after the accepted inputs. A draft token
+  // accepted after the last input is the new pending token, which the caller
+  // feeds to the constraint like a decoded token.
+  if (constraint_states != nullptr) {
+    const int num_accepted_inputs =
+        std::min(result.outcome.num_accepted, num_draft_inputs);
+    ABSL_ASSIGN_OR_RETURN(result.constraint_state,
+                          constraint_states->TakeState(num_accepted_inputs));
+  }
+  return result;
+}
+
+absl::StatusOr<std::shared_ptr<std::default_random_engine>>
+LlmLiteRtVerifier::UpdateSamplerConfig(
+    const proto::SamplerParameters& sampler_params,
+    std::shared_ptr<std::default_random_engine> rand_gen) {
+  // Staged, so that a failed update leaves the generators unchanged.
+  SeededRandomEngine own_rand_gen = own_rand_gen_;
+  if (rand_gen == nullptr) {
+    // Reused while the seed is unchanged, so that re-syncs (e.g. each turn)
+    // continue the verifier's stream instead of restarting it.
+    rand_gen = own_rand_gen.Get(sampler_params.seed());
+  }
+  // On NVIDIA's TensorRT-RTX backend (Backend::NPU) the verifier samples from
+  // candidates the device selects; elsewhere this is UpdateOrRecreateSampler().
+  ABSL_RETURN_IF_ERROR(UpdateOrRecreateMtpVerifierSampler(
+      sampler_, sampler_max_top_k_, sampler_backend_,
+      /*batch_size=*/1, sampler_params, std::cref(env_),
+      /*sequence_size=*/width_, vocab_size_, logits_data_type_));
+  own_rand_gen_ = std::move(own_rand_gen);
+  sampler_params_ = sampler_params;
+  rand_gen_ = rand_gen;
+  return rand_gen;
+}
+
+absl::StatusOr<TensorBuffer*> LlmLiteRtVerifier::GetOutputBuffer(
+    absl::string_view name) {
+  auto it = output_buffers_.find(name);
+  if (it == output_buffers_.end()) {
+    return absl::NotFoundError(absl::StrCat("Signature ", signature_.Key(),
+                                            " has no output ", name, "."));
+  }
+  return &it->second;
+}
+
+absl::StatusOr<std::unique_ptr<LlmLiteRtDraftVerifier>>
+LlmLiteRtDraftVerifier::Create(
+    Environment& env, CompiledModel& base_model,
+    absl::string_view decode_signature_key, const StateInterface& state,
+    const LlmExecutorSettings& executor_settings,
+    EmbeddingLookupManager* embedding_lookup,
+    EmbeddingLookupManager* per_layer_embedding_lookup,
+    const proto::ExecutorMetadata* executor_metadata,
+    LlmLiteRtVerifier::PassRunner pass_runner) {
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<VerifySignatureInfo> signatures,
+      FindVerifySignatures(
+          base_model, decode_signature_key, state,
+          executor_settings.GetSelectedSignatures(),
+          /*has_embedding_lookup=*/embedding_lookup != nullptr,
+          /*has_per_layer_embedding_lookup=*/per_layer_embedding_lookup !=
+              nullptr));
+  return absl::WrapUnique(new LlmLiteRtDraftVerifier(
+      env, base_model, executor_settings, embedding_lookup,
+      per_layer_embedding_lookup, executor_metadata, std::move(pass_runner),
+      std::move(signatures)));
+}
+
+LlmLiteRtDraftVerifier::LlmLiteRtDraftVerifier(
+    Environment& env, CompiledModel& base_model,
+    const LlmExecutorSettings& executor_settings,
+    EmbeddingLookupManager* embedding_lookup,
+    EmbeddingLookupManager* per_layer_embedding_lookup,
+    const proto::ExecutorMetadata* executor_metadata,
+    LlmLiteRtVerifier::PassRunner pass_runner,
+    std::vector<VerifySignatureInfo> signatures)
+    : env_(env),
+      base_model_(base_model),
+      executor_settings_(executor_settings),
+      embedding_lookup_(embedding_lookup),
+      per_layer_embedding_lookup_(per_layer_embedding_lookup),
+      executor_metadata_(executor_metadata),
+      pass_runner_(std::move(pass_runner)),
+      signatures_(std::move(signatures)),
+      sampler_params_(GreedySamplerParams()) {
+  for (const VerifySignatureInfo& info : signatures_) {
+    if (info.status.ok()) {
+      widths_.push_back(info.width);
+    }
+  }
+}
+
+absl::Status LlmLiteRtDraftVerifier::CheckSupport() const {
+  if (signatures_.empty()) {
+    return absl::FailedPreconditionError(
+        "Draft verification needs a verify signature, but the model has none.");
+  }
+  if (!widths_.empty()) {
+    return absl::OkStatus();
+  }
+  std::vector<std::string> reasons;
+  reasons.reserve(signatures_.size());
+  for (const VerifySignatureInfo& info : signatures_) {
+    reasons.push_back(absl::StrCat(info.key, ": ", info.status.message()));
+  }
+  return absl::FailedPreconditionError(
+      absl::StrCat("None of the model's verify signatures can verify drafts. ",
+                   absl::StrJoin(reasons, " ")));
+}
+
+bool LlmLiteRtDraftVerifier::PassFits(int position, int kv_cache_size) const {
+  return SelectVerifyWidth(widths_, /*num_drafts=*/0, position, kv_cache_size)
+      .has_value();
+}
+
+void LlmLiteRtDraftVerifier::SetSamplerConfig(
+    const proto::SamplerParameters& sampler_params,
+    std::shared_ptr<std::default_random_engine> rand_gen) {
+  // The lenience stream restarts only when the sampler's stream does.
+  lenience_rng_.Update(sampler_params.seed(), rand_gen);
+  sampler_params_ = sampler_params;
+  rand_gen_ = std::move(rand_gen);
+}
+
+absl::Status LlmLiteRtDraftVerifier::SetLenience(float lenience) {
+  if (!(lenience >= 0.0f && lenience <= 1.0f)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Speculative lenience must be in [0, 1], got ", lenience));
+  }
+  lenience_ = lenience;
+  return absl::OkStatus();
+}
+
+absl::StatusOr<VerifyPassOutcome> LlmLiteRtDraftVerifier::VerifyPass(
+    int position, int pending_token, absl::Span<const int> drafts,
+    LitertState& state, ConstrainedDecoder* constrained_decoder,
+    bool feed_pending_token) {
+  const int kv_cache_size = state.GetNumEntries();
+  const std::optional<int> width =
+      SelectVerifyWidth(widths_, drafts.size(), position, kv_cache_size);
+  if (!width.has_value()) {
+    return absl::ResourceExhaustedError(
+        absl::StrCat("No verify pass fits into the KV cache of ", kv_cache_size,
+                     " entries at position ", position, "."));
+  }
+  ABSL_ASSIGN_OR_RETURN(LlmLiteRtVerifier * verifier,
+                        GetOrCreateVerifier(*width));
+  ABSL_RETURN_IF_ERROR(
+      verifier->UpdateSamplerConfig(sampler_params_, rand_gen_).status());
+
+  std::optional<DraftConstraintStates> constraint_states;
+  if (constrained_decoder != nullptr) {
+    const Constraint& constraint = *constrained_decoder->GetConstraint();
+    ABSL_ASSIGN_OR_RETURN(const Constraint::State* decoder_state,
+                          constrained_decoder->GetState(0));
+    if (feed_pending_token) {
+      ABSL_ASSIGN_OR_RETURN(
+          std::unique_ptr<Constraint::State> start,
+          AdvanceConstraintState(constraint, *decoder_state, pending_token));
+      constraint_states.emplace(constraint, std::move(start));
+    } else {
+      constraint_states.emplace(constraint, *decoder_state);
+    }
+  }
+
+  // Exactly one call per pass, which swaps ping-pong state buffers.
+  LITERT_ASSIGN_OR_RETURN(
+      auto state_buffers,
+      state.GetStateBuffers(base_model_, verifier->signature_key()));
+  std::uniform_real_distribution<double> unit(0.0, 1.0);
+  ABSL_ASSIGN_OR_RETURN(
+      VerifyPassResult pass,
+      verifier->Verify(
+          position, pending_token, drafts, state_buffers,
+          constraint_states.has_value() ? &*constraint_states : nullptr,
+          lenience_,
+          [&](int /*i*/) -> double { return unit(lenience_rng_.engine()); }));
+
+  if (pass.outcome.next_token.has_value() && *pass.outcome.next_token < 0) {
+    const auto& advanced_settings = executor_settings_.GetAdvancedSettings();
+    if (advanced_settings.has_value() &&
+        advanced_settings->error_on_invalid_sampled_token_id) {
+      return absl::InternalError(
+          "Invalid draft verification result: the sampled token is "
+          "negative.");
+    }
+    ABSL_LOG(WARNING) << "Invalid draft verification result. The sampled "
+                         "token is cast to 0 to avoid crash.";
+    pass.outcome.next_token = 0;
+  }
+  if (pass.constraint_state != nullptr) {
+    ABSL_RETURN_IF_ERROR(
+        constrained_decoder->SetState(0, std::move(pass.constraint_state)));
+  }
+  return pass.outcome;
+}
+
+absl::StatusOr<LlmLiteRtVerifier*> LlmLiteRtDraftVerifier::GetOrCreateVerifier(
+    int width) {
+  if (auto it = verifiers_.find(width); it != verifiers_.end()) {
+    return it->second.get();
+  }
+  for (const VerifySignatureInfo& info : signatures_) {
+    if (!info.status.ok() || info.width != width) {
+      continue;
+    }
+    // Every verifier starts its passes with the draft verifier's runner.
+    LlmLiteRtVerifier::PassRunner pass_runner;
+    if (pass_runner_ != nullptr) {
+      pass_runner = [this](absl::string_view signature_key,
+                           absl::flat_hash_map<absl::string_view, TensorBuffer>&
+                               input_buffers,
+                           absl::flat_hash_map<absl::string_view, TensorBuffer>&
+                               output_buffers) {
+        return pass_runner_(signature_key, input_buffers, output_buffers);
+      };
+    }
+    ABSL_ASSIGN_OR_RETURN(std::unique_ptr<LlmLiteRtVerifier> verifier,
+                          LlmLiteRtVerifier::Create(
+                              env_, base_model_, info.key, executor_settings_,
+                              embedding_lookup_, per_layer_embedding_lookup_,
+                              executor_metadata_, std::move(pass_runner)));
+    LlmLiteRtVerifier* result = verifier.get();
+    verifiers_[width] = std::move(verifier);
+    return result;
+  }
+  return absl::InternalError(
+      absl::StrCat("No usable verify signature has width ", width, "."));
+}
+
+}  // namespace litert::lm

@@ -108,7 +108,7 @@ class FileBackedSectionStream : public SectionStreamBase {
   // *must* be called before using the stream.
   absl::Status Prepare() override {
     if (buffer_) {
-      ABSL_LOG(INFO) << "Buffer already prepared for file: " << file_path_;
+      ABSL_VLOG(1) << "Buffer already prepared for file: " << file_path_;
       return absl::OkStatus();
     }
 
@@ -162,11 +162,11 @@ class FileBackedSectionStream : public SectionStreamBase {
       is_ready_ = false;
       stream_.str(std::string());  // Clear the stringstream
       stream_.clear();             // Clear any error flags
-      ABSL_LOG(INFO) << "Buffer finalized and stream reset for file: "
-                     << file_path_;
+      ABSL_VLOG(1) << "Buffer finalized and stream reset for file: "
+                   << file_path_;
     } else {
-      ABSL_LOG(INFO) << "Nothing to finalize. Either Prepare() was not called "
-                     << "or Finalize() has already been called.";
+      ABSL_VLOG(1) << "Nothing to finalize. Either Prepare() was not called "
+                   << "or Finalize() has already been called.";
     }
     return absl::OkStatus();
   }
@@ -200,7 +200,7 @@ class ProtoBufSectionStream : public SectionStreamBase {
   // Prepare: Serializes the protocol buffer to a string.
   absl::Status Prepare() override {
     if (is_ready_) {
-      ABSL_LOG(INFO) << "Stream already prepared for proto.";
+      ABSL_VLOG(1) << "Stream already prepared for proto.";
       return absl::OkStatus();
     }
 
@@ -216,7 +216,7 @@ class ProtoBufSectionStream : public SectionStreamBase {
         stream_.str()
             .size();  // Get the size from the stringstream's underlying string.
     is_ready_ = true;
-    ABSL_LOG(INFO)
+    ABSL_VLOG(1)
         << "Protocol buffer serialized directly to stringstream, size: "
         << serialized_size_ << " bytes.";
     return absl::OkStatus();
@@ -237,7 +237,7 @@ class ProtoBufSectionStream : public SectionStreamBase {
     stream_.clear();
     serialized_size_ = 0;
     is_ready_ = false;
-    ABSL_LOG(INFO) << "Stream finalized.";
+    ABSL_VLOG(1) << "Stream finalized.";
     return absl::OkStatus();
   }
 
@@ -258,7 +258,7 @@ class ZlibBackendedSectionStream : public SectionStreamBase {
 
   absl::Status Prepare() override {
     if (is_ready_) {
-      ABSL_LOG(INFO) << "Stream already prepared.";
+      ABSL_VLOG(1) << "Stream already prepared.";
       return absl::OkStatus();
     }
 
@@ -326,7 +326,7 @@ class ZlibBackendedSectionStream : public SectionStreamBase {
     zlib_stream_.clear();
     zlib_serialized_size_ = 0;
     is_ready_ = false;
-    ABSL_LOG(INFO) << "Zlib section stream finalized.";
+    ABSL_VLOG(1) << "Zlib section stream finalized.";
     return absl::OkStatus();
   }
 

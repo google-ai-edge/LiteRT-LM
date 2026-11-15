@@ -15,13 +15,19 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_FASTVLM_DATA_PROCESSOR_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_FASTVLM_DATA_PROCESSOR_H_
 
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
-#include "support/preprocessor/stb_image_preprocessor.h"  // from @litert
-#include "runtime/components/prompt_template.h"
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/fastvlm_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/engine/io_types.h"
+#include "support/preprocessor/image_preprocessor.h"
+#include "support/preprocessor/stb_image_preprocessor.h"
 
 namespace litert::lm {
 
@@ -36,53 +42,25 @@ class FastVlmDataProcessor
  public:
   // Creates a FastVlmDataProcessor instance.
   static absl::StatusOr<std::unique_ptr<FastVlmDataProcessor>> Create(
-      FastVlmDataProcessorConfig config,
-      const PromptTemplateCapabilities& capabilities);
+      FastVlmDataProcessorConfig config);
 
   // Returns the config of the FastVlmDataProcessor.
   const FastVlmDataProcessorConfig& GetConfig() const override {
     return config_;
   }
 
-  // Converts a message into the template input for that message.
-  absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
-      const nlohmann::ordered_json& message) const override;
-
-  // Formats tool declarations.
-  absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const override;
-
-  // Returns the start of tool call blocks.
-  absl::string_view CodeFenceStart() const override { return ""; }
-
-  // Returns the end of tool call blocks.
-  absl::string_view CodeFenceEnd() const override { return ""; }
-
  private:
   explicit FastVlmDataProcessor(
       FastVlmDataProcessorConfig config,
-      const PromptTemplateCapabilities& capabilities,
       std::unique_ptr<ImagePreprocessor> image_preprocessor)
-      : config_(config),
-        capabilities_(capabilities),
-        image_preprocessor_(std::move(image_preprocessor)) {}
+      : config_(config), image_preprocessor_(std::move(image_preprocessor)) {}
 
   absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
       const std::string& rendered_template_prompt,
       const nlohmann::ordered_json& messages,
       const FastVlmDataProcessorArguments& args) const override;
 
-  absl::StatusOr<Message> ToMessageImpl(
-      const Responses& responses,
-      const FastVlmDataProcessorArguments& args) const override;
-
-  absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<FastVlmDataProcessorConfig,
-                                       FastVlmDataProcessorArguments>& other)
-      override;
-
   FastVlmDataProcessorConfig config_;
-  PromptTemplateCapabilities capabilities_;
   std::unique_ptr<ImagePreprocessor> image_preprocessor_;
 };
 

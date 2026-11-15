@@ -1,0 +1,53 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package litert.lm.proto;
+
+option java_multiple_files = true;
+option java_outer_classname = "Text2SpeechModelTypeOuterClass";
+
+// Kokoro-82M: phoneme-conditioned acoustic predictor + iSTFT neural vocoder.
+message Kokoro {
+  optional string voice_name = 1;
+  optional string language = 2;
+  optional int32 target_bucket = 3;
+  optional string vocoder_backend = 4;
+}
+
+// Qwen3-TTS: autoregressive talker + MTP drafter + RVQ codec vocoder.
+message Qwen3Tts {
+  optional string language = 1;
+  optional string speaker_file = 2;
+  optional int32 max_frames = 3;
+  // Seed of the codebook-0 sampler. Each session restarts from this seed.
+  optional int32 seed = 4;
+  // Whether to sample codebook 0 (true) or pick it greedily (false).
+  optional bool do_sample = 5;
+  // Softmax temperature of the codebook-0 sampler.
+  optional float temperature = 6;
+  // Number of most likely codebook-0 tokens to sample from (0 = all).
+  optional int32 top_k = 7;
+  // Penalty applied to codebook-0 tokens that were already generated.
+  optional float repetition_penalty = 8;
+}
+
+// Architecture-specific parameters for TTS models.
+message Text2SpeechModelType {
+  oneof model_type {
+    Kokoro kokoro = 1;
+    Qwen3Tts qwen3_tts = 2;
+  }
+}

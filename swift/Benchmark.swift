@@ -19,7 +19,8 @@ import CLiteRTLM
 /// Data struct to hold benchmark information. Note that this is an experimental API and may change
 /// in the future.
 public struct BenchmarkInfo {
-  /// The time in seconds to initialize the engine and the conversation.
+  /// The time in seconds to create the engine. Session and conversation creation are not included.
+  /// 0 if the engine didn't report it.
   public let initTimeInSecond: Double
 
   /// The time in seconds to the first token.
@@ -36,6 +37,11 @@ public struct BenchmarkInfo {
 
   /// The number of tokens processed per second in the last decode.
   public let lastDecodeTokensPerSecond: Double
+
+  /// The max number of tokens, i.e. the KV cache size, that the engine used. It can differ from the
+  /// requested one, e.g. for a model whose KV cache size is fixed when it is compiled. 0 if the
+  /// engine didn't report it.
+  public let maxNumTokens: Int
 }
 
 /// Runs a benchmark on the LiteRT-LM engine.
@@ -47,21 +53,38 @@ public struct BenchmarkInfo {
 /// - Parameters:
 ///   - modelPath: The path to the model file.
 ///   - backend: The backend to use for the engine.
+///   - visionBackend: The backend to use for the vision executor. If `nil`, the vision executor
+///       is not initialized.
+///   - audioBackend: The backend to use for the audio executor. If `nil`, the audio executor is
+///       not initialized.
 ///   - prefillTokens: The number of tokens to prefill.
 ///   - decodeTokens: The number of tokens to decode.
 ///   - cacheDir: The directory for placing cache files. Set to ":nocache" to disable caching.
 ///   - prompt: The custom prompt string to tokenize and run. If the tokenized prompt is shorter
 ///       than `prefillTokens`, the remaining tokens are padded with zero. If it is longer, the
 ///       prompt is truncated to `prefillTokens`.
+///   - maxNumTokens: The maximum number of the sum of input and output tokens, i.e. the size of the
+///       KV cache, like `EngineConfig.maxNumTokens`. When `nil`, use the default value from the
+///       model or the engine. Note that the KV cache size affects the prefill and decode speed.
+///   - speculativeDecodingConfig: The speculative decoding configuration of the benchmarked engine
+///       (see `EngineConfig.speculativeDecodingConfig`). `nil` keeps the runtime default (`.off`),
+///       unless the deprecated `ExperimentalFlags.enableSpeculativeDecoding` is set.
+///   - samplerConfig: The sampler configuration of the benchmarked conversation. `nil` uses the
+///       model's default sampler, like `ConversationConfig.samplerConfig`.
 /// - Returns: The benchmark info.
 /// - Throws: A `LiteRTLMError` if the engine fails to initialize or generate benchmark info.
 public func benchmark(
   modelPath: String,
   backend: Backend,
+  visionBackend: Backend? = nil,
+  audioBackend: Backend? = nil,
   prefillTokens: Int = 256,
   decodeTokens: Int = 256,
   cacheDir: String? = nil,
-  prompt: String = "How are you"
+  prompt: String = "How are you",
+  maxNumTokens: Int? = nil,
+  speculativeDecodingConfig: SpeculativeDecodingConfig? = nil,
+  samplerConfig: SamplerConfig? = nil
 ) async throws -> BenchmarkInfo {
   ExperimentalFlags.optIntoExperimentalAPIs()
 
@@ -75,13 +98,17 @@ public func benchmark(
   let engineConfig = try EngineConfig(
     modelPath: modelPath,
     backend: backend,
-    maxNumTokens: max(prefillTokens, decodeTokens) + 32,
-    cacheDir: cacheDir
+    visionBackend: visionBackend,
+    audioBackend: audioBackend,
+    maxNumTokens: maxNumTokens,
+    cacheDir: cacheDir,
+    speculativeDecodingConfig: speculativeDecodingConfig
   )
   let engine = Engine(engineConfig: engineConfig)
   try await engine.initializeForBenchmark(prefillTokens: prefillTokens, decodeTokens: decodeTokens)
 
-  let conversation = try await engine.createConversation()
+  let conversation = try await engine.createConversation(
+    with: ConversationConfig(samplerConfig: samplerConfig))
   _ = try await conversation.sendMessage(Message(prompt))
   return try conversation.getBenchmarkInfo()
 }

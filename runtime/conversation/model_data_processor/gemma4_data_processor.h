@@ -26,17 +26,19 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
-#include "runtime/components/logits_processor/constrained_decoding/constraint.h"
-#if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
-#include "runtime/components/logits_processor/constrained_decoding/gemma_model_constraint_provider.h"
-#endif
-#include "support/preprocessor/audio_preprocessor.h"  // from @litert
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
+#include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/constraint_provider.h"
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+#include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/engine/io_types.h"
+#include "support/preprocessor/audio_preprocessor.h"
+#include "support/preprocessor/image_preprocessor.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -59,16 +61,14 @@ class Gemma4DataProcessor
     return config_;
   }
 
-  // Converts a message into the template input for that message.
-  absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
-      const nlohmann::ordered_json& message) const override;
-
-  // Formats tool declarations.
-  absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const override;
+  absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
+      const nlohmann::ordered_json& tools,
+      std::optional<ToolChoice> tool_choice) const override;
 
   absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
-      const nlohmann::ordered_json& tools) const override;
+      const nlohmann::ordered_json& tools) const override {
+    return CreateConstraint(tools, std::nullopt);
+  }
 
   // Returns the start of tool call blocks.
   absl::string_view CodeFenceStart() const override;
@@ -76,39 +76,31 @@ class Gemma4DataProcessor
   // Returns the end of tool call blocks.
   absl::string_view CodeFenceEnd() const override;
 
-  absl::StatusOr<SingleTurnTemplateRenderResult> RenderSingleTurnTemplate(
-      std::vector<Message>& history, const Preface& preface,
-      const Message& message, const PromptTemplate& prompt_template,
-      bool current_is_appending_message, bool append_message,
-      std::optional<nlohmann::ordered_json> extra_context) const override;
-
-
  private:
-#if defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
-  explicit Gemma4DataProcessor(
-      const Gemma4DataProcessorConfig& config = Gemma4DataProcessorConfig(),
-      std::optional<Preface> preface = std::nullopt,
-      std::unique_ptr<ImagePreprocessor> image_preprocessor = nullptr,
-      std::unique_ptr<AudioPreprocessor> audio_preprocessor = nullptr)
-      : config_(config),
-        preface_(preface),
-        image_preprocessor_(std::move(image_preprocessor)),
-        audio_preprocessor_(std::move(audio_preprocessor)) {};
-#else
-  explicit Gemma4DataProcessor(
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+  // TODO(b/574011343): Remove the FST path once LLGuidance tool call
+  // constraints are validated and made the default.
+  using ConstraintProviderPtr =
       std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
-                      decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>
-          constraint_provider,
+                      decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>;
+#else
+  using ConstraintProviderPtr = std::unique_ptr<ConstraintProvider>;
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
+
+  explicit Gemma4DataProcessor(
+      ConstraintProviderPtr constraint_provider,
       const Gemma4DataProcessorConfig& config = Gemma4DataProcessorConfig(),
       std::optional<Preface> preface = std::nullopt,
       std::unique_ptr<ImagePreprocessor> image_preprocessor = nullptr,
-      std::unique_ptr<AudioPreprocessor> audio_preprocessor = nullptr)
-      : constraint_provider_c_(std::move(constraint_provider)),
+      std::unique_ptr<AudioPreprocessor> audio_preprocessor = nullptr,
+      std::string channel_start_token = "", std::string channel_end_token = "")
+      : constraint_provider_(std::move(constraint_provider)),
         config_(config),
         preface_(preface),
         image_preprocessor_(std::move(image_preprocessor)),
-        audio_preprocessor_(std::move(audio_preprocessor)) {};
-#endif
+        audio_preprocessor_(std::move(audio_preprocessor)),
+        channel_start_token_(std::move(channel_start_token)),
+        channel_end_token_(std::move(channel_end_token)) {}
 
   absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
       const std::string& rendered_template_prompt,
@@ -119,23 +111,16 @@ class Gemma4DataProcessor
       const Responses& responses,
       const Gemma4DataProcessorArguments& args) const override;
 
-  absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<Gemma4DataProcessorConfig,
-                                       Gemma4DataProcessorArguments>& other)
-      override {
-    ABSL_LOG(INFO) << "Gemma4DataProcessor::CloneStateImpl is a no-op.";
-    return absl::OkStatus();
-  }
-
-#if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
-  std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
-                  decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>
-      constraint_provider_c_;
-#endif
+  ConstraintProviderPtr constraint_provider_;
   Gemma4DataProcessorConfig config_;
   std::optional<Preface> preface_;
   std::unique_ptr<ImagePreprocessor> image_preprocessor_;
   std::unique_ptr<AudioPreprocessor> audio_preprocessor_;
+  // The first tokens of the channel start and end in `config_`, e.g.
+  // "<|channel>" and "<channel|>". Empty if the tool call constraints don't
+  // accept channels.
+  std::string channel_start_token_;
+  std::string channel_end_token_;
 };
 
 }  // namespace litert::lm

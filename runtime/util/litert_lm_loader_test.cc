@@ -27,13 +27,20 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/base/log_severity.h"  // from @com_google_absl
+#include "absl/log/scoped_mock_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/any2any_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/text2image_metadata.pb.h"
+#include "runtime/proto/text2speech_metadata.pb.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
-#include "runtime/util/status_macros.h"  // IWYU pragma: keep
+#include "schema/core/litertlm_header.h"
 #include "schema/core/litertlm_header_schema_generated.h"
 
 namespace litert::lm {
@@ -137,9 +144,46 @@ TEST(LitertLmLoaderTest, GetSectionLocationNotFound) {
   auto& loader = *loader_ptr;
 
   BufferKey embedder_key(schema::AnySectionDataType_TFLiteModel,
-                         ModelType::kTfLiteEmbedder);
+                         proto::LlmMetadata::TF_LITE_EMBEDDER);
   EXPECT_THAT(loader.GetSectionLocation(embedder_key),
               StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(LitertLmLoaderTest, GetEmbeddingMetadataSuccess) {
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) /
+                        "test_embedding_metadata.litertlm";
+  flatbuffers::FlatBufferBuilder builder(1024);
+  auto section_object = schema::CreateSectionObject(
+      builder, 0, 32, 64, schema::AnySectionDataType_EmbeddingMetadataProto);
+  std::vector<flatbuffers::Offset<schema::SectionObject>> sections;
+  sections.push_back(section_object);
+  auto sections_vector = builder.CreateVector(sections);
+  auto section_metadata =
+      schema::CreateSectionMetadata(builder, sections_vector);
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+
+  WriteDummyModelFile(test_file_path.string(), metadata, builder);
+
+  ASSERT_OK_AND_ASSIGN(auto model_file,
+                       ScopedFile::Open(test_file_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  EXPECT_TRUE(loader->GetEmbeddingMetadata().has_value());
+  EXPECT_EQ(loader->GetEmbeddingMetadata()->Size(), 32);
+  // A container whose only capability section is EmbeddingMetadata has no
+  // LlmMetadata.
+  EXPECT_FALSE(loader->HasLlmMetadata());
+}
+
+TEST(LitertLmLoaderTest, HasLlmMetadataForLlmFile) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+  EXPECT_TRUE(loader->HasLlmMetadata());
+  EXPECT_GT(loader->GetLlmMetadata().Size(), 0);
 }
 
 TEST(LitertLmLoaderTest, InitializeWithSentencePieceFile) {
@@ -152,10 +196,13 @@ TEST(LitertLmLoaderTest, InitializeWithSentencePieceFile) {
   auto& loader = *loader_ptr;
   EXPECT_FALSE(loader.GetHuggingFaceTokenizer());
   EXPECT_GT(loader.GetSentencePieceTokenizer()->Size(), 0);
-  EXPECT_GT(loader.GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size(), 0);
+  EXPECT_GT(
+      loader.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE).Size(),
+      0);
   EXPECT_GT(loader.GetLlmMetadata().Size(), 0);
   // Try to get non-existent TFLite model.
-  EXPECT_EQ(loader.GetTFLiteModel(ModelType::kTfLiteEmbedder).Size(), 0);
+  EXPECT_EQ(loader.GetTFLiteModel(proto::LlmMetadata::TF_LITE_EMBEDDER).Size(),
+            0);
 }
 
 TEST(LitertLmLoaderTest, InitializeWithHuggingFaceFile) {
@@ -181,9 +228,12 @@ TEST(LitertLmLoaderTest, InitializeWithMemoryMappedFile) {
   auto& loader = *loader_ptr;
   EXPECT_FALSE(loader.GetHuggingFaceTokenizer());
   EXPECT_GT(loader.GetSentencePieceTokenizer()->Size(), 0);
-  EXPECT_GT(loader.GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size(), 0);
+  EXPECT_GT(
+      loader.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE).Size(),
+      0);
   EXPECT_GT(loader.GetLlmMetadata().Size(), 0);
-  EXPECT_EQ(loader.GetTFLiteModel(ModelType::kTfLiteEmbedder).Size(), 0);
+  EXPECT_EQ(loader.GetTFLiteModel(proto::LlmMetadata::TF_LITE_EMBEDDER).Size(),
+            0);
 }
 
 TEST(LitertLmLoaderTest, GetSectionLocationSizeMatch) {
@@ -202,11 +252,12 @@ TEST(LitertLmLoaderTest, GetSectionLocationSizeMatch) {
             loader.GetSentencePieceTokenizer()->Size());
 
   BufferKey model_key(schema::AnySectionDataType_TFLiteModel,
-                      ModelType::kTfLitePrefillDecode);
+                      proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
   ASSERT_OK_AND_ASSIGN(auto model_location,
                        loader.GetSectionLocation(model_key));
-  EXPECT_EQ(model_location.second - model_location.first,
-            loader.GetTFLiteModel(ModelType::kTfLitePrefillDecode).Size());
+  EXPECT_EQ(
+      model_location.second - model_location.first,
+      loader.GetTFLiteModel(proto::LlmMetadata::TF_LITE_PREFILL_DECODE).Size());
 
   BufferKey metadata_key(schema::AnySectionDataType_LlmMetadataProto);
   ASSERT_OK_AND_ASSIGN(auto metadata_location,
@@ -247,11 +298,11 @@ TEST(LitertLmLoaderTest, GetHuggingFaceTokenizerLargeDecompressionSize) {
   uint64_t large_size = 1024ULL * 1024ULL * 1024ULL + 1ULL;  // 1GB + 1 byte
   WriteDummyModelFile(header_path.string(), builder, large_size);
 
-  auto model_file = ScopedFile::Open(header_path.string());
-  ASSERT_TRUE(model_file.ok());
+  ASSERT_OK_AND_ASSIGN(auto model_file,
+                       ScopedFile::Open(header_path.string()));
 
   ASSERT_OK_AND_ASSIGN(auto loader,
-                       LitertLmLoader::Create(std::move(model_file.value())));
+                       LitertLmLoader::Create(std::move(model_file)));
 
   auto tokenizer = loader->GetHuggingFaceTokenizer();
   EXPECT_FALSE(tokenizer.has_value());
@@ -267,11 +318,11 @@ TEST(LitertLmLoaderTest, GetTfLiteModelSectionHints) {
   auto& loader = *loader_ptr;
 
   EXPECT_EQ(loader.GetTFLiteModelPreferActivationType(
-                ModelType::kTfLitePrefillDecode),
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
             "fp16");
-  EXPECT_EQ(
-      loader.GetTFLiteModelBackendConstraint(ModelType::kTfLitePrefillDecode),
-      "cpu");
+  EXPECT_EQ(loader.GetTFLiteModelBackendConstraint(
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+            "cpu");
 }
 
 TEST(LitertLmLoaderTest, GetScopedFileSuccess) {
@@ -333,6 +384,369 @@ TEST(LitertLmLoaderTest, GetSharedScopedFileFailure) {
       loader.GetSharedScopedFile(),
       StatusIs(absl::StatusCode::kInvalidArgument,
                ::testing::HasSubstr("Model source is not a ScopedFile")));
+}
+
+TEST(LitertLmLoaderTest, MissingSectionLogsHumanReadableEnumName) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader_ptr,
+                       LitertLmLoader::Create(std::move(model_file)));
+
+  absl::ScopedMockLog log;
+  EXPECT_CALL(
+      log,
+      Log(absl::LogSeverity::kWarning, ::testing::_,
+          ::testing::HasSubstr("Section not found: ExecutorMetadataProto")))
+      .Times(1);
+
+  log.StartCapturingLogs();
+  EXPECT_FALSE(loader_ptr->GetExecutorMetadata().has_value());
+}
+
+// Writes a model file whose header declares a per-layer embedder section that
+// extends well past the end of the file, so the section is present in the
+// header but can never be mapped.
+absl::StatusOr<std::string> WriteTruncatedPerLayerEmbedderModelFile(
+    const std::string& file_name) {
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) / file_name;
+
+  flatbuffers::FlatBufferBuilder builder(1024);
+  auto model_type = schema::CreateKeyValuePair(
+      builder, "model_type",
+      TfLiteModelTypeToWireString(
+          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
+  auto items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{model_type});
+  auto section = schema::CreateSectionObject(
+      builder, items, /*begin_offset=*/32, /*end_offset=*/1 << 20,
+      schema::AnySectionDataType_TFLiteModel);
+  auto section_metadata = schema::CreateSectionMetadata(
+      builder,
+      builder.CreateVector(
+          std::vector<flatbuffers::Offset<schema::SectionObject>>{section}));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  WriteDummyModelFile(test_file_path.string(), metadata, builder);
+  if (!std::filesystem::exists(test_file_path)) {
+    return absl::InternalError("Failed to write test model file.");
+  }
+  return test_file_path.string();
+}
+
+TEST(LitertLmLoaderTest, GetSectionBufferReportsMapFailureAsError) {
+  ASSERT_OK_AND_ASSIGN(
+      const std::string model_path,
+      WriteTruncatedPerLayerEmbedderModelFile(
+          "truncated_per_layer_embedder_scoped_file.litertlm"));
+  ASSERT_OK_AND_ASSIGN(auto model_file, ScopedFile::Open(model_path));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+
+  // The section exists in the header, so a mapping failure must not look like
+  // a missing section.
+  BufferKey per_layer_key(schema::AnySectionDataType_TFLiteModel,
+                          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER);
+  EXPECT_TRUE(loader->HasSection(per_layer_key));
+  EXPECT_TRUE(
+      loader->HasTFLiteModel(proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
+  ASSERT_OK(loader->GetSectionLocation(per_layer_key));
+  EXPECT_THAT(loader->GetSectionBuffer(per_layer_key),
+              StatusIs(absl::StatusCode::kInternal));
+  // The lossy legacy accessor still degrades to an empty buffer.
+  EXPECT_EQ(
+      loader->GetTFLiteModel(proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER)
+          .Size(),
+      0);
+
+  // A genuinely absent section is still reported as kNotFound.
+  BufferKey embedder_key(schema::AnySectionDataType_TFLiteModel,
+                         proto::LlmMetadata::TF_LITE_EMBEDDER);
+  EXPECT_FALSE(loader->HasSection(embedder_key));
+  EXPECT_FALSE(loader->HasTFLiteModel(proto::LlmMetadata::TF_LITE_EMBEDDER));
+  EXPECT_THAT(loader->GetSectionBuffer(embedder_key),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(LitertLmLoaderTest, GetSectionBufferRejectsSectionPastMappedFile) {
+  ASSERT_OK_AND_ASSIGN(const std::string model_path,
+                       WriteTruncatedPerLayerEmbedderModelFile(
+                           "truncated_per_layer_embedder_mmap.litertlm"));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> mapped_file,
+                       MemoryMappedFile::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(mapped_file)));
+
+  BufferKey per_layer_key(schema::AnySectionDataType_TFLiteModel,
+                          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER);
+  EXPECT_THAT(loader->GetSectionBuffer(per_layer_key),
+              StatusIs(absl::StatusCode::kOutOfRange));
+  EXPECT_EQ(
+      loader->GetTFLiteModel(proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER)
+          .Size(),
+      0);
+
+  BufferKey embedder_key(schema::AnySectionDataType_TFLiteModel,
+                         proto::LlmMetadata::TF_LITE_EMBEDDER);
+  EXPECT_THAT(loader->GetSectionBuffer(embedder_key),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(LitertLmLoaderTest, ZeroByteSectionTreatedAsAbsent) {
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) /
+                        "zero_byte_section.litertlm";
+
+  flatbuffers::FlatBufferBuilder builder(1024);
+  auto model_type = schema::CreateKeyValuePair(
+      builder, "model_type",
+      TfLiteModelTypeToWireString(
+          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
+  auto items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{model_type});
+  auto section = schema::CreateSectionObject(
+      builder, items, /*begin_offset=*/0, /*end_offset=*/0,
+      schema::AnySectionDataType_TFLiteModel);
+  auto section_metadata = schema::CreateSectionMetadata(
+      builder,
+      builder.CreateVector(
+          std::vector<flatbuffers::Offset<schema::SectionObject>>{section}));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+  WriteDummyModelFile(test_file_path.string(), metadata, builder);
+
+  ASSERT_OK_AND_ASSIGN(auto model_file,
+                       ScopedFile::Open(test_file_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(model_file)));
+
+  BufferKey per_layer_key(schema::AnySectionDataType_TFLiteModel,
+                          proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER);
+  EXPECT_FALSE(loader->HasSection(per_layer_key));
+  EXPECT_FALSE(
+      loader->HasTFLiteModel(proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER));
+  EXPECT_THAT(loader->GetSectionBuffer(per_layer_key),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(LitertLmLoaderTest, LoadCapabilityText2SpeechMetadataAndNamedSections) {
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) /
+                        "text2speech_capability_model.litertlm";
+
+  flatbuffers::FlatBufferBuilder builder(1024);
+
+  // Section 0: Text2SpeechMetadataProto
+  auto text2speech_meta_section = schema::CreateSectionObject(
+      builder, /*items=*/0, /*begin_offset=*/200, /*end_offset=*/216,
+      schema::AnySectionDataType_Text2SpeechMetadataProto);
+
+  // Section 1: GenericBinaryData with items metadata (name = "af_heart")
+  // NB: the value must be a std::string; a const char* selects the generic
+  // CreateKeyValuePair template, which leaves the value union unset.
+  const std::string voice1_name = "af_heart";
+  auto voice1_kv = schema::CreateKeyValuePair(builder, "name", voice1_name);
+  auto voice1_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{voice1_kv});
+  auto voice1_section = schema::CreateSectionObject(
+      builder, voice1_items, /*begin_offset=*/216, /*end_offset=*/232,
+      schema::AnySectionDataType_GenericBinaryData);
+
+  // Section 2: GenericBinaryData with items metadata (name = "am_adam")
+  const std::string voice2_name = "am_adam";
+  auto voice2_kv = schema::CreateKeyValuePair(builder, "name", voice2_name);
+  auto voice2_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{voice2_kv});
+  auto voice2_section = schema::CreateSectionObject(
+      builder, voice2_items, /*begin_offset=*/232, /*end_offset=*/264,
+      schema::AnySectionDataType_GenericBinaryData);
+
+  // Section 3: TFLiteModel with model_type = "tf_lite_acoustic"
+  const std::string acoustic_model_type = "tf_lite_acoustic";
+  auto acoustic_kv =
+      schema::CreateKeyValuePair(builder, "model_type", acoustic_model_type);
+  auto acoustic_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{acoustic_kv});
+  auto acoustic_section = schema::CreateSectionObject(
+      builder, acoustic_items, /*begin_offset=*/264, /*end_offset=*/280,
+      schema::AnySectionDataType_TFLiteModel);
+
+  std::vector<flatbuffers::Offset<schema::SectionObject>> sections = {
+      text2speech_meta_section, voice1_section, voice2_section,
+      acoustic_section};
+  auto section_metadata =
+      schema::CreateSectionMetadata(builder, builder.CreateVector(sections));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+
+  WriteDummyModelFile(test_file_path.string(), metadata, builder);
+
+  {
+    std::ofstream file(test_file_path.string(),
+                       std::ios::binary | std::ios::app);
+    std::string dummy(300, 'a');
+    file.write(dummy.data(), dummy.size());
+  }
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> mapped_file,
+                       MemoryMappedFile::Create(test_file_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(mapped_file)));
+
+  ASSERT_TRUE(loader->GetText2SpeechMetadata().has_value());
+  EXPECT_EQ(loader->GetText2SpeechMetadata()->Size(), 16);
+
+  ASSERT_TRUE(loader->GetGenericBinaryData("af_heart").has_value());
+  EXPECT_EQ(loader->GetGenericBinaryData("af_heart")->Size(), 16);
+
+  ASSERT_TRUE(loader->GetGenericBinaryData("am_adam").has_value());
+  EXPECT_EQ(loader->GetGenericBinaryData("am_adam")->Size(), 32);
+
+  EXPECT_THAT(loader->GetGenericBinaryDataNames(),
+              ::testing::UnorderedElementsAre("af_heart", "am_adam"));
+
+  EXPECT_EQ(loader->GetTFLiteModel(proto::Text2SpeechMetadata::TF_LITE_ACOUSTIC)
+                .Size(),
+            16);
+}
+
+TEST(LitertLmLoaderTest, LoadCapabilityText2ImageMetadataAndSections) {
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) /
+                        "text2image_capability_model.litertlm";
+
+  flatbuffers::FlatBufferBuilder builder(1024);
+
+  // Section 0: Text2ImageMetadataProto
+  auto text2image_meta_section = schema::CreateSectionObject(
+      builder, /*items=*/0, /*begin_offset=*/200, /*end_offset=*/216,
+      schema::AnySectionDataType_Text2ImageMetadataProto);
+
+  // Section 1: TFLiteModel with model_type = "tf_lite_image_denoiser"
+  const std::string dit_model_type = "tf_lite_image_denoiser";
+  auto dit_kv =
+      schema::CreateKeyValuePair(builder, "model_type", dit_model_type);
+  auto dit_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{dit_kv});
+  auto dit_section = schema::CreateSectionObject(
+      builder, dit_items, /*begin_offset=*/216, /*end_offset=*/240,
+      schema::AnySectionDataType_TFLiteModel);
+
+  // Section 2: TFLiteModel with model_type = "tf_lite_image_decoder"
+  const std::string vae_model_type = "tf_lite_image_decoder";
+  auto vae_kv =
+      schema::CreateKeyValuePair(builder, "model_type", vae_model_type);
+  auto vae_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{vae_kv});
+  auto vae_section = schema::CreateSectionObject(
+      builder, vae_items, /*begin_offset=*/240, /*end_offset=*/272,
+      schema::AnySectionDataType_TFLiteModel);
+
+  // Section 3: TFLiteModel with model_type =
+  // "tf_lite_diffusion_transformer_initial" (Flux2Klein)
+  const std::string dit_prep_model_type =
+      "tf_lite_diffusion_transformer_initial";
+  auto dit_prep_kv =
+      schema::CreateKeyValuePair(builder, "model_type", dit_prep_model_type);
+  auto dit_prep_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{dit_prep_kv});
+  auto dit_prep_section = schema::CreateSectionObject(
+      builder, dit_prep_items, /*begin_offset=*/272, /*end_offset=*/288,
+      schema::AnySectionDataType_TFLiteModel);
+
+  std::vector<flatbuffers::Offset<schema::SectionObject>> sections = {
+      text2image_meta_section, dit_section, vae_section, dit_prep_section};
+  auto section_metadata =
+      schema::CreateSectionMetadata(builder, builder.CreateVector(sections));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+
+  WriteDummyModelFile(test_file_path.string(), metadata, builder);
+
+  {
+    std::ofstream file(test_file_path.string(),
+                       std::ios::binary | std::ios::app);
+    std::string dummy(300, 'b');
+    file.write(dummy.data(), dummy.size());
+  }
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> mapped_file,
+                       MemoryMappedFile::Create(test_file_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(mapped_file)));
+
+  ASSERT_TRUE(loader->GetText2ImageMetadata().has_value());
+  EXPECT_EQ(loader->GetText2ImageMetadata()->Size(), 16);
+
+  EXPECT_EQ(
+      loader->GetTFLiteModel(proto::Text2ImageMetadata::TF_LITE_IMAGE_DENOISER)
+          .Size(),
+      24);
+  EXPECT_EQ(
+      loader->GetTFLiteModel(proto::Text2ImageMetadata::TF_LITE_IMAGE_DECODER)
+          .Size(),
+      32);
+  EXPECT_EQ(
+      loader
+          ->GetTFLiteModel(
+              proto::Text2ImageMetadata::TF_LITE_DIFFUSION_TRANSFORMER_INITIAL)
+          .Size(),
+      16);
+}
+
+TEST(LitertLmLoaderTest, LoadCapabilityAny2AnyMetadataAndSections) {
+  auto test_file_path = std::filesystem::path(::testing::TempDir()) /
+                        "any2any_capability_model.litertlm";
+
+  flatbuffers::FlatBufferBuilder builder(1024);
+
+  auto any2any_meta_section = schema::CreateSectionObject(
+      builder, /*items=*/0, /*begin_offset=*/200, /*end_offset=*/216,
+      schema::AnySectionDataType_Any2AnyMetadataProto);
+
+  const std::string vision_model_type = "tf_lite_vision_encoder";
+  auto vision_kv =
+      schema::CreateKeyValuePair(builder, "model_type", vision_model_type);
+  auto vision_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{vision_kv});
+  auto vision_section = schema::CreateSectionObject(
+      builder, vision_items, /*begin_offset=*/216, /*end_offset=*/240,
+      schema::AnySectionDataType_TFLiteModel);
+
+  const std::string vocoder_model_type = "tf_lite_audio_vocoder";
+  auto vocoder_kv =
+      schema::CreateKeyValuePair(builder, "model_type", vocoder_model_type);
+  auto vocoder_items = builder.CreateVector(
+      std::vector<flatbuffers::Offset<schema::KeyValuePair>>{vocoder_kv});
+  auto vocoder_section = schema::CreateSectionObject(
+      builder, vocoder_items, /*begin_offset=*/240, /*end_offset=*/272,
+      schema::AnySectionDataType_TFLiteModel);
+
+  std::vector<flatbuffers::Offset<schema::SectionObject>> sections = {
+      any2any_meta_section, vision_section, vocoder_section};
+  auto section_metadata =
+      schema::CreateSectionMetadata(builder, builder.CreateVector(sections));
+  auto metadata = schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
+
+  WriteDummyModelFile(test_file_path.string(), metadata, builder);
+
+  {
+    std::ofstream file(test_file_path.string(),
+                       std::ios::binary | std::ios::app);
+    std::string dummy(300, 'c');
+    file.write(dummy.data(), dummy.size());
+  }
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> mapped_file,
+                       MemoryMappedFile::Create(test_file_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto loader,
+                       LitertLmLoader::Create(std::move(mapped_file)));
+
+  ASSERT_TRUE(loader->GetAny2AnyMetadata().has_value());
+  EXPECT_EQ(loader->GetAny2AnyMetadata()->Size(), 16);
+
+  EXPECT_EQ(
+      loader->GetTFLiteModel(proto::Any2AnyMetadata::TF_LITE_VISION_ENCODER)
+          .Size(),
+      24);
+  EXPECT_EQ(
+      loader->GetTFLiteModel(proto::Any2AnyMetadata::TF_LITE_AUDIO_VOCODER)
+          .Size(),
+      32);
 }
 
 }  // namespace

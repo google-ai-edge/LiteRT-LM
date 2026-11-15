@@ -39,10 +39,10 @@ config_setting(
 
 alias(
     name = "global_allocator",
-    actual = "@litert//support/util:global_allocator",
+    actual = "//support/util:global_allocator",
 )
 
 alias(
     name = "alloc_defs",
-    actual = "@litert//support/util:alloc_defs",
+    actual = "//support/util:alloc_defs",
 )

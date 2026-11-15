@@ -1,0 +1,19 @@
+--- include/cppjieba/MPSegment.hpp	2026-06-04 00:00:00.000000000 -0700
++++ include/cppjieba/MPSegment.hpp	2026-06-04 00:00:00.000000000 -0700
+@@ -112,4 +112,5 @@
+         vector<WordRange>& words) const {
++    (void)end;
+     size_t i = 0;
+     while (i < dags.size()) {
+       const DictUnit* p = dags[i].pInfo;
+
+--- include/cppjieba/Trie.hpp	2026-06-04 00:00:00.000000000 -0700
++++ include/cppjieba/Trie.hpp	2026-06-04 00:00:00.000000000 -0700
+@@ -142,6 +142,7 @@
+     ptNode->ptValue = ptValue;
+   }
+   void DeleteNode(const Unicode& key, const DictUnit* ptValue) {
++    (void)ptValue;
+       if (key.begin() == key.end()) {
+         return;
+       }

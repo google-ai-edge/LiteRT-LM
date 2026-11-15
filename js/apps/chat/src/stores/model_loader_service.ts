@@ -14,12 +14,96 @@
  * limitations under the License.
  */
 
-import {Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig} from '@litert-lm/core';
+import {ActivationDataType, Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
 
 import {teeStream} from '../tee_stream.js';
 
 import {LocalDirectoryService} from './local_directory_service.js';
-import {CustomModel, SettingsStore} from './settings_store.js';
+import {parseModelReference} from './model_reference.js';
+import {CustomModel, EXPERIMENTAL_SETTING_KEYS, getModalityConfigs, LEGACY_MODEL_PATHS, ModalityBackend, ModalityConfig, ModelSettings} from './settings_store.js';
+
+function toBackend({backend}: ModalityConfig): Backend {
+  return backend === 'cpu' ? Backend.CPU : Backend.GPU;
+}
+
+/** Returns the activation precision override, which only applies on GPU. */
+function toActivationDataType({backend, precision}: ModalityConfig):
+    ActivationDataType|undefined {
+  if (backend === 'cpu' || precision === 'default') return undefined;
+  return precision === 'fp32' ? ActivationDataType.FLOAT32 :
+                                ActivationDataType.FLOAT16;
+}
+
+const SUPPRESSED_WARNING_PATTERNS = [
+  /mel_filterbank\.cc:.*Missing \d+ bands\s+starting at \d+ in mel-frequency design\./,
+  /tasks\.cc:.*Failed to get (?:prefill|decode) profile summary: UNIMPLEMENTED: GetProfileSummary not implemented for backend: GpuArtisan/,
+];
+
+/**
+ * Maximum number of images in a conversation. Artisan models reserve GPU memory
+ * for this many images' embeddings when the model is loaded.
+ */
+const MAX_NUM_IMAGES = 8;
+
+/**
+ * Returns a model's key in `ModelLoaderService.cachedModels`,
+ * `downloadProgresses` and `downloadSpeeds`: its normalized URL, which is
+ * also its key in the cache. File names aren't unique: many Hugging Face repos
+ * name their model `model.litertlm`.
+ */
+export function getModelKey(path: string): string {
+  try {
+    return new URL(path).href;
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * Local storage key for the URLs that `hf://` models (keyed by `getModelKey()`)
+ * were last loaded from, which are also their keys in the cache.
+ */
+const HF_MODEL_URLS_KEY = 'litertlm-hf-model-urls';
+
+/** Formats a model's size for the model list. */
+function formatModelSize(bytes: number): string {
+  return `${(bytes / 1e9).toFixed(2)} GB`;
+}
+
+/**
+ * Wraps `console.warn` to suppress known noisy WASM runtime warnings in the
+ * chat app.
+ */
+export function suppressKnownWasmWarnings(
+    consoleObj: Pick<Console, 'warn'> = console) {
+  const flaggedWarn = consoleObj.warn as unknown as {
+    __litertLmWarningsSuppressed?: boolean;
+  };
+  if (flaggedWarn.__litertLmWarningsSuppressed) {
+    return;
+  }
+  const originalWarn = consoleObj.warn;
+  const wrappedWarn = function(this: unknown, ...args: unknown[]) {
+    if (args.length > 0 && typeof args[0] === 'string') {
+      const msg = args[0];
+      if (SUPPRESSED_WARNING_PATTERNS.some(pattern => pattern.test(msg))) {
+        return;
+      }
+    }
+    return originalWarn.apply(this, args);
+  };
+  (wrappedWarn as unknown as {__litertLmWarningsSuppressed?: boolean})
+      .__litertLmWarningsSuppressed = true;
+  consoleObj.warn = wrappedWarn;
+}
+
+/** Options describing a non-blocking confirmation dialog request. */
+export interface ConfirmDialogOptions {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  danger?: boolean;
+}
 
 /**
  * Service responsible for downloading, caching, and building the GPU WASM
@@ -38,32 +122,51 @@ export class ModelLoaderService {
   downloadAbortController: AbortController|null = null;
   isDownloadAborted = false;
 
+  loadedSettings: ModelSettings|null = null;
+  /** Asks the user to confirm a destructive action. */
+  confirmAction = (options: ConfirmDialogOptions) =>
+      Promise.resolve(confirm(options.message));
+  private readonly inMemoryModels = new Map<string, File>();
+
   constructor(
       private readonly updateCallback: () => void,
-      private readonly settings: SettingsStore,
       private readonly updateStatus: (msg: string) => void,
       private readonly localDirService?: LocalDirectoryService,
       private readonly createEngine: typeof Engine.create = Engine.create,
       private readonly loadWasm:
-          typeof getOrLoadGlobalLiteRtLm = getOrLoadGlobalLiteRtLm) {}
+          typeof getOrLoadGlobalLiteRtLm = getOrLoadGlobalLiteRtLm,
+      private readonly resolve: typeof resolveModel = resolveModel) {}
 
   async updateCacheSize() {
+    if (!window.caches) {
+      this.cachedModels = new Map(Array.from(
+          this.inMemoryModels, ([path, file]) => [getModelKey(path), file.size]));
+      this.updateCallback();
+      return;
+    }
     try {
       const cache = await window.caches.open('litertlm-models');
       const keys = await cache.keys();
       const newCachedModels = new Map<string, number>();
+      // hf:// models are cached under the URL they were loaded from.
+      const hfModels = new Map(
+          Object.entries(this.getHfModelUrls())
+              .map(([uri, url]) => [url, uri.replace(/#backend=cpu$/, '')]));
 
       for (const request of keys) {
+        if (LEGACY_MODEL_PATHS.has(request.url)) {
+          // A default model's old file, which was replaced by its hf:// URI.
+          await cache.delete(request);
+          continue;
+        }
         const response = await cache.match(request);
         if (response) {
-          const filename = request.url.split('/').pop() || request.url;
+          const key = hfModels.get(request.url) ?? request.url;
           const contentLength = response.headers.get('content-length');
-          if (contentLength) {
-            newCachedModels.set(filename, Number(contentLength));
-          } else {
-            const blob = await response.blob();
-            newCachedModels.set(filename, blob.size);
-          }
+          const size = contentLength ? Number(contentLength) :
+                                       (await response.blob()).size;
+          // A model's GPU and CPU variants share a key, so add up their sizes.
+          newCachedModels.set(key, (newCachedModels.get(key) ?? 0) + size);
         }
       }
 
@@ -74,37 +177,77 @@ export class ModelLoaderService {
     }
   }
 
-  async deleteModelFromCache(modelPath: string, onDeleted?: () => void) {
-    const confirmDelete = confirm(
-        'Are you sure you want to remove this model\'s weights from your browser cache?');
-    if (!confirmDelete) return;
+  needsModelReload(settings: ModelSettings): boolean {
+    if (!this.engine || !this.loadedSettings) return true;
+    const topKChanged = settings.samplerType !== 'greedy' &&
+        this.loadedSettings.topK !== settings.topK;
+    return this.loadedSettings.selectedModelPath !==
+        settings.selectedModelPath ||
+        this.loadedSettings.contextLength !== settings.contextLength ||
+        topKChanged ||
+        this.loadedSettings.enableSpeculativeDecoding !==
+            settings.enableSpeculativeDecoding ||
+        EXPERIMENTAL_SETTING_KEYS.some(
+            key => this.loadedSettings![key] !== settings[key]);
+  }
+
+  async deleteModelFromCache(modelPath: string): Promise<boolean> {
+    const confirmDelete = await this.confirmAction({
+      title: 'Remove cached weights?',
+      message:
+          'Remove this model\'s downloaded weights from your browser cache? You can re-download them anytime.',
+      confirmLabel: 'Remove Weights',
+      danger: true,
+    });
+    if (!confirmDelete) return false;
+
+    if (!window.caches) {
+      const removed = this.inMemoryModels.delete(modelPath);
+      if (removed) {
+        this.updateStatus('Model cache removed successfully.');
+        await this.updateCacheSize();
+      }
+      return removed;
+    }
 
     try {
       const cache = await window.caches.open('litertlm-models');
-      const deleted = await cache.delete(modelPath);
+      const gpuUrl = this.getCacheUrl(modelPath, 'gpu');
+      const cpuHfUrl = modelPath.startsWith('hf://') ?
+          this.getHfModelUrls()[this.getHfStorageKey(modelPath, 'cpu')] :
+          undefined;
+      const deletedGpu = await cache.delete(gpuUrl);
+      const deletedCpu =
+          cpuHfUrl && cpuHfUrl !== gpuUrl ? await cache.delete(cpuHfUrl) : false;
+      const deleted = deletedGpu || deletedCpu;
       if (deleted) {
         this.updateStatus('Model cache removed successfully.');
-
-        if (modelPath.startsWith('https://local-model/')) {
-          this.settings.customModels = this.settings.customModels.filter(m => m.path !== modelPath);
-          this.settings.saveSettings();
-        }
-
         await this.updateCacheSize();
-
-        if (this.settings.selectedModelPath === modelPath) {
-          if (onDeleted) onDeleted();
-        }
       }
+      return deleted;
     } catch (e) {
       console.error('[LiteRT-LM] Failed to delete model from Cache:', e);
+      return false;
     }
   }
 
   async clearAllCache(onDeleted?: () => void) {
-    const confirmClear = confirm(
-        'Are you sure you want to delete ALL cached models? This will free up significant disk space.');
+    const confirmClear = await this.confirmAction({
+      title: 'Clear all cached models?',
+      message:
+          'Delete all cached model weights stored in this browser? This will free up disk space.',
+      confirmLabel: 'Clear All',
+      danger: true,
+    });
     if (!confirmClear) return;
+
+    if (!window.caches) {
+      this.inMemoryModels.clear();
+      this.updateStatus('Model cache cleared successfully.');
+      if (onDeleted) onDeleted();
+      await this.updateCacheSize();
+      return;
+    }
 
     try {
       this.updateStatus('Clearing all cache...');
@@ -143,11 +286,16 @@ export class ModelLoaderService {
     });
   }
 
-  async loadModelWeights(onModelLoaded: () => Promise<void>) {
+  async loadModelWeights(
+      settings: ModelSettings, onModelLoaded: () => Promise<void>) {
     if (this.isModelLoading) return;
 
-    const modelPath = this.settings.selectedModelPath;
+    const modelPath = settings.selectedModelPath;
     const modelFilename = modelPath.split('/').pop() || modelPath;
+    const modelKey = getModelKey(modelPath);
+    const modalities = getModalityConfigs(settings);
+    const textBackend = modalities.text.backend;
+    const useCpuText = textBackend === 'cpu';
 
     this.isModelLoading = true;
     this.isDownloadAborted = false;
@@ -158,7 +306,8 @@ export class ModelLoaderService {
     try {
       if (!this.isWasmLoaded) {
         this.updateStatus('Loading LiteRT WASM runtime...');
-        const wasmPath = import.meta.env.DEV ? '/wasm' : undefined;
+        suppressKnownWasmWarnings();
+        const wasmPath = (import.meta.env.DEV || import.meta.env.MODE === 'selfcontained') ? './wasm' : undefined;
         await this.loadWasm(wasmPath);
         this.isWasmLoaded = true;
       }
@@ -180,12 +329,60 @@ export class ModelLoaderService {
         this.updateStatus(`Loading local directory model ${modelFilename}...`);
         const file = await this.localDirService.getFile(modelPath);
         modelInput = file.stream();
+      } else if (!window.caches) {
+        const memFile = this.inMemoryModels.get(modelPath);
+        if (memFile) {
+          this.updateStatus(`Loading imported model (${modelFilename})...`);
+          modelInput = memFile.stream();
+        } else if (modelPath.startsWith('https://local-model/')) {
+          throw new Error(
+              'Local model file not found in cache. Please re-upload the file.');
+        } else {
+          const modelUrl = await this.resolveModelUrl(modelPath, textBackend);
+          this.downloadProgresses.set(modelKey, 0);
+          this.downloadSpeeds.set(modelKey, '0 MB / 0 MB');
+          this.updateCallback();
+          this.updateStatus(`Downloading weights (${modelFilename})...`);
+
+          this.downloadAbortController = new AbortController();
+          const response = await fetch(modelUrl, {
+            signal: this.downloadAbortController.signal,
+          });
+          if (!response.ok) {
+            throw new Error(`Failed to fetch model: ${response.statusText}`);
+          }
+          if (!response.body) {
+            throw new Error('Model response body is empty.');
+          }
+
+          const totalBytes =
+              Number(response.headers.get('content-length') || '0');
+          let bytesRead = 0;
+          modelInput =
+              this.makeProgressStream(response.body, (chunkLength) => {
+                bytesRead += chunkLength;
+                const percent =
+                    totalBytes > 0 ? (bytesRead / totalBytes) * 100 : 0;
+                this.downloadProgresses.set(modelKey, Math.round(percent));
+                this.downloadSpeeds.set(
+                    modelKey,
+                    `${(bytesRead / 1e6).toFixed(1)} MB / ${
+                        (totalBytes / 1e6).toFixed(1)} MB`);
+                this.updateCallback();
+              });
+        }
       } else {
         const cache = await window.caches.open('litertlm-models');
-        const cachedResponse = await cache.match(modelPath);
+        const hfStorageKey = this.getHfStorageKey(modelPath, textBackend);
+        const previousUrl = this.getHfModelUrls()[hfStorageKey];
+        const modelUrl = await this.resolveModelUrl(modelPath, textBackend);
+        const cachedResponse = await cache.match(modelUrl);
+        if (cachedResponse) {
+          this.setHfModelUrl(modelPath, modelUrl, textBackend);
+        }
 
-        this.downloadProgresses.set(modelFilename, 0);
-        this.downloadSpeeds.set(modelFilename, '0 MB / 0 MB');
+        this.downloadProgresses.set(modelKey, 0);
+        this.downloadSpeeds.set(modelKey, '0 MB / 0 MB');
         this.updateCallback();
 
         if (cachedResponse) {
@@ -203,9 +400,9 @@ export class ModelLoaderService {
                 bytesRead += chunkLength;
                 const percent =
                     totalBytes > 0 ? (bytesRead / totalBytes) * 100 : 0;
-                this.downloadProgresses.set(modelFilename, Math.round(percent));
+                this.downloadProgresses.set(modelKey, Math.round(percent));
                 this.downloadSpeeds.set(
-                    modelFilename,
+                    modelKey,
                     `${(bytesRead / 1e6).toFixed(1)} MB / ${
                         (totalBytes / 1e6).toFixed(1)} MB`);
                 this.updateCallback();
@@ -219,11 +416,14 @@ export class ModelLoaderService {
 
           this.downloadAbortController = new AbortController();
 
-          const response = await fetch(modelPath, {
+          const response = await fetch(modelUrl, {
             signal: this.downloadAbortController.signal,
           });
           if (!response.ok) {
             throw new Error(`Failed to fetch model: ${response.statusText}`);
+          }
+          if (!response.body) {
+            throw new Error('Model response body is empty.');
           }
 
           const totalBytes =
@@ -231,13 +431,13 @@ export class ModelLoaderService {
           let bytesRead = 0;
 
           const progressStream =
-              this.makeProgressStream(response.body!, (chunkLength) => {
+              this.makeProgressStream(response.body, (chunkLength) => {
                 bytesRead += chunkLength;
                 const percent =
                     totalBytes > 0 ? (bytesRead / totalBytes) * 100 : 0;
-                this.downloadProgresses.set(modelFilename, Math.round(percent));
+                this.downloadProgresses.set(modelKey, Math.round(percent));
                 this.downloadSpeeds.set(
-                    modelFilename,
+                    modelKey,
                     `${(bytesRead / 1e6).toFixed(1)} MB / ${
                         (totalBytes / 1e6).toFixed(1)} MB`);
                 this.updateCallback();
@@ -252,9 +452,14 @@ export class ModelLoaderService {
             }
           });
 
-          void cache.put(modelPath, cacheResponse)
-              .then(() => {
-                this.updateCacheSize();
+          void cache.put(modelUrl, cacheResponse)
+              .then(async () => {
+                this.setHfModelUrl(modelPath, modelUrl, textBackend);
+                if (previousUrl && previousUrl !== modelUrl) {
+                  // The hf:// model's previous file, which it was updated from.
+                  await cache.delete(previousUrl);
+                }
+                await this.updateCacheSize();
               })
               .catch(err => {
                 if (this.isDownloadAborted) {
@@ -274,38 +479,66 @@ export class ModelLoaderService {
 
       this.engine = await this.createEngine({
         model: modelInput,
-        backend: Backend.GPU_ARTISAN,
-        mainExecutorSettings: {
-          maxNumTokens: this.settings.contextLength,
+        // Without a backend, Engine.create() picks GPU or GPU_ARTISAN.
+        ...(useCpuText ? {backend: Backend.CPU} : {}),
+        activationDataType: toActivationDataType(modalities.text),
+        mainExecutorSettings: useCpuText ? {
+          maxNumTokens: settings.contextLength,
+        } : {
+          maxNumTokens: settings.contextLength,
+          // Artisan (GPU_ARTISAN) models reserve GPU memory for the embeddings
+          // of this many images per conversation up front, and can't take
+          // images if it's unset.
+          maxNumImages: MAX_NUM_IMAGES,
           backendConfig: {
             num_output_candidates: 1,
             wait_for_weight_uploads: true,
-            num_decode_steps_per_sync: 1,
+            num_decode_steps_per_sync: 3,
             sequence_batch_size: 0,
             supported_lora_ranks: [] as number[],
-            max_top_k: Math.max(1, this.settings.topK),
+            max_top_k: Math.max(1, settings.topK),
             enable_decode_logits: false,
             enable_external_embeddings: false,
-            use_submodel: true,
-          } as GpuArtisanConfig
+            use_submodel: false,
+            use_autosized_ringbuffers: true,
+          } as GpuArtisanConfig,
         },
+        // Always enable image input. On web, only one vision signature is
+        // loaded by default to fit in the wasm heap.
+        visionBackend: toBackend(modalities.vision),
+        visionActivationDataType: toActivationDataType(modalities.vision),
+        // Always enable audio input. On GPU, the audio encoder's weights are
+        // released from the wasm heap after they are uploaded.
+        audioBackend: toBackend(modalities.audio),
+        audioActivationDataType: toActivationDataType(modalities.audio),
+        // The drafter can only be loaded when the engine is created, so this
+        // can't be changed per session. ADAPTIVE only speculates while it's
+        // faster than decoding normally. Models without a drafter can't use
+        // speculative decoding.
+        ...(settings.enableSpeculativeDecoding ? {
+          speculativeDecodingConfig: {mode: SpeculativeDecodingMode.ADAPTIVE}
+        } :
+                                     {}),
         benchmarkEnabled: true
       });
+
+      this.loadedSettings = structuredClone(settings);
+
       const loadTimeSec = (performance.now() - startTime) / 1000;
       this.metricLoadTime = `${loadTimeSec.toFixed(2)}s`;
 
       await onModelLoaded();
 
       this.isModelLoading = false;
-      this.downloadProgresses.delete(modelFilename);
-      this.downloadSpeeds.delete(modelFilename);
+      this.downloadProgresses.delete(modelKey);
+      this.downloadSpeeds.delete(modelKey);
       this.updateCallback();
 
     } catch (err: unknown) {
       console.error(err);
       this.isModelLoading = false;
-      this.downloadProgresses.delete(modelFilename);
-      this.downloadSpeeds.delete(modelFilename);
+      this.downloadProgresses.delete(modelKey);
+      this.downloadSpeeds.delete(modelKey);
 
       const error = err as Error;
       if (error.name === 'AbortError') {
@@ -319,10 +552,25 @@ export class ModelLoaderService {
     }
   }
 
-  async importCustomModel(file: File): Promise<string> {
+  async importCustomModel(file: File): Promise<CustomModel> {
     const path = `https://local-model/${file.name}`;
+    const customModel: CustomModel = {
+      name: file.name.replace(/\.litertlm$/, ''),
+      filename: file.name,
+      path,
+      size: `${(file.size / 1e9).toFixed(2)} GB`
+    };
+
+    if (!window.caches) {
+      this.inMemoryModels.set(path, file);
+      this.cachedModels.set(getModelKey(path), file.size);
+      this.updateStatus(`Local model ${file.name} imported.`);
+      this.updateCallback();
+      return customModel;
+    }
+
     const cache = await window.caches.open('litertlm-models');
-    
+
     this.updateStatus(`Importing local model ${file.name}...`);
     this.isModelLoading = true;
     this.updateCallback();
@@ -335,25 +583,10 @@ export class ModelLoaderService {
         }
       });
       await cache.put(path, response);
-      
-      const customModel: CustomModel = {
-        name: file.name.replace(/\.litertlm$/, ''),
-        filename: file.name,
-        path,
-        size: `${(file.size / 1e9).toFixed(2)} GB`
-      };
-      
-      const exists = this.settings.customModels.some(m => m.path === path);
-      if (!exists) {
-        this.settings.customModels = [...this.settings.customModels, customModel];
-      }
-      
-      this.settings.selectedModelPath = path;
-      this.settings.saveSettings();
-      
+
       await this.updateCacheSize();
       this.updateStatus(`Local model ${file.name} imported.`);
-      
+      return customModel;
     } catch (e) {
       console.error('[LiteRT-LM] Failed to import custom model:', e);
       this.updateStatus(`Failed to import model: ${(e as Error).message}`);
@@ -362,7 +595,126 @@ export class ModelLoaderService {
       this.isModelLoading = false;
       this.updateCallback();
     }
-    return path;
+  }
+
+  /**
+   * Looks up a model that the user entered as a URL, `hf://` URI or Hugging
+   * Face repo (`<org>/<repo>`), and returns it as a custom model. Nothing is
+   * downloaded until the model is loaded.
+   *
+   * A Hugging Face model is pinned to the file and commit that it resolves to
+   * now, so it keeps loading the same file (from the cache, once downloaded)
+   * until it's added again.
+   */
+  async addRemoteModel(
+      text: string,
+      textBackend: ModalityBackend = 'gpu'): Promise<CustomModel> {
+    try {
+      const reference = parseModelReference(text);
+      if (!reference) {
+        throw new Error(
+            `"${text.trim()}" isn't a URL or a Hugging Face repo (org/repo)`);
+      }
+      this.updateStatus(`Looking up ${reference}...`);
+      const {huggingFace} = await this.resolveFor(reference, textBackend);
+      let model: CustomModel;
+      if (huggingFace) {
+        const {repo, path, source} = huggingFace;
+        const filename = path.split('/').pop() || path;
+        const repoName = repo.split('/').pop() || repo;
+        const stem = filename.replace(/\.litertlm$/, '');
+        model = {
+          name: stem === repoName || stem === 'model' ? repoName :
+                                                        `${repoName} (${stem})`,
+          filename,
+          path: source.url,
+          size: source.size === undefined ? '' : formatModelSize(source.size),
+        };
+      } else {
+        const filename =
+            new URL(reference).pathname.split('/').pop() || reference;
+        model = {
+          name: filename.replace(/\.litertlm$/, ''),
+          filename,
+          path: reference,
+          size: '',
+        };
+      }
+      this.updateStatus(`Added ${model.name}.`);
+      return model;
+    } catch (e) {
+      console.error('[LiteRT-LM] Failed to add model:', e);
+      this.updateStatus(`Failed to add model: ${(e as Error).message}`);
+      throw e;
+    }
+  }
+
+  /**
+   * Returns the URL to download and cache a model from. A `hf://` model is
+   * resolved to the file it points to now, e.g. on its repo's `web` branch, so
+   * a new version is downloaded when the repo is updated. If that fails, e.g.
+   * offline, the URL it was last loaded from is used, so that it still loads
+   * from the cache.
+   */
+  private async resolveModelUrl(
+      modelPath: string, textBackend: ModalityBackend = 'gpu'): Promise<string> {
+    if (!modelPath.startsWith('hf://')) return modelPath;
+    this.updateStatus(`Looking up ${modelPath}...`);
+    const storageKey = this.getHfStorageKey(modelPath, textBackend);
+    try {
+      const {huggingFace} = await this.resolveFor(modelPath, textBackend);
+      if (huggingFace) return huggingFace.source.url;
+    } catch (e) {
+      const lastUrl = this.getHfModelUrls()[storageKey];
+      if (!lastUrl) throw e;
+      console.warn(
+          `[LiteRT-LM] Failed to look up ${modelPath}, loading ${lastUrl}:`, e);
+      return lastUrl;
+    }
+    throw new Error(`${modelPath} isn't a Hugging Face model`);
+  }
+
+  /** Resolves a model to the file that `textBackend` can run. */
+  private resolveFor(reference: string, textBackend: ModalityBackend) {
+    // Without a backend, resolveModel prefers -gpu.litertlm and falls back to
+    // .litertlm, which Engine.create() also does.
+    return textBackend === 'cpu' ?
+        this.resolve(reference, {backend: Backend.CPU}) :
+        this.resolve(reference);
+  }
+
+  private getHfStorageKey(
+      modelPath: string, textBackend: ModalityBackend = 'gpu'): string {
+    const base = getModelKey(modelPath);
+    return textBackend === 'cpu' ? `${base}#backend=cpu` : base;
+  }
+
+  /** Returns the URL a model is cached under. */
+  private getCacheUrl(
+      modelPath: string, textBackend: ModalityBackend = 'gpu'): string {
+    return this.getHfModelUrls()[this.getHfStorageKey(modelPath, textBackend)] ??
+        modelPath;
+  }
+
+  /** Returns the URLs that `hf://` models were last loaded from. */
+  private getHfModelUrls(): Record<string, string> {
+    try {
+      const urls: unknown =
+          JSON.parse(window.localStorage.getItem(HF_MODEL_URLS_KEY) ?? '{}');
+      return typeof urls === 'object' && urls !== null ?
+          urls as Record<string, string> :
+          {};
+    } catch {
+      return {};
+    }
+  }
+
+  private setHfModelUrl(
+      modelPath: string, url: string, textBackend: ModalityBackend = 'gpu') {
+    if (!modelPath.startsWith('hf://')) return;
+    const urls = this.getHfModelUrls();
+    urls[this.getHfStorageKey(modelPath, textBackend)] = url;
+    window.localStorage.setItem(HF_MODEL_URLS_KEY, JSON.stringify(urls));
   }
 
   cancelDownload() {

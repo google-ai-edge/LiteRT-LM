@@ -1,0 +1,230 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "omni/speech2text/levenshtein_text_merger.h"
+
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <gtest/gtest.h>
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "litert/cc/litert_macros.h"  // from @litert
+#include "omni/base/stage.h"
+#include "omni/speech2text/detokenizer.h"
+#include "omni/speech2text/text_merger.h"
+
+namespace litert::omni::asr {
+namespace {
+
+class DummyWordStage
+    : public SingleThreadedStageWithDeque<std::vector<Detokenizer::Word>> {
+ public:
+  void PushWords(const std::vector<std::string>& strings) {
+    std::vector<Detokenizer::Word> words;
+    words.reserve(strings.size());
+    for (const auto& s : strings) {
+      words.push_back({s, std::nullopt});
+    }
+    PushOutput(std::move(words));
+  }
+
+ protected:
+  bool NeedScheduleInternal() const override { return false; }
+  absl::Status ScheduleInternal() override { return absl::OkStatus(); }
+};
+
+absl::StatusOr<TextMerger::MergeResult> ProcessWords(
+    DummyWordStage& word_stage, LevenshteinTextMerger& merger,
+    const std::vector<std::string>& strings) {
+  word_stage.PushWords(strings);
+  LITERT_RETURN_IF_ERROR(merger.Schedule());
+  LITERT_ASSIGN_OR_RETURN(auto out, merger.GetOutput());
+  return std::get<TextMerger::MergeResult>(std::move(out));
+}
+
+TEST(LevenshteinTextMergerTest, InitialChunkReturnsUnconfirmedOnly) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  auto result = ProcessWords(word_stage, merger, {"hello", "world"});
+  ASSERT_TRUE(result.ok());
+  if (!result.ok()) return;
+
+  EXPECT_EQ(result->confirmed_text, "");
+  EXPECT_EQ(result->unconfirmed_text, "hello world");
+}
+
+TEST(LevenshteinTextMergerTest, SequentialMergeFlow) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  // Chunk 1: "hello world this is"
+  auto res1 =
+      ProcessWords(word_stage, merger, {"hello", "world", "this", "is"});
+  ASSERT_TRUE(res1.ok());
+  if (!res1.ok()) return;
+  EXPECT_EQ(res1->confirmed_text, "");
+  EXPECT_EQ(res1->unconfirmed_text, "hello world this is");
+
+  // Chunk 2: overlaps at "this is", adds "a test"
+  auto res2 = ProcessWords(word_stage, merger, {"this", "is", "a", "test"});
+  ASSERT_TRUE(res2.ok());
+  if (!res2.ok()) return;
+  EXPECT_EQ(res2->confirmed_text, "hello world");
+  EXPECT_EQ(res2->unconfirmed_text, "this is a test");
+
+  // Chunk 3: overlaps at "a test", adds "of streaming"
+  auto res3 =
+      ProcessWords(word_stage, merger, {"a", "test", "of", "streaming"});
+  ASSERT_TRUE(res3.ok());
+  if (!res3.ok()) return;
+  EXPECT_EQ(res3->confirmed_text, "this is");
+  EXPECT_EQ(res3->unconfirmed_text, "a test of streaming");
+
+  // End of stream flush
+  ASSERT_TRUE(merger.Flush().ok());
+  auto res_flush = merger.GetOutput();
+  ASSERT_TRUE(res_flush.ok());
+  if (!res_flush.ok()) return;
+  const auto& flush_text = std::get<TextMerger::MergeResult>(*res_flush);
+  EXPECT_EQ(flush_text.confirmed_text, "a test of streaming");
+  EXPECT_EQ(flush_text.unconfirmed_text, "");
+}
+
+TEST(LevenshteinTextMergerTest, ResetClearsState) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  auto dummy_res = ProcessWords(word_stage, merger, {"hello", "world"});
+  EXPECT_TRUE(dummy_res.ok());
+  EXPECT_FALSE(merger.unconfirmed_words_for_testing().empty());
+
+  merger.Reset();
+  EXPECT_TRUE(merger.unconfirmed_words_for_testing().empty());
+
+  // First merge after reset behaves as initial chunk
+  auto result = ProcessWords(word_stage, merger, {"new", "stream"});
+  ASSERT_TRUE(result.ok());
+  if (!result.ok()) return;
+  EXPECT_EQ(result->confirmed_text, "");
+  EXPECT_EQ(result->unconfirmed_text, "new stream");
+}
+
+TEST(LevenshteinTextMergerTest, NoOverlapConfirmsPreviousState) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  auto res1 = ProcessWords(word_stage, merger, {"apple", "banana"});
+  EXPECT_TRUE(res1.ok());
+
+  // Chunk 2 has no overlap
+  auto result = ProcessWords(word_stage, merger, {"cat", "dog"});
+  ASSERT_TRUE(result.ok());
+  if (!result.ok()) return;
+  EXPECT_EQ(result->confirmed_text, "apple banana");
+  EXPECT_EQ(result->unconfirmed_text, "cat dog");
+}
+
+TEST(LevenshteinTextMergerTest, StitchesAtLongestContiguousOverlapMatch) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  // Chunk 1 has an earlier "the" and ends with "of the project".
+  auto res1 = ProcessWords(word_stage, merger,
+                           {"are", "they", "happy", "with", "the", "progress",
+                            "of", "the", "project"});
+  ASSERT_TRUE(res1.ok());
+
+  // Chunk 2 starts with a noisy token "with", then matches "of the project".
+  auto res2 = ProcessWords(
+      word_stage, merger,
+      {"with", "of", "the", "project", "they", "might", "not", "be"});
+  ASSERT_TRUE(res2.ok());
+  if (!res2.ok()) return;
+  EXPECT_EQ(res2->confirmed_text, "are they happy with the progress");
+  EXPECT_EQ(res2->unconfirmed_text, "of the project they might not be");
+}
+
+TEST(LevenshteinTextMergerTest,
+     FallsBackToContiguousSeamRunWhenGlobalAlignmentScattersSingleMatches) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  // Global edit distance between chunk 1 and chunk 2 can pair scattered tokens
+  // ("a", "b", "c") interleaved with substitutions so no contiguous kCorrect
+  // run in `align_codes` has length >= 2, even though the seam has an exact
+  // 2-word contiguous match ("right now") at the end of chunk 1 / start of
+  // chunk 2.
+  auto res1 = ProcessWords(word_stage, merger,
+                           {"a", "x1", "b", "x2", "c", "x3", "right", "now"});
+  ASSERT_TRUE(res1.ok());
+
+  auto res2 = ProcessWords(word_stage, merger,
+                           {"right", "now", "a", "y1", "b", "y2", "c", "y3"});
+  ASSERT_TRUE(res2.ok());
+  if (!res2.ok()) return;
+  EXPECT_EQ(res2->confirmed_text, "a x1 b x2 c x3");
+  EXPECT_EQ(res2->unconfirmed_text, "right now a y1 b y2 c y3");
+}
+
+TEST(LevenshteinTextMergerTest, IgnoresInteriorSingleWordStopwordMatch) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  auto res1 =
+      ProcessWords(word_stage, merger, {"alpha", "the", "bravo", "charlie"});
+  ASSERT_TRUE(res1.ok());
+
+  // Only "the" matches, and it is neither at the end of chunk 1 nor a >=5-char
+  // boundary token, so no false stitch should drop "bravo charlie".
+  auto res2 =
+      ProcessWords(word_stage, merger, {"delta", "echo", "the", "foxtrot"});
+  ASSERT_TRUE(res2.ok());
+  if (!res2.ok()) return;
+  EXPECT_EQ(res2->confirmed_text, "alpha the bravo charlie");
+  EXPECT_EQ(res2->unconfirmed_text, "delta echo the foxtrot");
+}
+
+TEST(LevenshteinTextMergerTest, ChineseWindowsWithoutSpacesAreNotDuplicated) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  auto res1 = ProcessWords(word_stage, merger, {"你好吗？北京有什么好玩的？"});
+  ASSERT_TRUE(res1.ok());
+  auto res2 =
+      ProcessWords(word_stage, merger, {"北京有什么好玩的？这个秋天还可以。"});
+  ASSERT_TRUE(res2.ok());
+
+  EXPECT_EQ(res2->confirmed_text, "你好吗？");
+  EXPECT_EQ(res2->unconfirmed_text, "北京有什么好玩的？这个秋天还可以。");
+}
+
+TEST(LevenshteinTextMergerTest, EmptyChunkKeepsUnconfirmedWords) {
+  DummyWordStage word_stage;
+  LevenshteinTextMerger merger(&word_stage);
+
+  auto res1 = ProcessWords(word_stage, merger, {"你好吗？"});
+  ASSERT_TRUE(res1.ok());
+  auto res2 = ProcessWords(word_stage, merger, {});
+  ASSERT_TRUE(res2.ok());
+
+  EXPECT_EQ(res2->confirmed_text, "");
+  EXPECT_EQ(res2->unconfirmed_text, "你好吗？");
+}
+
+}  // namespace
+}  // namespace litert::omni::asr

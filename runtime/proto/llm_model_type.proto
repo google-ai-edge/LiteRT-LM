@@ -31,16 +31,16 @@ message LlmModelType {
     Qwen2p5 qwen2p5 = 7;
     Gemma4 gemma4 = 8;
     FastVlm fast_vlm = 9;
+    Lfm2 lfm2 = 11;
+    MiniCPM5 minicpm5 = 12;
+    MiniCpmV4 minicpmv4 = 13;
   }
+  reserved 6, 10, 14;
 }
 
 // The default model type for the generic model.
 message GenericModel {
-  // The model role to use for the model.
-  optional string model_role = 1;
-  // If true, force the content from the model to be a string instead of an
-  // array. Some legacy templates only support string content.
-  optional bool force_string_content = 2;
+  reserved 1, 2;
 
   // --- Multimodal Configurations ---
 
@@ -269,6 +269,10 @@ message Gemma4 {
   // patchifying the image.
   int32 pooling_kernel_size = 18;
 
+  // Whether to perform 2-stage sub-patch merging in the image preprocessor.
+  // Only used for Gemma4 12B model.
+  bool merge_patches = 20;
+
   // Audio modality.
   // The start of audio token indicates the start of audio in the prompt.
   TokenUnion start_of_audio_token = 3;
@@ -295,8 +299,7 @@ message Gemma4 {
   string close_quote = 11;
   // Signifies the start of function response.
   string function_response_start = 12;
-  // Whether to use the chat template for applying FC format.
-  bool use_template_for_fc_format = 13;
+  reserved 13;
   // The constraint mode when constrained decoding is enabled.
   ConstraintMode constraint_mode = 14;
 }
@@ -311,3 +314,61 @@ message FastVlm {
 
   reserved 1, 2;
 }
+
+// LFM Model
+message Lfm2 {
+  TokenUnion start_of_image_token = 1;
+  // The end of image token indicates the end of image
+  TokenUnion end_of_image_token = 2;
+
+  // The patch width that the image preprocessor should patchify the image to.
+  int32 patch_width = 3;
+  // The patch height that the image preprocessor should patchify the image to.
+  int32 patch_height = 4;
+
+  // The maximum number of patches that the image preprocessor should patchify
+  // the image to.
+  int32 max_num_patches = 5;
+
+  // The pooling kernel size that the image preprocessor should use for
+  // patchifying the image.
+  int32 pooling_kernel_size = 6;
+
+  // The height of the image tensor that the image preprocessor should resize
+  // to.
+  int32 image_tensor_height = 7;
+  // The width of the image tensor that the image preprocessor should resize to.
+  int32 image_tensor_width = 8;
+
+  // Image normalization parameters.
+  repeated float normalization_mean = 9;
+  repeated float normalization_std = 10;
+  float normalization_rescale_factor = 11;
+
+  // Options for tool calling.
+  // Signifies the beginning of a tool call.
+  optional string code_fence_start = 12;
+  // Signifies the end of tool call.
+  optional string code_fence_end = 13;
+  // Whether to escape the fence strings for regex matching.
+  optional bool escape_fence_strings = 14;
+}
+
+// Model configuration for MiniCPM5.
+message MiniCPM5 {
+  // Options for tool calling.
+  // Signifies the beginning of a tool call.
+  optional string code_fence_start = 1;
+  // Signifies the end of tool call.
+  optional string code_fence_end = 2;
+  // Whether to escape the fence strings for regex matching.
+  optional bool escape_fence_strings = 3;
+  // An optional regex to match each line of the tool code block.
+  optional string tool_code_regex = 4;
+}
+
+// MiniCPM-V-4 multimodal model (fused SigLIP + Resampler vision + Llama LLM).
+// The slice geometry and the soft-token count per slice are fixed by the fused
+// vision tflite bundled with the model and by compile-time constants in the
+// runtime, so there are no per-bundle configuration fields.
+message MiniCpmV4 {}

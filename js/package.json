@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "build": "turbo build",
+    "build-selfcontained": "turbo build-selfcontained",
     "test": "turbo test",
     "typecheck": "turbo typecheck",
     "dev": "turbo watch dev",

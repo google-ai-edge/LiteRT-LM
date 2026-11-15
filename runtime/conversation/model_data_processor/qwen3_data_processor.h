@@ -45,16 +45,6 @@ class Qwen3DataProcessor
       Qwen3DataProcessorConfig config,
       std::optional<Preface> preface = std::nullopt);
 
-  // Return the same tools as the input for generic models.
-  absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const override {
-    return tools;
-  }
-
-  // Return the same message as the template input for generic models.
-  absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
-      const nlohmann::ordered_json& message) const override;
-
   // No-op for generic models.
   absl::string_view CodeFenceStart() const override;
 
@@ -69,22 +59,9 @@ class Qwen3DataProcessor
                               std::optional<Preface> preface)
       : config_(std::move(config)), preface_(std::move(preface)) {};
 
-  absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
-      const std::string& rendered_template_prompt,
-      const nlohmann::ordered_json& messages,
-      const Qwen3DataProcessorArguments& args) const override;
-
   absl::StatusOr<Message> ToMessageImpl(
       const Responses& responses,
       const Qwen3DataProcessorArguments& args) const override;
-
-  absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<Qwen3DataProcessorConfig,
-                                       Qwen3DataProcessorArguments>& other)
-      override {
-    ABSL_LOG(INFO) << "Qwen3DataProcessor::CloneStateImpl is a no-op.";
-    return absl::OkStatus();
-  }
 
   Qwen3DataProcessorConfig config_;
   std::optional<Preface> preface_;

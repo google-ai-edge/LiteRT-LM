@@ -138,22 +138,3 @@ export async function supportsFeature(
   }
   return (await check).supported;
 }
-
-/**
- * Throw an error if a given WASM feature is not supported.
- *
- * @param feature The feature to check.
- * @throws An error if the feature is not supported.
- */
-export async function throwIfFeatureNotSupported(
-    feature: keyof typeof WASM_FEATURE_CHECKS): Promise<void> {
-  const check = WASM_FEATURE_CHECKS[feature]?.();
-  if (!check) {
-    // Then we don't know how to check for this feature.
-    throw new Error(`Unknown feature: ${feature}`);
-  }
-  const result = await check;
-  if (!result.supported) {
-    throw result.error!;
-  }
-}

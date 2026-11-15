@@ -15,12 +15,14 @@
  */
 
 import {getGlobalLiteRtLm} from './global_litertlm.js';
+import {ModelInput} from './model_input.js';
+import {SpeculativeDecodingConfig, speculativeDecodingConfigToWasm, wasmSpeculativeDecodingConfigToConfig} from './speculative_decoding_config.js';
 import {RecursiveRequired} from './types.js';
-import {type AdvancedSettings, Backend, type CpuConfig, EngineSettings as WasmEngineSettings, GpuArtisanConfig as WasmGpuArtisanConfig, type GpuConfig} from './wasm_binding_types.js';
+import {ActivationDataType, type AdvancedSettings, Backend, type CpuConfig, EngineSettings as WasmEngineSettings, GpuArtisanConfig as WasmGpuArtisanConfig, type GpuConfig} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray, fillEmscriptenVector} from './wasm_utils.js';
 
 // Re-export these types since they're already compatible with JS.
-export {AdvancedSettings, CpuConfig, GpuConfig};
+export {ActivationDataType, AdvancedSettings, CpuConfig, GpuConfig};
 
 /**
  * LiteRT-LM GpuArtisanConfig
@@ -36,7 +38,14 @@ export interface GpuArtisanConfig extends
  */
 export interface LlmExecutorSettings {
   maxNumTokens?: number;
-  backendConfig?: CpuConfig|GpuConfig|GpuArtisanConfig;
+  /**
+   * Maximum number of images in a conversation (until the context is reset).
+   * Required for vision input with `Backend.GPU_ARTISAN` models, which reserve
+   * space for this many images' embeddings up front.
+   */
+  maxNumImages?: number;
+  backendConfig?: Partial<CpuConfig>|Partial<GpuConfig>|
+      Partial<GpuArtisanConfig>;
   samplerBackend?: Backend;
   advancedSettings?: Partial<AdvancedSettings>;
 }
@@ -45,11 +54,97 @@ export interface LlmExecutorSettings {
  * LiteRT-LM EngineSettings
  */
 export interface EngineSettings {
-  model: string|Blob|ReadableStream<Uint8Array>;
+  /** The model: a URL, a `hf://` URI, a `ModelSource`, or the model's data. */
+  model: ModelInput;
+  /**
+   * Backend for the model. Defaults to `Backend.GPU`. For a model loaded from
+   * a `hf://` URI, it also chooses the model file, and the model must use it
+   * if it's set (see `ModelInput`).
+   */
   backend?: Backend;
+  /**
+   * Activation precision for the text model on GPU backends (`Backend.GPU` and
+   * `Backend.GPU_ARTISAN`), such as `ActivationDataType.FLOAT16` or
+   * `ActivationDataType.FLOAT32`.
+   *
+   * If unset, the runtime uses the model section's preferred activation type if
+   * present, or `ActivationDataType.FLOAT16` otherwise. Ignored on
+   * `Backend.CPU`.
+   */
+  activationDataType?: ActivationDataType;
+  /**
+   * Backend for the vision encoder. Can be `Backend.CPU` or `Backend.GPU`.
+   * If unset, vision input is disabled.
+   */
+  visionBackend?: Backend;
+  /**
+   * Activation precision for the vision encoder when `visionBackend` is
+   * `Backend.GPU`, such as `ActivationDataType.FLOAT16` or
+   * `ActivationDataType.FLOAT32`.
+   *
+   * If unset, the runtime uses the model section's preferred activation type if
+   * present, or `ActivationDataType.FLOAT32` otherwise. Ignored when vision is
+   * disabled or when `visionBackend` is `Backend.CPU`.
+   */
+  visionActivationDataType?: ActivationDataType;
+  /**
+   * Maximum number of vision tokens per image. Only used when vision is
+   * enabled. If unset, the model's default is used.
+   */
+  maxVisionTokensPerImage?: number;
+  /**
+   * Smallest vision signature, in tokens per image, to prepare. Defaults to
+   * `maxVisionTokensPerImage`, which prepares exactly one vision signature.
+   *
+   * Lowering this prepares additional smaller signatures so that small images
+   * run on a tighter graph instead of being padded, but each extra signature
+   * costs a lot of memory and can exceed the 4GB wasm32 limit.
+   */
+  minVisionTokensPerImage?: number;
+  /**
+   * Backend for the audio encoder. Can be `Backend.CPU` or `Backend.GPU`.
+   * If unset, audio input is disabled.
+   */
+  audioBackend?: Backend;
+  /**
+   * Activation precision for the audio encoder when `audioBackend` is
+   * `Backend.GPU`, such as `ActivationDataType.FLOAT16` or
+   * `ActivationDataType.FLOAT32`.
+   *
+   * If unset, the runtime uses the model section's preferred activation type if
+   * present, or `ActivationDataType.FLOAT32` otherwise. Ignored when audio is
+   * disabled or when `audioBackend` is `Backend.CPU`.
+   */
+  audioActivationDataType?: ActivationDataType;
   mainExecutorSettings?: LlmExecutorSettings;
   benchmarkEnabled?: boolean;
+  /**
+   * The default speculative decoding (e.g. Multi-Token Prediction (MTP))
+   * configuration of the engine's sessions. Each session can override any field
+   * with `SessionConfig.speculativeDecodingConfig`. Fields left unset use the
+   * runtime defaults (mode `SpeculativeDecodingMode.OFF`).
+   *
+   * Speculative decoding requires a model that contains a drafter, such as
+   * Gemma 4 with an MTP drafter, and only supports a single output candidate.
+   * Modes `ON` and `ADAPTIVE` load the drafter when the engine is created. If
+   * the mode is `OFF`, the drafter is not loaded, and sessions can not enable
+   * speculative decoding later.
+   */
+  speculativeDecodingConfig?: SpeculativeDecodingConfig;
 }
+
+type OptionalEngineSettingsKeys =
+    'activationDataType'|'visionBackend'|'visionActivationDataType'|
+    'maxVisionTokensPerImage'|'minVisionTokensPerImage'|'audioBackend'|
+    'audioActivationDataType'|'speculativeDecodingConfig';
+
+/**
+ * EngineSettings with all defaults resolved. Fields that have no default
+ * (e.g. vision settings when vision is disabled) remain optional.
+ */
+export type ResolvedEngineSettings =
+    RecursiveRequired<Omit<EngineSettings, OptionalEngineSettingsKeys|'model'>>&
+    Pick<EngineSettings, OptionalEngineSettingsKeys|'model'>;
 
 /**
  * Fills a WasmEngineSettings with the values from a EngineSettings.
@@ -69,11 +164,38 @@ export function fillWasmEngineSettingsFromEngineSettings(
     wasmEngineSettings.enableBenchmark();
   }
 
+  if (engineSettings.activationDataType !== undefined) {
+    wasmExecutorSettings.setActivationDataType(
+        {value: engineSettings.activationDataType});
+  }
+  if (engineSettings.visionActivationDataType !== undefined) {
+    wasmEngineSettings.getMutableVisionExecutorSettings()
+        ?.setActivationDataType(
+            {value: engineSettings.visionActivationDataType});
+  }
+  if (engineSettings.audioActivationDataType !== undefined) {
+    wasmEngineSettings.getMutableAudioExecutorSettings()
+        ?.setActivationDataType(
+            {value: engineSettings.audioActivationDataType});
+  }
+
+  if (engineSettings.maxVisionTokensPerImage !== undefined) {
+    wasmEngineSettings.setMaxVisionTokensPerImage(
+        engineSettings.maxVisionTokensPerImage);
+  }
+  if (engineSettings.minVisionTokensPerImage !== undefined) {
+    wasmEngineSettings.setMinVisionTokensPerImage(
+        engineSettings.minVisionTokensPerImage);
+  }
+
   if (engineSettings.mainExecutorSettings) {
     const mainExecutorSettings = engineSettings.mainExecutorSettings;
 
     if (mainExecutorSettings.maxNumTokens !== undefined) {
       wasmExecutorSettings.setMaxNumTokens(mainExecutorSettings.maxNumTokens);
+    }
+    if (mainExecutorSettings.maxNumImages !== undefined) {
+      wasmExecutorSettings.setMaxNumImages(mainExecutorSettings.maxNumImages);
     }
     if (mainExecutorSettings.samplerBackend !== undefined) {
       wasmExecutorSettings.setSamplerBackend(
@@ -82,27 +204,63 @@ export function fillWasmEngineSettingsFromEngineSettings(
     if (mainExecutorSettings.backendConfig !== undefined) {
       const backendConfig = mainExecutorSettings.backendConfig;
       if (backend === Backend.CPU) {
-        wasmExecutorSettings.setBackendConfigCpu(backendConfig as CpuConfig);
+        const partialCpuConfig = backendConfig as Partial<CpuConfig>;
+        const cpuConfig: CpuConfig = {
+          kv_increment_size: partialCpuConfig.kv_increment_size ?? 0,
+          prefill_chunk_size: partialCpuConfig.prefill_chunk_size ?? 0,
+          number_of_threads: partialCpuConfig.number_of_threads ?? 0,
+        };
+        wasmExecutorSettings.setBackendConfigCpu(cpuConfig);
       } else if (backend === Backend.GPU) {
-        wasmExecutorSettings.setBackendConfigGpu(backendConfig as GpuConfig);
+        const partialGpuConfig = backendConfig as Partial<GpuConfig>;
+        const gpuConfig: GpuConfig = {
+          max_top_k: partialGpuConfig.max_top_k ?? 1,
+          external_tensor_mode: partialGpuConfig.external_tensor_mode ?? false,
+        };
+        wasmExecutorSettings.setBackendConfigGpu(gpuConfig);
       } else if (backend === Backend.GPU_ARTISAN) {
-        const gpuArtisanConfig = backendConfig as GpuArtisanConfig;
+        const partialGpuArtisanConfig =
+            backendConfig as Partial<GpuArtisanConfig>;
         const loraRanksVec = new wasm.VectorUint32();
         fillEmscriptenVector(
-            gpuArtisanConfig.supported_lora_ranks, loraRanksVec);
+            partialGpuArtisanConfig.supported_lora_ranks ?? [], loraRanksVec);
         const wasmGpuArtisanConfig: WasmGpuArtisanConfig = {
-          ...gpuArtisanConfig,
+          num_output_candidates:
+              partialGpuArtisanConfig.num_output_candidates ?? 1,
+          wait_for_weight_uploads:
+              partialGpuArtisanConfig.wait_for_weight_uploads ?? true,
+          num_decode_steps_per_sync:
+              partialGpuArtisanConfig.num_decode_steps_per_sync ?? 1,
+          sequence_batch_size:
+              partialGpuArtisanConfig.sequence_batch_size ?? 0,
           supported_lora_ranks: loraRanksVec,
+          max_top_k: partialGpuArtisanConfig.max_top_k ?? 1,
+          enable_decode_logits:
+              partialGpuArtisanConfig.enable_decode_logits ?? false,
+          enable_external_embeddings:
+              partialGpuArtisanConfig.enable_external_embeddings ?? false,
+          use_submodel: partialGpuArtisanConfig.use_submodel ?? true,
+          use_autosized_ringbuffers:
+              partialGpuArtisanConfig.use_autosized_ringbuffers ?? true,
         };
         wasmExecutorSettings.setBackendConfigGpuArtisan(wasmGpuArtisanConfig);
         loraRanksVec.delete();
       }
     }
     if (mainExecutorSettings.advancedSettings !== undefined) {
-      const defaultAdv = wasmExecutorSettings.getAdvancedSettings();
+      // The advanced settings are unset until the engine is created, so fall
+      // back to the C++ defaults.
+      const defaultAdv = wasmExecutorSettings.getAdvancedSettings() ??
+          wasm.createDefaultAdvancedSettings();
       const newAdv = {...defaultAdv, ...mainExecutorSettings.advancedSettings};
       wasmExecutorSettings.setAdvancedSettings(newAdv);
     }
+  }
+
+  if (engineSettings.speculativeDecodingConfig !== undefined) {
+    wasmEngineSettings.setSpeculativeDecodingConfig(
+        speculativeDecodingConfigToWasm(
+            engineSettings.speculativeDecodingConfig));
   }
 }
 
@@ -110,51 +268,67 @@ export function fillWasmEngineSettingsFromEngineSettings(
  * Converts a WasmEngineSettings to a EngineSettings.
  *
  * Fields are populated with the WASM object's values, which may be default
- * values if they were not set.
+ * values if they were not set. Advanced settings that have not been set yet
+ * (i.e. before the engine is created) are filled with the C++ defaults.
  *
  * The returned value omits the `model` field since its TS representation is a
  * URL or stream, which does not match what the WASM object holds.
  */
 export function wasmEngineSettingsToEngineSettings(
-    wasmEngineSettings: WasmEngineSettings):
-    RecursiveRequired<Omit<EngineSettings, 'model'>> {
+    wasmEngineSettings: WasmEngineSettings,
+    wasm = getGlobalLiteRtLm().liteRtLmWasm):
+    Omit<ResolvedEngineSettings, 'model'> {
   const wasmExecutorSettings =
       wasmEngineSettings.getMutableMainExecutorSettings();
 
   let backendConfig: CpuConfig|GpuConfig|GpuArtisanConfig;
   let backend: Backend;
-  try {
-    // This isn't ideal, but there's no way to get what backend config is set.
-    backendConfig = wasmExecutorSettings.getBackendConfigCpu();
+  // This isn't ideal, but there's no way to get what backend config is set.
+  const cpuConfig = wasmExecutorSettings.getBackendConfigCpu();
+  if (!(cpuConfig instanceof Error)) {
+    backendConfig = cpuConfig;
     backend = Backend.CPU;
-  } catch (e) {
-    try {
-      backendConfig = wasmExecutorSettings.getBackendConfigGpu();
+  } else {
+    const gpuConfig = wasmExecutorSettings.getBackendConfigGpu();
+    if (!(gpuConfig instanceof Error)) {
+      backendConfig = gpuConfig;
       backend = Backend.GPU;
-    } catch (e) {
-      try {
-        const wasmGpuArtisanConfig =
-            wasmExecutorSettings.getBackendConfigGpuArtisan();
-        backendConfig = {
-          ...wasmGpuArtisanConfig,
-          supported_lora_ranks: consumeEmscriptenVectorToArray(
-              wasmGpuArtisanConfig.supported_lora_ranks),
-        };
-        backend = Backend.GPU_ARTISAN;
-      } catch (e) {
+    } else {
+      const wasmGpuArtisanConfig =
+          wasmExecutorSettings.getBackendConfigGpuArtisan();
+      if (wasmGpuArtisanConfig instanceof Error) {
         throw new Error('Unsupported backend config');
       }
+      backendConfig = {
+        ...wasmGpuArtisanConfig,
+        supported_lora_ranks: consumeEmscriptenVectorToArray(
+            wasmGpuArtisanConfig.supported_lora_ranks),
+      };
+      backend = Backend.GPU_ARTISAN;
     }
   }
 
+  const visionSettings = wasmEngineSettings.getMutableVisionExecutorSettings();
+  const audioSettings = wasmEngineSettings.getMutableAudioExecutorSettings();
   return {
     backend,
+    activationDataType: wasmExecutorSettings.getActivationDataType()?.value,
+    visionBackend: wasmEngineSettings.getVisionBackend()?.value,
+    visionActivationDataType: visionSettings?.getActivationDataType()?.value,
+    maxVisionTokensPerImage: wasmEngineSettings.getMaxVisionTokensPerImage(),
+    minVisionTokensPerImage: wasmEngineSettings.getMinVisionTokensPerImage(),
+    audioBackend: wasmEngineSettings.getAudioBackend()?.value,
+    audioActivationDataType: audioSettings?.getActivationDataType()?.value,
     mainExecutorSettings: {
       maxNumTokens: wasmExecutorSettings.getMaxNumTokens(),
+      maxNumImages: wasmExecutorSettings.getMaxNumImages(),
       samplerBackend: wasmExecutorSettings.getSamplerBackend().value,
       backendConfig,
-      advancedSettings: wasmExecutorSettings.getAdvancedSettings(),
+      advancedSettings: wasmExecutorSettings.getAdvancedSettings() ??
+          wasm.createDefaultAdvancedSettings(),
     },
     benchmarkEnabled: false,
+    speculativeDecodingConfig: wasmSpeculativeDecodingConfigToConfig(
+        wasmEngineSettings.getSpeculativeDecodingConfig()),
   };
 }

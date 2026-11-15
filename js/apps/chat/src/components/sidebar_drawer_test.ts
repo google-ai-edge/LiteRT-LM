@@ -59,6 +59,15 @@ describe('litert-sidebar', () => {
     mockSettings.topK = 40;
     mockSettings.samplerType = 'top_k';
     mockSettings.enableThinking = false;
+    mockSettings.enableSpeculativeDecoding = false;
+    mockSettings.systemPrompt = '';
+    mockSettings.disabledTools = [];
+    mockSettings.textBackend = 'gpu';
+    mockSettings.visionBackend = 'gpu';
+    mockSettings.audioBackend = 'gpu';
+    mockSettings.textPrecision = 'default';
+    mockSettings.visionPrecision = 'default';
+    mockSettings.audioPrecision = 'default';
     mockSettings.customModels = [];
     mockSettings.localDirModels = [];
 
@@ -79,6 +88,7 @@ describe('litert-sidebar', () => {
       'deleteModelFromCache',
       'clearAllCache',
       'cancelDownload',
+      'addRemoteModel',
     ]);
     mockModelLoader.cachedModels = cachedModelsMap;
     mockModelLoader.downloadProgresses = downloadProgressMap;
@@ -97,6 +107,8 @@ describe('litert-sidebar', () => {
       addHost: jasmine.createSpy('addHost'),
       removeHost: jasmine.createSpy('removeHost'),
       requestUpdate: jasmine.createSpy('requestUpdate'),
+      storage: window.localStorage,
+      requestConfirm: jasmine.createSpy('requestConfirm').and.resolveTo(true),
     } as unknown as jasmine.SpyObj<LlmChatStateController>;
 
     element = document.createElement('litert-sidebar');
@@ -109,81 +121,458 @@ describe('litert-sidebar', () => {
     element.remove();
   });
 
-  it('renders model list in dropdown', () => {
-    const dropdown = element.shadowRoot!.querySelector('custom-dropdown');
-    expect(dropdown).toBeTruthy();
-
-    const items = element.shadowRoot!.querySelectorAll('.dropdown-item');
-    expect(items.length).toBe(MODELS.length + 1);
-    expect(items[0]!.querySelector('.model-name')!.textContent!.trim()).toBe(MODELS[0]!.name);
-  });
-
-  it('triggers model load on model change', async () => {
-    const dropdown = element.shadowRoot!.querySelector('custom-dropdown') as HTMLElement;
-    
-    // Simulate selection change event from dropdown
-    dropdown.dispatchEvent(new CustomEvent('change', {
-      detail: MODELS[1]!.path,
-    }));
+  async function toggleSettingsPage(id: string) {
+    element.shadowRoot!.querySelector<HTMLButtonElement>(`#tab-${id}`)!.click();
     await element.updateComplete;
+  }
 
-    expect(mockSettings.selectedModelPath).toBe(MODELS[1]!.path);
-    expect(mockSettings.saveSettings).toHaveBeenCalled();
-    expect(mockModelLoader.loadModelWeights).toHaveBeenCalled();
+  describe('settings pages', () => {
+    it('collapse settings disclosures below conversations by default', () => {
+      expect(element.shadowRoot!.querySelector('#conversations-list'))
+          .toBeTruthy();
+      expect(element.shadowRoot!.querySelector('#panel-model-config'))
+          .toBeNull();
+      expect(element.shadowRoot!.querySelector('#panel-system-prompt'))
+          .toBeNull();
+      expect(element.shadowRoot!.querySelector('#panel-experimental'))
+          .toBeNull();
+      const modelToggle =
+          element.shadowRoot!.querySelector('#tab-model-config')!;
+      const promptToggle =
+          element.shadowRoot!.querySelector('#tab-system-prompt')!;
+      const expToggle =
+          element.shadowRoot!.querySelector('#tab-experimental')!;
+      expect(modelToggle.getAttribute('aria-expanded')).toBe('false');
+      expect(promptToggle.getAttribute('aria-expanded')).toBe('false');
+      expect(expToggle.getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('switches between disclosures so at most one panel is open', async () => {
+      await toggleSettingsPage('model-config');
+      expect(element.shadowRoot!.querySelector('#panel-model-config'))
+          .toBeTruthy();
+      expect(element.shadowRoot!.querySelector('#tab-model-config')!.classList)
+          .toContain('active');
+      expect(element.shadowRoot!.querySelector('#tab-model-config')!
+                 .getAttribute('aria-expanded'))
+          .toBe('true');
+
+      await toggleSettingsPage('system-prompt');
+
+      expect(element.shadowRoot!.querySelector('#panel-system-prompt'))
+          .toBeTruthy();
+      expect(element.shadowRoot!.querySelector('#panel-model-config'))
+          .toBeNull();
+      expect(element.shadowRoot!.querySelector('#conversations-list'))
+          .toBeTruthy();
+    });
+
+    it('hides when the expanded disclosure is clicked again', async () => {
+         await toggleSettingsPage('model-config');
+         expect(element.shadowRoot!.querySelector('#panel-model-config'))
+             .toBeTruthy();
+
+         await toggleSettingsPage('system-prompt');
+         expect(element.shadowRoot!.querySelector('#panel-system-prompt'))
+             .toBeTruthy();
+
+         await toggleSettingsPage('system-prompt');
+
+         expect(element.shadowRoot!.querySelector('#panel-system-prompt'))
+             .toBeNull();
+         expect(element.shadowRoot!.querySelector('#tab-system-prompt')!
+                    .getAttribute('aria-expanded'))
+             .toBe('false');
+         expect(element.shadowRoot!.querySelector('#conversations-list'))
+             .toBeTruthy();
+       });
+
+    it('routes Tab/Shift+Tab naturally through an expanded upward settings tray and restores focus on close or Escape',
+       async () => {
+         const modelBtn = element.shadowRoot!.querySelector<HTMLButtonElement>(
+             '#tab-model-config')!;
+         const sysBtn = element.shadowRoot!.querySelector<HTMLButtonElement>(
+             '#tab-system-prompt')!;
+         await toggleSettingsPage('model-config');
+
+         modelBtn.focus();
+         expect(element.shadowRoot!.activeElement).toBe(modelBtn);
+
+         // Forward Tab from expanded #tab-model-config enters .settings-tray
+         modelBtn.dispatchEvent(new KeyboardEvent(
+             'keydown', {key: 'Tab', bubbles: true, cancelable: true}));
+         const closeTrayBtn =
+             element.shadowRoot!.querySelector<HTMLButtonElement>(
+                 '.btn-close-tray')!;
+         expect(element.shadowRoot!.activeElement).toBe(closeTrayBtn);
+
+         // Shift+Tab from first tray element returns to #tab-model-config
+         closeTrayBtn.dispatchEvent(new KeyboardEvent(
+             'keydown',
+             {key: 'Tab', shiftKey: true, bubbles: true, cancelable: true}));
+         expect(element.shadowRoot!.activeElement).toBe(modelBtn);
+
+         // Forward Tab from last tray element (#btn-reset-settings) goes to #tab-system-prompt
+         const resetBtn = element.shadowRoot!.querySelector<HTMLButtonElement>(
+             '#btn-reset-settings')!;
+         resetBtn.focus();
+         resetBtn.dispatchEvent(new KeyboardEvent(
+             'keydown', {key: 'Tab', bubbles: true, cancelable: true}));
+         expect(element.shadowRoot!.activeElement).toBe(sysBtn);
+
+         // Shift+Tab from #tab-system-prompt goes back into #btn-reset-settings
+         sysBtn.dispatchEvent(new KeyboardEvent(
+             'keydown',
+             {key: 'Tab', shiftKey: true, bubbles: true, cancelable: true}));
+         expect(element.shadowRoot!.activeElement).toBe(resetBtn);
+
+         // Clicking .btn-close-tray closes panel and restores focus to #tab-model-config
+         closeTrayBtn.focus();
+         closeTrayBtn.click();
+         await element.updateComplete;
+         expect(element.shadowRoot!.querySelector('#panel-model-config'))
+             .toBeNull();
+         expect(element.shadowRoot!.activeElement).toBe(modelBtn);
+
+         // Pressing Escape inside #panel-system-prompt restores focus to #tab-system-prompt
+         await toggleSettingsPage('system-prompt');
+         const sysTextarea =
+             element.shadowRoot!.querySelector<HTMLTextAreaElement>(
+                 '#system-prompt')!;
+         sysTextarea.focus();
+         sysTextarea.dispatchEvent(new KeyboardEvent(
+             'keydown', {key: 'Escape', bubbles: true, cancelable: true}));
+         await element.updateComplete;
+         expect(element.shadowRoot!.querySelector('#panel-system-prompt'))
+             .toBeNull();
+         expect(element.shadowRoot!.activeElement).toBe(sysBtn);
+       });
   });
 
-  it('deletes model from cache when clicking delete cache button', async () => {
-    // Make the first model cached
-    cachedModelsMap.set(MODELS[0]!.filename, 1024 * 1024 * 1024); // 1 GB
-    element.requestUpdate();
-    await element.updateComplete;
+  describe('model config page', () => {
+    beforeEach(async () => {
+      await toggleSettingsPage('model-config');
+    });
 
-    const deleteBtn = element.shadowRoot!.querySelector('.delete-cache-btn') as HTMLButtonElement;
-    expect(deleteBtn).toBeTruthy();
+    it('updates settings on number input changes and describes disabled Greedy fields via tooltip and aria-describedby',
+       async () => {
+         // 1. Context Length
+         const contextInput = element.shadowRoot!.querySelector(
+             '#context-length') as HTMLInputElement;
+         contextInput.value = '4096';
+         contextInput.dispatchEvent(new Event('input'));
+         expect(mockSettings.contextLength).toBe(4096);
+         expect(mockSettings.saveSettings).toHaveBeenCalled();
 
-    deleteBtn.click();
+         // 2. Max Gen
+         const maxGenInput = element.shadowRoot!.querySelector(
+             '#max-output-tokens') as HTMLInputElement;
+         maxGenInput.value = '1024';
+         maxGenInput.dispatchEvent(new Event('input'));
+         expect(mockSettings.maxOutputTokens).toBe(1024);
 
-    expect(mockModelLoader.deleteModelFromCache)
-        .toHaveBeenCalledWith(MODELS[0]!.path);
+         // 3. Temp & Top-P while in Top-K / Top-P before switching to Greedy
+         const tempInput = element.shadowRoot!.querySelector(
+             '#temperature') as HTMLInputElement;
+         tempInput.value = '1.2';
+         tempInput.dispatchEvent(new Event('input'));
+         expect(mockSettings.temperature).toBe(1.2);
+
+         const thinkingCheckbox = element.shadowRoot!.querySelector(
+             '#enable-thinking') as HTMLInputElement;
+         thinkingCheckbox.checked = true;
+         thinkingCheckbox.dispatchEvent(new Event('change'));
+         expect(mockSettings.enableThinking).toBeTrue();
+
+         const topPInput =
+             element.shadowRoot!.querySelector('#top-p') as HTMLInputElement;
+         topPInput.value = '0.5';
+         topPInput.dispatchEvent(new Event('input'));
+         expect(mockSettings.topP).toBe(0.5);
+
+         // 4. Sampler Select -> Greedy removes visible hint box and attaches tooltip + aria-describedby
+         const samplerSelect = element.shadowRoot!.querySelector(
+             '#sampler-type') as HTMLSelectElement;
+         samplerSelect.value = 'greedy';
+         samplerSelect.dispatchEvent(new Event('change'));
+         expect(mockSettings.samplerType).toBe('greedy');
+         element.requestUpdate();
+         await element.updateComplete;
+
+         expect(element.shadowRoot!.querySelector('#greedy-sampler-hint'))
+             .toBeNull();
+         const greedyDesc =
+             element.shadowRoot!.querySelector('#greedy-disabled-desc');
+         expect(greedyDesc?.textContent).toContain('Not used with Greedy');
+         for (const selector of ['#temperature', '#top-p', '#top-k']) {
+           const field = element.shadowRoot!.querySelector(
+               selector) as HTMLInputElement;
+           expect(field.disabled).toBeTrue();
+           expect(field.getAttribute('title')).toContain('Not used with Greedy');
+           expect(field.getAttribute('aria-describedby'))
+               .toBe('greedy-disabled-desc');
+         }
+       });
+
+    it('toggles speculative decoding with concise drafter hint', () => {
+      const toggle = element.shadowRoot!.querySelector<HTMLInputElement>(
+          '#enable-speculative-decoding')!;
+      const hint =
+          toggle.closest('.toggle-row')!.querySelector('.setting-hint')!;
+      expect(hint.textContent!.trim())
+          .toBe('Adaptive drafting on models with a drafter (e.g. MTP).');
+      expect(toggle.checked).toBeFalse();
+
+      toggle.checked = true;
+      toggle.dispatchEvent(new Event('change'));
+
+      expect(mockSettings.enableSpeculativeDecoding).toBeTrue();
+      expect(mockSettings.saveSettings).toHaveBeenCalled();
+    });
+
+    it('makes full checkbox cards clickable (<label>) without double-toggling and preserves exact a11y name and description',
+       async () => {
+         const thinkingInput = element.shadowRoot!.querySelector<
+             HTMLInputElement>('#enable-thinking')!;
+         const card = thinkingInput.closest('.toggle-row') as HTMLLabelElement;
+         const title = card.querySelector('.toggle-title') as HTMLElement;
+         const hint = card.querySelector('.setting-hint') as HTMLElement;
+
+         expect(card.tagName).toBe('LABEL');
+         expect(card.getAttribute('for')).toBe('enable-thinking');
+         expect(thinkingInput.getAttribute('aria-labelledby'))
+             .toBe('enable-thinking-label');
+         expect(thinkingInput.getAttribute('aria-describedby'))
+             .toBe('enable-thinking-desc');
+         expect(title.textContent!.trim()).toBe('Thinking mode');
+         expect(hint.textContent!.trim())
+             .toBe('Include step-by-step reasoning before answering.');
+
+         expect(thinkingInput.checked).toBeFalse();
+
+         // Clicking the card container toggles once
+         card.click();
+         await element.updateComplete;
+         expect(thinkingInput.checked).toBeTrue();
+         expect(mockSettings.enableThinking).toBeTrue();
+
+         // Clicking the description hint toggles once
+         hint.click();
+         await element.updateComplete;
+         expect(thinkingInput.checked).toBeFalse();
+         expect(mockSettings.enableThinking).toBeFalse();
+
+         // Clicking the title toggles once
+         title.click();
+         await element.updateComplete;
+         expect(thinkingInput.checked).toBeTrue();
+         expect(mockSettings.enableThinking).toBeTrue();
+
+         // Clicking the checkbox input directly toggles once (no double-toggle)
+         thinkingInput.click();
+         await element.updateComplete;
+         expect(thinkingInput.checked).toBeFalse();
+         expect(mockSettings.enableThinking).toBeFalse();
+       });
+
+    it('resets defaults on reset button click', async () => {
+      const resetBtn = element.shadowRoot!.querySelector('#btn-reset-settings') as HTMLButtonElement;
+      resetBtn.click();
+      await Promise.resolve();
+      expect(mockSettings.resetDefaults).toHaveBeenCalledWith('modelConfig');
+    });
   });
 
-  it('updates settings on slider/number input changes', async () => {
-    // 1. Context Length
-    const contextInput = element.shadowRoot!.querySelector('#context-length') as HTMLInputElement;
-    contextInput.value = '4096';
-    contextInput.dispatchEvent(new Event('input'));
-    expect(mockSettings.contextLength).toBe(4096);
-    expect(mockSettings.saveSettings).toHaveBeenCalled();
+  describe('system prompt page', () => {
+    beforeEach(async () => {
+      await toggleSettingsPage('system-prompt');
+    });
 
-    // 2. Max Gen
-    const maxGenInput = element.shadowRoot!.querySelector('#max-output-tokens') as HTMLInputElement;
-    maxGenInput.value = '1024';
-    maxGenInput.dispatchEvent(new Event('input'));
-    expect(mockSettings.maxOutputTokens).toBe(1024);
+    it('is shown when selected', () => {
+      expect(element.shadowRoot!.querySelector('#panel-system-prompt'))
+          .toBeTruthy();
+      expect(element.shadowRoot!.querySelector('#panel-model-config'))
+          .toBeNull();
+      expect(element.shadowRoot!.querySelector('#tab-system-prompt')!.classList)
+          .toContain('active');
+    });
 
-    // 3. Sampler Select
-    const samplerSelect = element.shadowRoot!.querySelector('#sampler-type') as HTMLSelectElement;
-    samplerSelect.value = 'greedy';
-    samplerSelect.dispatchEvent(new Event('change'));
-    expect(mockSettings.samplerType).toBe('greedy');
+    it('updates the system prompt', () => {
+      const textarea =
+          element.shadowRoot!.querySelector<HTMLTextAreaElement>(
+              '#system-prompt')!;
+      textarea.value = 'You are a pirate.';
+      textarea.dispatchEvent(new Event('change'));
 
-    // 4. Temp
-    const tempInput = element.shadowRoot!.querySelector('#temperature') as HTMLInputElement;
-    tempInput.value = '1.2';
-    tempInput.dispatchEvent(new Event('input'));
-    expect(mockSettings.temperature).toBe(1.2);
+      expect(mockSettings.systemPrompt).toBe('You are a pirate.');
+      expect(mockSettings.saveSettings).toHaveBeenCalled();
+    });
 
-    // 5. Thinking Checkbox
-    const thinkingCheckbox = element.shadowRoot!.querySelector('#enable-thinking') as HTMLInputElement;
-    thinkingCheckbox.checked = true;
-    thinkingCheckbox.dispatchEvent(new Event('change'));
-    expect(mockSettings.enableThinking).toBeTrue();
+    it('toggles tools via full-card click, description click, and input click without double-toggling',
+       async () => {
+         const toggle = element.shadowRoot!.querySelector<HTMLInputElement>(
+             '#tool-run_javascript')!;
+         const card = toggle.closest('.toggle-row') as HTMLLabelElement;
+         const hint = card.querySelector('.setting-hint') as HTMLElement;
+         expect(card.tagName).toBe('LABEL');
+         expect(toggle.getAttribute('aria-labelledby'))
+             .toBe('tool-run_javascript-label');
+         expect(toggle.getAttribute('aria-describedby'))
+             .toBe('tool-run_javascript-desc');
+         expect(toggle.checked).toBeTrue();
+
+         // Clicking description text toggles off once
+         hint.click();
+         await element.updateComplete;
+         expect(toggle.checked).toBeFalse();
+         expect(mockSettings.disabledTools).toEqual(['run_javascript']);
+
+         // Clicking outer card toggles back on once
+         card.click();
+         await element.updateComplete;
+         expect(toggle.checked).toBeTrue();
+         expect(mockSettings.disabledTools).toEqual([]);
+
+         // Clicking checkbox input directly toggles off once
+         toggle.click();
+         await element.updateComplete;
+         expect(toggle.checked).toBeFalse();
+         expect(mockSettings.disabledTools).toEqual(['run_javascript']);
+       });
+
+    it('resets the system prompt and tools', async () => {
+      element.shadowRoot!
+          .querySelector<HTMLButtonElement>('#btn-reset-system-prompt')!
+          .click();
+      await Promise.resolve();
+      expect(mockSettings.resetDefaults).toHaveBeenCalledWith('systemPrompt');
+    });
   });
 
-  it('resets defaults on reset button click', () => {
-    const resetBtn = element.shadowRoot!.querySelector('#btn-reset-settings') as HTMLButtonElement;
-    resetBtn.click();
-    expect(mockSettings.resetDefaults).toHaveBeenCalled();
+  describe('experimental page', () => {
+    beforeEach(async () => {
+      await toggleSettingsPage('experimental');
+    });
+
+    it('disables CPU text backend for -gpu.litertlm models and enables it for non-GPU models',
+       async () => {
+         const textBackend = element.shadowRoot!.querySelector<HTMLSelectElement>(
+             '#text-backend')!;
+         const note =
+             element.shadowRoot!.querySelector<HTMLElement>('#experimental-note')!;
+         expect(textBackend.disabled).toBeTrue();
+         expect(textBackend.value).toBe('gpu');
+         expect(textBackend.getAttribute('title')).toContain('-gpu.litertlm');
+         expect(note.textContent).toContain('WebGPU-only');
+         expect(note.querySelectorAll('.nowrap').length).toBeGreaterThan(0);
+
+         mockSettings.selectedModelPath =
+             'https://example.com/gemma-3-1b-it.litertlm';
+         element.requestUpdate();
+         await element.updateComplete;
+
+         expect(textBackend.disabled).toBeFalse();
+         textBackend.value = 'cpu';
+         textBackend.dispatchEvent(new Event('change'));
+         expect(mockSettings.textBackend).toBe('cpu');
+         expect(mockSettings.saveSettings).toHaveBeenCalled();
+
+         element.requestUpdate();
+         await element.updateComplete;
+         const textPrecision =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#text-precision')!;
+         expect(textPrecision.disabled).toBeTrue();
+         expect(textPrecision.value).toBe('fp32');
+       });
+
+    it('updates vision/audio backends and activation precision and resets experimental group',
+       async () => {
+         const expTab = element.shadowRoot!.querySelector<HTMLButtonElement>(
+             '#tab-experimental')!;
+
+         const textPrecision =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#text-precision')!;
+         textPrecision.value = 'fp32';
+         textPrecision.dispatchEvent(new Event('change'));
+         expect(mockSettings.textPrecision).toBe('fp32');
+
+         const visionBackend =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#vision-backend')!;
+         visionBackend.value = 'cpu';
+         visionBackend.dispatchEvent(new Event('change'));
+         expect(mockSettings.visionBackend).toBe('cpu');
+
+         const audioPrecision =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#audio-precision')!;
+         audioPrecision.value = 'fp16';
+         audioPrecision.dispatchEvent(new Event('change'));
+         expect(mockSettings.audioPrecision).toBe('fp16');
+
+         element.requestUpdate();
+         await element.updateComplete;
+
+         const visionPrecision =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#vision-precision')!;
+         expect(visionPrecision.disabled).toBeTrue();
+         expect(
+             expTab.querySelector('.tuning-pill')!.textContent!.trim())
+             .toBe('T:FP32 · V:CPU +1');
+
+         element.shadowRoot!
+             .querySelector<HTMLButtonElement>('#btn-reset-experimental')!
+             .click();
+         await Promise.resolve();
+         expect(mockSettings.resetDefaults)
+             .toHaveBeenCalledWith('experimental');
+       });
+
+    it('surfaces non-default backend badge in Runtime card only when a modality uses CPU',
+       async () => {
+         expect(element.shadowRoot!.querySelector('#runtime-backend-badge'))
+             .toBeNull();
+
+         mockSettings.visionBackend = 'cpu';
+         element.requestUpdate();
+         await element.updateComplete;
+         let runtimeBadge =
+             element.shadowRoot!.querySelector<HTMLElement>(
+                 '#runtime-backend-badge');
+         expect(runtimeBadge).toBeTruthy();
+         expect(runtimeBadge!.textContent!.trim()).toBe('WebGPU · CPU');
+
+         mockSettings.selectedModelPath =
+             'https://example.com/gemma-3-1b-it.litertlm';
+         mockSettings.textBackend = 'cpu';
+         mockSettings.audioBackend = 'cpu';
+         element.requestUpdate();
+         await element.updateComplete;
+         runtimeBadge =
+             element.shadowRoot!.querySelector<HTMLElement>(
+                 '#runtime-backend-badge');
+         expect(runtimeBadge!.textContent!.trim()).toBe('CPU');
+
+         mockSettings.selectedModelPath = MODELS[0]!.path;
+         mockModelLoader.metricLoadTime = '12.48s';
+         element.style.width = '248px';
+         element.style.display = 'flex';
+         element.requestUpdate();
+         await element.updateComplete;
+         runtimeBadge =
+             element.shadowRoot!.querySelector<HTMLElement>(
+                 '#runtime-backend-badge');
+         const statusHeader =
+             element.shadowRoot!.querySelector<HTMLElement>('.status-header')!;
+         expect(runtimeBadge!.textContent!.trim()).toBe('WebGPU · CPU');
+         expect(runtimeBadge!.scrollWidth)
+             .toBeLessThanOrEqual(runtimeBadge!.clientWidth);
+         expect(statusHeader.scrollWidth)
+             .toBeLessThanOrEqual(statusHeader.clientWidth);
+       });
   });
 
   it('renders conversations list and triggers selection', async () => {
@@ -203,78 +592,106 @@ describe('litert-sidebar', () => {
     expect(mockChatSession.selectConversation).toHaveBeenCalledWith('conv1');
   });
 
-  it('deletes conversation on click ✕', async () => {
-    const list = element.shadowRoot!.querySelector('#conversations-list');
-    const deleteBtn = list!.querySelector('.btn-delete-conv') as HTMLButtonElement;
-    
-    deleteBtn.click();
+  it('deletes conversation on click ✕ and dispatches conversation-deleted',
+     async () => {
+       const list = element.shadowRoot!.querySelector('#conversations-list');
+       const deleteBtn =
+           list!.querySelector('.btn-delete-conv') as HTMLButtonElement;
+       let deletedFired = false;
+       element.addEventListener('conversation-deleted', () => {
+         deletedFired = true;
+       });
 
-    expect(mockChatSession.deleteConversation).toHaveBeenCalledWith('conv1');
-  });
+       deleteBtn.click();
 
-  it('renders progress bar when model is downloading', async () => {
-    mockModelLoader.isModelLoading = true;
-    const modelFilename = MODELS[0]!.filename;
-    downloadProgressMap.set(modelFilename, 45);
-    downloadSpeedsMap.set(modelFilename, '5.2 MB/s');
-    mockModelLoader.downloadAbortController = {} as AbortController;
-    
-    element.requestUpdate();
-    await element.updateComplete;
+       expect(mockChatSession.deleteConversation).toHaveBeenCalledWith('conv1');
+       expect(deletedFired).toBeTrue();
+     });
 
-    const progressContainer = element.shadowRoot!.querySelector('#progress-container');
-    expect(progressContainer).toBeTruthy();
+  it('renders compact summary badges for speculative decoding and custom system prompt',
+     async () => {
+       mockSettings.samplerType = 'greedy';
+       mockSettings.contextLength = 4096;
+       mockSettings.enableSpeculativeDecoding = true;
+       mockSettings.systemPrompt = 'Be concise.';
+       element.requestUpdate();
+       await element.updateComplete;
 
-    const percentText = progressContainer!.querySelector('#progress-percent');
-    expect(percentText!.textContent!.trim()).toBe('45%');
+       const modelBadge =
+           element.shadowRoot!
+               .querySelector('#tab-model-config .tuning-pill')!
+               .textContent!.trim();
+       const promptBadge =
+           element.shadowRoot!
+               .querySelector('#tab-system-prompt .tuning-pill')!
+               .textContent!.trim();
 
-    const speedText = progressContainer!.querySelector('#progress-speed');
-    expect(speedText!.textContent!.trim()).toBe('5.2 MB/s');
+       expect(modelBadge).toBe('Greedy · 4k+');
+       expect(promptBadge).toBe('Custom · 1/1');
+     });
 
-    const cancelBtn = progressContainer!.querySelector('#btn-cancel-download') as HTMLButtonElement;
-    expect(cancelBtn).toBeTruthy();
+  it('renders compact single-line download status in Runtime card without duplicating composer progress bar',
+     async () => {
+       mockModelLoader.isModelLoading = true;
+       mockState.statusText = 'Downloading weights (gemma-4-E2B)...';
+       const modelKey = MODELS[0]!.path;
+       downloadProgressMap.set(modelKey, 45);
+       downloadSpeedsMap.set(modelKey, '5.2 MB/s');
+       mockModelLoader.downloadAbortController = {} as AbortController;
 
-    cancelBtn.click();
-    expect(mockModelLoader.cancelDownload).toHaveBeenCalled();
-  });
+       element.requestUpdate();
+       await element.updateComplete;
 
-  it('triggers mountDirectory when select-dir is chosen (isSupported=true)', async () => {
-    (mockLocalDirService as any).isSupported = true;
-    element.requestUpdate();
-    await element.updateComplete;
+       expect(element.shadowRoot!.querySelector('#progress-container'))
+           .toBeNull();
+       expect(element.shadowRoot!.querySelector('#btn-cancel-download'))
+           .toBeNull();
 
-    const dropdown = element.shadowRoot!.querySelector('custom-dropdown') as HTMLElement;
-    dropdown.dispatchEvent(new CustomEvent('change', {
-      detail: 'select-dir',
-    }));
-    await element.updateComplete;
+       const statusText =
+           element.shadowRoot!.querySelector('#status-text') as HTMLElement;
+       expect(statusText).toBeTruthy();
+       expect(statusText.textContent!.trim()).toBe('Downloading weights · 45%');
 
-    expect(mockLocalDirService.mountDirectory).toHaveBeenCalled();
-  });
+       const statusDot =
+           element.shadowRoot!.querySelector('#status-dot') as HTMLElement;
+       expect(statusDot.classList.contains('loading')).toBeTrue();
+     });
 
-  it('renders upload option when isSupported is false', async () => {
-    (mockLocalDirService as any).isSupported = false;
-    element.requestUpdate();
-    await element.updateComplete;
+  it('summarizes reload, download, and error states in the Runtime status line',
+     async () => {
+       mockModelLoader.engine = {} as unknown as ModelLoaderService['engine'];
+       mockModelLoader.needsModelReload =
+           jasmine.createSpy('needsModelReload').and.returnValue(true);
+       element.requestUpdate();
+       await element.updateComplete;
+       const statusText = () => element.shadowRoot!.querySelector<HTMLElement>(
+                                           '#status-text')!.textContent!.trim();
+       expect(statusText()).toBe('Reloads on next message');
 
-    const dropdown = element.shadowRoot!.querySelector('custom-dropdown') as HTMLElement;
-    const uploadItem = dropdown.querySelector('[data-value="upload"]');
-    const selectDirItem = dropdown.querySelector('[data-value="select-dir"]');
+       mockModelLoader.isModelLoading = true;
+       mockState.statusText = 'Downloading weights (gemma-4-E2B)...';
+       mockModelLoader.downloadProgresses.set(MODELS[0]!.path, 64);
+       element.requestUpdate();
+       await element.updateComplete;
+       expect(statusText()).toBe('Downloading weights · 64%');
+       expect(element.shadowRoot!.querySelector('#progress-container'))
+           .toBeNull();
 
-    expect(uploadItem).toBeTruthy();
-    expect(selectDirItem).toBeFalsy();
-  });
+       mockModelLoader.isModelLoading = false;
+       mockState.errorMessage = 'Failed to run inference';
+       element.requestUpdate();
+       await element.updateComplete;
+       expect(statusText()).toBe('Error · see message in chat');
+     });
 
-  it('renders select-dir option when isSupported is true', async () => {
-    (mockLocalDirService as any).isSupported = true;
-    element.requestUpdate();
-    await element.updateComplete;
-
-    const dropdown = element.shadowRoot!.querySelector('custom-dropdown') as HTMLElement;
-    const uploadItem = dropdown.querySelector('[data-value="upload"]');
-    const selectDirItem = dropdown.querySelector('[data-value="select-dir"]');
-
-    expect(uploadItem).toBeFalsy();
-    expect(selectDirItem).toBeTruthy();
-  });
+  it('labels the mobile drawer header as Menu with Close / Close menu button',
+     () => {
+       const title = element.shadowRoot!.querySelector(
+                         '.mobile-sidebar-header .section-title') as HTMLElement;
+       const closeBtn = element.shadowRoot!.querySelector(
+                            '#btn-dismiss-sidebar') as HTMLButtonElement;
+       expect(title.textContent!.trim()).toBe('Menu');
+       expect(closeBtn.textContent!.trim()).toBe('Close');
+       expect(closeBtn.getAttribute('aria-label')).toBe('Close menu');
+     });
 });

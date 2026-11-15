@@ -59,6 +59,21 @@ message LitertLmMetrics {
 
   // Peak private memory usage in megabytes.
   float peak_private_mb = 9;
+
+  // Fields 10 and 11 were the DMA-BUF specific `peak_dmabuf_mb` and
+  // `dmabuf_buffer_count`, which are now reported through
+  // peak_accelerator_mb / peak_accelerator_breakdown_mb.
+  reserved 10, 11;
+  reserved "peak_dmabuf_mb", "dmabuf_buffer_count";
+
+  // Peak accelerator (GPU / NPU) memory used by the process in megabytes. Unset
+  // when accelerator memory tracking is not supported on the platform or peak
+  // memory reporting is disabled.
+  optional float peak_accelerator_mb = 12;
+
+  // Breakdown of peak_accelerator_mb into platform-specific categories, in
+  // megabytes, keyed by the category name.
+  map<string, float> peak_accelerator_breakdown_mb = 13;
 }
 
 message LitertLmMetricsList {

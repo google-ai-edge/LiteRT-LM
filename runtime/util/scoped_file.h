@@ -15,7 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_SCOPED_FILE_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_SCOPED_FILE_H_
 
-#include "support/util/scoped_file.h"  // from @litert
+#include "support/util/scoped_file.h"
 
 namespace litert::lm {
 using ScopedFile = ::litert::support::ScopedFile;

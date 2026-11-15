@@ -61,7 +61,7 @@ absl::Status StopTokenDetector::AddStopTokenSequence(
   // Check if the sequence already exists
   if (std::find(stop_sequences_storage_.begin(), stop_sequences_storage_.end(),
                 stop_sequence) != stop_sequences_storage_.end()) {
-    ABSL_LOG(INFO) << absl::StrFormat(
+    ABSL_VLOG(1) << absl::StrFormat(
         "Stop token sequence %s already exists. Skipping "
         "adding the stop token sequence.",
         PrintSequence(stop_sequence));

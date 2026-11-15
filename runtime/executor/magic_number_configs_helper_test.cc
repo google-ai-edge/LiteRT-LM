@@ -24,6 +24,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -32,6 +33,7 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "runtime/util/test_utils.h"  // NOLINT
@@ -100,25 +102,39 @@ class ModelResourcesMock : public ModelResources {
  public:
   MOCK_METHOD(absl::StatusOr<const proto::LlmMetadata*>, GetLlmMetadata, (),
               (override));
+  MOCK_METHOD(absl::StatusOr<const proto::ExecutorMetadata*>,
+              GetExecutorMetadata, (), (override));
   MOCK_METHOD(absl::StatusOr<std::unique_ptr<Tokenizer>>, GetTokenizer, (),
               (override));
   MOCK_METHOD(absl::StatusOr<absl::string_view>, GetTFLiteModelBuffer,
-              (ModelType model_type), (override));
+              (proto::LlmMetadata::TfLiteModelType model_type), (override));
   MOCK_METHOD(std::optional<std::string>, GetTFLiteModelBackendConstraint,
-              (ModelType model_type), (override));
+              (proto::LlmMetadata::TfLiteModelType model_type), (override));
   MOCK_METHOD(std::optional<std::string>, GetTFLiteModelPreferActivationType,
-              (ModelType model_type), (override));
+              (proto::LlmMetadata::TfLiteModelType model_type), (override));
   MOCK_METHOD(absl::StatusOr<std::reference_wrapper<ScopedFile>>, GetScopedFile,
               (), (override));
   MOCK_METHOD((absl::StatusOr<std::pair<size_t, size_t>>),
-              GetWeightsSectionOffset, (ModelType model_type), (override));
+              GetWeightsSectionOffset,
+              (proto::LlmMetadata::TfLiteModelType model_type), (override));
+
+  using ModelResources::HasTFLiteModel;
+
+  bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override {
+    return true;
+  }
 
   absl::StatusOr<const litert::Model*> GetTFLiteModel(
-      ModelType model_type) override {
+      proto::LlmMetadata::TfLiteModelType model_type) override {
     return &model_;
   }
 
   explicit ModelResourcesMock(const Model& model) : model_(model) {}
+
+  absl::StatusOr<FileRegion> GetTFLiteModelSectionFileRegion(
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    return absl::UnimplementedError("Unimplemented");
+  }
 
  private:
   const Model& model_;
@@ -235,6 +251,52 @@ TEST(MagicNumberConfigsHelperTest,
 
   // Verifications are disabled by default.
   EXPECT_EQ(helper.magic_number_verifications(), nullptr);
+}
+
+TEST(MagicNumberConfigsHelperTest, ContextLength_ExpansionOptIn) {
+  for (int context : {131072, 262144}) {
+    auto model = LoadModelFromFile(kTestModelPathContextLength);
+    ASSERT_OK(model);
+    auto executor_settings = GetLlmExecutorSettings();
+    ASSERT_OK(executor_settings);
+    executor_settings->SetMaxNumTokens(context);
+    executor_settings->SetAdvancedSettings(
+        AdvancedSettings{.allow_context_length_expansion = true});
+
+    ModelResourcesMock model_resources(*model);
+    MagicNumberConfigsHelper helper;
+    auto env_options =
+        helper.GetLiteRtEnvOptions(model_resources, *executor_settings);
+    ASSERT_EQ(env_options.size(), 1);
+    ASSERT_NE(helper.magic_number_configs(), nullptr);
+    const auto& config = Get(helper.magic_number_configs()->configs, 0);
+    EXPECT_EQ(config.magic_number, 8209);
+    EXPECT_EQ(config.target_number, context);
+    EXPECT_EQ(config.signature_prefix, nullptr);
+  }
+}
+
+TEST(MagicNumberConfigsHelperTest, ContextExpansionKeepsBatchLimits) {
+  auto model = LoadModelFromFile(kTestModelPathDecodeBatch);
+  ASSERT_OK(model);
+  auto executor_settings = GetLlmExecutorSettings();
+  ASSERT_OK(executor_settings);
+  executor_settings->SetMaxNumTokens(262144);
+  executor_settings->SetAdvancedSettings(
+      AdvancedSettings{.prefill_batch_sizes = {8192},
+                       .num_output_candidates = 20,
+                       .allow_context_length_expansion = true});
+
+  ModelResourcesMock model_resources(*model);
+  MagicNumberConfigsHelper helper;
+  auto env_options =
+      helper.GetLiteRtEnvOptions(model_resources, *executor_settings);
+  ASSERT_EQ(env_options.size(), 1);
+  ASSERT_NE(helper.magic_number_configs(), nullptr);
+  ASSERT_EQ(helper.magic_number_configs()->num_configs, 3);
+  EXPECT_EQ(Get(helper.magic_number_configs()->configs, 0).target_number, 262144);
+  EXPECT_EQ(Get(helper.magic_number_configs()->configs, 1).target_number, 8);
+  EXPECT_EQ(Get(helper.magic_number_configs()->configs, 2).target_number, 4096);
 }
 
 TEST(MagicNumberConfigsHelperTest,

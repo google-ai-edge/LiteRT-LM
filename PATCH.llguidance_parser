@@ -1,8 +1,0 @@
---- src/earley/parser.rs
-+++ src/earley/parser.rs
-@@ -135,3 +135,3 @@
-     pub fn one_in(&mut self, n: u32) -> bool {
--        self.next().is_multiple_of(n)
-+        self.next() % n == 0
-     }
- 

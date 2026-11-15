@@ -1,0 +1,87 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_SPEECH2TEXT_TDT_DECODER_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_SPEECH2TEXT_TDT_DECODER_H_
+
+#include <cstddef>
+#include <memory>
+#include <optional>
+#include <vector>
+
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/base/litert_runner.h"
+#include "omni/base/stateful_litert_runner.h"
+#include "omni/speech2text/litert_speech_recognizer.h"
+#include "omni/speech2text/speech_recognizer.h"
+
+namespace litert::omni::asr {
+
+// Token Duration Transducer (TDT) decoder implementation supporting optional
+// stateful decoding.
+class TdtDecoder : public LiteRtSpeechRecognizer::Decoder {
+ public:
+  // `max_symbols_per_step` caps the number of non-blank tokens emitted at a
+  // single encoder time frame via zero-duration steps before rolling back the
+  // frame burst and advancing to the next frame.
+  static absl::StatusOr<std::unique_ptr<TdtDecoder>> Create(
+      LiteRtRunner* absl_nonnull runner,
+      std::vector<int> decode_start_token_ids = {8192},
+      int decode_statefully_after = 4, int max_symbols_per_step = 3);
+
+  ~TdtDecoder() override = default;
+
+  // When `decode_range` is provided (see `Decoder::DecodeRange`), encoder
+  // frames `[floor(start_fraction * max_time_index),
+  // round(valid_fraction * max_time_index))` are reported, i.e. frames whose
+  // center lies in real audio (frames straddling the padding boundary
+  // otherwise emit stray partial tokens), with timestamps relative to the
+  // first reported frame. Frames before the start are still decoded (the
+  // prediction network is autoregressive) but their tokens are dropped.
+  absl::StatusOr<std::vector<SpeechRecognizer::DecodedToken>> Decode(
+      std::vector<TensorBuffer>& encoder_outputs,
+      std::optional<DecodeRange> decode_range) override;
+
+  // Decodes without `decode_range`.
+  using Decoder::Decode;
+
+ private:
+  TdtDecoder(
+      LiteRtRunner* absl_nonnull runner,
+      std::unique_ptr<StatefulLiteRtRunner> absl_nullable stateful_runner,
+      std::vector<TensorBuffer> decode_input_buffers,
+      std::vector<TensorBuffer> decode_output_buffers,
+      std::optional<TensorBuffer> stateful_decode_token_ids_buffer,
+      size_t max_time_index, size_t num_token_ids, size_t num_logits_per_token,
+      int blank_token_id, int decode_statefully_after,
+      int max_symbols_per_step);
+
+  LiteRtRunner& runner_;
+  std::unique_ptr<StatefulLiteRtRunner> absl_nullable stateful_runner_;
+  std::vector<TensorBuffer> decode_input_buffers_;
+  std::vector<TensorBuffer> decode_output_buffers_;
+  std::optional<TensorBuffer> stateful_decode_token_ids_buffer_;
+  const size_t max_time_index_;
+  const size_t num_token_ids_;
+  const size_t num_logits_per_token_;
+  const int blank_token_id_;
+  const int decode_statefully_after_;
+  const int max_symbols_per_step_;
+};
+
+}  // namespace litert::omni::asr
+
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_SPEECH2TEXT_TDT_DECODER_H_

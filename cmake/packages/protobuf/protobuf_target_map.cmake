@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(PROTOBUF_TARGET_MAP
-  "protobuf::libprotobuf-lite=${PROTO_LIB_DIR}/libprotobuf-lite.a"
-  "protobuf::libprotobuf=${PROTO_LIB_DIR}/libprotobuf.a"
-  "protobuf::libprotoc=${PROTO_LIB_DIR}/libprotoc.a"
-  "protobuf::libupb=${PROTO_LIB_DIR}/libupb.a"
-  "protobuf::libutf8_validity=${PROTO_LIB_DIR}/libutf8_validity.a"
+set(LITERTLM_PROTOBUF_TARGET_MAP
+  "protobuf::libprotobuf-lite=${LITERTLM_PROTOBUF_LIB_DIR}/libprotobuf-lite.a"
+  "protobuf::libprotobuf=${LITERTLM_PROTOBUF_LIB_DIR}/libprotobuf.a"
+  "protobuf::libprotoc=${LITERTLM_PROTOBUF_LIB_DIR}/libprotoc.a"
+  "protobuf::libupb=${LITERTLM_PROTOBUF_LIB_DIR}/libupb.a"
+  "protobuf::libutf8_validity=${LITERTLM_PROTOBUF_LIB_DIR}/libutf8_validity.a"
+  "protobuf::libutf8_range=${LITERTLM_PROTOBUF_LIB_DIR}/libutf8_range.a"
 )

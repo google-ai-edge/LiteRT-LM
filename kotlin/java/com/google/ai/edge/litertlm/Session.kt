@@ -136,6 +136,19 @@ class Session(private val handle: Long) : AutoCloseable {
     LiteRtLmJni.nativeCancelProcess(handle)
   }
 
+  /**
+   * Clones the current session into a new [Session] instance sharing the current KV cache state and
+   * configuration.
+   *
+   * @return A new [Session] instance with the cloned state.
+   * @throws IllegalStateException if the session is not alive.
+   * @throws LiteRtLmJniException if the native clone operation fails.
+   */
+  fun clone(): Session {
+    checkIsAlive()
+    return Session(LiteRtLmJni.nativeCloneSession(handle))
+  }
+
   /** Throws [IllegalStateException] if the session is not alive. */
   private fun checkIsAlive() {
     check(isAlive) { "Session is not alive." }

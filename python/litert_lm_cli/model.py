@@ -25,18 +25,24 @@ import io
 import mimetypes
 import os
 import pathlib
-import traceback
+from typing import Any
 
 import click
 
 import litert_lm
-from litert_lm_builder import litertlm_builder
 from litert_lm_builder import litertlm_peek
+from litert_lm_cli import config
+try:
+  # PyPI: litert-lm-builder bundles the protos under its own package.
+  from litert_lm_builder.runtime.proto import llm_metadata_pb2
+except ImportError:
+  # Bazel: the protos are importable from the workspace root.
+  from runtime.proto import llm_metadata_pb2
 
 # The default model types representing the main text model components.
 _DEFAULT_TARGET_MODEL_TYPES = frozenset({
-    litertlm_builder.TfLiteModelType.ARTISAN_TEXT_DECODER.value,
-    litertlm_builder.TfLiteModelType.PREFILL_DECODE.value,
+    llm_metadata_pb2.LlmMetadata.TF_LITE_ARTISAN_TEXT_DECODER,
+    llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE,
 })
 
 
@@ -113,16 +119,17 @@ def load_preset(preset: str):
 
 def model_default_backend(
     model_path: str,
-    target_model_types: collections.abc.Container[
-        str
+    target_model_types: collections.abc.Iterable[
+        llm_metadata_pb2.LlmMetadata.TfLiteModelType
     ] = _DEFAULT_TARGET_MODEL_TYPES,
 ) -> str | None:
   """Inspects the .litertlm file metadata to detect the default backend.
 
   Args:
     model_path: The path to the .litertlm model file.
-    target_model_types: The model types to look for. Defaults to main model
-      types (ARTISAN_TEXT_DECODER, PREFILL_DECODE).
+    target_model_types: The `LlmMetadata.TfLiteModelType` enum values to look
+      for. Defaults to main model types (TF_LITE_ARTISAN_TEXT_DECODER,
+      TF_LITE_PREFILL_DECODE).
 
   Returns:
     The default backend name (e.g., 'gpu', 'cpu') or None if not found.
@@ -130,6 +137,13 @@ def model_default_backend(
     present in the model is crucial. It signals the CLI to pass None to the
     Engine, safely disabling them and preventing C++ initialization crashes.
   """
+  target_wire_strings = {
+      llm_metadata_pb2.LlmMetadata.TfLiteModelType.Name(t).lower()
+      for t in target_model_types
+  }
+  artisan_wire_string = llm_metadata_pb2.LlmMetadata.TfLiteModelType.Name(
+      llm_metadata_pb2.LlmMetadata.TF_LITE_ARTISAN_TEXT_DECODER
+  ).lower()
   try:
     with io.StringIO() as dummy_out:
       metadata = litertlm_peek.read_litertlm_header(model_path, dummy_out)
@@ -143,11 +157,8 @@ def model_default_backend(
             model_type = litertlm_peek.get_model_type(section)
             if model_type:
               model_type_lower = model_type.lower()
-              if model_type_lower in target_model_types:
-                if (
-                    model_type_lower
-                    == litertlm_builder.TfLiteModelType.ARTISAN_TEXT_DECODER.value
-                ):
+              if model_type_lower in target_wire_strings:
+                if model_type_lower == artisan_wire_string:
                   return "gpu"
                 if section.ItemsLength() > 0:
                   for j in range(section.ItemsLength()):
@@ -174,14 +185,63 @@ def model_default_backend(
   return None
 
 
+# TODO: Try to unify with logic in `model_default_backend`.
+def is_gpu_artisan_model(model_path: str) -> bool:
+  """Returns whether the .litertlm file has an artisan GPU text decoder.
+
+  Args:
+    model_path: The path to the .litertlm model file.
+
+  Returns:
+    True if the file has a TF_LITE_ARTISAN_TEXT_DECODER section whose backend
+    constraint is empty or allows the GPU. False otherwise, including when the
+    metadata can't be read.
+  """
+  artisan_wire_string = llm_metadata_pb2.LlmMetadata.TfLiteModelType.Name(
+      llm_metadata_pb2.LlmMetadata.TF_LITE_ARTISAN_TEXT_DECODER
+  ).lower()
+  try:
+    with io.StringIO() as dummy_out:
+      metadata = litertlm_peek.read_litertlm_header(model_path, dummy_out)
+      section_metadata = metadata.SectionMetadata() if metadata else None
+      if not section_metadata:
+        return False
+      for i in range(section_metadata.ObjectsLength()):
+        section = section_metadata.Objects(i)
+        if not section:
+          continue
+        model_type = litertlm_peek.get_model_type(section)
+        if not model_type or model_type.lower() != artisan_wire_string:
+          continue
+        for j in range(section.ItemsLength()):
+          item = section.Items(j)
+          if item is None:
+            continue
+          item_dict = litertlm_peek.kvp_to_dict(item)
+          constraint = item_dict.get("value")
+          if item_dict.get("key") == "backend_constraint" and constraint:
+            return any(
+                b.strip().lower().startswith("gpu")
+                for b in str(constraint).split(",")
+            )
+        return True
+  except Exception:  # pylint: disable=broad-exception-caught
+    return False
+  return False
+
+
 def _create_backend_obj(
-    backend_name: str | None, cpu_thread_count: int | None = None
+    backend_name: str | None,
+    cpu_thread_count: int | None = None,
+    gpu_decode_steps_per_sync: int | None = None,
 ) -> litert_lm.Backend | None:
   """Creates a litert_lm.Backend object from name, or returns None."""
   if backend_name is None:
     return None
   elif backend_name == "gpu":
-    return litert_lm.Backend.GPU()
+    return litert_lm.Backend.GPU(
+        gpu_decode_steps_per_sync=gpu_decode_steps_per_sync
+    )
   elif backend_name == "npu":
     return litert_lm.Backend.NPU()
   else:
@@ -191,48 +251,204 @@ def _create_backend_obj(
 def parse_backend(
     backend: str | None = None,
     *,
-    model_obj: Model | None = None,
+    model_obj: Model,
     cpu_thread_count: int | None = None,
-    target_model_types: collections.abc.Container[
-        str
+    target_model_types: collections.abc.Iterable[
+        llm_metadata_pb2.LlmMetadata.TfLiteModelType
     ] = _DEFAULT_TARGET_MODEL_TYPES,
     label: str | None = None,
+    gpu_decode_steps_per_sync: int | None = None,
 ) -> litert_lm.Backend | None:
   """Parses the backend string and resolves it against model constraints.
 
   Args:
     backend: The backend requested by the user (e.g., "cpu", "gpu", "npu").
-    model_obj: Optional Model instance to check for constraints.
+    model_obj: Model instance to check for constraints.
     cpu_thread_count: Optional thread count for CPU backend.
     target_model_types: Container of model types to look for when resolving
       default backend. Defaults to main model types.
     label: Optional label for the backend (e.g., "audio", "vision") used in log
       messages.
+    gpu_decode_steps_per_sync: Optional decode steps per sync for GPU backend.
 
   Returns:
     The resolved litert_lm.Backend to use, or None if not supported.
   """
-  if backend is not None:
-    return _create_backend_obj(backend.lower(), cpu_thread_count)
+  model_cfg = config.get_model_config(model_obj.model_id)
+  is_main_model = target_model_types == _DEFAULT_TARGET_MODEL_TYPES
 
-  if model_obj is not None:
-    default_backend = model_default_backend(
-        model_obj.model_path, target_model_types
-    )
-    if default_backend is None:
-      return None
-
-    if default_backend != "cpu":
-      label_str = f" for {label}" if label else ""
-      click.echo(
-          click.style(
-              f"Using model's default backend{label_str}: {default_backend}",
-              fg="bright_black",
-          )
+  # 1. Resolve Backend
+  resolved_backend = backend
+  backend_from_config = False
+  if resolved_backend is None:
+    if is_main_model and model_cfg.backend is not None:
+      resolved_backend = model_cfg.backend
+      backend_from_config = True
+    elif label == "vision" and model_cfg.vision_backend is not None:
+      resolved_backend = model_cfg.vision_backend
+      backend_from_config = True
+    elif label == "audio" and model_cfg.audio_backend is not None:
+      resolved_backend = model_cfg.audio_backend
+      backend_from_config = True
+    else:
+      resolved_backend = model_default_backend(
+          model_obj.model_path, target_model_types
       )
+      # Print info message for model's default backend if it is not CPU
+      if resolved_backend and resolved_backend != "cpu":
+        label_str = f" for {label}" if label else ""
+        click.echo(
+            click.style(
+                f"Using model's default backend{label_str}: {resolved_backend}",
+                fg="bright_black",
+            )
+        )
 
-    return _create_backend_obj(default_backend, cpu_thread_count)
+  if resolved_backend is None:
+    return None
 
+  # Print info message if backend came from config
+  if backend_from_config:
+    label_str = f" for {label}" if label else ""
+    click.echo(
+        click.style(
+            f"Using backend{label_str} from config for model"
+            f" '{model_obj.model_id}': {resolved_backend}",
+            fg="bright_black",
+        )
+    )
+
+  # 2. Resolve CPU Thread Count
+  resolved_threads = cpu_thread_count
+  threads_from_config = False
+  if resolved_threads is None:
+    if is_main_model and model_cfg.cpu_thread_count is not None:
+      resolved_threads = model_cfg.cpu_thread_count
+      threads_from_config = True
+
+  # Print info message if threads came from config
+  if threads_from_config:
+    click.echo(
+        click.style(
+            "Using cpu_thread_count from config for model"
+            f" '{model_obj.model_id}': {resolved_threads}",
+            fg="bright_black",
+        )
+    )
+
+  # 3. Resolve GPU Decode Steps Per Sync
+  resolved_gpu_decode_steps_per_sync = gpu_decode_steps_per_sync
+  gpu_decode_steps_from_config = False
+  if resolved_gpu_decode_steps_per_sync is None:
+    if is_main_model and model_cfg.gpu_decode_steps_per_sync is not None:
+      resolved_gpu_decode_steps_per_sync = model_cfg.gpu_decode_steps_per_sync
+      gpu_decode_steps_from_config = True
+
+  # Print info message if gpu_decode_steps_per_sync came from config
+  if gpu_decode_steps_from_config:
+    click.echo(
+        click.style(
+            "Using gpu_decode_steps_per_sync from config for model"
+            f" '{model_obj.model_id}': {resolved_gpu_decode_steps_per_sync}",
+            fg="bright_black",
+        )
+    )
+
+  return _create_backend_obj(
+      resolved_backend.lower(),
+      resolved_threads,
+      resolved_gpu_decode_steps_per_sync,
+  )
+
+
+def speculative_decoding_config_from_mode(
+    mode: str | None,
+) -> litert_lm.SpeculativeDecodingConfig | None:
+  """Returns the speculative decoding config for a normalized CLI mode.
+
+  Args:
+    mode: "on", "off" or "adaptive", as returned by
+      `common.normalize_speculative_decoding`, or None.
+
+  Returns:
+    A config setting `mode`, or None (inherit the model's default) if `mode` is
+    None.
+  """
+  if mode is None:
+    return None
+  return litert_lm.SpeculativeDecodingConfig(
+      mode=litert_lm.SpeculativeDecodingMode[mode.upper()]
+  )
+
+
+def resolve_config_option(
+    value: Any,
+    model_obj: Model | None,
+    config_key: str,
+    label: str | None = None,
+) -> Any:
+  """Resolves an option value, falling back to config if value is None.
+
+  Args:
+    value: Explicit value passed by CLI/user (if any).
+    model_obj: Model instance (if available).
+    config_key: Attribute name on ModelConfig (e.g. "cache", "max_num_tokens").
+    label: Display label for logging (defaults to config_key).
+
+  Returns:
+    The explicit value if set, otherwise value from ModelConfig if set,
+    otherwise None.
+  """
+  if value is not None or model_obj is None:
+    return value
+
+  model_id = getattr(model_obj, "model_id", None)
+  if not model_id:
+    return value
+
+  model_cfg = config.get_model_config(model_id)
+  config_val = getattr(model_cfg, config_key, None)
+  if config_val is not None:
+    display_label = label or config_key
+    click.echo(
+        click.style(
+            f"Using {display_label} from config for model"
+            f" '{model_id}': {config_val}",
+            fg="bright_black",
+        )
+    )
+    return config_val
+
+  return None
+
+
+def resolve_ringbuffers_local_attention(
+    value: bool | None, model_obj: Model
+) -> bool | None:
+  """Resolves whether to use ringbuffers for the local attention KV cache.
+
+  Ringbuffers default to on for artisan GPU models, which otherwise allocate
+  their local attention KV caches for the full context length.
+
+  Args:
+    value: Explicit value passed by CLI/user (if any).
+    model_obj: Model instance.
+
+  Returns:
+    The explicit value if set, True for artisan GPU models, otherwise None (use
+    the engine's default).
+  """
+  if value is not None:
+    return value
+  if is_gpu_artisan_model(model_obj.model_path):
+    click.echo(
+        click.style(
+            "Using ringbuffers for local attention (default for artisan GPU"
+            " models).",
+            fg="bright_black",
+        )
+    )
+    return True
   return None
 
 
@@ -271,30 +487,50 @@ class Model:
     ]
 
   @classmethod
-  def from_model_reference(cls, model_reference):
+  def from_model_reference(cls, model_reference: str) -> Model:
     """Creates a Model instance from a model reference."""
-    if os.path.exists(model_reference):
+    # 1. Check if model_reference matches an imported model ID in
+    # ~/.litert-lm/models/.
+    imported_model = cls.from_model_id(model_reference)
+    if imported_model.exists():
+      return imported_model
+
+    # 2. Check if model_reference is an existing local file
+    if os.path.isfile(model_reference):
       return cls.from_model_path(model_reference)
-    else:
-      # assume the reference is model_id
-      return cls.from_model_id(model_reference)
+
+    # 3. Check if model_reference is a local directory containing a model
+    if os.path.isdir(model_reference):
+      dir_model_path = os.path.join(model_reference, "model.litertlm")
+      if os.path.isfile(dir_model_path):
+        return cls.from_model_path(dir_model_path)
+
+    # 4. Fallback: Return imported_model representation (so .exists() returns
+    # False).
+    return imported_model
 
   @classmethod
-  def from_model_path(cls, model_path):
+  def from_model_path(cls, model_path: str) -> Model:
     """Creates a Model instance from a model path."""
+    abs_path = os.path.abspath(model_path)
+    if os.path.basename(abs_path) == "model.litertlm":
+      parent_name = pathlib.Path(abs_path).parent.name
+      model_id = parent_name.replace("--", "/")
+    else:
+      model_id = os.path.basename(abs_path)
     return cls(
-        model_id=os.path.basename(model_path),
-        model_path=os.path.abspath(model_path),
+        model_id=model_id,
+        model_path=abs_path,
     )
 
   @classmethod
-  def from_model_id(cls, model_id):
+  def from_model_id(cls, model_id: str) -> Model:
     """Creates a Model instance from a model ID."""
     return cls(
         model_id=model_id,
         model_path=os.path.join(
             get_converted_models_base_dir(),
-            model_id.replace("/", "--"),
+            model_id_dir_name(model_id),
             "model.litertlm",
         ),
     )
@@ -306,12 +542,7 @@ def model_id_dir_name(model_id):
   return model_id.replace("/", "--")
 
 
-def get_cli_base_dir() -> str:
-  """Gets the base directory for LiteRT-LM CLI."""
-  env_override = os.environ.get("LITERT_LM_DIR")
-  if env_override:
-    return os.path.abspath(env_override)
-  return os.path.join(os.path.expanduser("~"), ".litert-lm")
+get_cli_base_dir = config.get_cli_base_dir
 
 
 # ~/.litert-lm/models

@@ -12,34 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+include("${LITERTLM_MODULES_DIR}/utils.cmake")
+include("${LITERTLM_GTEST_PACKAGE_DIR}/gtest_config.cmake")
 
-# [TODO] Update to follow the same pattern as the other packages.
+set(LITERTLM_GTEST_EXTERNAL_DONE ${LITERTLM_GTEST_STAMP_DIR}/gtest_external-done CACHE INTERNAL "")
+
+
+setup_external_install_structure("${LITERTLM_GTEST_INSTALL_PREFIX}")
+set(LITERTLM_GTEST_TAG "v1.17.0" CACHE STRING "GoogleTest git tag")
+
 include(ExternalProject)
-
-set(GTEST_EXT_PREFIX ${EXTERNAL_PROJECT_BINARY_DIR}/googletest)
-set(GTEST_INSTALL_PREFIX ${GTEST_EXT_PREFIX}/install)
-set(GTEST_INCLUDE_DIR ${GTEST_INSTALL_PREFIX}/include)
-set(GTEST_CONFIG_CMAKE_FILE "${GTEST_INSTALL_PREFIX}/lib/cmake/GTest/GTestConfig.cmake")
-
-set(absl_DIR "${ABSL_INSTALL_PREFIX}/lib/cmake/absl" CACHE PATH "Path to absl config")
-set(ABSL_DIR "${ABSL_INSTALL_PREFIX}/lib/cmake/absl" CACHE PATH "Path to absl config")
-set(absl_ROOT "${ABSL_INSTALL_PREFIX}" CACHE PATH "absl root dir")
-set(ABSL_ROOT "${ABSL_INSTALL_PREFIX}" CACHE PATH "absl root dir")
-
-list(APPEND CMAKE_PREFIX_PATH "${ABSL_INSTALL_PREFIX}")
-list(APPEND CMAKE_SYSTEM_PREFIX_PATH "${ABSL_INSTALL_PREFIX}")
-
-set(ABSL_INCLUDE_DIR "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dir")
-set(ABSL_INCLUDE_DIRS "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dirs")
-set(absl_INCLUDE_DIR "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dir")
-set(absl_INCLUDE_DIRS "${ABSL_INSTALL_PREFIX}/include" CACHE PATH "absl include dirs")
-set(ABSL_LIBRARY_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
-set(ABSL_LIB_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
-set(absl_LIBRARY_DIR "${ABSL_INSTALL_PREFIX}/lib" CACHE PATH "absl lib dir")
-
-setup_external_install_structure("${GTEST_INSTALL_PREFIX}")
-
-if(NOT EXISTS "${GTEST_CONFIG_CMAKE_FILE}")
+if(NOT EXISTS "${LITERTLM_GTEST_EXTERNAL_DONE}")
   message(STATUS "GoogleTest not found. Configuring external build...")
 
   ExternalProject_Add(
@@ -49,23 +32,32 @@ if(NOT EXISTS "${GTEST_CONFIG_CMAKE_FILE}")
     GIT_REPOSITORY
       https://github.com/google/googletest
     GIT_TAG
-      v1.17.0
+      ${LITERTLM_GTEST_TAG}
     PREFIX
-      ${GTEST_EXT_PREFIX}
-    PATCH_COMMAND
-      git checkout -- . && git clean -df
+      ${LITERTLM_GTEST_EXT_PREFIX}
+    UPDATE_COMMAND
+      git fetch origin ${LITERTLM_GTEST_TAG}
+      COMMAND git reset --hard FETCH_HEAD
+      COMMAND git clean -dfx
     CMAKE_ARGS
       ${LITERTLM_TOOLCHAIN_FILE}
       ${LITERTLM_TOOLCHAIN_ARGS}
+      -DLITERTLM_ORCHESTRATION_PHASE=${LITERTLM_ORCHESTRATION_PHASE}
+      "-DLITERTLM_BIN_EXT=${LITERTLM_BIN_EXT}"
+      "-DLITERTLM_STATIC_LIB_EXT=${LITERTLM_STATIC_LIB_EXT}"
+      "-DLITERTLM_DYN_LIB_EXT=${LITERTLM_DYN_LIB_EXT}"
+      "-DLITERTLM_LIB_PREFIX=${LITERTLM_LIB_PREFIX}"
       -DCMAKE_PREFIX_PATH=${ABSL_INSTALL_PREFIX}
-      -DCMAKE_INSTALL_PREFIX=${GTEST_INSTALL_PREFIX}
+      -DCMAKE_INSTALL_PREFIX=${LITERTLM_GTEST_INSTALL_PREFIX}
       -DCMAKE_INSTALL_LIBDIR=lib
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DCMAKE_POLICY_DEFAULT_CMP0169=OLD
       -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}
       -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
       -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+      -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+      -DLITERTLM_ABSL_CONFIG_PATH=${ABSL_CONFIG_PATH}
       -Dabsl_DIR=${absl_DIR}
       -DABSL_DIR=${ABSL_DIR}
       -Dabsl_ROOT=${absl_ROOT}
@@ -78,18 +70,31 @@ if(NOT EXISTS "${GTEST_CONFIG_CMAKE_FILE}")
       -DABSL_LIB_DIR=${ABSL_LIB_DIR}
       -Dabsl_LIBRARY_DIR=${absl_LIBRARY_DIR}
   )
-
+  if(LITERTLM_GENERATE_TARGET_MAP)
+    ExternalProject_Add_Step(gtest_external generate_target_map
+      COMMAND ${CMAKE_COMMAND}
+          "-DDEP_NAME=gtest"
+          "-DSEARCH_DIR=${LITERTLM_GTEST_LIB_DIR}"
+          "-DSEARCH_STR=LITERTLM_GTEST_LIB_DIR"
+          "-DOUTPUT_FILE=${LITERTLM_GTEST_TARGET_MAP_PATH}"
+          -P ${LITERTLM_SCRIPTS_DIR}/generate_target_map.cmake
+      DEPENDEES install
+      BYPRODUCTS ${LITERTLM_GTEST_TARGET_MAP_PATH}
+    )
+  endif()
 else()
-    message(STATUS "GoogleTest already installed at: ${GTEST_INSTALL_PREFIX}")
+    message(STATUS "GoogleTest already installed at: ${LITERTLM_GTEST_INSTALL_PREFIX}")
     if(NOT TARGET gtest_external)
         add_custom_target(gtest_external)
     endif()
 endif()
 
-import_static_lib(imp_gmock                      "${GTEST_LIB_DIR}/libgmock.a")
-import_static_lib(imp_gmock_main                 "${GTEST_LIB_DIR}/libgmock_main.a")
-import_static_lib(imp_gtest                      "${GTEST_LIB_DIR}/libgtest.a")
-import_static_lib(imp_gtest_main                 "${GTEST_LIB_DIR}/libgtest_main.a")
+
+#--- Legacy target map generation for gtest. This is not recommended and may be removed in future versions.
+import_static_lib(imp_gmock "${LITERTLM_GTEST_LIB_DIR}/libgmock.a")
+import_static_lib(imp_gmock_main "${LITERTLM_GTEST_LIB_DIR}/libgmock_main.a")
+import_static_lib(imp_gtest "${LITERTLM_GTEST_LIB_DIR}/libgtest.a")
+import_static_lib(imp_gtest_main "${LITERTLM_GTEST_LIB_DIR}/libgtest_main.a")
 
 add_library(gtest_libs INTERFACE)
 target_link_libraries(gtest_libs INTERFACE

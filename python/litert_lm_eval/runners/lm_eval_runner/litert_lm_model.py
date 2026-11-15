@@ -201,7 +201,7 @@ class LitertLmModelRunner(LM):
     if image_idx < len(visual_items):
       new_content.extend(visual_items[image_idx:])
 
-    processed_msg["content"] = new_content
+    processed_msg["content"] = new_content  # pyrefly: ignore[unsupported-operation]
     return processed_msg
 
   def generate_until(self, requests) -> List[str]:
@@ -233,7 +233,7 @@ class LitertLmModelRunner(LM):
 
       with self.engine.create_conversation(messages=history) as conversation:
         response = conversation.send_message(last_msg)
-        text_response = self._extract_text(response.get("content", []))
+        text_response = str(response)
 
         if until:
           stop_indices = [

@@ -34,6 +34,40 @@ flatbuffer_py_library(
     srcs = ["//schema/core:litertlm_header_schema.fbs"],
 )
 
+flatbuffer_py_library(
+    name = "tflite_schema_py",
+    srcs = ["@org_tensorflow//tensorflow/compiler/mlir/lite/schema:schema.fbs"],
+)
+
+pytype_strict_library(
+    name = "externalize_tflite_flatbuffer",
+    srcs = ["externalize_tflite_flatbuffer.py"],
+    deps = [
+        ":tflite_schema_py",
+        "@flatbuffers//:runtime_py",
+    ] + select({
+        "@platforms//os:macos": [],
+        "//conditions:default": [
+            # Without numpy, FlatBuffers packs and unpacks weight buffers one
+            # byte at a time.
+            requirement("numpy"),
+        ],
+    }),
+)
+
+py_test(
+    name = "externalize_tflite_flatbuffer_test",
+    srcs = ["externalize_tflite_flatbuffer_test.py"],
+    imports = [".."],
+    deps = [
+        ":externalize_tflite_flatbuffer",
+        ":tflite_schema_py",
+        "@absl_py//absl/testing:absltest",
+        "@flatbuffers//:runtime_py",
+        requirement("numpy"),
+    ],
+)
+
 pytype_strict_library(
     name = "litertlm_core",
     srcs = ["litertlm_core.py"],
@@ -65,7 +99,13 @@ pytype_strict_library(
     deps = [
         ":litertlm_core",
         ":litertlm_header_schema_py",
+        "//runtime/proto:any2any_metadata_py_pb2",
+        "//runtime/proto:embedding_metadata_py_pb2",
+        "//runtime/proto:executor_metadata_py_pb2",
         "//runtime/proto:llm_metadata_py_pb2",
+        "//runtime/proto:speech2text_metadata_py_pb2",
+        "//runtime/proto:text2image_metadata_py_pb2",
+        "//runtime/proto:text2speech_metadata_py_pb2",
         "@com_google_protobuf//:protobuf_python",
     ],
 )
@@ -92,6 +132,7 @@ py_test(
     deps = [
         ":litertlm_builder",
         ":litertlm_peek",
+        "//runtime/proto:executor_metadata_py_pb2",
         "@absl_py//absl/testing:absltest",
     ],
 )
@@ -104,8 +145,15 @@ pytype_strict_library(
         ":litertlm_core",
         ":litertlm_header_schema_py",
         ":litertlm_peek",
+        ":externalize_tflite_flatbuffer",
         "@flatbuffers//:runtime_py",
+        "//runtime/proto:any2any_metadata_py_pb2",
+        "//runtime/proto:embedding_metadata_py_pb2",
+        "//runtime/proto:executor_metadata_py_pb2",
         "//runtime/proto:llm_metadata_py_pb2",
+        "//runtime/proto:speech2text_metadata_py_pb2",
+        "//runtime/proto:text2image_metadata_py_pb2",
+        "//runtime/proto:text2speech_metadata_py_pb2",
         "@com_google_protobuf//:protobuf_python",
         requirement("tomli"),
     ],
@@ -120,7 +168,13 @@ py_test(
         ":litertlm_core",
         ":litertlm_header_schema_py",
         ":litertlm_peek",
+        "//runtime/proto:any2any_metadata_py_pb2",
+        "//runtime/proto:embedding_metadata_py_pb2",
+        "//runtime/proto:executor_metadata_py_pb2",
         "//runtime/proto:llm_metadata_py_pb2",
+        "//runtime/proto:speech2text_metadata_py_pb2",
+        "//runtime/proto:text2image_metadata_py_pb2",
+        "//runtime/proto:text2speech_metadata_py_pb2",
         "@absl_py//absl/testing:absltest",
         "@absl_py//absl/testing:parameterized",
         "@com_google_protobuf//:protobuf_python",
@@ -147,12 +201,14 @@ py_test(
     srcs = ["litertlm_builder_cli_test.py"],
     imports = [".."],
     data = [
+        "//runtime/testdata:test_lm.litertlm",
         ":litertlm_builder_cli",
     ],
     deps = [
         ":litertlm_core",
         ":litertlm_peek",
         "@rules_python//python/runfiles",
+        "//runtime/proto:executor_metadata_py_pb2",
         "//runtime/proto:llm_metadata_py_pb2",
         "@absl_py//absl/testing:absltest",
     ],
@@ -183,11 +239,24 @@ genrule(
         "litertlm_builder.py",
         "litertlm_builder_cli.py",
         "litertlm_peek_main.py",
+        "externalize_tflite_flatbuffer.py",
         ":litertlm_header_schema_py",
+        ":tflite_schema_py",
+        "//runtime/proto:executor_metadata_py_pb2",
         "//runtime/proto:llm_metadata_py_pb2",
         "//runtime/proto:llm_model_type_py_pb2",
         "//runtime/proto:sampler_params_py_pb2",
         "//runtime/proto:token_py_pb2",
+        "//runtime/proto:speech2text_metadata_py_pb2",
+        "//runtime/proto:speech2text_model_type_py_pb2",
+        "//runtime/proto:embedding_metadata_py_pb2",
+        "//runtime/proto:embedding_model_type_py_pb2",
+        "//runtime/proto:text2image_metadata_py_pb2",
+        "//runtime/proto:image_gen_model_type_py_pb2",
+        "//runtime/proto:text2speech_metadata_py_pb2",
+        "//runtime/proto:text2speech_model_type_py_pb2",
+        "//runtime/proto:any2any_metadata_py_pb2",
+        "//runtime/proto:any2any_model_type_py_pb2",
     ],
     outs = [
         "shaded/litert_lm_builder/__init__.py",
@@ -196,11 +265,24 @@ genrule(
         "shaded/litert_lm_builder/litertlm_builder.py",
         "shaded/litert_lm_builder/litertlm_builder_cli.py",
         "shaded/litert_lm_builder/litertlm_peek_main.py",
+        "shaded/litert_lm_builder/externalize_tflite_flatbuffer.py",
         "shaded/litert_lm_builder/litertlm_header_schema_py_generated.py",
+        "shaded/litert_lm_builder/tflite_schema_py_generated.py",
+        "shaded/litert_lm_builder/runtime/proto/executor_metadata_pb2.py",
         "shaded/litert_lm_builder/runtime/proto/llm_metadata_pb2.py",
         "shaded/litert_lm_builder/runtime/proto/llm_model_type_pb2.py",
         "shaded/litert_lm_builder/runtime/proto/sampler_params_pb2.py",
         "shaded/litert_lm_builder/runtime/proto/token_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/speech2text_metadata_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/speech2text_model_type_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/embedding_metadata_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/embedding_model_type_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/text2image_metadata_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/image_gen_model_type_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/text2speech_metadata_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/text2speech_model_type_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/any2any_metadata_pb2.py",
+        "shaded/litert_lm_builder/runtime/proto/any2any_model_type_pb2.py",
     ],
     cmd = """
         for src in $(SRCS); do
@@ -265,5 +347,6 @@ genrule(
         echo 'flatbuffers' >> $@
         echo 'absl-py' >> $@
         echo 'tomli' >> $@
+        echo 'numpy' >> $@
     """,
 )

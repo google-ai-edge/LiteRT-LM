@@ -45,30 +45,24 @@ export class ConversationFake implements ChatInterface {
     if (this.nextResponses.length > 0) {
       return this.nextResponses.shift()!;
     }
-    return {role: 'model', content: 'hello from fake'};
+    return {role: 'assistant', content: 'hello from fake'};
   }
 
-  private appendInput(message: MessageLike|MessageLike[]) {
-    if (Array.isArray(message)) {
-      this.history.push(...message.map(
-          m => typeof m === 'string' ? {role: 'user', content: m} as Message :
-                                       m));
-    } else {
-      this.history.push(
-          typeof message === 'string' ?
-              {role: 'user', content: message} as Message :
-              message);
-    }
+  private appendInput(message: MessageLike) {
+    this.history.push(
+        typeof message === 'string' ?
+            {role: 'user', content: message} as Message :
+            message);
   }
 
-  async sendMessage(message: MessageLike|MessageLike[]): Promise<Message> {
+  async sendMessage(message: MessageLike): Promise<Message> {
     this.appendInput(message);
     const newMessage = this.popNextResponse();
     this.history.push(newMessage);
     return newMessage;
   }
 
-  sendMessageStreaming(message: MessageLike|MessageLike[]):
+  sendMessageStreaming(message: MessageLike):
       ReadableStream<Message> {
     this.appendInput(message);
     return new ReadableStream<Message>({
@@ -100,6 +94,11 @@ export class ConversationFake implements ChatInterface {
       lastDecodeTokensPerSecond: 0,
       lastDecodeTokenCount: 0,
       timeToFirstTokenInSecond: 0,
+      mtpRounds: 0,
+      mtpDraftedTokens: 0,
+      mtpAcceptedTokens: 0,
+      mtpEmittedTokens: 0,
+      plainDecodeSteps: 0,
     };
   }
 

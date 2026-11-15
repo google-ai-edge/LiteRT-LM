@@ -19,9 +19,7 @@
 #include <cstddef>
 #include <iterator>
 #include <limits>
-#include <memory>
 #include <numeric>
-#include <random>
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
@@ -30,8 +28,100 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "hwy/highway.h"  // from @highway
+#include "runtime/components/sampling_uniforms.h"
 
 namespace litert::lm {
+
+namespace {
+
+#if HWY_TARGET != HWY_SCALAR
+#define LITERT_LM_SAMPLING_HAS_SIMD 1
+namespace hn = hwy::HWY_NAMESPACE;
+
+// Per lane: (a < b) ? b : a. This is exactly std::max(a, b), also for NaN and
+// signed zeros: a lane keeps `a` unless `a < b`.
+template <class V>
+HWY_INLINE V MaxLanes(V a, V b) {
+  return hn::IfThenElse(hn::Lt(a, b), b, a);
+}
+#endif
+
+// Max of x[0..kSize) as an 8-lane reduction: lane j folds x[j], x[j + 8], ...
+// with (a < b) ? b : a, then the 8 lanes are reduced with std::max_element.
+// Equals *std::max_element(x, x + kSize) when x has no NaN; with NaN the result
+// depends on which lanes hold the NaN values.
+template <int kSize>
+inline float Max(const float* x) {
+  constexpr int kTileSize = 8;
+  static_assert(kSize % kTileSize == 0);
+  float max[kTileSize];
+#if defined(LITERT_LM_SAMPLING_HAS_SIMD)
+  // The same per-lane fold as the scalar loop below, with explicit Highway
+  // vectors (statically dispatched). Some toolchains (e.g. the Android arm64
+  // opt build) do not autovectorize the scalar loop. Two 4-lane vectors keep
+  // the 8-lane fold order on every target: max[0..3] is in max_lo and
+  // max[4..7] is in max_hi.
+  const hn::FixedTag<float, 4> d;
+  auto max_lo = hn::LoadU(d, x);
+  auto max_hi = hn::LoadU(d, x + 4);
+  for (int i = kTileSize; i < kSize; i += kTileSize) {
+    max_lo = MaxLanes(max_lo, hn::LoadU(d, x + i));
+    max_hi = MaxLanes(max_hi, hn::LoadU(d, x + i + 4));
+  }
+  hn::StoreU(max_lo, d, max);
+  hn::StoreU(max_hi, d, max + 4);
+#else
+  std::copy_n(x, kTileSize, max);
+  for (int i = kTileSize; i < kSize; i += kTileSize) {
+    for (int j = 0; j < kTileSize; ++j) {
+      max[j] = std::max(max[j], x[i + j]);
+    }
+  }
+#endif
+  return *std::max_element(max, max + kTileSize);
+}
+
+// Similar to std::max_element, but more optimized.
+inline int MaxElement(const float* logits, int size) {
+  if (size <= 0) return 0;
+
+  constexpr int kTileSize = 128;
+  float max = logits[0];
+  int max_idx = 0;
+
+  int i = 0;
+  for (; i + kTileSize <= size; i += kTileSize) {
+    const float* tile_logits = logits + i;
+
+    // Find the max in this tile.
+    float tile_max = Max<kTileSize>(tile_logits);
+
+    if (tile_max > max) {
+      // Find first index of this max in the tile. We only do this if we have a
+      // new max, which avoids the index search for most tiles.
+      for (int j = 0; j < kTileSize; ++j) {
+        if (tile_logits[j] == tile_max) {
+          max = tile_max;
+          max_idx = i + j;
+          break;
+        }
+      }
+    }
+  }
+
+  // Handle remaining elements
+  for (; i < size; ++i) {
+    if (logits[i] > max) {
+      max = logits[i];
+      max_idx = i;
+    }
+  }
+
+  return max_idx;
+}
+
+}  // namespace
 
 absl::StatusOr<std::vector<std::vector<int>>> TopKTokenIds(
     absl::Span<const float> logits, int k, int batch_size, int sequence_size) {
@@ -45,17 +135,12 @@ absl::StatusOr<std::vector<std::vector<int>>> TopKTokenIds(
   const int vocab_size = logits.size() / (batch_size * sequence_size);
   std::vector<std::vector<int>> output_indices(
       batch_size, std::vector<int>(sequence_size * k));
-  if (k == 1) {  // Greedy sampling. Use std::max_element to be more efficient.
+  if (k == 1) {  // Greedy sampling. Use MaxElement to be more efficient.
     for (int b = 0; b < batch_size; ++b) {
       for (int s = 0; s < sequence_size; ++s) {
-        auto max_iterator = std::max_element(
-            logits.begin() + (b * sequence_size + s) * vocab_size,
-            logits.begin() + (b * sequence_size + s + 1) * vocab_size);
-        // Gets the index of the max element in the logits of each batch.
-        const int max_logit_idx =
-            std::distance(logits.begin() + (b * sequence_size + s) * vocab_size,
-                          max_iterator);
-        output_indices[b][s] = max_logit_idx;
+        const float* sub_logits =
+            logits.data() + (b * sequence_size + s) * vocab_size;
+        output_indices[b][s] = MaxElement(sub_logits, vocab_size);
       }
     }
   } else if (k <= 1024) {
@@ -211,8 +296,8 @@ absl::StatusOr<std::vector<std::vector<float>>> Softmax(
 
 absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
     absl::Span<const float> logits, int k, float p, float temperature,
-    std::shared_ptr<std::default_random_engine> rng, int batch_size,
-    int sequence_size, std::vector<std::vector<float>>& sampled_scores) {
+    absl::Span<const float> uniforms, int batch_size, int sequence_size,
+    std::vector<std::vector<float>>& sampled_scores) {
   if (logits.empty()) {
     return absl::InvalidArgumentError("Logits vector cannot be empty.");
   }
@@ -228,8 +313,10 @@ absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
   if (p < 0.0 || p > 1.0) {
     return absl::InvalidArgumentError("p must be in the range [0.0, 1.0].");
   }
-  if (rng == nullptr) {
-    return absl::InvalidArgumentError("rng cannot be nullptr.");
+  if (absl::Status status =
+          ValidateUniforms(uniforms, batch_size * sequence_size);
+      !status.ok()) {
+    return status;
   }
   const int vocab_size = logits.size() / (batch_size * sequence_size);
   // Ensure k is not larger than the number of probabilities
@@ -311,9 +398,11 @@ absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
         continue;
       }
 
-      // O(final_sample_size) which is O(k) time complexity.
-      std::uniform_real_distribution<double> dist(0.0, cumulative_prob);
-      double random_sample = dist(*rng);
+      // Inverse transform sampling over the nucleus: O(final_sample_size),
+      // which is O(k) time complexity.
+      const double random_sample =
+          static_cast<double>(uniforms[b * sequence_size + s]) *
+          cumulative_prob;
       double current_cumulative = 0.0;
       for (int i = 0; i < final_sample_size; ++i) {
         current_cumulative += (*probabilities)[b][s * k + index_of_topk[i]];

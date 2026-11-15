@@ -19,8 +19,8 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
-#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -29,14 +29,16 @@
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
+#include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
+#include "litert/experimental/custom_ops/gated_delta_net/gated_delta_update_litert_custom_op.h"  // from @litert
+#include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/ynnpack_mode.h"
 #include "runtime/util/file_util.h"
-#include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
-#include "tflite/delegates/xnnpack/xnnpack_delegate.h"  // from @litert
 
 namespace litert::lm {
 
@@ -54,7 +56,7 @@ absl::StatusOr<Backend> GetSamplerBackend(
   Backend sampler_backend = executor_settings.GetSamplerBackend();
 
   if (sampler_backend == Backend::UNSPECIFIED) {
-    sampler_backend = backend;
+    sampler_backend = backend == Backend::NPU ? Backend::CPU : backend;
   }
 
   if (sampler_backend != Backend::CPU && sampler_backend != Backend::GPU) {
@@ -70,15 +72,23 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
     const LlmExecutorSettings& executor_settings,
     const ActivationDataType& activation_data_type,
     std::optional<ModelSignatures*> signatures,
-    std::optional<std::string> cache_suffix) {
+    std::optional<std::string> cache_suffix, ModelResources* resources) {
   LITERT_ASSIGN_OR_RETURN(auto compilation_options, Options::Create());
-  std::string cache_path = executor_settings.GetCacheDir();
+  LITERT_RETURN_IF_ERROR(
+      litert::gated_delta_net::RegisterGatedDeltaNetCustomOps(
+          compilation_options));
+  [[maybe_unused]] std::string cache_path = executor_settings.GetCacheDir();
 
   switch (executor_settings.GetBackend()) {
     case Backend::GPU: {
+      AdvancedSettings advanced_settings;
+      if (executor_settings.GetAdvancedSettings()) {
+        advanced_settings = *executor_settings.GetAdvancedSettings();
+      }
       // TODO: b/403132820 - Add accelerator compilation options for ML_DRIFT.
-      LITERT_ASSIGN_OR_RETURN(auto& gpu_compilation_options,
-                              compilation_options.GetGpuOptions());
+      LITERT_ASSIGN_OR_RETURN(
+          auto& gpu_compilation_options,
+          compilation_options.GetOptions<::litert::GpuOptions>());
       gpu_compilation_options.EnableInfiniteFloatCapping(true);
       if (activation_data_type == ActivationDataType::FLOAT32) {
         gpu_compilation_options.SetPrecision(GpuOptions::Precision::kFp32);
@@ -87,25 +97,28 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       }
 #if defined(__APPLE__)
       gpu_compilation_options.SetPreferTextureWeights(false);
-      gpu_compilation_options.SetUseMetalArgumentBuffers(true);
+      gpu_compilation_options.EnableMetalResidencySet(
+          advanced_settings.gpu_enable_metal_residency_set);
 #else   // !__APPLE__
       gpu_compilation_options.SetPreferTextureWeights(true);
 #endif  // !__APPLE__
 
-      bool has_valid_model_fd =
-          executor_settings.GetModelAssets().GetScopedFile().ok() &&
-          executor_settings.GetModelAssets().GetScopedFile().value()->IsValid();
+      auto model_scoped_file =
+          executor_settings.GetModelAssets().GetScopedFile();
+      bool has_valid_model_fd = model_scoped_file.ok() &&
+                                *model_scoped_file != nullptr &&
+                                (*model_scoped_file)->IsValid();
 
       auto program_cache_file = executor_settings.GetProgramCacheFile(
-          cache_suffix.value_or("") +
-              std::string(ExecutorSettingsBase::kMlDriftCacheSuffix),
+          absl::StrCat(cache_suffix.value_or(""),
+                       ExecutorSettingsBase::kMlDriftCacheSuffix),
           /*check_and_clean=*/true);
       bool has_valid_program_cache_fd =
           program_cache_file.ok() &&
           !std::holds_alternative<std::string>(*program_cache_file);
       auto weight_cache_file = executor_settings.GetWeightCacheFile(
-          cache_suffix.value_or("") +
-              std::string(ExecutorSettingsBase::kMlDriftWeightCacheSuffix),
+          absl::StrCat(cache_suffix.value_or(""),
+                       ExecutorSettingsBase::kMlDriftWeightCacheSuffix),
           /*check_and_clean=*/true);
       bool has_valid_weight_cache_fd =
           weight_cache_file.ok() &&
@@ -117,17 +130,26 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         // If the model path is available, use the model name as the cache key.
         absl::string_view model_path = *model_path_or_status;
         absl::string_view model_name = Basename(model_path);
-        LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
-                                GetFileCacheIdentifier(model_path));
-        cache_key = absl::StrCat(model_name, "_", metadata_id);
+        auto metadata_id_or = GetFileCacheIdentifier(model_path);
+        if (metadata_id_or.ok()) {
+          cache_key = absl::StrCat(model_name, "_", *metadata_id_or);
+        } else if (has_valid_model_fd) {
+          // The path cannot be resolved via stat() (e.g. a virtual/relative
+          // MDD path in a sandboxed process). Fall back to the file
+          // descriptor, which yields an equivalent (mtime, size) identifier
+          // via fstat().
+          LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
+                                  GetFileCacheIdentifier(**model_scoped_file));
+          cache_key = absl::StrCat(model_name, "_", metadata_id);
+        } else {
+          return metadata_id_or.status();
+        }
       } else if (has_valid_model_fd &&
                  (has_valid_program_cache_fd || has_valid_weight_cache_fd)) {
         // If the model is loaded from an fd, there is no way to automatically
         // generate a unique cache key from the file descriptor.
-        LITERT_ASSIGN_OR_RETURN(
-            std::string metadata_id,
-            GetFileCacheIdentifier(
-                *executor_settings.GetModelAssets().GetScopedFile().value()));
+        LITERT_ASSIGN_OR_RETURN(std::string metadata_id,
+                                GetFileCacheIdentifier(**model_scoped_file));
         cache_key = absl::StrCat("fd_", metadata_id);
       }
       if (cache_suffix.has_value() && !cache_suffix->empty() &&
@@ -135,39 +157,45 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
         absl::StrAppend(&cache_key, *cache_suffix);
       }
 
-      AdvancedSettings advanced_settings;
-      if (executor_settings.GetAdvancedSettings()) {
-        advanced_settings = *executor_settings.GetAdvancedSettings();
-      }
-
       LITERT_RETURN_IF_ERROR(SetGpuCacheOptions(
           weight_cache_file, program_cache_file, cache_key,
           /*logging_prefix=*/"", advanced_settings.cache_compiled_shaders_only,
           gpu_compilation_options));
+      ABSL_RETURN_IF_ERROR(SetCommonGpuOptions(
+          executor_settings, gpu_compilation_options, activation_data_type));
 
       // Use NoExternalTensorsMode to get better performance.
       ABSL_ASSIGN_OR_RETURN(const GpuConfig gpu_config,
                             executor_settings.GetBackendConfig<GpuConfig>());
       bool external_tensor_mode = gpu_config.external_tensor_mode;
       gpu_compilation_options.EnableExternalTensorsMode(external_tensor_mode);
+      bool single_kv_cache_buffer =
+          signatures.has_value() &&
+          signatures.value()->input_int32_param.has_value();
       if (!external_tensor_mode) {
         // This option prevents KVCache handling from being affected by
         // BHWC conversion in NoExternalTensorsMode.
         gpu_compilation_options.AddExternalTensorPattern("kv_cache_");
-        gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_c_");
-        if (signatures.has_value() &&
-            signatures.value()->input_int32_param.has_value()) {
-          gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
-          gpu_compilation_options.AddExternalTensorPattern("param_tensor");
-          gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
-        }
+        // Runtime param tensors (including lora_param_tensor) are written by
+        // the host (external) and read as a linear buffer (buffer storage).
+        gpu_compilation_options.AddExternalTensorPattern("param_tensor");
         ABSL_ASSIGN_OR_RETURN(auto sampler_backend,
                               GetSamplerBackend(executor_settings));
         if (sampler_backend == Backend::GPU) {
           // GPU Sampler requires logits to be external tensors (PHWC4 format).
           gpu_compilation_options.AddExternalTensorPattern("logits");
         }
+        gpu_compilation_options.AddExternalTensorPattern("w_prime");
+        gpu_compilation_options.AddExternalTensorPattern("lora_");
       }
+      gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_c_");
+      gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_r_");
+      if (single_kv_cache_buffer) {
+        gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
+      }
+      gpu_compilation_options.AddBufferStorageTensorPattern("w_prime");
+      gpu_compilation_options.AddBufferStorageTensorPattern("lora_");
+      gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
       // Prefill and decode are always fully delegated to single delegate.
       gpu_compilation_options.SetHintFullyDelegatedToSingleDelegate(true);
 
@@ -209,9 +237,11 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       gpu_compilation_options.SetBackend(GpuOptions::Backend::kWebGpu);
 #endif  // defined(LITERT_USE_WEBGPU_ACCELERATOR)
       // Prepare WebGPU or Vulkan command buffers ahead to reduce the overhead
-      // of command buffer preparation. 2 steps ahead because KV cache is
-      // swapped and the GPU resource bindings are the same as the previous
-      // previous step.
+      // of command buffer preparation. 2 steps ahead are needed because
+      //   1) KV caches when single_kv_cache_buffer is false
+      //   2) other input tensors when they are prepared on GPU
+      // are swapped and the GPU resource bindings are the same as the previous
+      // step.
       gpu_compilation_options.SetNumStepsOfCommandBufferPreparations(2);
       gpu_compilation_options.SetNumThreadsToUpload(
           advanced_settings.num_threads_to_upload >= 0
@@ -224,36 +254,50 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       compilation_options.SetHardwareAccelerators(HwAccelerators::kGpu);
       break;
     }
+    case Backend::NPU: {
+      // Let LiteRT's NPU compiler plugin partition supported subgraphs and keep
+      // the remaining ops on CPU. This is the generic LiteRT-LM fallback path
+      // for NPU backends that are not packaged for the specialized NPU
+      // executor.
+      AdvancedSettings advanced_settings;
+      if (executor_settings.GetAdvancedSettings()) {
+        advanced_settings = *executor_settings.GetAdvancedSettings();
+      }
+      LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
+                              compilation_options.GetRuntimeOptions());
+      runtime_options.SetDisableDelegateClustering(
+          advanced_settings.disable_delegate_clustering);
+      compilation_options.SetHardwareAccelerators(HwAccelerators::kNpu |
+                                                  HwAccelerators::kCpu);
+      break;
+    }
     case Backend::CPU: {
-      LITERT_ASSIGN_OR_RETURN(auto& cpu_compilation_options,
-                              compilation_options.GetCpuOptions());
+      LITERT_ASSIGN_OR_RETURN(
+          auto& cpu_compilation_options,
+          compilation_options.GetOptions<::litert::CpuOptions>());
       ABSL_ASSIGN_OR_RETURN(const CpuConfig cpu_config,
                             executor_settings.GetBackendConfig<CpuConfig>());
       const uint32_t num_threads = cpu_config.number_of_threads;
-      cpu_compilation_options.SetNumThreads(num_threads);
-      auto weight_cache_file = executor_settings.GetWeightCacheFile(
-          cache_suffix.value_or("") +
-              std::string(ExecutorSettingsBase::kXnnpackCacheSuffix),
-          /*check_and_clean=*/true);
-      if (weight_cache_file.ok()) {
-        if (std::holds_alternative<std::string>(*weight_cache_file)) {
-          cache_path = std::get<std::string>(*weight_cache_file);
-          cpu_compilation_options.SetXNNPackWeightCachePath(cache_path.c_str());
-        } else {
-          auto scoped_cache_file =
-              std::get<std::shared_ptr<ScopedFile>>(*weight_cache_file);
-          ABSL_ASSIGN_OR_RETURN(auto duplicated,
-                                scoped_cache_file->Duplicate());
-          ABSL_ASSIGN_OR_RETURN(int fd, duplicated.Release());
-          cpu_compilation_options.SetXNNPackWeightCacheFileDescriptor(fd);
-        }
-      } else {
-        ABSL_LOG(WARNING) << "Can't use cache: " << weight_cache_file.status();
+      ABSL_RETURN_IF_ERROR(
+          SetCpuOptions(cpu_compilation_options, num_threads));
+      bool enable_ynnpack = false;
+      if (cpu_config.enable_ynnpack == YnnpackMode::kOn) {
+        enable_ynnpack = true;
+      } else if (cpu_config.enable_ynnpack == YnnpackMode::kOff) {
+        enable_ynnpack = false;
+      } else if (cpu_config.enable_ynnpack == YnnpackMode::kAuto) {
+        // Without the model resources, the model can't be inspected, so leave
+        // YNNPACK disabled.
+        enable_ynnpack =
+            resources != nullptr && ModelResourcesContainSdpa(*resources);
       }
-      auto default_xnn_options = TfLiteXNNPackDelegateOptionsDefault();
-      cpu_compilation_options.SetXNNPackFlags(
-          default_xnn_options.flags |
-          TFLITE_XNNPACK_DELEGATE_FLAG_DYNAMIC_FULLY_CONNECTED);
+      cpu_compilation_options.SetEnableYNNPack(enable_ynnpack);
+      auto weight_cache_file = executor_settings.GetWeightCacheFile(
+          absl::StrCat(cache_suffix.value_or(""),
+                       ExecutorSettingsBase::kXnnpackCacheSuffix),
+          /*check_and_clean=*/true);
+      ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
+          weight_cache_file, "LLM", cpu_compilation_options));
       LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
                               compilation_options.GetRuntimeOptions());
       runtime_options.SetCompressQuantizationZeroPoints(true);
@@ -269,6 +313,29 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
     default:
       return absl::InvalidArgumentError(absl::StrCat(
           "Unsupported backend: ", executor_settings.GetBackend()));
+  }
+
+  AdvancedSettings advanced_settings;
+  if (executor_settings.GetAdvancedSettings()) {
+    advanced_settings = *executor_settings.GetAdvancedSettings();
+  }
+  if (advanced_settings.enable_profiling) {
+    LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
+                            compilation_options.GetRuntimeOptions());
+    runtime_options.SetEnableProfiling(/*enabled=*/true);
+  }
+
+  if (!executor_settings.GetSelectedSignatures().empty()) {
+    std::vector<absl::string_view> selected_signatures;
+    selected_signatures.reserve(
+        executor_settings.GetSelectedSignatures().size());
+    for (const auto& sig : executor_settings.GetSelectedSignatures()) {
+      selected_signatures.push_back(sig);
+    }
+    LITERT_ASSIGN_OR_RETURN(auto& runtime_options,
+                            compilation_options.GetRuntimeOptions());
+    LITERT_RETURN_IF_ERROR(
+        runtime_options.SetSelectedSignatures(selected_signatures));
   }
 
   return compilation_options;

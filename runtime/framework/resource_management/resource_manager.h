@@ -31,12 +31,12 @@
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
-#include "runtime/executor/audio_executor.h"
-#include "runtime/executor/audio_executor_settings.h"
+#include "runtime/executor/audio/audio_executor.h"
+#include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_settings.h"
-#include "runtime/executor/vision_executor.h"
-#include "runtime/executor/vision_executor_settings.h"
+#include "runtime/executor/vision/vision_executor.h"
+#include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/framework/resource_management/context_handler/context_handler.h"
 
 namespace litert::lm {
@@ -52,20 +52,26 @@ class ResourceManager {
       std::unique_ptr<AudioExecutorSettings> audio_executor_settings,
       LlmExecutorSettings llm_executor_settings,
       ::litert::Environment* absl_nullable litert_env,
-      std::unique_ptr<AudioExecutor> audio_executor = nullptr);
+      std::unique_ptr<AudioExecutor> audio_executor = nullptr,
+      std::unique_ptr<VisionExecutor> vision_executor = nullptr);
 
   // Creates a ResourceManager with the provided llm_executor.
   // Note that the audio_executor is used for testing only (dependency
-  // injection)
+  // injection).
+  // The vision_executor is optional. If provided, it is used instead of lazily
+  // creating one from vision_executor_settings in TryLoadingVisionExecutor().
+  // This is needed when the vision model can not be (re)loaded from the model
+  // assets later on, e.g. when the model was loaded from a stream.
   static absl::StatusOr<std::unique_ptr<ResourceManager>> Create(
       ModelResources* absl_nullable model_resources,
       std::unique_ptr<LlmExecutor> absl_nonnull llm_executor,
       std::unique_ptr<VisionExecutorSettings> absl_nullable
-          vision_executor_settings,
+      vision_executor_settings,
       std::unique_ptr<AudioExecutorSettings> absl_nullable
-          audio_executor_settings,
+      audio_executor_settings,
       ::litert::Environment* absl_nullable litert_env,
-      std::unique_ptr<AudioExecutor> absl_nullable audio_executor = nullptr);
+      std::unique_ptr<AudioExecutor> absl_nullable audio_executor = nullptr,
+      std::unique_ptr<VisionExecutor> absl_nullable vision_executor = nullptr);
 
   ~ResourceManager();
 
@@ -84,13 +90,16 @@ class ResourceManager {
   // assign a unique, custom lora_path. This lora_path serves as the identifier
   // for the LoRA across all sessions referencing that scoped file.
   std::optional<uint32_t> AssignLoraId(std::string lora_path,
-                                       bool has_scoped_lora_file);
+                                       bool has_scoped_lora_file)
+      ABSL_LOCKS_EXCLUDED(lora_mutex_);
 
   // Creates a new context handler from the provided session config struct.
   // If a session specific lora is provided, the lora will be loaded and the
   // corresponding lora id will be assigned.
   absl::StatusOr<std::unique_ptr<ContextHandler>> CreateContextHandler(
-      const SessionConfig& session_config);
+      const SessionConfig& session_config) ABSL_LOCKS_EXCLUDED(lora_mutex_)
+      ABSL_LOCKS_EXCLUDED(executor_mutex_)
+          ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
 
   // Clones the context handler.
   // The cloned context handler will have the same shared processed context as
@@ -99,7 +108,9 @@ class ResourceManager {
   // be copied from the original context handler, thus the values will initially
   // be the same, but can be different afterward.
   absl::StatusOr<std::unique_ptr<ContextHandler>> CloneContextHandler(
-      std::shared_ptr<const ContextHandler> llm_context_handler);
+      std::shared_ptr<const ContextHandler> llm_context_handler)
+      ABSL_LOCKS_EXCLUDED(executor_mutex_)
+          ABSL_LOCKS_EXCLUDED(audio_executor_mutex_);
 
   // Acquires the executor without any context handler. This function should
   // only be called when the usage of the returned executor does not involve any
@@ -145,9 +156,25 @@ class ResourceManager {
   absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
       ABSL_LOCKS_EXCLUDED(vision_executor_mutex_);
 
+  // Resets the LLM executor and clears the current context handler.
+  void ResetCurrentHandler() ABSL_LOCKS_EXCLUDED(executor_mutex_);
+
+  // Updates whether to enable Metal residency set on GPU at runtime.
+  absl::Status UpdateGpuEnableMetalResidencySet(bool enable_metal_residency_set)
+      ABSL_LOCKS_EXCLUDED(executor_mutex_);
+
+  // Updates the LLM executor settings.
+  absl::Status UpdateExecutorSettings(
+      const LlmExecutorSettings& executor_settings)
+      ABSL_LOCKS_EXCLUDED(executor_mutex_);
+
  private:
   // Creates the litert environment if it is not created yet.
   absl::Status MaybeCreateLitertEnv();
+
+  std::optional<uint32_t> AssignLoraIdLocked(std::string lora_path,
+                                             bool has_scoped_lora_file)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(lora_mutex_);
 
   // Guards the llm_executor_.
   absl::Mutex executor_mutex_;
@@ -159,9 +186,14 @@ class ResourceManager {
   std::shared_ptr<ContextHandler> current_handler_
       ABSL_GUARDED_BY(executor_mutex_);
 
+  // Guards lora_hash_to_id_.
+  absl::Mutex lora_mutex_ ABSL_ACQUIRED_BEFORE(executor_mutex_,
+                                               audio_executor_mutex_);
+
   // Map lora id from hash. If lora is provided by lora path, lora path will be
   // treated as the hash key.
-  absl::flat_hash_map<std::string, uint32_t> lora_hash_to_id_;
+  absl::flat_hash_map<std::string, uint32_t> lora_hash_to_id_
+      ABSL_GUARDED_BY(lora_mutex_);
 
   // The mutex lock for the vision executor.
   absl::Mutex vision_executor_mutex_;

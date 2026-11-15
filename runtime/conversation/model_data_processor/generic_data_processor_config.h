@@ -16,11 +16,11 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_GENERIC_DATA_PROCESSOR_CONFIG_H_
 
 #include <optional>
-#include <string>
 
-#include "support/preprocessor/audio_preprocessor.h"  // from @litert
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
 #include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
+#include "runtime/proto/llm_metadata.pb.h"
+#include "support/preprocessor/audio_preprocessor.h"
+#include "support/preprocessor/image_preprocessor.h"
 
 namespace litert::lm {
 
@@ -47,17 +47,19 @@ struct MultimodalConfig {
 };
 
 struct GenericDataProcessorConfig {
-  std::string model_role = "assistant";
-  // If true, force the content from the model to be a string instead of an
-  // array. Some legacy templates only support string content.
-  bool force_string_content = false;
-
   // When set, the generic processor operates in multimodal mode
   std::optional<MultimodalConfig> multimodal;
+
+  // When set, the generic processor parses tool calls from model responses.
+  std::optional<proto::ToolCallConfig> tool_call_config;
 };
 
 struct GenericDataProcessorArguments {
   std::optional<int> visual_token_budget;
+
+  // Whether to only dry run the media preprocessing, to count the tokens the
+  // input consumes. See ModelDataProcessor::WithDryRun().
+  bool dry_run = false;
 };
 
 }  // namespace litert::lm

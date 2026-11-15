@@ -1,0 +1,169 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_EMBEDDING_ENGINE_SETTINGS_H_
+#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_EMBEDDING_ENGINE_SETTINGS_H_
+
+#include <optional>
+#include <ostream>
+#include <string>
+
+#include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/executor/audio/audio_executor_settings.h"
+#include "runtime/executor/embedding/embedding_executor_settings.h"
+#include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/vision/vision_executor_settings.h"
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/engine.pb.h"
+
+namespace litert::lm {
+
+// Settings used for initializing EmbeddingEngine.
+// This class encapsulates the model-specific settings for the embedding text
+// encoder, vision encoder, and audio encoder models.
+class EmbeddingEngineSettings {
+ public:
+  // Creates a default EmbeddingEngineSettings with the given model assets and
+  // specified backends.
+  static absl::StatusOr<EmbeddingEngineSettings> CreateDefault(
+      ModelAssets model_assets, Backend backend = Backend::CPU,
+      std::optional<Backend> vision_backend = std::nullopt,
+      std::optional<Backend> audio_backend = std::nullopt);
+
+  // Maximum sequence length (in tokens) for text encoder signatures. If set,
+  // EmbeddingEngine will automatically select signatures up to this length.
+  std::optional<int> GetMaxInputLength() const;
+  void SetMaxInputLength(std::optional<int> max_input_length);
+
+  // Minimum sequence length (in tokens) for text encoder signatures. If set,
+  // EmbeddingEngine will exclude signatures shorter than this length.
+  std::optional<int> GetMinInputLength() const;
+  void SetMinInputLength(std::optional<int> min_input_length);
+
+  // Desired maximum number of vision tokens generated per image. If set,
+  // EmbeddingEngine will automatically select vision encoder (and adapter)
+  // signatures with capacity up to this length and the smallest signature that
+  // fits it, and configure patch metadata accordingly. If not set, it defaults
+  // to the value derived from the model's metadata (if any).
+  std::optional<int> GetVisionTokensPerImage() const;
+  void SetVisionTokensPerImage(std::optional<int> vision_tokens_per_image);
+
+  // Smallest vision signature capacity to load, or std::nullopt for no
+  // minimum. Smaller signatures are skipped to save memory. On web, the engine
+  // defaults this to the vision tokens per image, so only one signature is
+  // loaded. Must be non-negative and not exceed the vision tokens per image.
+  std::optional<int> GetMinVisionTokensPerImage() const;
+  void SetMinVisionTokensPerImage(
+      std::optional<int> min_vision_tokens_per_image);
+
+  // Whether the vision and audio encoders bundled in the model are compiled
+  // on demand instead of at engine creation time.
+  // - false (default): every configured encoder is compiled while the engine
+  //   is created.
+  // - true: the vision encoder is compiled on the first request carrying an
+  //   image input, and the audio encoder on the first request carrying an
+  //   audio input. This keeps engine creation time and memory footprint down
+  //   for text-only workloads, at the cost of a one-time initialization
+  //   latency on the first multimodal request.
+  // Lazy loading is not supported when the engine is created from a data
+  // stream (see EmbeddingEngineImpl::CreateStreamingWeights), because the
+  // weights of all submodels are consumed in a single pass over the stream. In
+  // that case the flag is ignored and the encoders are compiled eagerly.
+  bool GetLazyLoadMultimodalEncoders() const;
+  void SetLazyLoadMultimodalEncoders(bool lazy_load_multimodal_encoders);
+
+  // Returns the EmbeddingExecutorSettings for the embedding model.
+  const EmbeddingExecutorSettings& GetMainExecutorSettings() const;
+  EmbeddingExecutorSettings& GetMutableMainExecutorSettings();
+
+  // Returns the VisionExecutorSettings for the vision model.
+  const std::optional<VisionExecutorSettings>& GetVisionExecutorSettings()
+      const;
+  std::optional<VisionExecutorSettings>& GetMutableVisionExecutorSettings();
+
+  // Returns the AudioExecutorSettings for the audio model.
+  const std::optional<AudioExecutorSettings>& GetAudioExecutorSettings() const;
+  std::optional<AudioExecutorSettings>& GetMutableAudioExecutorSettings();
+
+  // Benchmark parameters:
+  // Returns true if the benchmark is enabled.
+  bool IsBenchmarkEnabled() const;
+  // Returns the benchmark parameters.
+  const std::optional<proto::BenchmarkParams>& GetBenchmarkParams() const;
+  // Returns the mutable benchmark parameters.
+  proto::BenchmarkParams& GetMutableBenchmarkParams();
+
+  // Returns the EmbeddingMetadata parameters if loaded.
+  const std::optional<proto::EmbeddingMetadata>& GetEmbeddingMetadata() const;
+  proto::EmbeddingMetadata& GetMutableEmbeddingMetadata();
+
+  // Resolves default values and metadata preferences across all executor
+  // settings based on the precedence waterfall:
+  // 1. Settings explicitly set by user in code (highest precedence).
+  // 2. prefer_activation_type from model metadata / TOML (supports "fp32_fp16"
+  //    for mixed precision).
+  // 3. Fallback to FLOAT16 if the backend is GPU.
+  //
+  // `metadata_from_file` (may be null) is adopted only when the caller has not
+  // supplied metadata of its own, and fills in the input length bounds. Safe to
+  // call more than once, which the streamed path relies on.
+  absl::Status ResolveDefaults(
+      const proto::EmbeddingMetadata* absl_nullable metadata_from_file =
+          nullptr,
+      const std::optional<std::string>& text_prefer_activation_type =
+          std::nullopt,
+      const std::optional<std::string>& vision_prefer_activation_type =
+          std::nullopt,
+      const std::optional<std::string>& audio_prefer_activation_type =
+          std::nullopt);
+
+  // Validates the engine settings to ensure cache directories, backend
+  // constraints, input length bounds and vision token bounds are valid. Returns
+  // an error if validation fails. Call after ResolveDefaults, so that bounds
+  // inherited from the model's metadata are validated too.
+  absl::Status Validate(
+      const std::optional<std::string>& text_backend_constraint = std::nullopt,
+      const std::optional<std::string>& vision_backend_constraint =
+          std::nullopt,
+      const std::optional<std::string>& audio_backend_constraint =
+          std::nullopt) const;
+
+ private:
+  explicit EmbeddingEngineSettings(
+      EmbeddingExecutorSettings embedding_executor_settings,
+      std::optional<VisionExecutorSettings> vision_executor_settings,
+      std::optional<AudioExecutorSettings> audio_executor_settings,
+      std::optional<proto::BenchmarkParams> benchmark_params = std::nullopt);
+
+  EmbeddingExecutorSettings main_executor_settings_;
+  std::optional<VisionExecutorSettings> vision_executor_settings_;
+  std::optional<AudioExecutorSettings> audio_executor_settings_;
+  std::optional<proto::EmbeddingMetadata> metadata_;
+  std::optional<proto::BenchmarkParams> benchmark_params_;
+  std::optional<int> max_input_length_;
+  std::optional<int> min_input_length_;
+  std::optional<int> vision_tokens_per_image_;
+  std::optional<int> min_vision_tokens_per_image_;
+  bool lazy_load_multimodal_encoders_ = false;
+};
+
+std::ostream& operator<<(std::ostream& os,
+                         const EmbeddingEngineSettings& settings);
+
+}  // namespace litert::lm
+
+#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_EMBEDDING_ENGINE_SETTINGS_H_

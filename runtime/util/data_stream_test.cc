@@ -22,6 +22,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/util/file_data_stream.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -45,7 +46,8 @@ TEST(DataStreamTest, SubStreamReadAndPreserve) {
   std::vector<char> buffer(8);
   ASSERT_OK(sub_stream->ReadAndPreserve(buffer.data(), 0, 8));
 
-  std::string magic_number(buffer.data(), 8);
+  std::string magic_number(
+      absl::string_view(buffer.data(), buffer.size()).substr(0, 8));
   EXPECT_EQ(magic_number, "LITERTLM");
 }
 
@@ -56,7 +58,8 @@ TEST(DataStreamTest, SubStreamReadAndDiscard) {
   std::vector<char> buffer(8);
   ASSERT_OK(sub_stream->ReadAndDiscard(buffer.data(), 0, 8));
 
-  std::string magic_number(buffer.data(), 8);
+  std::string magic_number(
+      absl::string_view(buffer.data(), buffer.size()).substr(0, 8));
   EXPECT_EQ(magic_number, "LITERTLM");
 }
 
@@ -100,7 +103,8 @@ TEST(DataStreamTest, SubStreamOfSubStream) {
   std::vector<char> buffer(7);
   ASSERT_OK(sub_sub_stream->ReadAndPreserve(buffer.data(), 0, 7));
 
-  std::string magic_number(buffer.data(), 7);
+  std::string magic_number(
+      absl::string_view(buffer.data(), buffer.size()).substr(0, 7));
   EXPECT_EQ(magic_number, "ITERTLM");
 }
 

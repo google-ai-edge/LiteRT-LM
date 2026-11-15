@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -31,7 +32,6 @@
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  //NOLINT
 
 namespace litert::lm {
@@ -137,10 +137,12 @@ absl::Status EmbeddingLookupMultiModal::LookupPrefill(
                      ". Output tensor bytes: ", output_tensor->Size()));
   }
 
-  auto output_tensor_lock_and_addr = ::litert::TensorBufferScopedLock::Create(
-      *output_tensor, TensorBuffer::LockMode::kWrite);
+  LITERT_ASSIGN_OR_RETURN(
+      auto output_tensor_lock_and_addr,
+      ::litert::TensorBufferScopedLock::Create(*output_tensor,
+                                               TensorBuffer::LockMode::kWrite));
   auto output_tensor_ptr =
-      reinterpret_cast<uint8_t*>(output_tensor_lock_and_addr->second);
+      reinterpret_cast<uint8_t*>(output_tensor_lock_and_addr.second);
 
   output_tensor_ptr += byte_offset;
   for (int token : tokens) {
@@ -177,9 +179,18 @@ absl::Status EmbeddingLookupMultiModal::Initialize(
         "Cannot initialize embedding lookup with an embedding buffer that is "
         "null.");
   }
+  LITERT_ASSIGN_OR_RETURN(auto duplicated_buffer,
+                          embedding_buffer->Duplicate());
+  embedding_buffer_ = std::move(duplicated_buffer);
   LITERT_ASSIGN_OR_RETURN(
-      embedding_,
-      ::litert::lm::ReferTensorBufferAsSpan<float>(*embedding_buffer));
+      auto lock_and_addr,
+      ::litert::TensorBufferScopedLock::Create(
+          *embedding_buffer_, ::litert::TensorBuffer::LockMode::kRead));
+  LITERT_ASSIGN_OR_RETURN(auto type, embedding_buffer_->TensorType());
+  LITERT_ASSIGN_OR_RETURN(auto num_elements, type.Layout().NumElements());
+  embedding_buffer_lock_ = std::move(lock_and_addr.first);
+  embedding_ =
+      absl::MakeSpan(static_cast<float*>(lock_and_addr.second), num_elements);
   special_token_ = special_token;
   return absl::OkStatus();
 }

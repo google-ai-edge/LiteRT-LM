@@ -1,10 +1,10 @@
 {{ bos_token }}
 {%- set ns = namespace(prev_message_type=None) -%}
 {%- set loop_messages = messages -%}
-{%- if tools or messages[0]['role'] == 'system' -%}
+{%- if tools or (messages and messages[0]['role'] == 'system') -%}
     {{- '<start_of_turn>developer\n' -}}
     {#- System Instructions (before tools) -#}
-    {%- if messages[0]['role'] == 'system' -%}
+    {%- if messages and messages[0]['role'] == 'system' -%}
         {%- if messages[0]['content'] is string -%}
             {{- messages[0]['content'] | trim -}}
         {%- elif messages[0]['content'] is iterable and messages[0]['content'] | length > 0 -%}
@@ -24,7 +24,7 @@
         {{- '<end_function_declaration>' -}}
     {%- endfor %}
     {#- System Instructions (after tools) -#}
-    {%- if messages[0]['role'] == 'system' and messages[0]['content'] is iterable and messages[0]['content'] | length > 1 -%}
+    {%- if messages and messages[0]['role'] == 'system' and messages[0]['content'] is iterable and messages[0]['content'] | length > 1 -%}
         {%- for item in messages[0]['content'][1:] -%}
             {%- if item['type'] == 'text' -%}
                 {{- item['text'] | trim -}}

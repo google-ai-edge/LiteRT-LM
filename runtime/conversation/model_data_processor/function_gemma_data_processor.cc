@@ -19,9 +19,9 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include <variant>
 #include <vector>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -29,14 +29,25 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
-#include "runtime/components/logits_processor/constrained_decoding/constraint.h"
-#if !defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
-#include "runtime/components/logits_processor/constrained_decoding/gemma_model_constraint_provider.h"
-#endif
+#include "runtime/components/constrained_decoding/constraint.h"
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+#include <variant>
+
+#include "runtime/components/constrained_decoding/gemma_model_constraint_provider.h"
+#else
+#include "runtime/components/constrained_decoding/constraint_provider.h"
+#include "runtime/components/constrained_decoding/llg_constraint_config.h"
+#include "runtime/components/constrained_decoding/llg_constraint_provider.h"
+#include "runtime/components/constrained_decoding/llg_fc_tool_calls.h"
+#include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/components/tool_use/fc_tool_format_utils.h"
 #include "runtime/components/tool_use/parser_utils.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/function_gemma_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/status_macros.h"
 #include "sentencepiece_model.pb.h"  // from @sentencepiece
@@ -129,18 +140,20 @@ absl::StatusOr<std::string> FormatToolResponse(
 // Formats "content" as a tool response in FC format.
 //
 // Case 1: If "content" is an object, formats "content" directly as a tool
-// response in FC format as a string.
+// response in FC format and returns an array of text parts.
 //
 // Case 2: If "content" is an array, formats each tool response item in the
-// array in FC format and returns an array of *text* items. A tool response
-// item is an object with "name" and "response" fields or an object with a
-// "tool_response" field.
+// array in FC format and returns an array of text parts.
 //
-// Case 3: If "content" is neither an object nor an array, returns it unchanged.
+// Case 3: If "content" is neither an object nor an array, normalizes it into
+// an array of text parts.
 absl::StatusOr<nlohmann::ordered_json> FormatToolResponses(
     const nlohmann::ordered_json& content) {
   if (content.is_object()) {
-    return FormatToolResponse(content);
+    ABSL_ASSIGN_OR_RETURN(std::string formatted_tool_response,
+                          FormatToolResponse(content));
+    return nlohmann::ordered_json::array(
+        {{{"type", "text"}, {"text", formatted_tool_response}}});
   }
 
   if (content.is_array()) {
@@ -163,9 +176,7 @@ absl::StatusOr<nlohmann::ordered_json> FormatToolResponses(
     return tool_content;
   }
 
-  // If the content of the message is not an array or object, pass it through
-  // unchanged.
-  return content;
+  return NormalizeContent(content);
 }
 
 // A message is a tool response if its role is "tool".
@@ -182,62 +193,69 @@ FunctionGemmaDataProcessor::Create(
     const Tokenizer* tokenizer,
     const std::vector<std::vector<int>>& stop_token_ids,
     bool enable_constrained_decoding) {
-#if defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+  ConstraintProviderPtr constraint_provider(
+      nullptr, &LiteRtLmGemmaModelConstraintProvider_Destroy);
   if (enable_constrained_decoding) {
-    return absl::FailedPreconditionError(
-        "Constrained decoding was disabled at build time.");
-  }
-  return absl::WrapUnique(new FunctionGemmaDataProcessor(config, preface));
-#else
-  std::unique_ptr<LiteRtLmGemmaModelConstraintProvider,
-                  decltype(&LiteRtLmGemmaModelConstraintProvider_Destroy)>
-      constraint_provider(nullptr,
-                          &LiteRtLmGemmaModelConstraintProvider_Destroy);
-  if (enable_constrained_decoding) {
-    std::vector<const int*> stop_token_ids_ptrs;
-    std::vector<size_t> stop_token_lengths;
-    stop_token_ids_ptrs.reserve(stop_token_ids.size());
-    stop_token_lengths.reserve(stop_token_ids.size());
-    for (const auto& stop_tokens : stop_token_ids) {
-      stop_token_ids_ptrs.push_back(stop_tokens.data());
-      stop_token_lengths.push_back(stop_tokens.size());
+    if (tokenizer == nullptr) {
+      return absl::InvalidArgumentError(
+          "Tokenizer must not be null when constrained decoding is enabled.");
     }
     if (tokenizer->GetTokenizerType() != TokenizerType::kSentencePiece) {
-      return absl::InvalidArgumentError(
-          "Constrained decoding is only supported for SentencePiece "
-          "tokenizer.");
+      ABSL_LOG(WARNING)
+          << "Constrained decoding is only supported for SentencePiece "
+             "tokenizer.";
+    } else {
+      std::vector<const int*> stop_token_ids_ptrs;
+      std::vector<size_t> stop_token_lengths;
+      stop_token_ids_ptrs.reserve(stop_token_ids.size());
+      stop_token_lengths.reserve(stop_token_ids.size());
+      for (const auto& stop_tokens : stop_token_ids) {
+        stop_token_ids_ptrs.push_back(stop_tokens.data());
+        stop_token_lengths.push_back(stop_tokens.size());
+      }
+      auto sp_tokenizer =
+          reinterpret_cast<const SentencePieceTokenizer*>(tokenizer);
+      auto serialized_model_proto =
+          sp_tokenizer->GetProcessor().model_proto().SerializeAsString();
+      LiteRtLmGemmaModelConstraintProvider* provider =
+          LiteRtLmGemmaModelConstraintProvider_Create(
+              serialized_model_proto.data(), serialized_model_proto.size(),
+              stop_token_ids_ptrs.data(), stop_token_lengths.data(),
+              stop_token_ids.size());
+      if (provider == nullptr) {
+        return absl::InternalError(
+            "Failed to create GemmaModelConstraintProvider.");
+      }
+      constraint_provider.reset(provider);
     }
-    auto sp_tokenizer =
-        reinterpret_cast<const SentencePieceTokenizer*>(tokenizer);
-    auto serialized_model_proto =
-        sp_tokenizer->GetProcessor().model_proto().SerializeAsString();
-    LiteRtLmGemmaModelConstraintProvider* provider =
-        LiteRtLmGemmaModelConstraintProvider_Create(
-            serialized_model_proto.data(), serialized_model_proto.size(),
-            stop_token_ids_ptrs.data(), stop_token_lengths.data(),
-            stop_token_ids.size());
-    if (provider == nullptr) {
-      return absl::InternalError(
-          "Failed to create GemmaModelConstraintProvider.");
-    }
-    constraint_provider.reset(provider);
   }
+#else
+  std::unique_ptr<ConstraintProvider> constraint_provider = nullptr;
+  if (enable_constrained_decoding) {
+    ABSL_ASSIGN_OR_RETURN(
+        constraint_provider,
+        CreateLlgToolCallConstraintProvider(
+            tokenizer, stop_token_ids, /*fallback_eos_token=*/"<eos>",
+            {config.code_fence_start, config.code_fence_end, config.open_quote,
+             config.close_quote, config.function_response_start}));
+  }
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
   return absl::WrapUnique(new FunctionGemmaDataProcessor(
       std::move(constraint_provider), config, preface));
-#endif
 }
 
 absl::StatusOr<nlohmann::ordered_json>
 FunctionGemmaDataProcessor::MessageToTemplateInput(
     const nlohmann::ordered_json& message) const {
   if (config_.use_template_for_fc_format) {
-    return message;
+    return ModelDataProcessor::MessageToTemplateInput(message);
   }
 
   // If the message doesn't contain any tool calls and isn't a tool message,
-  // then the template input is the same as the message.
+  // then normalize message content and return.
   if (!message.contains("tool_calls") && message["role"] != "tool") {
-    return message;
+    return ModelDataProcessor::MessageToTemplateInput(message);
   }
 
   nlohmann::ordered_json template_input = nlohmann::ordered_json::object();
@@ -251,82 +269,32 @@ FunctionGemmaDataProcessor::MessageToTemplateInput(
       ABSL_ASSIGN_OR_RETURN(template_input["content"],
                             FormatToolResponses(message["content"]));
     } else {
-      // If the role is not "tool" or "content" is a string, pass through the
-      // content unchanged.
-      template_input["content"] = message["content"];
+      template_input["content"] = NormalizeContent(message["content"]);
     }
   }
 
   // If the message contains tool calls, convert them to FC format and add them
   // to the template input.
   if (message.contains("tool_calls")) {
-    template_input["tool_calls"] = nlohmann::ordered_json::array();
-    for (const auto& tool_call : message["tool_calls"]) {
-      if (!tool_call.contains("function")) {
-        continue;
-      }
-      const nlohmann::ordered_json& function = tool_call["function"];
-      nlohmann::ordered_json tool_call_input = nlohmann::ordered_json::object();
-      tool_call_input["type"] = "function";
-      tool_call_input["function"]["name"] = function["name"];
-
-      if (function.contains("arguments")) {
-        if (function["arguments"].is_object()) {
-          // If `arguments` is an object, format the values in FC format.
-          for (const auto& [key, value] : function["arguments"].items()) {
-            ABSL_ASSIGN_OR_RETURN(std::string formatted_value,
-                                  FormatValueAsFc(value));
-            tool_call_input["function"]["arguments"][key] = formatted_value;
-          }
-        } else {
-          // Otherwise, pass through `arguments` unchanged.
-          tool_call_input["function"]["arguments"] = function["arguments"];
-        }
-      }
-
-      template_input["tool_calls"].push_back(tool_call_input);
-    }
+    ABSL_ASSIGN_OR_RETURN(template_input["tool_calls"],
+                          FormatToolCalls(message["tool_calls"],
+                                          [](const nlohmann::ordered_json& v) {
+                                            return FormatValueAsFc(v);
+                                          }));
   }
 
   return template_input;
 }
 
-absl::StatusOr<std::vector<InputData>>
-FunctionGemmaDataProcessor::ToInputDataVectorImpl(
-    const std::string& rendered_template_prompt,
-    const nlohmann::ordered_json& messages,
-    const FunctionGemmaDataProcessorArguments& args) const {
-  std::vector<InputData> input_data;
-  input_data.push_back(InputText(rendered_template_prompt));
-  return input_data;
-}
-
 absl::StatusOr<Message> FunctionGemmaDataProcessor::ToMessageImpl(
     const Responses& responses,
     const FunctionGemmaDataProcessorArguments& args) const {
-  absl::string_view response_text = responses.GetTexts()[0];
-  nlohmann::ordered_json message = {{"role", "assistant"}};
-  if (preface_.has_value() && std::holds_alternative<JsonPreface>(*preface_) &&
-      !std::get<JsonPreface>(*preface_).tools.empty()) {
-    ABSL_ASSIGN_OR_RETURN(
-        nlohmann::ordered_json content_and_tool_calls,
-        ParseTextAndToolCalls(
-            response_text, config_.code_fence_start, config_.code_fence_end,
-            GetSyntaxType(config_.syntax_type),
-            {.escape_fence_strings = config_.escape_fence_strings,
-             .tool_code_regex = config_.tool_code_regex,
-             .return_error_on_parse_failure = ReturnErrorOnParseFailure()}));
-    if (content_and_tool_calls.contains("content")) {
-      message["content"] = content_and_tool_calls["content"];
-    }
-    if (content_and_tool_calls.contains("tool_calls")) {
-      message["tool_calls"] = content_and_tool_calls["tool_calls"];
-    }
-  } else {
-    message["content"] = nlohmann::ordered_json::array(
-        {{{"type", "text"}, {"text", std::string(response_text)}}});
-  }
-  return message;
+  return ResponseTextToMessage(
+      responses.GetTexts()[0], preface_, config_.code_fence_start,
+      config_.code_fence_end, GetSyntaxType(config_.syntax_type),
+      {.escape_fence_strings = config_.escape_fence_strings,
+       .tool_code_regex = config_.tool_code_regex,
+       .return_error_on_parse_failure = ReturnErrorOnParseFailure()});
 }
 
 absl::StatusOr<nlohmann::ordered_json> FunctionGemmaDataProcessor::FormatTools(
@@ -335,26 +303,15 @@ absl::StatusOr<nlohmann::ordered_json> FunctionGemmaDataProcessor::FormatTools(
     return tools;
   }
 
-  if (!tools.is_array()) {
-    return absl::InvalidArgumentError("Tools must be an array.");
-  }
-  nlohmann::ordered_json formatted_tools = nlohmann::ordered_json::array();
-  for (const auto& tool : tools) {
-    ABSL_ASSIGN_OR_RETURN(std::string formatted_tool, FormatToolAsFc(tool));
-    formatted_tools.push_back(formatted_tool);
-  }
-  return formatted_tools;
+  return FormatToolsArray(
+      tools, [](const nlohmann::ordered_json& t) { return FormatToolAsFc(t); });
 }
 
 absl::StatusOr<std::unique_ptr<Constraint>>
 FunctionGemmaDataProcessor::CreateConstraint(
-    const nlohmann::ordered_json& tools) const {
-#if defined(LITERT_LM_FST_CONSTRAINTS_DISABLED)
-  return absl::FailedPreconditionError(
-      "Constrained decoding is disabled at build time, but it was requested "
-      "for inference.");
-#else
-  if (constraint_provider_c_ == nullptr) {
+    const nlohmann::ordered_json& tools,
+    std::optional<ToolChoice> tool_choice) const {
+  if (constraint_provider_ == nullptr) {
     return nullptr;
   }
   if (!tools.is_array()) {
@@ -369,6 +326,17 @@ FunctionGemmaDataProcessor::CreateConstraint(
     }
   }
 
+#if defined(LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS)
+  // The FST path only supports the default "auto" tool choice.
+  const bool is_auto_tool_choice =
+      tool_choice.has_value() &&
+      std::holds_alternative<ToolChoice::Auto>(tool_choice->choice);
+  if (tool_choice.has_value() && !is_auto_tool_choice) {
+    return absl::FailedPreconditionError(
+        "tool_choice other than \"auto\" requires LLGuidance tool call "
+        "constraints. Build with "
+        "--define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1 to enable them.");
+  }
   LiteRtLmGemmaModelConstraintOptions gemma_options = {
       .funcall_format = kLiteRtLmGemmaFuncallFormatFcStyle,
       .code_fence_start = config_.code_fence_start.c_str(),
@@ -386,15 +354,43 @@ FunctionGemmaDataProcessor::CreateConstraint(
       gemma_options.constraint_mode = kLiteRtLmGemmaConstraintModeTextAndOr;
       break;
   }
+  if (is_auto_tool_choice) {
+    gemma_options.constraint_mode = kLiteRtLmGemmaConstraintModeTextAndOr;
+  }
   std::string functions_str = functions.dump();
   LiteRtLmConstraint* constraint =
       LiteRtLmGemmaModelConstraintProvider_CreateConstraintFromTools(
-          constraint_provider_c_.get(), functions_str.c_str(), &gemma_options);
+          constraint_provider_.get(), functions_str.c_str(), &gemma_options);
   if (constraint == nullptr) {
     return absl::InternalError("Failed to create constraint with tools.");
   }
   return absl::WrapUnique(reinterpret_cast<Constraint*>(constraint));
-#endif
+#else
+  LlgConstraintsOptions options;
+  options.funcall_format = FuncallFormat::kFc;
+  options.code_fence_start = config_.code_fence_start;
+  options.code_fence_end = config_.code_fence_end;
+  options.open_quote = config_.open_quote;
+  options.close_quote = config_.close_quote;
+  options.function_response_start = config_.function_response_start;
+  switch (config_.constraint_mode) {
+    case FunctionGemmaDataProcessorConfig::ConstraintMode::kFunctionCallOnly:
+      options.constraint_mode = LlgConstraintMode::kFunctionCallsOnly;
+      break;
+    case FunctionGemmaDataProcessorConfig::ConstraintMode::kTextAndOr:
+    default:
+      options.constraint_mode = LlgConstraintMode::kTextAndOrFunctionCalls;
+      break;
+  }
+  if (tool_choice.has_value()) {
+    ABSL_RETURN_IF_ERROR(ApplyToolChoiceToOptions(*tool_choice, options));
+  }
+  ABSL_ASSIGN_OR_RETURN(std::string lark_grammar,
+                        CreateLarkGrammarForFcToolCalls(functions, options));
+  return constraint_provider_->CreateConstraint(
+      LlGuidanceConstraintArg{.constraint_type = LlgConstraintType::kLark,
+                              .constraint_string = std::move(lark_grammar)});
+#endif  // LITERT_LM_USE_FST_TOOL_CALL_CONSTRAINTS
 }
 
 absl::string_view FunctionGemmaDataProcessor::CodeFenceStart() const {

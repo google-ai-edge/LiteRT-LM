@@ -14,9 +14,17 @@
 
 """LiteRT LM is a library for running GenAI models on devices."""
 
+# pylint: disable=g-importing-member
+
 from ._ffi import ActivationDataType
+from ._ffi import LiteRtLmBackendType
+from ._ffi import LiteRtLmConstraintProviderType
+from ._ffi import LiteRtLmModality
+from ._ffi import LiteRtLmModelType
+from ._ffi import LiteRtLmNpuBrand
 from ._ffi import LogSeverity
 from ._ffi import set_min_log_severity
+from ._ffi import SpeculativeDecodingMode
 from ._messages import Content
 from ._messages import Contents
 from ._messages import Message
@@ -24,6 +32,10 @@ from ._messages import Role
 from ._messages import ToolCall
 from .benchmark import Benchmark
 from .conversation import Conversation
+from .embedding_engine import EmbeddingEngine
+from .embedding_engine import EmbeddingOptions
+from .embedding_engine import EmbeddingResponse
+from .embedding_engine import InputOverflowStrategy
 from .engine import Engine
 from .interfaces import AbstractBenchmark
 from .interfaces import AbstractConversation
@@ -31,16 +43,27 @@ from .interfaces import AbstractEngine
 from .interfaces import AbstractSession
 from .interfaces import Backend
 from .interfaces import BenchmarkInfo
+from .interfaces import ConstrainedDecodingConfig
 from .interfaces import LoraConfig
 from .interfaces import LoraRankConfig
+from .interfaces import NoRepeatNgramConfig
 from .interfaces import RepetitionPenaltyConfig
+from .interfaces import ResponseFormat
 from .interfaces import Responses
 from .interfaces import SamplerConfig
+from .interfaces import SpeculativeDecodingConfig
+from .interfaces import SuppressTokensConfig
 from .interfaces import ThinkingConfig
 from .interfaces import Tool
 from .interfaces import ToolEventHandler
+from .model_info import EmbeddingCapability
+from .model_info import LlmCapability
+from .model_info import ModelInfo
+from .model_info import SupportedModalities
 from .session import Session
 from .tools import tool_from_function
+
+ModelType = LiteRtLmModelType
 
 __all__ = (
     "AbstractBenchmark",
@@ -51,19 +74,39 @@ __all__ = (
     "Backend",
     "Benchmark",
     "BenchmarkInfo",
+    "ConstrainedDecodingConfig",
     "Content",
     "Contents",
     "Conversation",
+    "EmbeddingCapability",
+    "EmbeddingEngine",
+    "EmbeddingOptions",
+    "EmbeddingResponse",
     "Engine",
+    "InputOverflowStrategy",
+    "LiteRtLmBackendType",
+    "LiteRtLmConstraintProviderType",
+    "LiteRtLmModality",
+    "LiteRtLmModelType",
+    "LiteRtLmNpuBrand",
+    "LlmCapability",
     "LogSeverity",
     "LoraConfig",
     "LoraRankConfig",
     "Message",
+    "ModelInfo",
+    "ModelType",
+    "NoRepeatNgramConfig",
     "RepetitionPenaltyConfig",
+    "ResponseFormat",
     "Responses",
     "Role",
     "SamplerConfig",
     "Session",
+    "SpeculativeDecodingConfig",
+    "SpeculativeDecodingMode",
+    "SupportedModalities",
+    "SuppressTokensConfig",
     "ThinkingConfig",
     "Tool",
     "ToolCall",

@@ -52,8 +52,8 @@ def prompt_selection(
 
   # Users can quit the menu with "esc", "ctrl+d", and "ctrl+c" (already the
   # default).
-  @q.application.key_bindings.add(Keys.Escape, eager=True)
-  @q.application.key_bindings.add(Keys.ControlD, eager=True)
+  @q.application.key_bindings.add(Keys.Escape, eager=True)  # pyrefly: ignore[missing-attribute]
+  @q.application.key_bindings.add(Keys.ControlD, eager=True)  # pyrefly: ignore[missing-attribute]
   def _(event):
     event.app.exit(exception=KeyboardInterrupt())
 

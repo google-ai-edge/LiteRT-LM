@@ -13,7 +13,6 @@
 # limitations under the License.
 
 
-
 file(GLOB_RECURSE FBS_FILES "${SCHEMA_DIR}/*.fbs")
 
 if(NOT FBS_FILES)
@@ -24,7 +23,7 @@ endif()
 foreach(FBS_FILE ${FBS_FILES})
     get_filename_component(FBS_DIR "${FBS_FILE}" DIRECTORY)
     execute_process(
-        COMMAND ${FLATC_BIN} --cpp --gen-object-api --reflect-names --gen-mutable -o "${FBS_DIR}" "${FBS_FILE}"
+        COMMAND ${FLATC_BIN} --cpp --gen-object-api --reflect-names --gen-mutable -o "${FBS_DIR}" "${FBS_FILE}_generated.h"
         RESULT_VARIABLE RET_CODE
     )
 

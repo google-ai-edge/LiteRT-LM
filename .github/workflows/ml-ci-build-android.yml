@@ -20,14 +20,7 @@ on:
   pull_request:
     branches:
     - main
-  schedule:
-    - cron: "0 10 * * *"  # Run at 2am PST (10am UTC) every day to refresh the cache.
   workflow_dispatch:  # Manual trigger
-    inputs:
-      REFRESH_CACHE:
-        description: 'Refresh cache to remove unused files'
-        type: boolean
-        default: true
 defaults:
   run:
     shell: bash
@@ -36,12 +29,22 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
+  gate:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/check-pr-state.yml
+
   presubmit:
+    needs: gate
+    if: needs.gate.outputs.should_skip != 'true'
     name: "Presubmit-Android"
     runs-on: "linux-x86-c4-16"
     container:
-      image: ubuntu:24.04
+      image: ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4
     permissions:
       id-token: write     # Required to get the OIDC token for WIF
       actions: write  # For gh cache delete.
@@ -52,8 +55,6 @@ jobs:
       MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
 
       GH_TOKEN: ${{ github.token }}  # For gh release upload.
-      REFRESH_CACHE: ${{ github.event_name == 'schedule' ||
-                         (github.event_name == 'workflow_dispatch' && inputs.REFRESH_CACHE) }}
     steps:
       - name: Install System Dependencies
         env:
@@ -61,23 +62,25 @@ jobs:
           TZ: Etc/UTC
         run: |
           ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+          printf 'http://us-central1.gce.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://mirrors.edge.kernel.org/ubuntu/\tpriority:2\nhttp://archive.ubuntu.com/ubuntu/\tpriority:3\n' \
+            > /etc/apt/mirrors.txt
+          sed -i -E 's@https?://(archive|security)\.ubuntu\.com/ubuntu/?@mirror+file:/etc/apt/mirrors.txt@g' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries
           apt-get update && apt-get install -yq \
             build-essential gcc clang cmake make gdb pkg-config \
             openjdk-17-jdk-headless git wget curl unzip \
             tar python3 python3-dev python3-pip git-lfs \
             python3-numpy ccache zlib1g-dev libssl-dev \
             libpng-dev libcurl4-openssl-dev libfftw3-dev \
-            golang-go npm patchelf \
-            apt-file && apt-file update
+            golang-go npm patchelf
           git lfs install
 
       - name: Checkout code.
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         with:
           lfs: true
-
-      - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+          persist-credentials: false
 
       - name: Install Rust
         run: |
@@ -85,6 +88,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Install Bazelisk
+        # zizmor: ignore[adhoc-packages]
         run: |
           npm install -g @bazel/bazelisk
 
@@ -95,19 +99,18 @@ jobs:
           mkdir -p $ANDROID_HOME/cmdline-tools
 
           # Download the official Android headless command-line tools
-          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
           unzip -q cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
           mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
           rm cmdline-tools.zip
 
-          # Cast a wider net: Install both API 33 and 34 to satisfy whatever version Bazel requires
           # Turn off pipefail temporarily so the SIGPIPE on 'yes' doesn't crash the step
           set +o pipefail
 
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
             "platform-tools" \
-            "platforms;android-33" "platforms;android-34" \
-            "build-tools;33.0.1" "build-tools;34.0.0" > /dev/null
+            "platforms;android-35" \
+            "build-tools;35.0.0" > /dev/null
 
           # Turn pipefail back on to keep the rest of your script safe
           set -o pipefail
@@ -118,106 +121,21 @@ jobs:
 
 
       - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
         id: setup-ndk
+        uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1.6.0
         with:
           ndk-version: r28b
           add-to-path: false
 
       - name: Export NDK Home globally
         # This guarantees Bazel finds it during both the Linux //... eval and the actual Android compile
-        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
-
-
-      - name : Set up cache keys.
-        id: cache-keys
-        run: |
-          CACHE_RESTORE_KEY_2="${{ github.workflow }}-"
-          CACHE_RESTORE_KEY_1="$CACHE_RESTORE_KEY_2-${{ hashFiles('**/WORKSPACE', '**/.bazelrc') }}-"
-          CACHE_RESTORE_KEY_0="$CACHE_RESTORE_KEY_1-${{ hashFiles('**/BUILD*') }}"
-          CACHE_RESTORE_KEY_HEAD="$CACHE_RESTORE_KEY_0-${{ github.event.pull_request.base.sha }}"
-
-          CACHE_KEY="$CACHE_RESTORE_KEY_0-${{ github.sha }}"
-          echo "CACHE_RESTORE_KEY_2=$CACHE_RESTORE_KEY_2" >> "$GITHUB_OUTPUT"
-          echo "CACHE_RESTORE_KEY_1=$CACHE_RESTORE_KEY_1" >> "$GITHUB_OUTPUT"
-          echo "CACHE_RESTORE_KEY_0=$CACHE_RESTORE_KEY_0" >> "$GITHUB_OUTPUT"
-          echo "CACHE_RESTORE_KEY_HEAD=$CACHE_RESTORE_KEY_HEAD" >> "$GITHUB_OUTPUT"
-          echo "CACHE_KEY=$CACHE_KEY" >> "$GITHUB_OUTPUT"
-
-      - name: Clean build outputs if cache is being refreshed.
-        if: env.REFRESH_CACHE == 'true'
-        run: bazelisk clean --expunge
-
-      - name: Restore bazel cache if cache is not being refreshed.
-        id: bazel-cache
-        if: env.REFRESH_CACHE != 'true'
-        run: |
-          TARGET_DIR="$HOME/.cache/bazel"
-          BUCKET_URL="gs://litert-lm-cicd/caches/android/bazel"
-
-          echo "cache-primary-key=${{ steps.cache-keys.outputs.CACHE_KEY }}" >> "$GITHUB_OUTPUT"
-
-          CACHE_KEYS=("${{ steps.cache-keys.outputs.CACHE_KEY }}" \
-                      "${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_HEAD }}" \
-                      "${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_0 }}" \
-                      "${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_1 }}" \
-                      "${{ steps.cache-keys.outputs.CACHE_RESTORE_KEY_2 }}")
-
-          FOUND_BLOB=""
-
-          GCLOUD_OUTPUT=$(gcloud storage ls "${BUCKET_URL}")
-
-          for key in "${CACHE_KEYS[@]}"; do
-              SEARCH_PATH="${BUCKET_URL}/${key}"
-              echo "Checking for cache key: ${SEARCH_PATH}"
-
-              # Added '|| true' so a grep miss doesn't crash the GitHub Actions step
-              MATCH=$(echo "${GCLOUD_OUTPUT}" | grep -F "${SEARCH_PATH}" | head -n 1 || true)
-
-              if [ -n "$MATCH" ]; then
-                  echo "Found matching cache file: ${MATCH}"
-                  # MATCH already contains the full gs:// path, so just assign it directly!
-                  FOUND_BLOB="${MATCH}"
-                  break
-              else
-                  echo "Key Miss: ${SEARCH_PATH}"
-              fi
-          done
-
-          if [ ! -z "$FOUND_BLOB" ]; then
-            echo "Cache hit! Found blob: $FOUND_BLOB"
-
-            # Parse the clean key name out of the full GCS blob path for logging
-            MATCHED_KEY=$(basename "$FOUND_BLOB" .tar.gz)
-            echo "cache-hit=true" >> "$GITHUB_OUTPUT"
-            echo "cache-matched-key=$MATCHED_KEY" >> "$GITHUB_OUTPUT"
-
-            echo "Downloading cache archive..."
-            # FOUND_BLOB now contains the full gs:// path, so use it directly
-            gcloud storage cp "$FOUND_BLOB" ./cache.tar.gz
-
-            if [ -f ./cache.tar.gz ]; then
-              echo "Extracting artifacts to $TARGET_DIR..."
-              mkdir -p "$TARGET_DIR"
-              tar -xzf ./cache.tar.gz -C "$TARGET_DIR"
-              rm -f ./cache.tar.gz
-            fi
-          else
-            echo "No matching cache found in GCS. Proceeding with clean build."
-            echo "cache-hit=false" >> "$GITHUB_OUTPUT"
-            echo "cache-matched-key=" >> "$GITHUB_OUTPUT"
-          fi
-
-
-      - name: Check cache hit.
-        run: |
-          echo "Cache Hit: ${{ steps.bazel-cache.outputs.cache-hit }}"
-          echo "Cache Primary Key: ${{ steps.bazel-cache.outputs.cache-primary-key }}"
-          echo "Cache Matched Key: ${{ steps.bazel-cache.outputs.cache-matched-key }}"
+        env:
+          NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
 
       - name: Run bazel build for Android.
         run: |
-          bazelisk build --disk_cache=~/.cache/bazel --repository_cache=~/.cache/bazel/repo --config=android_x86_64 \
+          bazelisk build --config=github_actions_bazel_cache --config=android_x86_64 \
             --deleted_packages=swift \
             //... \
             //runtime/engine:litert_lm_main \
@@ -226,32 +144,13 @@ jobs:
             -- \
             -//python/... \
             -//kotlin/java/com/google/ai/edge/litertlm/example/... \
-            -//runtime/components/rust/...
+            -//runtime/components/rust/... \
+            -//runtime/components/tool_use/rust/...
 
       - name: Update litert_lm_main prebuilt for Android if new version tag is pushed.
         if: github.ref_type == 'tag'
+        env:
+          GH_REF_NAME: ${{ github.ref_name }}
         run: |
           cp bazel-bin/runtime/engine/litert_lm_main litert_lm_main.android_x86_64
-          gh release upload ${{ github.ref_name }} litert_lm_main.android_x86_64 --clobber
-
-      - name: Save bazel cache if it's new or being refreshed.
-        if: env.REFRESH_CACHE == 'true' || steps.bazel-cache.outputs.cache-hit != 'true'
-        run: |
-          TARGET_DIR="$HOME/.cache/bazel"
-          CACHE_KEY="${{ steps.cache-keys.outputs.CACHE_KEY }}"
-          BUCKET_URL="gs://litert-lm-cicd/caches/android/bazel"
-          ARCHIVE_NAME="cache.tar.gz"
-
-          echo "Checking if target cache folder exists: $TARGET_DIR"
-          if [ ! -d "$TARGET_DIR" ]; then
-              echo "Target cache folder not found. Skipping cache save."
-              exit 0
-          fi
-
-          echo "Compressing cache artifacts from $TARGET_DIR..."
-          tar -czf ./$ARCHIVE_NAME -C "$TARGET_DIR" .
-
-          if [ -f "./$ARCHIVE_NAME" ]; then
-              echo "Uploading cache archive to $BUCKET_URL/$CACHE_KEY.tar.gz..."
-              gcloud storage cp ./$ARCHIVE_NAME "$BUCKET_URL/$CACHE_KEY.tar.gz"
-          fi
+          gh release upload "$GH_REF_NAME" litert_lm_main.android_x86_64 --clobber

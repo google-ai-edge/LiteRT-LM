@@ -20,8 +20,10 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/conversation/io_types.h"
 #include "runtime/engine/io_types.h"
@@ -91,11 +93,48 @@ ExtractChannelContent(const std::vector<Channel>& channels,
   return extracted_fields;
 }
 
+bool IsReasoningChannel(const Channel& channel) {
+  return channel.is_reasoning_channel ||
+         channel.channel_name == kThoughtChannelName;
+}
+
+bool IsReasoningChannel(absl::string_view channel_name,
+                        const std::vector<Channel>& channels) {
+  if (channel_name == kThoughtChannelName) {
+    return true;
+  }
+  for (const auto& channel : channels) {
+    if (channel.channel_name == channel_name) {
+      return channel.is_reasoning_channel;
+    }
+  }
+  return false;
+}
+
 void InsertChannelContentIntoMessage(
     const absl::flat_hash_map<std::string, std::string>& channel_content,
-    Message& assistant_message) {
+    Message& assistant_message, const std::vector<Channel>& channels) {
+  // Insert channel content into the message.
   for (const auto& [channel_name, value] : channel_content) {
     assistant_message[std::string(kChannelsKey)][channel_name] = value;
+  }
+
+  // Collect content from all reasoning channels.
+  std::vector<std::string> reasoning_contents;
+  for (const auto& channel : channels) {
+    if (IsReasoningChannel(channel)) {
+      auto it = channel_content.find(channel.channel_name);
+      if (it != channel_content.end()) {
+        reasoning_contents.push_back(it->second);
+      }
+    }
+  }
+
+  // Insert reasoning content into the message.
+  // If there are multiple reasoning channels, their contents are concatenated.
+  if (!reasoning_contents.empty()) {
+    assistant_message[std::string(kReasoningContentKey)] =
+        absl::StrJoin(reasoning_contents, "\n");
   }
 }
 

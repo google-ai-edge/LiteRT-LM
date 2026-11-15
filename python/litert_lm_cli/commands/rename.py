@@ -25,7 +25,7 @@ from litert_lm_cli import model
 
 @click.command(
     cls=help_formatter.ColorCommand,
-    help="Renames a model.",
+    help="Renames an imported model.",
 )
 @click.argument("old_model_id")
 @click.argument("new_model_id")

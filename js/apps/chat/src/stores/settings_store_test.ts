@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {MODELS, SettingsStore} from './settings_store.js';
+import {findModel, getNonDefaultBackendSummary, isGpuOnlyTextModel, migrateModelPath, MODELS, selectCustomModel, SettingsStore} from './settings_store.js';
 
 describe('SettingsStore', () => {
   let mockCallbackCount = 0;
@@ -42,6 +42,90 @@ describe('SettingsStore', () => {
     expect(store.topP).toBe(0.95);
     expect(store.topK).toBe(64);
     expect(store.enableThinking).toBe(true);
+    expect(store.enableSpeculativeDecoding).toBe(false);
+    expect(store.systemPrompt).toBe('');
+    expect(store.disabledTools).toEqual([]);
+    expect(store.textBackend).toBe('gpu');
+    expect(store.visionBackend).toBe('gpu');
+    expect(store.audioBackend).toBe('gpu');
+    expect(store.textPrecision).toBe('default');
+    expect(store.visionPrecision).toBe('default');
+    expect(store.audioPrecision).toBe('default');
+  });
+
+  it('persists, resets, and coerces experimental backend and precision settings', () => {
+    const store = new SettingsStore(mockUpdateCallback);
+    store.selectedModelPath = 'https://example.com/custom-cpu.litertlm';
+    store.textBackend = 'cpu';
+    store.visionBackend = 'cpu';
+    store.audioBackend = 'gpu';
+    store.textPrecision = 'fp32';
+    store.visionPrecision = 'fp16';
+    store.audioPrecision = 'fp16';
+    store.temperature = 0.4;
+    store.saveSettings();
+
+    const loaded = new SettingsStore(mockUpdateCallback);
+    expect(loaded.textBackend).toBe('cpu');
+    expect(loaded.visionBackend).toBe('cpu');
+    expect(loaded.audioPrecision).toBe('fp16');
+    expect(isGpuOnlyTextModel(MODELS[0]!.path)).toBeTrue();
+    expect(isGpuOnlyTextModel('https://example.com/custom-cpu.litertlm'))
+        .toBeFalse();
+
+    // If a GPU-only -gpu.litertlm model is saved with textBackend='cpu',
+    // loadSettings coerces textBackend back to 'gpu'.
+    window.localStorage.setItem(
+        'litertlm-chat-settings',
+        JSON.stringify({
+          selectedModelPath: MODELS[0]!.path,
+          textBackend: 'cpu',
+          visionBackend: 'cpu',
+        }));
+    const coerced = new SettingsStore(mockUpdateCallback);
+    expect(coerced.textBackend).toBe('gpu');
+    expect(coerced.visionBackend).toBe('cpu');
+
+    // Resetting 'experimental' leaves Model Config untouched.
+    loaded.resetDefaults('experimental');
+    expect(loaded.textBackend).toBe('gpu');
+    expect(loaded.visionBackend).toBe('gpu');
+    expect(loaded.audioBackend).toBe('gpu');
+    expect(loaded.textPrecision).toBe('default');
+    expect(loaded.visionPrecision).toBe('default');
+    expect(loaded.audioPrecision).toBe('default');
+    expect(loaded.temperature).toBe(0.4);
+  });
+
+  it('saves and loads the system prompt and model config', () => {
+    const store = new SettingsStore(mockUpdateCallback);
+    store.systemPrompt = 'Be concise.';
+    store.disabledTools = ['run_javascript'];
+    store.enableSpeculativeDecoding = true;
+    store.saveSettings();
+
+    const loaded = new SettingsStore(mockUpdateCallback);
+    expect(loaded.systemPrompt).toBe('Be concise.');
+    expect(loaded.disabledTools).toEqual(['run_javascript']);
+    expect(loaded.enableSpeculativeDecoding).toBeTrue();
+    expect(loaded.modelSettings).toEqual(jasmine.objectContaining({
+      systemPrompt: 'Be concise.',
+      disabledTools: ['run_javascript'],
+      enableSpeculativeDecoding: true,
+    }));
+  });
+
+  it('resets only the system prompt and tools', () => {
+    const store = new SettingsStore(mockUpdateCallback);
+    store.systemPrompt = 'Be concise.';
+    store.disabledTools = ['run_javascript'];
+    store.temperature = 0.1;
+
+    store.resetDefaults('systemPrompt');
+
+    expect(store.systemPrompt).toBe('');
+    expect(store.disabledTools).toEqual([]);
+    expect(store.temperature).toBe(0.1);
   });
 
   it('saves settings to localStorage', () => {
@@ -102,15 +186,16 @@ describe('SettingsStore', () => {
     const store = new SettingsStore(mockUpdateCallback);
     store.temperature = 0.1;
     store.contextLength = 1024;
+    store.enableSpeculativeDecoding = true;
+    store.systemPrompt = 'Be concise.';
 
-    // Auto-mock window.confirm to bypass browser blocking prompt
-    spyOn(window, 'confirm').and.returnValue(true);
+    store.resetDefaults();
 
-    const wasReset = store.resetDefaults();
-
-    expect(wasReset).toBeTrue();
     expect(store.temperature).toBe(1.0);
     expect(store.contextLength).toBe(4096);
+    expect(store.enableSpeculativeDecoding).toBeFalse();
+    // The system prompt is reset separately.
+    expect(store.systemPrompt).toBe('Be concise.');
     expect(mockCallbackCount).toBe(1);  // the reset triggers a save callback
   });
 
@@ -132,4 +217,87 @@ describe('SettingsStore', () => {
     expect(store.customModels.length).toBe(1);
     expect(store.customModels[0]!.name).toBe('Custom Model');
   });
+
+  it('replaces the default models\' old paths', () => {
+    const oldPath =
+        'https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it-web.litertlm';
+    expect(migrateModelPath(oldPath))
+        .toBe('hf://litert-community/gemma-4-E4B-it-litert-lm');
+    expect(migrateModelPath('https://example.com/model.litertlm'))
+        .toBe('https://example.com/model.litertlm');
+
+    window.localStorage.setItem(
+        'litertlm-chat-settings', JSON.stringify({selectedModelPath: oldPath}));
+    expect(new SettingsStore(mockUpdateCallback).selectedModelPath)
+        .toBe('hf://litert-community/gemma-4-E4B-it-litert-lm');
+  });
+
+  it('finds built-in, custom, and local-directory models by path', () => {
+    const custom =
+        {name: 'Mine', filename: 'mine.litertlm', path: 'p/mine', size: '1 GB'};
+    const local =
+        {name: 'Dir', filename: 'dir.litertlm', path: 'p/local', size: '2 GB'};
+    const models = {customModels: [custom], localDirModels: [local]};
+
+    expect(findModel(models, MODELS[1]!.path)).toBe(MODELS[1]);
+    expect(findModel(models, 'p/mine')).toBe(custom);
+    expect(findModel(models, 'p/local')).toBe(local);
+    expect(findModel(models, 'p/unknown')).toBeUndefined();
+  });
+
+  it('summarizes non-default modality backend overrides and returns null for all-GPU',
+     () => {
+       const store = new SettingsStore(mockUpdateCallback);
+       expect(getNonDefaultBackendSummary(store)).toBeNull();
+
+       store.visionBackend = 'cpu';
+       expect(getNonDefaultBackendSummary(store)).toEqual({
+         label: 'WebGPU · CPU',
+         detail: 'Backend: WebGPU · CPU (Vision on CPU)',
+       });
+
+       store.selectedModelPath = 'https://example.com/gemma-3-1b-it.litertlm';
+       store.textBackend = 'cpu';
+       store.audioBackend = 'cpu';
+       expect(getNonDefaultBackendSummary(store)).toEqual({
+         label: 'CPU',
+         detail: 'Backend: CPU (Text, Vision, Audio in WASM FP32)',
+       });
+
+       // -gpu.litertlm models coerce Text back to GPU -> mixed WebGPU · CPU
+       store.selectedModelPath = MODELS[0]!.path;
+       expect(getNonDefaultBackendSummary(store)).toEqual({
+         label: 'WebGPU · CPU',
+         detail: 'Backend: WebGPU · CPU (Vision, Audio on CPU)',
+       });
+     });
+
+  it('selects built-in models in selectCustomModel without adding duplicates to customModels',
+     () => {
+       const store = new SettingsStore(mockUpdateCallback);
+       store.textBackend = 'cpu';
+
+       selectCustomModel(store, MODELS[1]!);
+       expect(store.selectedModelPath).toBe(MODELS[1]!.path);
+       expect(store.customModels).toEqual([]);
+       expect(store.textBackend).toBe('gpu');
+
+       const custom = {
+         name: 'Mine',
+         filename: 'mine.litertlm',
+         path: 'hf://org/mine',
+         size: '1 GB',
+       };
+       const otherCustom = {
+         name: 'Other',
+         filename: 'other.litertlm',
+         path: 'hf://org/other',
+         size: '2 GB',
+       };
+       selectCustomModel(store, custom);
+       selectCustomModel(store, custom);
+       selectCustomModel(store, otherCustom);
+       expect(store.selectedModelPath).toBe(otherCustom.path);
+       expect(store.customModels).toEqual([custom, otherCustom]);
+     });
 });

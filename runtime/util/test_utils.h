@@ -15,6 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_TEST_UTILS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_TEST_UTILS_H_
 
-#include "support/util/test_utils.h"  // from @litert
+#include "support/util/test_utils.h"
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_TEST_UTILS_H_

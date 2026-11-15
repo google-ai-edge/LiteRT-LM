@@ -1,0 +1,260 @@
+/**
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import {Cleanup} from './cleanup.js';
+import {ContentPart, SUPPORTED_AUDIO_MIME_TYPES, SUPPORTED_IMAGE_MIME_TYPES} from './conversation_config.js';
+import {EmbeddingEngineSettings, fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings} from './embedding_engine_settings.js';
+import {runExclusiveEngineCreation} from './engine_creation.js';
+import type {LiteRtLm} from './litertlm_web.js';
+import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
+import {EngineModelInput, resolveModelInput} from './model_input.js';
+import {Mutex} from './mutex.js';
+import {createStreamingModelAssets} from './stream_utils.js';
+import {Backend, Deletable, EmbeddingEngine as WasmEmbeddingEngine, EmbeddingOptions, InputOverflowStrategy, unwrapWasmResult} from './wasm_binding_types.js';
+import {consumeEmscriptenVectorToArray} from './wasm_utils.js';
+
+export {
+  type EmbeddingOptions,
+  InputOverflowStrategy,
+  SUPPORTED_AUDIO_MIME_TYPES,
+  SUPPORTED_IMAGE_MIME_TYPES,
+};
+
+/**
+ * A single input part to the embedding engine.
+ */
+export type SingleEmbeddingInput = string | ContentPart | Blob;
+
+/**
+ * An input or sequence of inputs to compute an embedding for.
+ */
+export type EmbeddingInput = SingleEmbeddingInput | SingleEmbeddingInput[];
+
+/**
+ * Result of an embedding computation.
+ */
+export interface EmbeddingResponse {
+  embedding: number[];
+  inputLength: number;
+  truncatedLength?: number;
+  numChunks: number;
+}
+
+function toWasmEmbeddingOptions(options?: EmbeddingOptions): EmbeddingOptions {
+  return {
+    normalize: options?.normalize ?? true,
+    insertSpecialTokens: options?.insertSpecialTokens ?? true,
+    inputOverflowStrategy:
+        options?.inputOverflowStrategy ?? InputOverflowStrategy.ERROR,
+    visionTokensPerImage: options?.visionTokensPerImage,
+    outputSize: options?.outputSize,
+  };
+}
+
+async function normalizeInputPart(part: SingleEmbeddingInput):
+    Promise<ContentPart> {
+  if (typeof part === 'string') {
+    return {type: 'text', text: part};
+  }
+  if (part instanceof Blob) {
+    const mimeType = part.type.toLowerCase().split(';')[0].trim();
+    if (SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)) {
+      const arrayBuffer = await part.arrayBuffer();
+      return {type: 'image', data: arrayBuffer};
+    }
+    if (SUPPORTED_AUDIO_MIME_TYPES.has(mimeType)) {
+      const arrayBuffer = await part.arrayBuffer();
+      return {type: 'audio', data: arrayBuffer};
+    }
+    throw new Error(
+        `Unsupported Blob mime type: "${part.type}". Supported image types: ` +
+        `${[...SUPPORTED_IMAGE_MIME_TYPES].join(', ')}. Supported audio types: ` +
+        `${[...SUPPORTED_AUDIO_MIME_TYPES].join(', ')}.`);
+  }
+  if (typeof part === 'object' && part !== null) {
+    if (part.type === 'image') {
+      if (part.data instanceof Blob) {
+        const arrayBuffer = await part.data.arrayBuffer();
+        return {type: 'image', data: arrayBuffer};
+      }
+      return part;
+    }
+    if (part.type === 'audio') {
+      if (part.data instanceof Blob) {
+        const arrayBuffer = await part.data.arrayBuffer();
+        return {type: 'audio', data: arrayBuffer};
+      }
+      return part;
+    }
+    return part;
+  }
+  throw new Error(`Unsupported input part: ${JSON.stringify(part)}`);
+}
+
+async function normalizeInput(input: EmbeddingInput):
+    Promise<ContentPart | ContentPart[]> {
+  if (Array.isArray(input)) {
+    return Promise.all(input.map((p) => normalizeInputPart(p)));
+  }
+  return normalizeInputPart(input);
+}
+
+/**
+ * LiteRT-LM Embedding Engine
+ */
+export class EmbeddingEngine implements Deletable {
+  readonly settings: EmbeddingEngineSettings;
+  private readonly mutex = new Mutex();
+
+  private constructor(
+      private readonly engine: WasmEmbeddingEngine,
+      settings: EmbeddingEngineSettings,
+      private readonly deleteCallback: () => void,
+  ) {
+    this.settings = settings;
+  }
+
+  static async create(settings: EmbeddingEngineSettings):
+      Promise<EmbeddingEngine> {
+    // Resolve a hf:// URI, which chooses the file before anything is
+    // downloaded, outside the engine creation mutex: it makes network requests
+    // but doesn't use Wasm, so it shouldn't hold up other engines.
+    const [litertlm, model] = await Promise.all([
+      getOrLoadGlobalLiteRtLm(),
+      resolveModelInput(settings.model, settings.backend),
+    ]);
+    return runExclusiveEngineCreation(
+        litertlm.liteRtLmWasm,
+        () => EmbeddingEngine.createExclusive(litertlm, settings, model));
+  }
+
+  /**
+   * Creates the embedding engine. Must only be called while holding the engine
+   * creation mutex (see `runExclusiveEngineCreation`).
+   */
+  private static async createExclusive(
+      litertlm: LiteRtLm, settings: EmbeddingEngineSettings,
+      model: EngineModelInput): Promise<EmbeddingEngine> {
+    const wasm = litertlm.liteRtLmWasm;
+    const backend = settings.backend ?? Backend.GPU;
+    settings = {...settings, backend};
+
+    if (backend === Backend.GPU || backend === Backend.GPU_ARTISAN ||
+        settings.visionBackend === Backend.GPU ||
+        settings.audioBackend === Backend.GPU) {
+      await litertlm.setupDefaultWebGpuDevice();
+    }
+
+    const cleanup = new Cleanup();
+    let engine: WasmEmbeddingEngine;
+    try {
+      const {modelAssets, cleanupModelAssets} =
+          await createStreamingModelAssets(model.model, wasm, cleanup);
+
+      const wasmSettingsResult =
+          wasm.EmbeddingEngineSettings.createDefaultMultimodal(
+              modelAssets, {value: backend},
+              settings.visionBackend !== undefined ?
+                  {value: settings.visionBackend} :
+                  undefined,  // Skip vision backend if not set.
+              settings.audioBackend !== undefined ?
+                  {value: settings.audioBackend} :
+                  undefined);  // Skip audio backend if not set.
+      cleanupModelAssets();
+      const wasmSettings = unwrapWasmResult(wasmSettingsResult);
+
+      const cleanupWasmSettings = cleanup.add(() => {
+        wasmSettings.delete();
+      });
+
+      const resolvedBackend =
+          wasmSettings.getMutableMainExecutorSettings().getBackend().value;
+      model.checkBackend(resolvedBackend);
+      // Report the backend the engine uses, like `Engine.settings` does.
+      settings = {...settings, backend: resolvedBackend};
+
+      fillWasmEmbeddingEngineSettingsFromEmbeddingEngineSettings(
+          wasmSettings, settings);
+
+      engine = unwrapWasmResult(
+          await wasm.EmbeddingEngine.createEngine(wasmSettings));
+      cleanupWasmSettings();
+
+      cleanup.add(() => {
+        engine.delete();
+      });
+      return new EmbeddingEngine(
+          engine, settings, () => cleanup.run());
+    } catch (e) {
+      cleanup.run();
+      throw e;
+    }
+  }
+
+  async computeEmbedding(
+      input: EmbeddingInput,
+      options: EmbeddingOptions = {},
+  ): Promise<EmbeddingResponse> {
+    const normalized = await normalizeInput(input);
+    return this.mutex.acquireAndRun(async () => {
+      const wasmResponse = unwrapWasmResult(await this.engine.computeEmbedding(
+          normalized, toWasmEmbeddingOptions(options)));
+      const embedding = consumeEmscriptenVectorToArray(wasmResponse.embedding);
+      return {
+        embedding,
+        inputLength: wasmResponse.inputLength,
+        truncatedLength: wasmResponse.truncatedLength,
+        numChunks: wasmResponse.numChunks,
+      };
+    });
+  }
+
+  async computeEmbeddingBatch(
+      inputs: EmbeddingInput[],
+      options: EmbeddingOptions = {},
+  ): Promise<EmbeddingResponse[]> {
+    const normalizedBatch = await Promise.all(inputs.map(normalizeInput));
+    return this.mutex.acquireAndRun(async () => {
+      const wasmResponses =
+          unwrapWasmResult(await this.engine.computeEmbeddingBatch(
+              normalizedBatch, toWasmEmbeddingOptions(options)));
+      try {
+        const responses: EmbeddingResponse[] = [];
+        const count = wasmResponses.size();
+        for (let i = 0; i < count; i++) {
+          const wasmResp = wasmResponses.get(i);
+          const embedding =
+              consumeEmscriptenVectorToArray(wasmResp.embedding);
+          responses.push({
+            embedding,
+            inputLength: wasmResp.inputLength,
+            truncatedLength: wasmResp.truncatedLength,
+            numChunks: wasmResp.numChunks,
+          });
+        }
+        return responses;
+      } finally {
+        wasmResponses.delete();
+      }
+    });
+  }
+
+  async delete(): Promise<void> {
+    await this.mutex.acquireAndRun(() => {
+      this.deleteCallback();
+    });
+  }
+}

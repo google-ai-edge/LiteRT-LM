@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 if(CMAKE_VERSION VERSION_LESS "3.25")
     message(FATAL_ERROR
         "CMake 3.25+ is required because we use the 'block()' command for variable isolation.\n"
@@ -20,273 +19,507 @@ if(CMAKE_VERSION VERSION_LESS "3.25")
         "Please upgrade CMake to proceed."
     )
 endif()
-
 cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
+
 project(LiteRT-LM LANGUAGES C CXX)
 
-
-# --- Global Paths
-if(NOT LITERTLM_PROJECT_ROOT)
-    message(WARNING "LITERTLM_PROJECT_ROOT is not defined. Setting LITERTLM_PROJECT_ROOT to ${CMAKE_CURRENT_SOURCE_DIR}/../../..}")
-    set(LITERTLM_PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." CACHE PATH "LiteRT-LM: Absolute path to the repository root")
-endif()
-
-set(CMAKE_SOURCE_DIR ${LITERTLM_PROJECT_ROOT} CACHE PATH "Reset to repo root" FORCE)
-set(PROJECT_SOURCE_DIR ${LITERTLM_PROJECT_ROOT} "Reset to repo root" FORCE)
-
-
-set(LITERTLM_ROOT_DIR "${LITERTLM_PROJECT_ROOT}" CACHE PATH "LiteRT-LM: Root of the LiteRT-LM workspace")
-set(LITERTLM_PACKAGES_DIR "${LITERTLM_ROOT_DIR}/cmake/packages" CACHE PATH "LiteRT-LM: Directory for build packages")
-set(LITERTLM_PATCHES_DIR "${LITERTLM_ROOT_DIR}/cmake/patches"
-    CACHE PATH "LiteRT-LM: Directory for build patches")
-set(LITERTLM_MODULES_DIR "${LITERTLM_ROOT_DIR}/cmake/modules"
-    CACHE PATH "LiteRT-LM: Modules path, appended to CMAKE_MODULE_PATH")
-set(LITERTLM_SCRIPTS_DIR "${LITERTLM_ROOT_DIR}/cmake/scripts"
-    CACHE PATH "LiteRT-LM: Directory for internal build and automation scripts")
-set(LITERTLM_LOCAL_STAGING_DIR "${CMAKE_BINARY_DIR}/staging/lib" CACHE INTERNAL "")
-file(MAKE_DIRECTORY "${LITERTLM_LOCAL_STAGING_DIR}")
-set(LITERTLM_RUST_TARGET "" CACHE STRING "Rust target triple (e.g., aarch64-linux-android). Leave empty for host.")
-set(LITERTLM_RUST_FILES
-    "${LITERTLM_PROJECT_ROOT}/runtime/components/rust/minijinja_template.rs"
-    "${LITERTLM_PROJECT_ROOT}/runtime/components/tool_use/rust/parsers.rs"
-    CACHE INTERNAL "Rust files to include in the cxx bridge")
-set(LITERTLM_CARGO_TOML "${LITERTLM_PROJECT_ROOT}/Cargo.toml" CACHE INTERNAL "Path to LiteRT-LM's Cargo.toml")
-set(LITERTLM_PROTO_FILES
-  "${LITERTLM_PROJECT_ROOT}/runtime/proto/engine.proto"
-  "${LITERTLM_PROJECT_ROOT}/runtime/proto/llm_metadata.proto"
-  "${LITERTLM_PROJECT_ROOT}/runtime/proto/llm_model_type.proto"
-  "${LITERTLM_PROJECT_ROOT}/runtime/proto/sampler_params.proto"
-  "${LITERTLM_PROJECT_ROOT}/runtime/proto/token.proto"
-  "${LITERTLM_PROJECT_ROOT}/runtime/executor/proto/constrained_decoding_options.proto"
-  "${LITERTLM_PROJECT_ROOT}/runtime/util/external_file.proto"
-  CACHE INTERNAL
-  "Protobuf files that will be processed with protoc"
-)
-
-set(LITERTLM_FLATBUFFERS_FILES
-    "${LITERTLM_PROJECT_ROOT}/schema/litertlm_header_schema.fbs"
-    CACHE INTERNAL
-    "FlatBuffers files that will be processed with flatc"
-)
-
-### TODO(totero): Replace references to these with the namespaced versions.
-set(SCRIPTS_DIR      "${LITERTLM_SCRIPTS_DIR}")
-set(PATCHES_DIR      "${LITERTLM_PATCHES_DIR}")
-set(MODULES_DIR        "${LITERTLM_MODULES_DIR}")
-list(APPEND CMAKE_MODULE_PATH   "${LITERTLM_MODULES_DIR}")
-###
-
-set(EXTERNAL_PROJECT_BINARY_DIR "${CMAKE_BINARY_DIR}/external")
-set(THIRD_PARTY_DIR             "${CMAKE_BINARY_DIR}/third_party")
-set(GENERATED_SRC_DIR           "${CMAKE_BINARY_DIR}/generated/src" CACHE PATH "Root for generated code")
-file(MAKE_DIRECTORY "${GENERATED_SRC_DIR}")
-
-set(LITERTLM_INCLUDE_PATHS
-  "${GENERATED_SRC_DIR}"
-  "${CMAKE_BINARY_DIR}"
-  CACHE INTERNAL ""
-)
-
-
-# --- Environment
+# --- CMake Settings ---
 if(NOT CMAKE_CXX_STANDARD)
     set(CMAKE_CXX_STANDARD 20)
 endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-set(CMAKE_POLICY_VERSION_MINIMUM 3.20 CACHE STRING "Required CMake policy version." FORCE)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.20 CACHE STRING "Required CMake policy version" FORCE)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fpermissive" CACHE STRING "Required CXX flags" FORCE)
 
-add_compile_options("-fpermissive")
+if(CMAKE_CROSSCOMPILING)
+  set(_litertlm_cross_compile "ON")
+else()
+  set(_litertlm_cross_compile "OFF")
+endif()
 
+set(LITERTLM_CROSSCOMPILING "${_litertlm_cross_compile}" CACHE INTERNAL "LiteRTLM cross compile flag")
+
+set(ENV{VIRTUAL_ENV} "${LITERTLM_VENV_DIR}")
+
+if(LITERTLM_CROSSCOMPILING)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  set(PYTHON3_LIB "")
+else()
+  find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+  set(PYTHON3_LIB Python3::Python)
+endif()
+include_directories(SYSTEM "${LITERTLM_VENV_DIR}/include")
+
+message(STATUS "Using isolated Python: ${Python3_EXECUTABLE}")
+set(LITERTLM_ENV_WRAPPER
+"VIRTUAL_ENV=${LITERTLM_VENV_DIR}"
+"PATH=${LITERTLM_VENV_DIR}/bin:$ENV{PATH}"
+CACHE INTERNAL "LiteRT-LM: Environment variables for uv virtual environment"
+)
+set(LITERTLM_UV_ARGS
+"-DPython3_ROOT_DIR=${LITERTLM_VENV_DIR}"
+"-DPython3_FIND_VIRTUALENV=FIRST")
+
+if(NOT LITERTLM_PROJECT_ROOT)
+    message(WARNING "LITERTLM_PROJECT_ROOT is not defined. Setting LITERTLM_PROJECT_ROOT to ${CMAKE_CURRENT_SOURCE_DIR}/../../..}")
+    set(LITERTLM_PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." CACHE PATH "LiteRT-LM: Absolute path to the repository root")
+endif()
+set(CMAKE_SOURCE_DIR ${LITERTLM_PROJECT_ROOT} CACHE PATH
+    "Reset to repo root" FORCE)
+message(DEBUG "[LiteRTLM] CMAKE_SOURCE_DIR: ${CMAKE_SOURCE_DIR}")
+
+# --- Setup ---
+set(LITERTLM_ENV_WRAPPER "${LITERTLM_ENV_WRAPPER}" CACHE INTERNAL
+    "LiteRT-LM: Environment variables for UV virtual environment")
+set(LITERTLM_UV_ARGS "${LITERTLM_UV_ARGS}" CACHE INTERNAL
+    "LiteRT-LM: Arguments for UV virtual environment")
+set(LITERTLM_VENV_DIR "${LITERTLM_VENV_DIR}" CACHE PATH
+    "LiteRT-LM: Path to the uv virtual environment")
+set(LITERTLM_BUILD_COMMAND_ARGS "${LITERTLM_BUILD_COMMAND_ARGS}" CACHE INTERNAL
+    "LiteRT-LM: Arguments for the build command")
+set(LITERTLM_ORCHESTRATION_PHASE
+    ${LITERTLM_ORCHESTRATION_PHASE} CACHE INTERNAL
+    "LiteRT-LM: Phase of the super build" FORCE)
+message(DEBUG "[LiteRTLM] LITERTLM_ORCHESTRATION_PHASE: ${LITERTLM_ORCHESTRATION_PHASE}")
+set(LITERTLM_CMAKE_DIR ${LITERTLM_PROJECT_ROOT}/cmake
+    CACHE PATH "LiteRT-LM: Directory containing cmake scripts")
+set(LITERTLM_MODULES_DIR ${LITERTLM_CMAKE_DIR}/modules
+    CACHE PATH "LiteRT-LM: Modules path, appended to CMAKE_MODULE_PATH")
+message(DEBUG "[LiteRTLM] LITERTLM_MODULES_DIR: ${LITERTLM_MODULES_DIR}")
+set(LITERTLM_CMAKE_PACKAGES_DIR
+    ${LITERTLM_CMAKE_DIR}/packages CACHE PATH
+    "LiteRT-LM: Directory for build packages")
+message(DEBUG "[LiteRTLM] LITERTLM_CMAKE_PACKAGES_DIR: ${LITERTLM_CMAKE_PACKAGES_DIR}")
+
+set(LITERTLM_PATCHES_DIR "${LITERTLM_CMAKE_DIR}/patches"
+    CACHE PATH "LiteRT-LM: Directory for build patches")
+set(LITERTLM_SCRIPTS_DIR "${LITERTLM_CMAKE_DIR}/scripts"
+    CACHE PATH "LiteRT-LM: Directory for internal build and automation scripts")
+
+set(LITERTLM_GENERATED_SRC_DIR "${CMAKE_BINARY_DIR}"
+    CACHE PATH "Root for generated code")
+set(LITERTLM_STAGING_DIR "${CMAKE_BINARY_DIR}/../tmp/lib"
+    CACHE PATH "")
+set(LITERTLM_THIRD_PARTY_DIR "${CMAKE_BINARY_DIR}/third_party"
+    CACHE PATH "")
+if(NOT LITERTLM_CROSSCOMPILING AND DEFINED LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR)
+    set(LITERTLM_EXTERNAL_PROJECT_BIN_DIR "${LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR}"
+        CACHE PATH "LiteRT-LM: Root directory for external projects" FORCE)
+else()
+    set(LITERTLM_EXTERNAL_PROJECT_BIN_DIR "${CMAKE_BINARY_DIR}/external"
+        CACHE PATH "LiteRT-LM: Root directory for external projects")
+endif()
+set(LITERTLM_IMPORTED_SRC_DIR "${LITERTLM_CMAKE_DIR}/import/src" CACHE PATH "")
+set(LITERTLM_IMPORTED_LITERT_SRC_DIR "${LITERTLM_IMPORTED_SRC_DIR}/litert" )
+set(LITERTLM_INCLUDE_PATHS
+  "${LITERTLM_GENERATED_SRC_DIR}"
+  "${CMAKE_BINARY_DIR}"
+  CACHE PATH "")
+
+set(LITERTLM_TARGET_MAP_PATH
+    "${LITERTLM_CMAKE_PACKAGES_DIR}/litert_lm/${LITERTLM_ORCHESTRATION_PHASE}_target_map.cmake"
+    CACHE PATH "")
+
+list(APPEND CMAKE_MODULE_PATH   "${LITERTLM_MODULES_DIR}")
+set(LITERTLM_GENERATORS_DIR "${LITERTLM_MODULES_DIR}/generators" CACHE PATH "")
+
+set_property(GLOBAL PROPERTY LITERTLM_ARCHIVE_REGISTRY "")
+set_property(GLOBAL PROPERTY LITERTLM_TARGET_REGISTRY "")
+
+# --- Rust
+set(Rust_RUSTUP_INSTALL_MISSING_TARGET ON CACHE BOOL "Auto-install rust targets")
+set(LITERTLM_RUST_TARGET "" CACHE STRING "Rust target triple (e.g., aarch64-linux-android). Leave empty for host.")
+set(LITERTLM_RUST_FILES
+    "${LITERTLM_PROJECT_ROOT}/runtime/components/rust/minijinja_template.rs"
+    "${LITERTLM_PROJECT_ROOT}/runtime/components/tool_use/rust/parsers.rs"
+    CACHE INTERNAL "Rust files to include in the cxx bridge")
+set(LITERTLM_CARGO_TOML "${LITERTLM_PROJECT_ROOT}/Cargo.toml" CACHE PATH "Path to LiteRT-LM's Cargo.toml")
+if(DEFINED LITERTLM_RUST_LINKER_OVERRIDE AND DEFINED LITERTLM_RUST_CARGO_ENV_VAR)
+  set(ENV{${LITERTLM_RUST_CARGO_ENV_VAR}} "${LITERTLM_RUST_LINKER_OVERRIDE}")
+  message(STATUS "[LiteRTLM] Routing Rust Cargo: ${LITERTLM_RUST_LINKER_OVERRIDE}")
+endif()
+if(DEFINED LITERTLM_RUST_LINKER_OVERRIDE AND DEFINED LITERTLM_CORROSION_LINKER_VAR)
+  set(${LITERTLM_CORROSION_LINKER_VAR} "${LITERTLM_RUST_LINKER_OVERRIDE}" CACHE FILEPATH "Override Rust Linker")
+  message(STATUS "[LiteRTLM] Routing Rust Corrosion Linker: ${LITERTLM_RUST_LINKER_OVERRIDE}")
+endif()
+
+set(LITERTLM_PROTO_FILES
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/any2any_metadata.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/any2any_model_type.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/any2any_session_config.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/embedding_metadata.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/embedding_model_type.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/engine.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/image_gen_model_type.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/litert_lm_metrics.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/llm_metadata.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/llm_model_type.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/sampler_params.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/speech2text_metadata.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/speech2text_model_type.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/speech2text_session_config.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/text2image_metadata.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/text2image_session_config.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/text2speech_metadata.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/text2speech_model_type.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/text2speech_session_config.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/token.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/executor/proto/constrained_decoding_options.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/proto/executor_metadata.proto"
+  "${LITERTLM_PROJECT_ROOT}/runtime/util/external_file.proto"
+  CACHE INTERNAL
+  "Protobuf files that will be processed with protoc")
+
+set(LITERTLM_FLATBUFFERS_FILES
+    "${LITERTLM_PROJECT_ROOT}/schema/core/litertlm_header_schema.fbs"
+    CACHE INTERNAL
+    "FlatBuffers files that will be processed with flatc")
+
+# --- Directory Generation
+file(MAKE_DIRECTORY "${LITERTLM_STAGING_DIR}")
+file(MAKE_DIRECTORY "${LITERTLM_GENERATED_SRC_DIR}")
+file(MAKE_DIRECTORY "${LITERTLM_EXTERNAL_PROJECT_BIN_DIR}")
+
+# --- Feature Flags ---
+option(LITERT_LM_ENABLE_SENTENCEPIECE_TOKENIZER
+    "Enable SentencePiece tokenizer support"
+    ON)
+option(LITERT_LM_ENABLE_HUGGINGFACE_TOKENIZER
+    "Enable HuggingFace BPE tokenizer support"
+    ON)
+option(LITERT_LM_ENABLE_MINIJINJA_TEMPLATE
+    "Enable Minijinja prompt template engine"
+    ON)
+option(LITERT_LM_ENABLE_CONSTRAINED_DECODING
+    "Enable constrained decoding support"
+    ON)
+option(LITERT_LM_ENABLE_LLGUIDANCE
+    "Enable LlGuidance constrained decoding backend"
+    ON)
+option(LITERT_LM_ENABLE_FST_CONSTRAINTS
+    "Enable FST constraint provider"
+    ON)
+option(LITERT_LM_ENABLE_TOOL_USE_PARSER
+    "Enable tool-use expression parsers"
+    ON)
+option(LITERT_LM_ENABLE_GEMMA_PROCESSORS
+    "Enable Gemma family model data processors"
+    ON)
+option(LITERT_LM_ENABLE_QWEN_PROCESSOR
+    "Enable Qwen family model data processor"
+    ON)
+option(LITERT_LM_ENABLE_FASTVLM_PROCESSOR
+    "Enable FastVLM model data processor"
+    ON)
+option(LITERT_LM_ENABLE_LFM2_PROCESSOR
+    "Enable LFM2 model data processor"
+    ON)
+option(LITERT_LM_ENABLE_MINICPM_PROCESSOR
+    "Enable MiniCPM family model data processors"
+    ON)
+
+# --- Build
 option(LITERT_BUILD_CONFIG_DISABLE_GPU_VAL
     "LiteRT definition to disable GPU in build config"
-    TRUE
-)
-
+    TRUE)
 option(LITERT_BUILD_CONFIG_DISABLE_NPU_VAL
     "LiteRT definition to disable NPU in build config"
-    TRUE
-)
+    TRUE)
 
-set_property(GLOBAL PROPERTY LITERTLM_LOCAL_ARCHIVE_REGISTRY "")
-set_property(GLOBAL PROPERTY LITERTLM_LOCAL_TARGET_REGISTRY "")
+option(LITERTLM_BUILD_FETCH_CONTENT
+    "Enable downloading and building FetchContent dependencies"
+    ON)
+option(LITERTLM_BUILD_EXTERNAL_PROJECTS
+    "Enable building ExternalProject dependencies"
+    ON)
+option(LITERTLM_BUILD_TARGETS
+    "Enable building the primary LiteRT-LM targets and executables"
+    ON)
 
-if(DEFINED LITERTLM_RUST_LINKER_OVERRIDE AND DEFINED LITERTLM_RUST_CARGO_ENV_VAR)
-    set(ENV{${LITERTLM_RUST_CARGO_ENV_VAR}} "${LITERTLM_RUST_LINKER_OVERRIDE}")
-    message(STATUS "[LiteRTLM] Routing Rust Cargo: ${LITERTLM_RUST_LINKER_OVERRIDE}")
-endif()
-
-if(DEFINED LITERTLM_RUST_LINKER_OVERRIDE AND DEFINED LITERTLM_CORROSION_LINKER_VAR)
-    set(${LITERTLM_CORROSION_LINKER_VAR} "${LITERTLM_RUST_LINKER_OVERRIDE}" CACHE FILEPATH "Override Rust Linker")
-    message(STATUS "[LiteRTLM] Routing Rust Corrosion Linker: ${LITERTLM_RUST_LINKER_OVERRIDE}")
-endif()
+# --- Compiler Flags
+add_compile_options("-fpermissive")
 
 # --- Optional
-set(Rust_RUSTUP_INSTALL_MISSING_TARGET ON CACHE BOOL "Auto-install rust targets")
-
 option(_unverified_targets "Builds executables that are still in progress" OFF)
 
-option(ENABLE_CCACHE "Enables the use of ccache" OFF)
-if(${ENABLE_CCACHE} STREQUAL "ON")
-  find_program(CCACHE_PROGRAM ccache)
-  if(CCACHE_PROGRAM)
-      message(STATUS "Using CCache to speed up builds")
-      set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-      set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-  else()
-      message(WARNING "CCache not found. Install it (`sudo apt install ccache`) for faster builds!")
-  endif()
-endif()
+# --- Centralized ExternalProject & FetchContent Optimizations ---
+set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
 
-# --- Utilities
+include(ExternalProject)
+
+file(READ "${CMAKE_ROOT}/Modules/ExternalProject.cmake" _ep_content)
+string(REPLACE "\${CMAKE_CURRENT_LIST_DIR}" "${CMAKE_ROOT}/Modules" _ep_content "${_ep_content}")
+string(REPLACE "\${CMAKE_CURRENT_FUNCTION_LIST_DIR}" "${CMAKE_ROOT}/Modules" _ep_content "${_ep_content}")
+string(REPLACE "function(ExternalProject_Add " "function(_ExternalProject_Add " _ep_content "${_ep_content}")
+cmake_language(EVAL CODE "${_ep_content}")
+
+function(ExternalProject_Add name)
+    cmake_parse_arguments(PARSE_ARGV 1 _EP "" "GIT_REPOSITORY;GIT_TAG" "")
+
+    set(_call_args "[===[${name}]===]")
+    set(_skip_section FALSE)
+    set(_is_commit_sha FALSE)
+    if(_EP_GIT_REPOSITORY AND _EP_GIT_TAG)
+        string(LENGTH "${_EP_GIT_TAG}" _tag_len)
+        if(_tag_len EQUAL 40 AND _EP_GIT_TAG MATCHES "^[0-9a-fA-F]+$")
+            set(_is_commit_sha TRUE)
+        endif()
+    endif()
+
+    set(_ep_keywords
+        DEPENDS PREFIX LIST_SEPARATOR TMP_DIR STAMP_DIR DOWNLOAD_DIR
+        SOURCE_DIR SOURCE_SUBDIR BINARY_DIR INSTALL_DIR
+        DOWNLOAD_COMMAND URL URL_HASH URL_MD5 DOWNLOAD_NAME DOWNLOAD_NO_EXTRACT
+        GIT_REPOSITORY GIT_TAG GIT_REMOTE_NAME GIT_SUBMODULES GIT_SUBMODULES_RECURSE
+        GIT_SHALLOW GIT_PROGRESS GIT_CONFIG GIT_REMOTE_UPDATE_STRATEGY
+        UPDATE_COMMAND UPDATE_DISCONNECTED
+        PATCH_COMMAND
+        CONFIGURE_COMMAND CMAKE_COMMAND CMAKE_GENERATOR CMAKE_GENERATOR_PLATFORM
+        CMAKE_GENERATOR_TOOLSET CMAKE_GENERATOR_INSTANCE CMAKE_ARGS CMAKE_CACHE_ARGS
+        CMAKE_CACHE_DEFAULT_ARGS
+        BUILD_COMMAND BUILD_IN_SOURCE BUILD_ALWAYS BUILD_BYPRODUCTS
+        INSTALL_COMMAND
+        TEST_COMMAND TEST_BEFORE_INSTALL TEST_AFTER_INSTALL TEST_EXCLUDE_FROM_MAIN
+        LOG_DOWNLOAD LOG_UPDATE LOG_PATCH LOG_CONFIGURE LOG_BUILD LOG_INSTALL LOG_TEST
+        LOG_MERGED_STDOUTERR LOG_OUTPUT_ON_FAILURE
+        USES_TERMINAL_DOWNLOAD USES_TERMINAL_UPDATE USES_TERMINAL_PATCH
+        USES_TERMINAL_CONFIGURE USES_TERMINAL_BUILD USES_TERMINAL_INSTALL USES_TERMINAL_TEST
+        STEP_TARGETS INDEPENDENT_STEP_TARGETS
+    )
+
+    math(EXPR _last_idx "${ARGC} - 1")
+    foreach(_i RANGE 1 ${_last_idx})
+        set(_arg "${ARGV${_i}}")
+        if(_arg IN_LIST _ep_keywords)
+            if(_arg STREQUAL "UPDATE_COMMAND" OR _arg STREQUAL "GIT_SHALLOW")
+                set(_skip_section TRUE)
+            elseif(_is_commit_sha AND (_arg STREQUAL "GIT_REPOSITORY" OR _arg STREQUAL "GIT_TAG"))
+                set(_skip_section TRUE)
+            else()
+                set(_skip_section FALSE)
+                string(APPEND _call_args " [===[${_arg}]===]")
+            endif()
+        elseif(NOT _skip_section)
+            string(APPEND _call_args " [===[${_arg}]===]")
+        endif()
+    endforeach()
+
+    if(_EP_GIT_REPOSITORY)
+        if(_is_commit_sha)
+            string(APPEND _call_args
+                " DOWNLOAD_COMMAND [===[${CMAKE_COMMAND}]===]"
+                " [===[-DSRC_DIR=<SOURCE_DIR>]===]"
+                " [===[-DREPO_URL=${_EP_GIT_REPOSITORY}]===]"
+                " [===[-DTAG=${_EP_GIT_TAG}]===]"
+                " -P [===[${LITERTLM_SCRIPTS_DIR}/shallow_git_fetch.cmake]===]"
+                " UPDATE_COMMAND [===[]===]"
+            )
+        else()
+            string(APPEND _call_args
+                " GIT_SHALLOW TRUE"
+                " UPDATE_COMMAND [===[]===]"
+            )
+        endif()
+    endif()
+
+    cmake_language(EVAL CODE "_ExternalProject_Add(${_call_args})")
+endfunction()
+
 include("${LITERTLM_MODULES_DIR}/utils.cmake")
 include("${LITERTLM_MODULES_DIR}/macros.cmake")
+include("${LITERTLM_CMAKE_PACKAGES_DIR}/packages.cmake")
 
-# --- Dependencies
-include("${LITERTLM_MODULES_DIR}/fetch_content.cmake")
-include("${LITERTLM_MODULES_DIR}/external_project.cmake")
-include("${LITERTLM_MODULES_DIR}/collect_dependencies.cmake")
+if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
+    set(LITERTLM_HOST_PROTOC "${LITERTLM_HOST_PROTOC}" CACHE PATH "")
+    set(LITERTLM_HOST_PROTOC_BIN_DIR "${LITERTLM_HOST_PROTOC_BIN_DIR}" CACHE PATH "")
+    set(LITERTLM_HOST_FLATC "${LITERTLM_HOST_FLATC}" CACHE PATH "")
+    set(LITERTLM_HOST_FLATC_BIN_DIR "${LITERTLM_HOST_FLATC_BIN_DIR}" CACHE PATH "")
+endif()
 
-# --- LiteRT-LM Targets
-include("${LITERTLM_MODULES_DIR}/generators.cmake")
-generate_src_files(LITERTLM_CORE_FILES ${ALL_SOURCE_FILES} ${ALL_HEADER_FILES})
-generate_src_files(LITERTLM_FLATBUFFER_FILES ${ALL_SCHEMA_FILES})
-generate_src_files(LITERTLM_RUST_FILES ${ALL_RUST_FILES})
+# --- Targeted Prebuild Execution
+# Iterate through the required tools build scripts
+if(DEFINED LITERTLM_PREBUILD_PHASE)
+string(REPLACE " " ";" LITERTLM_PREBUILD_TARGETS "${LITERTLM_PREBUILD_TARGETS}")
+    block()
+        set(LITERTLM_EXTERNAL_PROJECT_BIN_DIR ${LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR})
+        message(STATUS "[LiteRTLM] Prebuild Phase: Provisioning targeted tools: ${LITERTLM_PREBUILD_TARGETS}")
+        foreach(_target ${LITERTLM_PREBUILD_TARGETS})
+            load_package(${_target})
+        endforeach()
+    endblock()
+endif()
 
-add_custom_target(generator_complete
-    COMMENT "--- ALL GENERATORS COMPLETE: RELEASING COMPILER GATE ---"
-)
-add_dependencies(generator_complete
-    litertlm_generated_protobuf
-    litertlm_cxx_bridge
-)
+# --- Build ---
+if(LITERTLM_BUILD_FETCH_CONTENT)
+    message(STATUS "[LiteRTLM] Building FetchContent dependencies...")
+    include("${LITERTLM_MODULES_DIR}/fetch_content.cmake")
+else()
+    message(STATUS "[LiteRTLM] Skipping FetchContent dependencies...")
+endif()
 
-if(LITERTLM_CORE_FILES)
-    include("${LITERTLM_MODULES_DIR}/patcher.cmake")
-    set_property(
-        DIRECTORY
-        APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        "${LITERTLM_PATCHES_DIR}/litertlm_patches.json"
-    )
-    apply_patches_from_json("${LITERTLM_PATCHES_DIR}/litertlm_patches.json")
+# ExternalProjects Deps
+if(LITERTLM_BUILD_EXTERNAL_PROJECTS)
+    message(STATUS "[LiteRTLM] Building ExternalProject dependencies...")
+    include("${LITERTLM_MODULES_DIR}/external_project.cmake")
+else()
+    message(STATUS "[LiteRTLM] Skipping ExternalProject dependencies...")
+endif()
 
-    if(NOT EXISTS "${GENERATED_SRC_DIR}/runtime/components/logits_processor/constrained_decoding/gemma_model_constraint_provider.cc")
+# LiteRT-LM
+if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
+    message(STATUS "[LiteRTLM] Building LiteRT-LM...")
+
+    include("${LITERTLM_MODULES_DIR}/collect_dependencies.cmake")
+    include("${LITERTLM_MODULES_DIR}/generators.cmake")
+
+    generate_src_files(LITERTLM_CORE_FILES ${ALL_SOURCE_FILES} ${ALL_HEADER_FILES})
+    generate_src_files(LITERTLM_FLATBUFFERS_FILES ${ALL_SCHEMA_FILES})
+    generate_src_files(LITERTLM_RUST_FILES ${ALL_RUST_FILES})
+
+    add_custom_target(generator_complete
+        COMMENT "--- ALL GENERATORS COMPLETE: RELEASING COMPILER GATE ---")
+    add_dependencies(generator_complete
+        LiteRTLM::Generated::Protobuf
+        litertlm_cxx_bridge)
+
+    if(NOT EXISTS "${LITERTLM_GENERATED_SRC_DIR}/runtime/components/constrained_decoding/gemma_model_constraint_provider.cc")
       file(COPY "${LITERTLM_PATCHES_DIR}/stubs/gemma_model_constraint_provider.cc"
-        DESTINATION "${GENERATED_SRC_DIR}/runtime/components/logits_processor/constrained_decoding"
-      )
+        DESTINATION "${LITERTLM_GENERATED_SRC_DIR}/runtime/components/constrained_decoding")
     endif()
-endif()
 
-add_compile_definitions(
-    absl_nullable=
-    absl_nonnull=
-)
+    set(LITERTLM_TENSORFLOW_MISSING_SRCS
+        "${LITERTLM_TENSORFLOW_SRC_DIR}/tensorflow/compiler/mlir/lite/allocation.cc"
+        "${LITERTLM_TENSORFLOW_SRC_DIR}/tensorflow/compiler/mlir/lite/mmap_allocation.cc"
+        "${LITERTLM_TENSORFLOW_SRC_DIR}/tensorflow/compiler/mlir/lite/mmap_allocation_disabled.cc"
+        "${LITERTLM_TENSORFLOW_SRC_DIR}/tensorflow/compiler/mlir/lite/core/api/error_reporter.cc"
+        "${LITERTLM_TENSORFLOW_SRC_DIR}/tensorflow/compiler/mlir/lite/core/model_builder_base.cc")
+    set_source_files_properties(${LITERTLM_TENSORFLOW_MISSING_SRCS} PROPERTIES GENERATED TRUE)
 
-set(TENSORFLOW_MISSING_SRCS
-    "${TENSORFLOW_SOURCE_DIR}/tensorflow/compiler/mlir/lite/allocation.cc"
-    "${TENSORFLOW_SOURCE_DIR}/tensorflow/compiler/mlir/lite/mmap_allocation.cc"
-    "${TENSORFLOW_SOURCE_DIR}/tensorflow/compiler/mlir/lite/mmap_allocation_disabled.cc"
-    "${TENSORFLOW_SOURCE_DIR}/tensorflow/compiler/mlir/lite/core/api/error_reporter.cc"
-    "${TENSORFLOW_SOURCE_DIR}/tensorflow/compiler/mlir/lite/core/model_builder_base.cc"
-
-)
-set_source_files_properties(${TENSORFLOW_MISSING_SRCS} PROPERTIES GENERATED TRUE)
-
-add_subdirectory(${LITERTLM_PROJECT_ROOT}/c ${GENERATED_SRC_DIR}/c)
-add_subdirectory(${LITERTLM_PROJECT_ROOT}/schema ${GENERATED_SRC_DIR}/schema)
-add_subdirectory(${LITERTLM_PROJECT_ROOT}/runtime ${GENERATED_SRC_DIR}/runtime)
-
-include("${LITERTLM_MODULES_DIR}/local_aggregate.cmake")
-generate_local_aggregate()
-
-add_executable(litert_lm_main
-    "${LITERTLM_PROJECT_ROOT}/runtime/engine/litert_lm_main.cc"
-)
-
-if(TARGET litertlm_local_anchor)
-    add_dependencies(litert_lm_main litertlm_local_anchor)
-endif()
-
-target_compile_definitions(litert_lm_main PRIVATE
-    ENABLE_HUGGINGFACE_TOKENIZER
-    ENABLE_SENTENCEPIECE_TOKENIZER
-)
-
-target_include_directories(litert_lm_main PRIVATE
-
-    ${LITERTLM_INCLUDE_PATHS}
-
-)
-
-target_link_options(litert_lm_main PRIVATE
-  "LINKER:--export-dynamic-symbol=LiteRt*"
-)
-
-# [TODO] Refactor into macro for DRY principle.
-# --- Toolchain-Specific Linker Flags ---
-set(_LITERTLM_LINK_MULTIDEF "")
-set(_LITERTLM_LINK_GROUP_START "")
-set(_LITERTLM_LINK_GROUP_END "")
-set(_LITERTLM_LINK_WHOLE_START "")
-set(_LITERTLM_LINK_WHOLE_END "")
-set(_LITERTLM_SYSLIBS "")
-
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    if(APPLE)
-        # macOS Linker (Mach-O)
-        set(_LITERTLM_LINK_MULTIDEF "-Wl,-multiply_defined,suppress")
-        set(_LITERTLM_LINK_WHOLE_START "-Wl,-all_load")
-        set(_LITERTLM_LINK_WHOLE_END "")
-        set(_LITERTLM_SYSLIBS "-lz" "-lpthread" "-ldl") # No librt on macOS
-    elseif(ANDROID)
-        # Android / Bionic (NO standalone rt or pthread)
-        set(_LITERTLM_LINK_MULTIDEF "-Wl,--allow-multiple-definition")
-        set(_LITERTLM_LINK_GROUP_START "-Wl,--start-group")
-        set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
-        set(_LITERTLM_SYSLIBS "-lz -ldl -llog")
-    else()
-        # Linux Linker (ELF)
-        set(_LITERTLM_LINK_MULTIDEF "-Wl,--allow-multiple-definition")
-        set(_LITERTLM_LINK_GROUP_START "-Wl,--start-group")
-        set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
-        set(_LITERTLM_LINK_WHOLE_START "-Wl,--whole-archive")
-        set(_LITERTLM_LINK_WHOLE_END "-Wl,--no-whole-archive")
-        set(_LITERTLM_SYSLIBS "-lz" "-lrt" "-lpthread" "-ldl")
+    add_compile_definitions(
+        absl_nullable=
+        absl_nonnull=)
+    if(LITERT_LM_ENABLE_HUGGINGFACE_TOKENIZER)
+        add_compile_definitions(ENABLE_HUGGINGFACE_TOKENIZER)
     endif()
-elseif(MSVC)
-    # Windows Linker
-    set(_LITERTLM_LINK_MULTIDEF "/FORCE:MULTIPLE")
-    set(_LITERTLM_LINK_WHOLE_START "/WHOLEARCHIVE")
+    if(LITERT_LM_ENABLE_SENTENCEPIECE_TOKENIZER)
+        add_compile_definitions(ENABLE_SENTENCEPIECE_TOKENIZER)
+    endif()
+    if(NOT LITERT_LM_ENABLE_CONSTRAINED_DECODING)
+        add_compile_definitions(
+            LITERT_LM_CONSTRAINED_DECODING_DISABLED
+            LITERT_LM_FST_CONSTRAINTS_DISABLED)
+    endif()
+    if(NOT LITERT_LM_ENABLE_FST_CONSTRAINTS)
+        add_compile_definitions(LITERT_LM_FST_CONSTRAINTS_DISABLED)
+    endif()
+
+    add_subdirectory("${LITERTLM_PROJECT_ROOT}/c" "${LITERTLM_GENERATED_SRC_DIR}/c")
+    add_subdirectory("${LITERTLM_PROJECT_ROOT}/js" "${LITERTLM_GENERATED_SRC_DIR}/js")
+    add_subdirectory("${LITERTLM_PROJECT_ROOT}/schema" "${LITERTLM_GENERATED_SRC_DIR}/schema")
+    add_subdirectory("${LITERTLM_PROJECT_ROOT}/runtime" "${LITERTLM_GENERATED_SRC_DIR}/runtime")
+    add_subdirectory("${LITERTLM_PROJECT_ROOT}/support" "${LITERTLM_GENERATED_SRC_DIR}/support")
+    add_subdirectory("${LITERTLM_PROJECT_ROOT}/sync" "${LITERTLM_GENERATED_SRC_DIR}/sync")
+
+    include("${LITERTLM_PACKAGE_DIR}/litert_lm_aggregate.cmake")
+    generate_litertlm_aggregate()
+
+    add_executable(litert_lm_main
+        "${LITERTLM_GENERATED_SRC_DIR}/runtime/engine/litert_lm_main.cc")
+
+    if(TARGET litertlm_anchor)
+        add_dependencies(litert_lm_main litertlm_anchor)
+    endif()
+
+    target_include_directories(litert_lm_main PUBLIC
+        ${LITERTLM_INCLUDE_PATHS})
+
+    target_link_options(litert_lm_main PRIVATE
+    "LINKER:--export-dynamic-symbol=LiteRt*")
+
+    # --- Toolchain-Specific Linker Flags ---
+    set(_LITERTLM_LINK_MULTIDEF "")
+    set(_LITERTLM_LINK_GROUP_START "")
+    set(_LITERTLM_LINK_GROUP_END "")
+    set(_LITERTLM_LINK_WHOLE_START "")
     set(_LITERTLM_LINK_WHOLE_END "")
-    set(_LITERTLM_SYSLIBS "") # MSVC defaults usually cover this
+    set(_LITERTLM_SYSLIBS "")
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        if(APPLE)
+            # macOS Linker (Mach-O)
+            set(_LITERTLM_LINK_MULTIDEF "-Wl,-multiply_defined,suppress")
+            set(_LITERTLM_LINK_WHOLE_START "-Wl,-all_load")
+            set(_LITERTLM_LINK_WHOLE_END "")
+            set(_LITERTLM_SYSLIBS "-lz" "-lpthread" "-ldl") # No librt on macOS
+        elseif(ANDROID)
+            # Android / Bionic (NO standalone rt or pthread)
+            set(_LITERTLM_LINK_MULTIDEF "-Wl,--allow-multiple-definition")
+            set(_LITERTLM_LINK_GROUP_START "-Wl,--start-group")
+            set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
+            set(_LITERTLM_SYSLIBS "-lz -ldl -llog")
+        else()
+            # Linux Linker (ELF)
+            set(_LITERTLM_LINK_MULTIDEF "-Wl,--allow-multiple-definition")
+            if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+                execute_process(
+                    COMMAND ${CMAKE_CXX_COMPILER} -fuse-ld=lld -Wl,--version
+                    OUTPUT_QUIET ERROR_QUIET
+                    RESULT_VARIABLE _LITERTLM_LLD_CHECK
+                )
+                if(_LITERTLM_LLD_CHECK EQUAL 0)
+                    message(STATUS "[LiteRTLM] Using LLD linker")
+                    set(_LITERTLM_LINK_MULTIDEF "-fuse-ld=lld ${_LITERTLM_LINK_MULTIDEF}")
+                endif()
+            endif()
+            set(_LITERTLM_LINK_GROUP_START "-Wl,--start-group")
+            set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
+            set(_LITERTLM_LINK_WHOLE_START "-Wl,--whole-archive")
+            set(_LITERTLM_LINK_WHOLE_END "-Wl,--no-whole-archive")
+            set(_LITERTLM_SYSLIBS "-lz" "-lrt" "-lpthread" "-ldl")
+        endif()
+    elseif(MSVC)
+        # Windows Linker
+        set(_LITERTLM_LINK_MULTIDEF "/FORCE:MULTIPLE")
+        set(_LITERTLM_LINK_WHOLE_START "/WHOLEARCHIVE")
+        set(_LITERTLM_LINK_WHOLE_END "")
+        set(_LITERTLM_SYSLIBS "") # MSVC defaults usually cover this
+    endif()
+
+    separate_arguments(_LITERTLM_ODML_EXPANDED_LIST NATIVE_COMMAND "${_LITERTLM_ODML_PAYLOAD}")
+    separate_arguments(_LITERTLM_CORE_EXPANDED_LIST NATIVE_COMMAND "${_LITERTLM_CORE_PAYLOAD}")
+
+    target_link_libraries(litert_lm_main
+        PUBLIC
+            ${_LITERTLM_LINK_MULTIDEF}
+            ${_LITERTLM_LINK_GROUP_START}
+
+            ${_LITERTLM_LINK_WHOLE_START}
+
+            ${_LITERTLM_ODML_EXPANDED_LIST}
+            ${_LITERTLM_CORE_EXPANDED_LIST}
+
+            ${_LITERTLM_LINK_WHOLE_END}
+
+            libpng_lib
+            kissfft_lib
+            miniaudio_lib
+            minizip_lib
+            minja_lib
+            highway_lib
+            zlib_lib
+            antlr_lib
+            LiteRTLM::nlohmann_json::nlohmann_json
+            opencl_headers_lib
+
+            ${PYTHON3_LIB}
+
+            ${_LITERTLM_SYSLIBS}
+            ${_LITERTLM_LINK_GROUP_END}
+    )
+else()
+    message(STATUS "[LiteRTLM] Skipping target layer build (LITERTLM_BUILD_TARGETS=OFF)")
 endif()
-
-separate_arguments(_LITERTLM_ODML_EXPANDED_LIST NATIVE_COMMAND "${_LITERTLM_ODML_PAYLOAD}")
-separate_arguments(_LITERTLM_CORE_EXPANDED_LIST NATIVE_COMMAND "${_LITERTLM_CORE_PAYLOAD}")
-
-target_link_libraries(litert_lm_main
-    PUBLIC
-        ${_LITERTLM_LINK_MULTIDEF}
-        ${_LITERTLM_LINK_GROUP_START}
-        
-        ${_LITERTLM_LINK_WHOLE_START}
-        ${_LITERTLM_ODML_EXPANDED_LIST}
-        ${_LITERTLM_LINK_WHOLE_END}
-        
-        ${_LITERTLM_CORE_EXPANDED_LIST}
-        
-        libpng_lib
-        kissfft_lib
-        miniaudio_lib
-        minizip_lib
-        minja_lib
-        zlib_lib
-        antlr_lib
-        LiteRTLM::nlohmann_json::nlohmann_json
-        opencl_headers_lib
-        
-        ${_LITERTLM_SYSLIBS}
-        ${_LITERTLM_LINK_GROUP_END}
-)

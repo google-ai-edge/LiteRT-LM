@@ -23,6 +23,11 @@
       "import": "./dist/testing/index.js",
       "default": "./dist/testing/index.js"
     },
+    "./model-cache": {
+      "types": "./dist/model-cache/index.d.ts",
+      "import": "./dist/model-cache/index.js",
+      "default": "./dist/model-cache/index.js"
+    },
     "./package.json": "./package.json"
   },
   "author": "",
@@ -37,16 +42,18 @@
     "build": "tsc",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "bundle-tests": "esbuild --bundle src/litertlm_web_test.ts --sourcemap --outfile=spec_dist/litertlm_web_test.js",
-    "test": "npm run bundle-tests && jasmine-browser-runner",
+    "test": "node scripts/browser-tests.mjs unit",
+    "test:package": "node scripts/browser-tests.mjs package",
+    "prepublishOnly": "npm test && npm run test:package",
     "clean": "rimraf .turbo node_modules dist spec_dist",
     "pack": "npm pack"
   },
   "devDependencies": {
     "@types/jasmine": "^5.1.8",
     "@webgpu/types": "^0.1.54",
-    "esbuild": "^0.23.0",
+    "esbuild": "^0.28.2",
     "eslint": "^9.8.0",
+    "express": "^5.0.0",
     "jasmine": "^5.8.0",
     "jasmine-browser-runner": "^3.0.0",
     "jasmine-core": "^5.8.0",

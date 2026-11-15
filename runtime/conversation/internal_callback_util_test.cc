@@ -53,6 +53,9 @@ nlohmann::ordered_json ChannelMessage(absl::string_view text,
   nlohmann::ordered_json message;
   message["role"] = "assistant";
   message["channels"] = {{channel_name, text}};
+  if (channel_name == "thought") {
+    message["reasoning_content"] = text;
+  }
   return message;
 }
 
@@ -759,7 +762,8 @@ TEST_F(InternalCallbackChannelTest, ChannelStreamWithCompleteMessageCallback) {
                 "content": [{"type": "text", "text": "Hello World!"}],
                 "channels": {
                   "thought": "I am thinking"
-                }
+                },
+                "reasoning_content": "I am thinking"
               })json")));
 }
 
@@ -785,6 +789,8 @@ TEST_F(InternalCallbackChannelTest,
   EXPECT_TRUE(final_done);
   EXPECT_TRUE(final_message.contains("channels"));
   EXPECT_EQ(final_message["channels"]["thought"], "I am thinking");
+  EXPECT_TRUE(final_message.contains("reasoning_content"));
+  EXPECT_EQ(final_message["reasoning_content"], "I am thinking");
 }
 
 TEST_F(InternalCallbackChannelTest, OpenChannelAtStartNoEndTag) {
@@ -813,6 +819,35 @@ TEST_F(InternalCallbackChannelTest, OpenChannelAtStartWithEndTag) {
 
   EXPECT_THAT(output_, ElementsAre(ChannelMessage("hmm", "thought"),
                                    TextMessage(" world")));
+}
+
+TEST_F(InternalCallbackChannelTest, CustomReasoningChannelName) {
+  auto user_callback = CreateUserMessageCallback(output_, done_, status_);
+  Message final_message;
+  bool final_done = false;
+  auto complete_message_callback = [&](const Message& message) {
+    final_message = message;
+    final_done = true;
+  };
+
+  std::vector<Channel> reasoning_channels = {
+      {"reasoning", "<|channel>reasoning\n", "<channel|>",
+       /*is_reasoning_channel=*/true}};
+
+  auto callback = CreateInternalCallback(
+      *model_data_processor_, processor_args_, reasoning_channels,
+      std::move(user_callback), /*cancel_callback=*/nullptr,
+      std::move(complete_message_callback));
+
+  callback(Responses(TaskState::kProcessing, {"<|channel>reasoning\n"}));
+  callback(Responses(TaskState::kProcessing, {"I am thinking"}));
+  callback(Responses(TaskState::kDone));
+
+  EXPECT_TRUE(final_done);
+  EXPECT_TRUE(final_message.contains("channels"));
+  EXPECT_EQ(final_message["channels"]["reasoning"], "I am thinking");
+  EXPECT_TRUE(final_message.contains("reasoning_content"));
+  EXPECT_EQ(final_message["reasoning_content"], "I am thinking");
 }
 
 TEST_F(InternalCallbackTest, MaxNumTokensReachedReturnsError) {

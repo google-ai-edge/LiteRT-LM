@@ -1,0 +1,182 @@
+// Copyright 2025 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_AUDIO_EXECUTOR_SETTINGS_H_
+#define THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_AUDIO_EXECUTOR_SETTINGS_H_
+
+#include <cstdint>
+#include <memory>
+#include <ostream>
+#include <utility>
+#include <vector>
+
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/executor/executor_settings_base.h"
+#include "runtime/util/scoped_file.h"
+
+namespace litert::lm {
+
+// The AudioExecutorSettings class is used to configure the AudioExecutor. It is
+// used to configure the audio encoder and audio adapter models.
+// Args:
+//   - model_assets: The model assets to use for the audio encoder and audio
+//   adapter models.
+//   - max_sequence_length: The maximum sequence length of the audio encoder
+//   model.
+//   - encoder_backend: The backend to use for the audio encoder model.
+//   - adapter_backend: The backend to use for the audio adapter model.
+//   - bundled_with_main_model: Whether the audio encoder and audio adapter
+//   models are bundled with the main model.
+class AudioExecutorSettings : public ExecutorSettingsBase {
+ public:
+  static absl::StatusOr<AudioExecutorSettings> CreateDefault(
+      const ModelAssets& model_assets, int max_sequence_length,
+      Backend encoder_backend, Backend adapter_backend,
+      bool bundled_with_main_model = true);
+
+  // Suffix constants
+  static constexpr absl::string_view kStaticEncoderName =
+      GetCacheModelName(CacheModel::kStaticAudioEncoder);
+  static constexpr absl::string_view kStreamingEncoderName =
+      GetCacheModelName(CacheModel::kStreamingAudioEncoder);
+  static constexpr absl::string_view kAdapterName =
+      GetCacheModelName(CacheModel::kAudioAdapter);
+  static constexpr absl::string_view kEncoderName =
+      GetCacheModelName(CacheModel::kAudioEncoder);
+
+  // Getter for max_sequence_length.
+  int GetMaxSequenceLength() const;
+  // Setter for max_sequence_length.
+  void SetMaxSequenceLength(int max_sequence_length);
+
+  // Getter for bundled_with_main_model.
+  bool GetBundledWithMainModel() const;
+  // Setter for bundled_with_main_model.
+  void SetBundledWithMainModel(bool bundled_with_main_model);
+
+  // Setter for the backend used by the audio encoder.
+  absl::Status SetBackend(const Backend& backend) override;
+
+  // Getter for adapter_backend.
+  Backend GetAdapterBackend() const;
+  // Setter for adapter_backend.
+  absl::Status SetAdapterBackend(const Backend& backend);
+
+  // Getter for num_threads for CPU backend.
+  int GetNumThreads() const { return num_threads_; }
+  // Setter for num_threads for CPU backend.
+  void SetNumThreads(int num_threads) { num_threads_ = num_threads; }
+
+  // Getter for LoRA rank.
+  uint32_t GetLoraRank() const { return lora_rank_; }
+  // Setter for LoRA rank.
+  void SetLoraRank(uint32_t lora_rank) { lora_rank_ = lora_rank; }
+
+  // Setter for supported LoRA ranks.
+  absl::Status SetSupportedLoraRanks(const std::vector<uint32_t>& lora_ranks) {
+    supported_lora_ranks_ = lora_ranks;
+    return absl::OkStatus();
+  }
+
+  // Getter for scoped_encoder_cache_file.
+  std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderCacheFile() const {
+    return GetScopedCacheFile(CacheModel::kAudioEncoder,
+                              CacheFileKind::kWeight);
+  }
+
+  // Setter for scoped_encoder_cache_file. It serves both the static and the
+  // streaming audio encoder.
+  void SetScopedEncoderCacheFile(
+      std::shared_ptr<litert::lm::ScopedFile> cache_file) {
+    SetScopedCacheFile(CacheModel::kAudioEncoder, CacheFileKind::kWeight,
+                       std::move(cache_file));
+  }
+
+  // Getter for scoped_adapter_cache_file.
+  std::shared_ptr<litert::lm::ScopedFile> GetScopedAdapterCacheFile() const {
+    return GetScopedCacheFile(CacheModel::kAudioAdapter,
+                              CacheFileKind::kWeight);
+  }
+
+  // Setter for scoped_adapter_cache_file.
+  void SetScopedAdapterCacheFile(
+      std::shared_ptr<litert::lm::ScopedFile> cache_file) {
+    SetScopedCacheFile(CacheModel::kAudioAdapter, CacheFileKind::kWeight,
+                       std::move(cache_file));
+  }
+
+  // Getter for scoped_encoder_program_cache_file.
+  std::shared_ptr<litert::lm::ScopedFile> GetScopedEncoderProgramCacheFile()
+      const {
+    return GetScopedCacheFile(CacheModel::kAudioEncoder,
+                              CacheFileKind::kProgram);
+  }
+
+  // Setter for scoped_encoder_program_cache_file. It serves both the static
+  // and the streaming audio encoder.
+  void SetScopedEncoderProgramCacheFile(
+      std::shared_ptr<litert::lm::ScopedFile> cache_file) {
+    SetScopedCacheFile(CacheModel::kAudioEncoder, CacheFileKind::kProgram,
+                       std::move(cache_file));
+  }
+
+  // Getter for scoped_adapter_program_cache_file.
+  std::shared_ptr<litert::lm::ScopedFile> GetScopedAdapterProgramCacheFile()
+      const {
+    return GetScopedCacheFile(CacheModel::kAudioAdapter,
+                              CacheFileKind::kProgram);
+  }
+
+  // Setter for scoped_adapter_program_cache_file.
+  void SetScopedAdapterProgramCacheFile(
+      std::shared_ptr<litert::lm::ScopedFile> cache_file) {
+    SetScopedCacheFile(CacheModel::kAudioAdapter, CacheFileKind::kProgram,
+                       std::move(cache_file));
+  }
+
+  // Getter for audio_buffering_enabled.
+  // Only affect streaming audio encoder. If enabled, the audio encoder will
+  // buffer the audio input if the input sequence length is less than the audio
+  // encoder model input tensor. If disabled, the audio input will be zero
+  // padded to the audio encoder model input tensor.
+  bool GetAudioBufferingEnabled() const { return audio_buffering_enabled_; }
+  // Setter for audio_buffering_enabled.
+  void SetAudioBufferingEnabled(bool buffer_audio_input) {
+    audio_buffering_enabled_ = buffer_audio_input;
+  }
+
+ private:
+  explicit AudioExecutorSettings(const ModelAssets& model_assets,
+                                 int max_sequence_length, int num_threads)
+      : ExecutorSettingsBase(model_assets),
+        max_sequence_length_(max_sequence_length),
+        num_threads_(num_threads) {}
+
+  int max_sequence_length_;
+  bool bundled_with_main_model_;
+  Backend adapter_backend_;
+  int num_threads_ = 4;
+  bool audio_buffering_enabled_ = false;
+  uint32_t lora_rank_ = 0;
+  std::vector<uint32_t> supported_lora_ranks_ = {};
+};
+
+std::ostream& operator<<(std::ostream& os,
+                         const AudioExecutorSettings& settings);
+
+}  // namespace litert::lm
+
+#endif  // THIRD_PARTY_ODML_LITE_RT_LLM_EXECUTOR_AUDIO_EXECUTOR_SETTINGS_H

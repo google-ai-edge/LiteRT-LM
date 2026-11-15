@@ -56,14 +56,20 @@ class LoraManager {
   // model_assets: Contains the LoRA model to load.
   absl::Status LoadLoRA(uint32_t lora_id, const ModelAssets& model_assets);
 
-  // Sets the current LoRA ID to use. If the LoRA object for the given ID
-  // doesn't exist, it will be created.
-  absl::Status UseLoRA(uint32_t lora_id);
+  // Sets the current LoRA ID to use, or std::nullopt to disable LoRA. If the
+  // LoRA object for the given ID doesn't exist, it will be created.
+  absl::Status UseLoRA(std::optional<uint32_t> lora_id);
 
   // Returns a map of all the LoRA tensor names to their duplicated
   // TensorBuffers for the current LoRA ID.
   absl::StatusOr<absl::flat_hash_map<absl::string_view, litert::TensorBuffer>>
   GetLoRABuffers() const;
+
+  // Returns a map of all the LoRA input names of `signature_name` to their
+  // duplicated TensorBuffers for the current LoRA ID, with buffer types
+  // supported by `signature_name`. See LoRA::GetLoRABuffers(signature_name).
+  absl::StatusOr<absl::flat_hash_map<absl::string_view, litert::TensorBuffer>>
+  GetLoRABuffers(absl::string_view signature_name) const;
 
  private:
   LoraManager(const litert::CompiledModel& compiled_model,

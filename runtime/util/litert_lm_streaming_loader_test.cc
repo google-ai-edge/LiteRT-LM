@@ -26,6 +26,8 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "runtime/components/model_resources.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/data_stream.h"
 #include "runtime/util/file_data_stream.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -68,6 +70,38 @@ TEST(LitertLmStreamingLoaderTest, LoadTestModel) {
 
   // Expect at least tokenizer, metadata, and tflite model.
   EXPECT_GE(num_sections, 3);
+}
+
+TEST(LitertLmStreamingLoaderTest, GetTfLiteModelSectionHints) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_with_section_hints.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto stream,
+                       FileDataStream::Create(model_path.string()));
+
+  LitertLmStreamingLoader loader(std::move(stream));
+  ASSERT_OK(loader.LoadHeader());
+
+  EXPECT_EQ(loader.GetTFLiteModelPreferActivationType(
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+            "fp16");
+  EXPECT_EQ(loader.GetTFLiteModelBackendConstraint(
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+            "cpu");
+}
+
+TEST(LitertLmStreamingLoaderTest, LoadHfTokenizerModel) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_hf_tokenizer.litertlm";
+  ASSERT_OK_AND_ASSIGN(auto stream,
+                       FileDataStream::Create(model_path.string()));
+
+  LitertLmStreamingLoader loader(std::move(stream));
+  ASSERT_OK_AND_ASSIGN(auto section_opt, loader.GetNextSection());
+  ASSERT_TRUE(section_opt.has_value());
+  EXPECT_EQ(section_opt->section->data_type(),
+            schema::AnySectionDataType_HF_Tokenizer_Zlib);
 }
 
 class MockDataStream : public DataStream {

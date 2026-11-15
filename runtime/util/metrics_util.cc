@@ -58,6 +58,14 @@ absl::StatusOr<proto::LitertLmMetrics> ToProto(const LitertLmMetrics& metrics) {
 
   proto_metrics.set_peak_mem_mb(metrics.peak_mem_mb);
   proto_metrics.set_peak_private_mb(metrics.peak_private_mb);
+  if (metrics.peak_accelerator_mb.has_value()) {
+    proto_metrics.set_peak_accelerator_mb(*metrics.peak_accelerator_mb);
+  }
+  auto& peak_accelerator_breakdown_mb =
+      *proto_metrics.mutable_peak_accelerator_breakdown_mb();
+  for (const auto& [category, mb] : metrics.peak_accelerator_breakdown_mb) {
+    peak_accelerator_breakdown_mb[category] = mb;
+  }
 
   if (metrics.benchmark_info.has_value()) {
     const auto& info = metrics.benchmark_info.value();

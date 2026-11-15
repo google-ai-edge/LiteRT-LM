@@ -19,6 +19,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -89,12 +90,14 @@ class EmbeddingLookupMultiModal : public EmbeddingLookup {
                              size_t byte_offset) override;
 
   // Returns true if there are any embeddings left to be read.
-  bool HasRemainingEmbeddings() const { return embedding_.size() > 0; }
+  bool HasRemainingEmbeddings() const { return !embedding_.empty(); }
 
  protected:
   absl::Status Initialize(const ::litert::TensorBuffer* embedding_buffer,
                           int special_token);
 
+  std::optional<::litert::TensorBuffer> embedding_buffer_;
+  std::optional<::litert::TensorBufferScopedLock> embedding_buffer_lock_;
   absl::Span<float> embedding_;
   int special_token_;
 };

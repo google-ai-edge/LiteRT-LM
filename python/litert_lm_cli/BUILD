@@ -40,12 +40,23 @@ genrule(
 )
 
 pytype_strict_library(
+    name = "config",
+    srcs = ["config.py"],
+    data = ["config_schema.json"],
+    deps = [
+        requirement("click"),
+    ],
+    imports = [".."],
+)
+
+pytype_strict_library(
     name = "model",
     srcs = ["model.py"],
     deps = [
+        ":config",
         "//python/litert_lm",
-        "//python/litert_lm_builder:litertlm_builder",
         "//python/litert_lm_builder:litertlm_peek",
+        "//runtime/proto:llm_metadata_py_pb2",
         requirement("click"),
     ],
     imports = [".."],
@@ -80,7 +91,10 @@ pytype_strict_library(
 pytype_strict_library(
     name = "common",
     srcs = ["common.py"],
-    deps = [requirement("click")],
+    deps = [
+        ":config",
+        requirement("click"),
+    ],
     imports = [".."],
 )
 
@@ -124,12 +138,28 @@ py_test(
     srcs = ["model_test.py"],
     tags = ["nowindows"],
     deps = [
+        ":config",
         ":model",
         "//python/litert_lm",
-        "//python/litert_lm_builder:litertlm_builder",
+        "//runtime/proto:llm_metadata_py_pb2",
         "@absl_py//absl/testing:absltest",
         "@absl_py//absl/testing:parameterized",
     ],
+)
+
+py_test(
+    name = "config_test",
+    srcs = ["config_test.py"],
+    tags = ["nowindows"],
+    deps = [
+        ":common",
+        ":config",
+        "@absl_py//absl/testing:absltest",
+        "@absl_py//absl/testing:parameterized",
+        requirement("click"),
+        requirement("jsonschema"),
+    ],
+    imports = [".."],
 )
 
 py_test(
@@ -183,17 +213,21 @@ pytype_strict_library(
     name = "main_lib",
     srcs = ["main.py"],
     deps = [
+        ":common",
         ":help_formatter",
         ":version",
         "//python/litert_lm",
         "//python/litert_lm_cli/commands:benchmark",
         "//python/litert_lm_cli/commands:convert",
         "//python/litert_lm_cli/commands:delete",
+        "//python/litert_lm_cli/commands:describe",
         "//python/litert_lm_cli/commands:import",  # fixdeps: keep
         "//python/litert_lm_cli/commands:list",
+        "//python/litert_lm_cli/commands:pack",
         "//python/litert_lm_cli/commands:rename",
         "//python/litert_lm_cli/commands:run",
-        "//python/litert_lm_cli/commands:serve",
+        "//python/litert_lm_cli/commands:unpack",
+        "//python/litert_lm_cli/commands/serve",
         requirement("click"),
     ],
     imports = [".."],
@@ -208,7 +242,6 @@ py_test(
     deps = [
         ":common",
         ":main_lib",
-        ":model",
         "//python/litert_lm",
         "//python/litert_lm_cli/commands:run",
         "@absl_py//absl/testing:absltest",

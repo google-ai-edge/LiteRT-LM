@@ -14,6 +14,7 @@
 
 #include "runtime/engine/io_types.h"
 
+#include <chrono>  // NOLINT: Required for monotonic benchmark timing.
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
@@ -33,14 +34,31 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "runtime/executor/executor_stats.h"
 
 namespace litert::lm {
+namespace {
+
+absl::Duration ToAbslDuration(std::chrono::steady_clock::duration duration) {
+  return absl::Nanoseconds(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count());
+}
+
+// Prints one "    <label>: <value>" line of a BenchmarkInfo summary section,
+// padding the label so that the values of a section line up.
+void PrintSummaryLine(std::ostream& os, absl::string_view label,
+                      absl::string_view value) {
+  os << absl::StrFormat("    %-19s%s", absl::StrCat(label, ":"), value)
+     << std::endl;
+}
+
+}  // namespace
 
 std::ostream& operator<<(std::ostream& os, const TaskState& task_state) {
   switch (task_state) {
@@ -132,7 +150,7 @@ absl::Status BenchmarkInfo::TimeInitPhaseStart(InitPhase phase) {
     return absl::InternalError(
         absl::StrCat("Phase ", phase_name, " already started."));
   }
-  start_time_map_[phase_name] = absl::Now();
+  start_time_map_[phase_name] = std::chrono::steady_clock::now();
   return absl::OkStatus();
 }
 
@@ -142,7 +160,8 @@ absl::Status BenchmarkInfo::TimeInitPhaseEnd(InitPhase phase) {
     return absl::InternalError(
         absl::StrCat("Phase ", phase_name, " not started."));
   }
-  init_phases_[phase_name] = absl::Now() - start_time_map_[phase_name];
+  init_phases_[phase_name] = ToAbslDuration(std::chrono::steady_clock::now() -
+                                            start_time_map_[phase_name]);
   return absl::OkStatus();
 }
 
@@ -159,10 +178,12 @@ absl::Status BenchmarkInfo::InitPhaseRecord(InitPhase phase,
 }
 
 absl::Status BenchmarkInfo::TimeMarkDelta(const std::string& mark_name) {
+  const auto now = std::chrono::steady_clock::now();
   if (mark_time_map_.contains(mark_name)) {
-    mark_durations_[mark_name] = absl::Now() - mark_time_map_[mark_name];
+    mark_durations_[mark_name] =
+        ToAbslDuration(now - mark_time_map_[mark_name]);
   }
-  mark_time_map_[mark_name] = absl::Now();
+  mark_time_map_[mark_name] = now;
   return absl::OkStatus();
 }
 
@@ -177,7 +198,7 @@ absl::Status BenchmarkInfo::TimePrefillTurnStart() {
     return absl::InternalError(
         absl::StrCat("Prefill turn ", phase_name, " already started."));
   }
-  start_time_map_[phase_name] = absl::Now();
+  start_time_map_[phase_name] = std::chrono::steady_clock::now();
   return absl::OkStatus();
 }
 
@@ -188,7 +209,8 @@ absl::Status BenchmarkInfo::TimePrefillTurnEnd(uint64_t num_prefill_tokens) {
         absl::StrCat("Prefill turn ", phase_name, " not started."));
   }
   prefill_turns_.emplace_back(num_prefill_tokens,
-                              absl::Now() - start_time_map_[phase_name]);
+                              ToAbslDuration(std::chrono::steady_clock::now() -
+                                             start_time_map_[phase_name]));
   prefill_turn_index_++;
   return absl::OkStatus();
 }
@@ -210,7 +232,7 @@ absl::Status BenchmarkInfo::TimeDecodeTurnStart() {
     return absl::InternalError(
         absl::StrCat("Decode turn ", phase_name, " already started."));
   }
-  start_time_map_[phase_name] = absl::Now();
+  start_time_map_[phase_name] = std::chrono::steady_clock::now();
   return absl::OkStatus();
 }
 
@@ -221,7 +243,8 @@ absl::Status BenchmarkInfo::TimeDecodeTurnEnd(uint64_t num_decode_tokens) {
         absl::StrCat("Decode turn ", phase_name, " not started."));
   }
   decode_turns_.emplace_back(num_decode_tokens,
-                             absl::Now() - start_time_map_[phase_name]);
+                             ToAbslDuration(std::chrono::steady_clock::now() -
+                                            start_time_map_[phase_name]));
   decode_turn_index_++;
   return absl::OkStatus();
 }
@@ -233,7 +256,7 @@ absl::Status BenchmarkInfo::TimeTextToTokenIdsStart() {
     return absl::InternalError(
         absl::StrCat("TextToTokenIds turn ", phase_name, " already started."));
   }
-  start_time_map_[phase_name] = absl::Now();
+  start_time_map_[phase_name] = std::chrono::steady_clock::now();
   return absl::OkStatus();
 }
 
@@ -245,7 +268,8 @@ absl::Status BenchmarkInfo::TimeTextToTokenIdsEnd(uint64_t num_tokens) {
         absl::StrCat("TextToTokenIds turn ", phase_name, " not started."));
   }
   text_to_token_ids_turns_.emplace_back(
-      num_tokens, absl::Now() - start_time_map_[phase_name]);
+      num_tokens, ToAbslDuration(std::chrono::steady_clock::now() -
+                                 start_time_map_[phase_name]));
   text_to_token_ids_turn_index_++;
   return absl::OkStatus();
 }
@@ -342,6 +366,36 @@ double BenchmarkInfo::GetTimeToFirstToken() const {
   return first_decode_token_seconds + first_prefill_token_seconds;
 }
 
+absl::Duration BenchmarkInfo::GetTotalInitTime() const {
+  const auto total =
+      init_phases_.find(std::string(InitPhaseToString(InitPhase::kTotal)));
+  if (total == init_phases_.end()) {
+    return absl::ZeroDuration();
+  }
+  return total->second;
+}
+
+const std::string& BenchmarkInfo::GetProfileSummary() const {
+  return profile_summary_;
+}
+void BenchmarkInfo::SetProfileSummary(absl::string_view profile_summary) {
+  profile_summary_ = profile_summary;
+}
+
+const std::optional<ExecutorStats>& BenchmarkInfo::GetExecutorStats() const {
+  return executor_stats_;
+}
+
+void BenchmarkInfo::SetExecutorStats(ExecutorStats executor_stats) {
+  executor_stats_ = std::move(executor_stats);
+}
+
+int BenchmarkInfo::GetMaxNumTokens() const { return max_num_tokens_; }
+
+void BenchmarkInfo::SetMaxNumTokens(int max_num_tokens) {
+  max_num_tokens_ = max_num_tokens;
+}
+
 std::ostream& operator<<(std::ostream& os, const BenchmarkTurnData& data) {
   os << "Processed " << data.num_tokens << " tokens in " << data.duration
      << " duration." << std::endl;
@@ -427,13 +481,129 @@ std::ostream& operator<<(std::ostream& os, const BenchmarkInfo& info) {
     }
   }
 
-  os << "--------------------------------------------------" << std::endl;
-
   if (!info.GetMarkDurations().empty()) {
+    os << "--------------------------------------------------" << std::endl;
     os << "  Mark Durations (" << info.GetMarkDurations().size()
        << "):" << std::endl;
     for (const auto& [mark_name, duration] : info.GetMarkDurations()) {
       os << "    - " << mark_name << ": " << duration << std::endl;
+    }
+  }
+  if (!info.GetProfileSummary().empty()) {
+    os << "--------------------------------------------------" << std::endl;
+    os << "  Profile Summary:" << std::endl;
+    os << info.GetProfileSummary() << std::endl;
+  }
+  if (info.GetExecutorStats().has_value()) {
+    const ExecutorStats& stats = *info.GetExecutorStats();
+    const int64_t mtp_rounds = stats.mtp_rounds();
+    const int64_t plain_steps = stats.plain_steps();
+    if (mtp_rounds > 0) {
+      const int64_t drafted = stats.mtp_num_draft_tokens();
+      const int64_t accepted = stats.mtp_num_accepted_tokens();
+      const int64_t emitted = stats.mtp_emitted_tokens();
+      const double acceptance =
+          drafted > 0 ? static_cast<double>(accepted) / drafted : 0.0;
+      const double tokens_per_round = static_cast<double>(emitted) / mtp_rounds;
+      const double ms_per_round =
+          absl::ToDoubleMilliseconds(stats.mtp_round_time()) / mtp_rounds;
+      const double draft_ms =
+          absl::ToDoubleMilliseconds(stats.mtp_drafting_time()) / mtp_rounds;
+      const double verify_ms =
+          absl::ToDoubleMilliseconds(stats.mtp_verify_time()) / mtp_rounds;
+      // Re-priming decodes count as plain decodes, so the round share is below
+      // 100% even when every Decode() call speculates.
+      const double round_pct =
+          100.0 * mtp_rounds / static_cast<double>(mtp_rounds + plain_steps);
+      os << "--------------------------------------------------" << std::endl;
+      os << "  Speculative Decoding (MTP):" << std::endl;
+      PrintSummaryLine(os, "Rounds",
+                       absl::StrFormat("%d (%.1f%% of decode steps)",
+                                       mtp_rounds, round_pct));
+      PrintSummaryLine(os, "Acceptance rate",
+                       absl::StrFormat("%.1f%% (%d of %d drafted tokens)",
+                                       100.0 * acceptance, accepted, drafted));
+      PrintSummaryLine(os, "Tokens per round",
+                       absl::StrFormat("%.2f (%d emitted)", tokens_per_round,
+                                       emitted));
+      PrintSummaryLine(
+          os, "Time per round",
+          absl::StrFormat("%.2f ms (draft %.2f ms, verify %.2f ms)",
+                          ms_per_round, draft_ms, verify_ms));
+      PrintSummaryLine(
+          os, "Plain decodes",
+          plain_steps > 0
+              ? absl::StrFormat(
+                    "%d (incl. re-priming), %.2f ms/step", plain_steps,
+                    absl::ToDoubleMilliseconds(stats.plain_step_time()) /
+                        plain_steps)
+              : "0");
+      if (stats.GetMetric(kMtpModeSwitchesMetric).has_value()) {
+        PrintSummaryLine(os, "Mode switches",
+                         absl::StrCat(stats.mtp_mode_switches()));
+      }
+      if (stats.GetMetric(kMtpLenientAcceptedTokensMetric).has_value()) {
+        const int64_t lenient = stats.mtp_lenient_accepted_tokens();
+        PrintSummaryLine(
+            os, "Lenient accepts",
+            absl::StrFormat(
+                "%d (%.1f%% of accepted)", lenient,
+                accepted > 0 ? 100.0 * static_cast<double>(lenient) / accepted
+                             : 0.0));
+      }
+    }
+    // Logits-only decodes (external sampling, scoring) exclude sampling, so
+    // they are reported separately from plain steps.
+    if (const int64_t logits_steps = stats.logits_steps(); logits_steps > 0) {
+      const double logits_ms =
+          absl::ToDoubleMilliseconds(stats.logits_step_time()) / logits_steps;
+      os << "--------------------------------------------------" << std::endl;
+      os << absl::StrFormat(
+                "  Logits-only Decode Steps: %d (%.2f ms/step, excl. "
+                "sampling)",
+                logits_steps, logits_ms)
+         << std::endl;
+    }
+    if (const int64_t verifications = stats.draft_verifications();
+        verifications > 0) {
+      const int64_t passes = stats.draft_verify_passes();
+      const int64_t drafted = stats.draft_verify_draft_tokens();
+      const int64_t accepted = stats.draft_verify_accepted_tokens();
+      const int64_t emitted = stats.draft_verify_emitted_tokens();
+      const double verify_ms =
+          absl::ToDoubleMilliseconds(stats.draft_verify_time());
+      os << "--------------------------------------------------" << std::endl;
+      os << "  Draft Verification:" << std::endl;
+      PrintSummaryLine(
+          os, "Verifications",
+          absl::StrFormat("%d (%d passes)", verifications, passes));
+      PrintSummaryLine(
+          os, "Acceptance rate",
+          absl::StrFormat("%.1f%% (%d of %d draft tokens)",
+                          drafted > 0
+                              ? 100.0 * static_cast<double>(accepted) / drafted
+                              : 0.0,
+                          accepted, drafted));
+      PrintSummaryLine(
+          os, "Tokens per pass",
+          absl::StrFormat(
+              "%.2f (%d emitted)",
+              passes > 0 ? static_cast<double>(emitted) / passes : 0.0,
+              emitted));
+      PrintSummaryLine(os, "Time per pass",
+                       absl::StrFormat("%.2f ms (%.2f ms per verification)",
+                                       passes > 0 ? verify_ms / passes : 0.0,
+                                       verify_ms / verifications));
+      if (stats.GetMetric(kDraftVerifyLenientAcceptedTokensMetric)
+              .has_value()) {
+        const int64_t lenient = stats.draft_verify_lenient_accepted_tokens();
+        PrintSummaryLine(
+            os, "Lenient accepts",
+            absl::StrFormat(
+                "%d (%.1f%% of accepted)", lenient,
+                accepted > 0 ? 100.0 * static_cast<double>(lenient) / accepted
+                             : 0.0));
+      }
     }
   }
   os << "--------------------------------------------------" << std::endl;

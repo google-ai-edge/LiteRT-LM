@@ -16,6 +16,17 @@ import Foundation
 import OSLog
 import CLiteRTLM
 
+extension ResponseFormat.FormatType {
+  var cConstraintType: LiteRtLmConstraintType {
+    switch self {
+    case .regex:
+      return kLiteRtLmConstraintTypeRegex
+    case .jsonObject:
+      return kLiteRtLmConstraintTypeJsonSchema
+    }
+  }
+}
+
 typealias CConversationHandle = OpaquePointer
 
 private let logger = Logger(
@@ -43,23 +54,34 @@ private let recurringToolCallLimit = 25
 ///
 /// This class facilitates interaction with the LiteRT-LM model by handling message sending
 /// and response reception.
-public class Conversation {
+public final class Conversation: Sendable {
   private let logger = Logger(
     subsystem: "com.google.ai.edge.litertlm.swift",
     category: "Conversation"
   )
 
-  private var handle: CConversationHandle?
+  private let handle: CConversationHandle?
   private let toolManager: ToolManager
+  private let automaticToolCalling: Bool
+  private let engine: Engine
+  private let enableResponseFormat: Bool
+  private let visualTokenBudget: Int32?
 
   /// Whether the conversation is alive and ready to be used.
   public var isAlive: Bool {
     return handle != nil
   }
 
-  init(handle: CConversationHandle, toolManager: ToolManager) {
+  init(
+    handle: CConversationHandle, toolManager: ToolManager, automaticToolCalling: Bool = true,
+    engine: Engine, enableResponseFormat: Bool = false, visualTokenBudget: Int32? = nil
+  ) {
     self.handle = handle
     self.toolManager = toolManager
+    self.automaticToolCalling = automaticToolCalling
+    self.engine = engine
+    self.enableResponseFormat = enableResponseFormat
+    self.visualTokenBudget = visualTokenBudget
   }
 
   deinit {
@@ -68,25 +90,90 @@ public class Conversation {
     }
   }
 
+  /// Clones the conversation, copying its state so the new conversation can be used
+  /// independently.
+  ///
+  /// - Returns: A new `Conversation` instance with the same message history, KV cache state, and
+  ///   configuration.
+  /// - Throws: A `LiteRTLMError` if the conversation is not alive or cloning fails.
+  public func clone() throws -> Conversation {
+    let handle = try checkIsAlive()
+    let clonedHandle = try LiteRTLMError.create(
+      "litert_lm_conversation_clone", { .conversation(.invalidResponse($0)) }
+    ) { out in
+      litert_lm_conversation_clone(handle, out)
+    }
+    return Conversation(
+      handle: clonedHandle,
+      toolManager: self.toolManager,
+      automaticToolCalling: self.automaticToolCalling,
+      engine: self.engine,
+      enableResponseFormat: self.enableResponseFormat,
+      visualTokenBudget: self.visualTokenBudget
+    )
+  }
+
+  private func shouldApplyResponseFormat(
+    _ responseFormat: ResponseFormat?,
+    forMessageDict messageDict: [String: Any]
+  ) -> Bool {
+    guard responseFormat != nil else { return false }
+    let isToolResponse = (messageDict["role"] as? String) == "tool"
+    if automaticToolCalling && toolManager.toolsJsonDescription != "[]" && !isToolResponse {
+      return false
+    }
+    return true
+  }
+
   /// Sends a message to the model and returns the response. This is a synchronous call.
   ///
   /// - Parameter message: The message to send to the model.
   /// - Parameter extraContext: The extra context to send to the model.
+  /// - Parameter repetitionPenaltyConfig: Optional configuration for repetition penalty.
+  /// - Parameter noRepeatNgramConfig: Optional configuration for no repeat ngram penalty.
+  /// - Parameter maxOutputTokens: Optional maximum number of tokens to generate per response. For thinking models, both thinking (reasoning) tokens and the final response tokens count towards this limit.
   /// - Parameter thinkingConfig: Optional configuration for thinking/reasoning generation.
+  /// - Parameter responseFormat: Optional response format for constrained decoding.
+  /// - Parameter toolChoice: Optional choice of whether and which tools the model may call for
+  ///   this message. It is only used if the conversation has tools and was created with
+  ///   `ExperimentalFlags.enableConversationConstrainedDecoding` set to true.
   /// - Returns: The model's response message.
   /// - Throws: A `LiteRTLMError` if sending the message fails or the model
   ///   returns an invalid response.
   public func sendMessage(
-    _ message: Message, extraContext: [String: Any]? = nil, thinkingConfig: ThinkingConfig? = nil
+    _ message: Message,
+    extraContext: [String: Any]? = nil,
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = nil,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = nil,
+    suppressTokensConfig: SuppressTokensConfig? = nil,
+    maxOutputTokens: Int? = nil,
+    thinkingConfig: ThinkingConfig? = nil,
+    responseFormat: ResponseFormat? = nil,
+    toolChoice: ToolChoice? = nil
   ) async throws -> Message {
     let handle = try checkIsAlive()
+
+    if responseFormat != nil && !enableResponseFormat {
+      throw LiteRTLMError.conversation(.responseFormatNotEnabled)
+    }
 
     var currentMessageJson: [String: Any] = message.toJson
 
     for i in 0..<recurringToolCallLimit {
       let (responseJson, responseString) = try attemptSendMessage(
-        handle: handle, messageJson: currentMessageJson, extraContext: extraContext,
-        thinkingConfig: i == 0 ? thinkingConfig : nil)
+        handle: handle,
+        messageJson: currentMessageJson,
+        extraContext: extraContext,
+        repetitionPenaltyConfig: repetitionPenaltyConfig,
+        noRepeatNgramConfig: noRepeatNgramConfig,
+        suppressTokensConfig: suppressTokensConfig,
+        maxOutputTokens: maxOutputTokens,
+        thinkingConfig: i == 0 ? thinkingConfig : nil,
+        responseFormat: responseFormat,
+        // The tool choice applies to the first message only, to avoid endless recursive tool
+        // calls (e.g. with `.required()`). For finer control, disable automatic tool calling.
+        toolChoice: i == 0 ? toolChoice : nil
+      )
 
       guard let toolCalls = responseJson["tool_calls"] as? [[String: Any]] else {
         if responseJson["content"] != nil || responseJson["channels"] != nil {
@@ -95,6 +182,9 @@ public class Conversation {
           throw LiteRTLMError.conversation(.invalidResponse(responseString))
         }
       }
+      if !automaticToolCalling {
+        return try Conversation.jsonToMessage(responseString)
+      }
       currentMessageJson = try await handleToolCalls(toolCalls)
     }
     throw LiteRTLMError.conversation(
@@ -102,8 +192,16 @@ public class Conversation {
   }
 
   private func attemptSendMessage(
-    handle: CConversationHandle, messageJson: [String: Any], extraContext: [String: Any]?,
-    thinkingConfig: ThinkingConfig? = nil
+    handle: CConversationHandle,
+    messageJson: [String: Any],
+    extraContext: [String: Any]?,
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = nil,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = nil,
+    suppressTokensConfig: SuppressTokensConfig? = nil,
+    maxOutputTokens: Int? = nil,
+    thinkingConfig: ThinkingConfig? = nil,
+    responseFormat: ResponseFormat? = nil,
+    toolChoice: ToolChoice? = nil
   ) throws
     -> (responseJson: [String: Any], responseString: String)
   {
@@ -118,39 +216,35 @@ public class Conversation {
     {
       extraContextString = String(data: extraData, encoding: .utf8)
     }
-    let optionalArgs = litert_lm_conversation_optional_args_create()
+    let optionalArgs = try makeOptionalArgs(
+      forMessageDict: messageJson,
+      repetitionPenaltyConfig: repetitionPenaltyConfig,
+      noRepeatNgramConfig: noRepeatNgramConfig,
+      suppressTokensConfig: suppressTokensConfig,
+      maxOutputTokens: maxOutputTokens,
+      thinkingConfig: thinkingConfig,
+      responseFormat: responseFormat,
+      toolChoice: toolChoice
+    )
     defer { litert_lm_conversation_optional_args_delete(optionalArgs) }
-    if let visualTokenBudget = ExperimentalFlags.visualTokenBudget {
-      litert_lm_conversation_optional_args_set_visual_token_budget(
-        optionalArgs, Int32(visualTokenBudget))
-    }
-    if let thinkingConfig = thinkingConfig {
-      guard let cThinkingConfig = litert_lm_thinking_config_create() else {
-        throw LiteRTLMError.conversation(
-          .invalidResponse("Failed to create native thinking config."))
-      }
-      defer { litert_lm_thinking_config_delete(cThinkingConfig) }
-      litert_lm_thinking_config_set_enable_thinking(
-        cThinkingConfig, thinkingConfig.enableThinking)
-      litert_lm_thinking_config_set_thinking_token_budget(
-        cThinkingConfig, Int32(thinkingConfig.thinkingTokenBudget))
-      litert_lm_conversation_optional_args_set_thinking_config(optionalArgs, cThinkingConfig)
-    }
 
-    guard
-      let responsePtr = litert_lm_conversation_send_message(
-        handle, messageString, extraContextString, optionalArgs)
-    else {
-      throw LiteRTLMError.conversation(.invalidResponse("Native sendMessage returned null."))
-
+    let responseError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    let responsePtr = try LiteRTLMError.create(
+      "litert_lm_conversation_send_message", responseError
+    ) { out in
+      litert_lm_conversation_send_message(
+        handle, messageString, extraContextString, optionalArgs, out)
     }
     // Delete the response pointer at the end of each iteration. Handled by defer block.
     let responsePtrRef = responsePtr
     defer { litert_lm_json_response_delete(responsePtrRef) }
 
-    guard let responseChars = litert_lm_json_response_get_string(responsePtr) else {
+    let responseChars: UnsafePointer<CChar>? = try LiteRTLMError.get(
+      nil, "litert_lm_json_response_get_string", responseError
+    ) { litert_lm_json_response_get_string(responsePtr, $0) }
+    guard let responseChars else {
       throw LiteRTLMError.conversation(
-        .invalidResponse("Native get string for response returned null."))
+        .invalidResponse("litert_lm_json_response_get_string returned a null string"))
     }
     let responseString = String(cString: responseChars)
 
@@ -160,6 +254,173 @@ public class Conversation {
       throw LiteRTLMError.conversation(.invalidJson("Failed to parse native response JSON."))
     }
     return (responseJson, responseString)
+  }
+
+  /// Creates native optional args for a single `send_message` call and applies the given settings.
+  ///
+  /// - Parameters:
+  ///   - messageJson: The message being sent, used to decide whether `responseFormat` applies.
+  ///   - repetitionPenaltyConfig: Optional configuration for repetition penalty.
+  ///   - noRepeatNgramConfig: Optional configuration for no-repeat n-gram.
+  ///   - suppressTokensConfig: Optional configuration for suppressed tokens.
+  ///   - maxOutputTokens: Optional maximum number of output tokens.
+  ///   - thinkingConfig: Optional configuration for thinking/reasoning generation.
+  ///   - responseFormat: Optional response format for constrained decoding.
+  ///   - toolChoice: Optional choice of whether and which tools the model may call.
+  /// - Returns: The native optional args handle. The caller must delete it with
+  ///   `litert_lm_conversation_optional_args_delete`.
+  /// - Throws: A `LiteRTLMError` if creating the optional args or any native setter fails. The
+  ///   optional args are deleted before the error is thrown.
+  private func makeOptionalArgs(
+    forMessageDict messageJson: [String: Any],
+    repetitionPenaltyConfig: RepetitionPenaltyConfig?,
+    noRepeatNgramConfig: NoRepeatNgramConfig?,
+    suppressTokensConfig: SuppressTokensConfig?,
+    maxOutputTokens: Int?,
+    thinkingConfig: ThinkingConfig?,
+    responseFormat: ResponseFormat?,
+    toolChoice: ToolChoice?
+  ) throws -> OpaquePointer {
+    let optionalArgsError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    let optionalArgs = try LiteRTLMError.create(
+      "litert_lm_conversation_optional_args_create", optionalArgsError
+    ) { out in
+      litert_lm_conversation_optional_args_create(out)
+    }
+    do {
+      if let visualTokenBudget = self.visualTokenBudget ?? ExperimentalFlags.visualTokenBudget {
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_visual_token_budget(
+            optionalArgs, Int32(visualTokenBudget)),
+          "litert_lm_conversation_optional_args_set_visual_token_budget", optionalArgsError)
+      }
+      if let repetitionPenaltyConfig = repetitionPenaltyConfig {
+        let cRepetitionPenaltyConfig = try LiteRTLMError.create(
+          "litert_lm_repetition_penalty_config_create", optionalArgsError
+        ) { out in
+          litert_lm_repetition_penalty_config_create(out)
+        }
+        defer { litert_lm_repetition_penalty_config_delete(cRepetitionPenaltyConfig) }
+
+        if let repetitionPenalty = repetitionPenaltyConfig.repetitionPenalty {
+          try LiteRTLMError.check(
+            litert_lm_repetition_penalty_config_set_repetition_penalty(
+              cRepetitionPenaltyConfig, repetitionPenalty),
+            "litert_lm_repetition_penalty_config_set_repetition_penalty", optionalArgsError)
+        }
+        if let presencePenalty = repetitionPenaltyConfig.presencePenalty {
+          try LiteRTLMError.check(
+            litert_lm_repetition_penalty_config_set_presence_penalty(
+              cRepetitionPenaltyConfig, presencePenalty),
+            "litert_lm_repetition_penalty_config_set_presence_penalty", optionalArgsError)
+        }
+        if let frequencyPenalty = repetitionPenaltyConfig.frequencyPenalty {
+          try LiteRTLMError.check(
+            litert_lm_repetition_penalty_config_set_frequency_penalty(
+              cRepetitionPenaltyConfig, frequencyPenalty),
+            "litert_lm_repetition_penalty_config_set_frequency_penalty", optionalArgsError)
+        }
+        if let windowSize = repetitionPenaltyConfig.windowSize {
+          try LiteRTLMError.check(
+            litert_lm_repetition_penalty_config_set_window_size(
+              cRepetitionPenaltyConfig, Int32(windowSize)),
+            "litert_lm_repetition_penalty_config_set_window_size", optionalArgsError)
+        }
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_repetition_penalty_config(
+            optionalArgs, cRepetitionPenaltyConfig),
+          "litert_lm_conversation_optional_args_set_repetition_penalty_config", optionalArgsError)
+      }
+      if let noRepeatNgramConfig = noRepeatNgramConfig {
+        let cNoRepeatNgramConfig = try LiteRTLMError.create(
+          "litert_lm_no_repeat_ngram_config_create", optionalArgsError
+        ) { out in
+          litert_lm_no_repeat_ngram_config_create(out)
+        }
+        defer { litert_lm_no_repeat_ngram_config_delete(cNoRepeatNgramConfig) }
+
+        if let noRepeatNgramSize = noRepeatNgramConfig.noRepeatNgramSize {
+          try LiteRTLMError.check(
+            litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size(
+              cNoRepeatNgramConfig, Int32(noRepeatNgramSize)),
+            "litert_lm_no_repeat_ngram_config_set_no_repeat_ngram_size", optionalArgsError)
+        }
+        if let windowSize = noRepeatNgramConfig.windowSize {
+          try LiteRTLMError.check(
+            litert_lm_no_repeat_ngram_config_set_window_size(
+              cNoRepeatNgramConfig, Int32(windowSize)),
+            "litert_lm_no_repeat_ngram_config_set_window_size", optionalArgsError)
+        }
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_no_repeat_ngram_config(
+            optionalArgs, cNoRepeatNgramConfig),
+          "litert_lm_conversation_optional_args_set_no_repeat_ngram_config", optionalArgsError)
+      }
+      if let suppressTokens = suppressTokensConfig?.suppressTokens, !suppressTokens.isEmpty {
+        let cSuppressTokensConfig = try LiteRTLMError.create(
+          "litert_lm_suppress_tokens_config_create", optionalArgsError
+        ) { out in
+          litert_lm_suppress_tokens_config_create(out)
+        }
+        defer { litert_lm_suppress_tokens_config_delete(cSuppressTokensConfig) }
+
+        let cTokens = suppressTokens.map { Int32($0) }
+        let suppressTokensStatus = cTokens.withUnsafeBufferPointer { buffer in
+          litert_lm_suppress_tokens_config_set_suppress_tokens(
+            cSuppressTokensConfig, buffer.baseAddress, buffer.count)
+        }
+        try LiteRTLMError.check(
+          suppressTokensStatus, "litert_lm_suppress_tokens_config_set_suppress_tokens",
+          optionalArgsError)
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_suppress_tokens_config(
+            optionalArgs, cSuppressTokensConfig),
+          "litert_lm_conversation_optional_args_set_suppress_tokens_config", optionalArgsError)
+      }
+      if let maxOutputTokens = maxOutputTokens {
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_max_output_tokens(
+            optionalArgs, Int32(maxOutputTokens)),
+          "litert_lm_conversation_optional_args_set_max_output_tokens", optionalArgsError)
+      }
+      if let thinkingConfig = thinkingConfig {
+        let cThinkingConfig = try LiteRTLMError.create(
+          "litert_lm_thinking_config_create", optionalArgsError
+        ) { out in
+          litert_lm_thinking_config_create(out)
+        }
+        defer { litert_lm_thinking_config_delete(cThinkingConfig) }
+        try LiteRTLMError.check(
+          litert_lm_thinking_config_set_enable_thinking(
+            cThinkingConfig, thinkingConfig.enableThinking),
+          "litert_lm_thinking_config_set_enable_thinking", optionalArgsError)
+        try LiteRTLMError.check(
+          litert_lm_thinking_config_set_thinking_token_budget(
+            cThinkingConfig, Int32(thinkingConfig.thinkingTokenBudget)),
+          "litert_lm_thinking_config_set_thinking_token_budget", optionalArgsError)
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_thinking_config(optionalArgs, cThinkingConfig),
+          "litert_lm_conversation_optional_args_set_thinking_config", optionalArgsError)
+      }
+      if let responseFormat = responseFormat,
+        shouldApplyResponseFormat(responseFormat, forMessageDict: messageJson)
+      {
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_constraint(
+            optionalArgs, responseFormat.type.cConstraintType, responseFormat.schemaOrPattern),
+          "litert_lm_conversation_optional_args_set_constraint", optionalArgsError)
+      }
+      if let toolChoice = toolChoice {
+        let toolChoiceJson = try toolChoice.jsonString()
+        try LiteRTLMError.check(
+          litert_lm_conversation_optional_args_set_tool_choice(optionalArgs, toolChoiceJson),
+          "litert_lm_conversation_optional_args_set_tool_choice", optionalArgsError)
+      }
+      return optionalArgs
+    } catch {
+      litert_lm_conversation_optional_args_delete(optionalArgs)
+      throw error
+    }
   }
 
   fileprivate func handleToolCalls(_ toolCalls: [[String: Any]]) async throws -> [String: Any] {
@@ -203,21 +464,57 @@ public class Conversation {
   ///
   /// - Parameter message: The message to send.
   /// - Parameter extraContext: The extra context to send to the model.
+  /// - Parameter repetitionPenaltyConfig: Optional configuration for repetition penalty.
+  /// - Parameter maxOutputTokens: Optional maximum number of tokens to generate per response. For thinking models, both thinking (reasoning) tokens and the final response tokens count towards this limit.
   /// - Parameter thinkingConfig: Optional configuration for thinking/reasoning generation.
+  /// - Parameter responseFormat: Optional response format for constrained decoding.
+  /// - Parameter toolChoice: Optional choice of whether and which tools the model may call for
+  ///   this message. It is only used if the conversation has tools and was created with
+  ///   `ExperimentalFlags.enableConversationConstrainedDecoding` set to true.
   /// - Returns: An async throwing stream of `Message` chunks.
   public func sendMessageStream(
-    _ message: Message, extraContext: [String: Any]? = nil, thinkingConfig: ThinkingConfig? = nil
+    _ message: Message,
+    extraContext: [String: Any]? = nil,
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = nil,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = nil,
+    suppressTokensConfig: SuppressTokensConfig? = nil,
+    maxOutputTokens: Int? = nil,
+    thinkingConfig: ThinkingConfig? = nil,
+    responseFormat: ResponseFormat? = nil,
+    toolChoice: ToolChoice? = nil
   ) -> AsyncThrowingStream<Message, Error> {
     return AsyncThrowingStream { continuation in
       do {
+        if responseFormat != nil && !enableResponseFormat {
+          throw LiteRTLMError.conversation(.responseFormatNotEnabled)
+        }
         let handle = try self.checkIsAlive()
         let messageJson: [String: Any] = message.toJson
         let context = StreamContext(
-          continuation: continuation, conversation: self)
+          continuation: continuation,
+          conversation: self,
+          repetitionPenaltyConfig: repetitionPenaltyConfig,
+          noRepeatNgramConfig: noRepeatNgramConfig,
+          suppressTokensConfig: suppressTokensConfig,
+          maxOutputTokens: maxOutputTokens,
+          responseFormat: responseFormat,
+          extraContext: extraContext,
+          thinkingConfig: thinkingConfig
+        )
 
         try self.sendToStream(
-          handle: handle, messageJson: messageJson, extraContext: extraContext,
-          thinkingConfig: thinkingConfig, context: context)
+          handle: handle,
+          messageJson: messageJson,
+          extraContext: extraContext,
+          repetitionPenaltyConfig: repetitionPenaltyConfig,
+          noRepeatNgramConfig: noRepeatNgramConfig,
+          suppressTokensConfig: suppressTokensConfig,
+          maxOutputTokens: maxOutputTokens,
+          thinkingConfig: thinkingConfig,
+          responseFormat: responseFormat,
+          toolChoice: toolChoice,
+          context: context
+        )
       } catch {
         continuation.finish(throwing: error)
       }
@@ -233,6 +530,10 @@ public class Conversation {
   ///   - handle: The `CConversationHandle` for the current conversation.
   ///   - messageJson: The message to send, represented as a JSON dictionary.
   ///   - extraContext: The extra context to send to the model.
+  ///   - repetitionPenaltyConfig: Optional configuration for repetition penalty.
+  ///   - thinkingConfig: Optional configuration for thinking/reasoning generation.
+  ///   - maxOutputTokens: Optional maximum number of output tokens.
+  ///   - toolChoice: Optional choice of whether and which tools the model may call.
   ///   - context: The `StreamContext` containing the `AsyncThrowingStream.Continuation`
   ///     and other state for the streaming process.
   /// - Throws: A `LiteRTLMError` if the message fails to send or the response is invalid.
@@ -241,7 +542,13 @@ public class Conversation {
     handle: CConversationHandle,
     messageJson: [String: Any],
     extraContext: [String: Any]? = nil,
+    repetitionPenaltyConfig: RepetitionPenaltyConfig? = nil,
+    noRepeatNgramConfig: NoRepeatNgramConfig? = nil,
+    suppressTokensConfig: SuppressTokensConfig? = nil,
+    maxOutputTokens: Int? = nil,
     thinkingConfig: ThinkingConfig? = nil,
+    responseFormat: ResponseFormat? = nil,
+    toolChoice: ToolChoice? = nil,
     context: StreamContext
   ) throws {
     let messageData = try JSONSerialization.data(withJSONObject: messageJson)
@@ -256,24 +563,17 @@ public class Conversation {
       extraContextString = String(data: extraData, encoding: .utf8)
     }
 
-    let optionalArgs = litert_lm_conversation_optional_args_create()
+    let optionalArgs = try makeOptionalArgs(
+      forMessageDict: messageJson,
+      repetitionPenaltyConfig: repetitionPenaltyConfig,
+      noRepeatNgramConfig: noRepeatNgramConfig,
+      suppressTokensConfig: suppressTokensConfig,
+      maxOutputTokens: maxOutputTokens,
+      thinkingConfig: thinkingConfig,
+      responseFormat: responseFormat,
+      toolChoice: toolChoice
+    )
     defer { litert_lm_conversation_optional_args_delete(optionalArgs) }
-    if let visualTokenBudget = ExperimentalFlags.visualTokenBudget {
-      litert_lm_conversation_optional_args_set_visual_token_budget(
-        optionalArgs, Int32(visualTokenBudget))
-    }
-    if let thinkingConfig = thinkingConfig {
-      guard let cThinkingConfig = litert_lm_thinking_config_create() else {
-        throw LiteRTLMError.conversation(
-          .invalidResponse("Failed to create native thinking config."))
-      }
-      defer { litert_lm_thinking_config_delete(cThinkingConfig) }
-      litert_lm_thinking_config_set_enable_thinking(
-        cThinkingConfig, thinkingConfig.enableThinking)
-      litert_lm_thinking_config_set_thinking_token_budget(
-        cThinkingConfig, Int32(thinkingConfig.thinkingTokenBudget))
-      litert_lm_conversation_optional_args_set_thinking_config(optionalArgs, cThinkingConfig)
-    }
 
     let contextPtr = Unmanaged.passRetained(context).toOpaque()
 
@@ -286,16 +586,20 @@ public class Conversation {
       contextPtr
     )
 
-    guard status == 0 else {
+    guard status == kLiteRtLmStatusOk else {
       Unmanaged<StreamContext>.fromOpaque(contextPtr).release()
-      throw LiteRTLMError.conversation(.failedToStartStream(status: Int(status)))
+      let errorMsg = LiteRTLMError.consumeLastError() ?? ""
+      throw LiteRTLMError.conversation(
+        .failedToStartStream(status: Int(status.rawValue), message: errorMsg))
     }
   }
 
   /// Cancels the ongoing asynchronous inference process.
   public func cancel() throws {
     let handle = try checkIsAlive()
-    litert_lm_conversation_cancel_process(handle)
+    try LiteRTLMError.check(
+      litert_lm_conversation_cancel_process(handle), "litert_lm_conversation_cancel_process",
+      { .conversation(.invalidResponse($0)) })
   }
 
   /// Renders the message into a string for testing and logging.
@@ -313,9 +617,13 @@ public class Conversation {
       throw LiteRTLMError.conversation(.failedToSerializeMessage)
     }
 
-    guard let cString = litert_lm_conversation_render_message_to_string(handle, messageString)
-    else {
-      throw LiteRTLMError.conversation(.invalidResponse("Failed to render message into string."))
+    let renderError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    let cString: UnsafePointer<CChar>? = try LiteRTLMError.get(
+      nil, "litert_lm_conversation_render_message_to_string", renderError
+    ) { litert_lm_conversation_render_message_to_string(handle, messageString, $0) }
+    guard let cString else {
+      throw LiteRTLMError.conversation(
+        .invalidResponse("litert_lm_conversation_render_message_to_string returned a null string"))
     }
     return String(cString: cString)
   }
@@ -326,18 +634,27 @@ public class Conversation {
   /// - Throws: A `LiteRTLMError` if the conversation is not alive, or rendering fails.
   public func renderPrefaceIntoString() throws -> String {
     let handle = try checkIsAlive()
-    guard let cString = litert_lm_conversation_render_preface_to_string(handle) else {
-      throw LiteRTLMError.conversation(.invalidResponse("Failed to render preface into string."))
+    let renderError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    let cString: UnsafePointer<CChar>? = try LiteRTLMError.get(
+      nil, "litert_lm_conversation_render_preface_to_string", renderError
+    ) { litert_lm_conversation_render_preface_to_string(handle, $0) }
+    guard let cString else {
+      throw LiteRTLMError.conversation(
+        .invalidResponse("litert_lm_conversation_render_preface_to_string returned a null string"))
     }
     return String(cString: cString)
   }
 
   /// Gets the number of tokens in the conversation KV Cache (prefill + decode).
   ///
-  /// - Throws: A `LiteRTLMError` if the conversation is not alive.
+  /// - Throws: A `LiteRTLMError` if the conversation is not alive or the native call fails.
   public func getTokenCount() throws -> Int {
     let handle = try checkIsAlive()
-    return Int(litert_lm_conversation_get_token_count(handle))
+    let tokenCount = try LiteRTLMError.get(
+      0, "litert_lm_conversation_get_token_count",
+      { .conversation(.invalidResponse($0)) }
+    ) { litert_lm_conversation_get_token_count(handle, $0) }
+    return Int(tokenCount)
   }
 
   /// Retrieves the benchmark information from the conversation.
@@ -351,37 +668,72 @@ public class Conversation {
       throw LiteRTLMError.conversation(.benchmarkNotEnabled)
     }
 
-    guard let benchmarkInfoPtr = litert_lm_conversation_get_benchmark_info(handle) else {
-      throw LiteRTLMError.conversation(.benchmarkInfoUnavailable)
+    let makeError: (String) -> LiteRTLMError = { details in
+      self.logger.error("Failed to read benchmark info: \(details)")
+      return LiteRTLMError.conversation(.benchmarkInfoUnavailable)
+    }
+
+    let benchmarkInfoPtr = try LiteRTLMError.create(
+      "litert_lm_conversation_get_benchmark_info", makeError
+    ) { out in
+      litert_lm_conversation_get_benchmark_info(handle, out)
     }
     defer { litert_lm_benchmark_info_delete(benchmarkInfoPtr) }
 
-    let numPrefillTurns = litert_lm_benchmark_info_get_num_prefill_turns(benchmarkInfoPtr)
-    let numDecodeTurns = litert_lm_benchmark_info_get_num_decode_turns(benchmarkInfoPtr)
+    let numPrefillTurns = try LiteRTLMError.get(
+      0, "litert_lm_benchmark_info_get_num_prefill_turns", makeError
+    ) { litert_lm_benchmark_info_get_num_prefill_turns(benchmarkInfoPtr, $0) }
+    let numDecodeTurns = try LiteRTLMError.get(
+      0, "litert_lm_benchmark_info_get_num_decode_turns", makeError
+    ) { litert_lm_benchmark_info_get_num_decode_turns(benchmarkInfoPtr, $0) }
 
-    let initTimeInSecond = litert_lm_benchmark_info_get_total_init_time_in_second(benchmarkInfoPtr)
-    let timeToFirstTokenInSecond = litert_lm_benchmark_info_get_time_to_first_token(
-      benchmarkInfoPtr)
+    let initTimeInSecond = try LiteRTLMError.get(
+      0.0, "litert_lm_benchmark_info_get_total_init_time_in_second", makeError
+    ) { litert_lm_benchmark_info_get_total_init_time_in_second(benchmarkInfoPtr, $0) }
+    let timeToFirstTokenInSecond = try LiteRTLMError.get(
+      0.0, "litert_lm_benchmark_info_get_time_to_first_token", makeError
+    ) { litert_lm_benchmark_info_get_time_to_first_token(benchmarkInfoPtr, $0) }
 
-    let lastPrefillTokenCount: Int =
-      numPrefillTurns > 0
-      ? Int(
-        litert_lm_benchmark_info_get_prefill_token_count_at(
-          benchmarkInfoPtr, numPrefillTurns - 1)) : 0
-    let lastPrefillTokensPerSec: Double =
-      numPrefillTurns > 0
-      ? litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
-        benchmarkInfoPtr, numPrefillTurns - 1) : 0.0
+    var lastPrefillTokenCount = 0
+    var lastPrefillTokensPerSec = 0.0
+    if numPrefillTurns > 0 {
+      lastPrefillTokenCount = try Int(
+        LiteRTLMError.get(
+          0, "litert_lm_benchmark_info_get_prefill_token_count_at", makeError
+        ) {
+          litert_lm_benchmark_info_get_prefill_token_count_at(
+            benchmarkInfoPtr, numPrefillTurns - 1, $0)
+        })
+      lastPrefillTokensPerSec = try LiteRTLMError.get(
+        0.0, "litert_lm_benchmark_info_get_prefill_tokens_per_sec_at", makeError
+      ) {
+        litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
+          benchmarkInfoPtr, numPrefillTurns - 1, $0)
+      }
+    }
 
-    let lastDecodeTokenCount: Int =
-      numDecodeTurns > 0
-      ? Int(
-        litert_lm_benchmark_info_get_decode_token_count_at(
-          benchmarkInfoPtr, numDecodeTurns - 1)) : 0
-    let lastDecodeTokensPerSec: Double =
-      numDecodeTurns > 0
-      ? litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
-        benchmarkInfoPtr, numDecodeTurns - 1) : 0.0
+    var lastDecodeTokenCount = 0
+    var lastDecodeTokensPerSec = 0.0
+    if numDecodeTurns > 0 {
+      lastDecodeTokenCount = try Int(
+        LiteRTLMError.get(
+          0, "litert_lm_benchmark_info_get_decode_token_count_at", makeError
+        ) {
+          litert_lm_benchmark_info_get_decode_token_count_at(
+            benchmarkInfoPtr, numDecodeTurns - 1, $0)
+        })
+      lastDecodeTokensPerSec = try LiteRTLMError.get(
+        0.0, "litert_lm_benchmark_info_get_decode_tokens_per_sec_at", makeError
+      ) {
+        litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
+          benchmarkInfoPtr, numDecodeTurns - 1, $0)
+      }
+    }
+
+    let maxNumTokens = try Int(
+      LiteRTLMError.get(
+        Int32(0), "litert_lm_benchmark_info_get_max_num_tokens", makeError
+      ) { litert_lm_benchmark_info_get_max_num_tokens(benchmarkInfoPtr, $0) })
 
     return BenchmarkInfo(
       initTimeInSecond: initTimeInSecond,
@@ -389,7 +741,8 @@ public class Conversation {
       lastPrefillTokenCount: lastPrefillTokenCount,
       lastDecodeTokenCount: lastDecodeTokenCount,
       lastPrefillTokensPerSecond: lastPrefillTokensPerSec,
-      lastDecodeTokensPerSecond: lastDecodeTokensPerSec
+      lastDecodeTokensPerSecond: lastDecodeTokensPerSec,
+      maxNumTokens: maxNumTokens
     )
   }
 
@@ -408,8 +761,31 @@ public class Conversation {
     var contents: [Content] = []
     if let contentArray = jsonObject["content"] as? [[String: Any]] {
       for item in contentArray {
-        if let type = item["type"] as? String, type == "text", let text = item["text"] as? String {
-          contents.append(.text(text))
+        if let type = item["type"] as? String {
+          switch type {
+          case "text":
+            if let text = item["text"] as? String {
+              contents.append(.text(text))
+            }
+          case "tool_response":
+            if let name = item["name"] as? String, let response = item["response"] {
+              let id = item["id"] as? String ?? ""
+              contents.append(.toolResponse(name: name, response: response, id: id))
+            }
+          case "image":
+            if let path = item["path"] as? String {
+              contents.append(.imageFile(path))
+            } else if let blob = item["blob"] as? String, let data = Data(base64Encoded: blob) {
+              contents.append(.imageData(data))
+            }
+          case "audio":
+            if let path = item["path"] as? String {
+              contents.append(.audioFile(path))
+            } else if let blob = item["blob"] as? String, let data = Data(base64Encoded: blob) {
+              contents.append(.audioData(data))
+            }
+          default: break
+          }
         }
       }
     }
@@ -423,11 +799,38 @@ public class Conversation {
       }
     }
 
-    if contents.isEmpty && channels.isEmpty {
+    var toolCalls: [ToolCall] = []
+    if let toolCallsArray = jsonObject["tool_calls"] as? [[String: Any]] {
+      for item in toolCallsArray {
+        if let function = item["function"] as? [String: Any],
+          let name = function["name"] as? String,
+          let args = function["arguments"] as? [String: Any]
+        {
+          let id = item["id"] as? String ?? ""
+          toolCalls.append(ToolCall(name: name, id: id, arguments: args))
+        }
+      }
+    }
+
+    if contents.isEmpty && channels.isEmpty && toolCalls.isEmpty {
       throw LiteRTLMError.message(.invalidContent)
     }
 
-    return Message(contents: contents, channels: channels)
+    let roleRaw = jsonObject["role"] as? String ?? "user"
+    let role: Role
+    switch roleRaw {
+    case "assistant", "model":
+      role = .model
+    default:
+      role = Role(rawValue: roleRaw) ?? .user
+    }
+
+    return Message(
+      contents: Contents(contents: contents),
+      role: role,
+      channels: channels,
+      toolCalls: toolCalls
+    )
   }
 
   /// Context object to bridge the C callback to the Swift AsyncThrowingStream.
@@ -436,13 +839,36 @@ public class Conversation {
     let conversation: Conversation
     var toolCallCount: Int = 0
     var pendingToolCalls: [[String: Any]] = []
+    let repetitionPenaltyConfig: RepetitionPenaltyConfig?
+    let noRepeatNgramConfig: NoRepeatNgramConfig?
+    let suppressTokensConfig: SuppressTokensConfig?
+    let maxOutputTokens: Int?
+    let responseFormat: ResponseFormat?
+    // Reused when sending tool responses, so the whole turn renders with the same context and
+    // thinking settings (e.g. enable_thinking) as the original message.
+    let extraContext: [String: Any]?
+    let thinkingConfig: ThinkingConfig?
 
     init(
       continuation: AsyncThrowingStream<Message, Error>.Continuation,
-      conversation: Conversation
+      conversation: Conversation,
+      repetitionPenaltyConfig: RepetitionPenaltyConfig? = nil,
+      noRepeatNgramConfig: NoRepeatNgramConfig? = nil,
+      suppressTokensConfig: SuppressTokensConfig? = nil,
+      maxOutputTokens: Int? = nil,
+      responseFormat: ResponseFormat? = nil,
+      extraContext: [String: Any]? = nil,
+      thinkingConfig: ThinkingConfig? = nil
     ) {
       self.continuation = continuation
       self.conversation = conversation
+      self.repetitionPenaltyConfig = repetitionPenaltyConfig
+      self.noRepeatNgramConfig = noRepeatNgramConfig
+      self.suppressTokensConfig = suppressTokensConfig
+      self.maxOutputTokens = maxOutputTokens
+      self.responseFormat = responseFormat
+      self.extraContext = extraContext
+      self.thinkingConfig = thinkingConfig
     }
   }
 }
@@ -456,8 +882,26 @@ private func streamCallback(
 
   let context = Unmanaged<Conversation.StreamContext>.fromOpaque(userData).takeUnretainedValue()
 
-  let isFinal = litert_lm_stream_chunk_is_final(chunk)
-  let errorMessage = litert_lm_stream_chunk_get_error(chunk)
+  let isFinal: Bool
+  let errorMessage: UnsafePointer<CChar>?
+  let responseJson: UnsafePointer<CChar>?
+  do {
+    let makeError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
+    isFinal = try LiteRTLMError.get(false, "litert_lm_stream_chunk_is_final", makeError) {
+      litert_lm_stream_chunk_is_final(chunk, $0)
+    }
+    // A chunk without an error or text yields a nil result.
+    errorMessage = try LiteRTLMError.get(nil, "litert_lm_stream_chunk_get_error", makeError) {
+      litert_lm_stream_chunk_get_error(chunk, $0)
+    }
+    responseJson = try LiteRTLMError.get(nil, "litert_lm_stream_chunk_get_text", makeError) {
+      litert_lm_stream_chunk_get_text(chunk, $0)
+    }
+  } catch {
+    context.continuation.finish(throwing: error)
+    Unmanaged<Conversation.StreamContext>.fromOpaque(userData).release()
+    return
+  }
 
   if let errorMessage = errorMessage {
     let errorString = String(cString: errorMessage)
@@ -468,7 +912,7 @@ private func streamCallback(
     return
   }
 
-  if let responseJson = litert_lm_stream_chunk_get_text(chunk) {
+  if let responseJson = responseJson {
     let responseString = String(cString: responseJson)
     do {
       guard let responseData = responseString.data(using: .utf8),
@@ -510,9 +954,18 @@ private func streamCallback(
       Task {
         do {
           let toolResponseJson = try await context.conversation.handleToolCalls(toolCalls)
+          // The tool choice applies to the first message only, to avoid endless recursive tool
+          // calls. For finer control, disable automatic tool calling.
           try context.conversation.sendToStream(
             handle: context.conversation.checkIsAlive(),
             messageJson: toolResponseJson,
+            extraContext: context.extraContext,
+            repetitionPenaltyConfig: context.repetitionPenaltyConfig,
+            noRepeatNgramConfig: context.noRepeatNgramConfig,
+            suppressTokensConfig: context.suppressTokensConfig,
+            maxOutputTokens: context.maxOutputTokens,
+            thinkingConfig: context.thinkingConfig,
+            responseFormat: context.responseFormat,
             context: context
           )
         } catch {

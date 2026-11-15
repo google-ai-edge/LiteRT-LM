@@ -1,6 +1,8 @@
 --- src/bytes.rs
 +++ src/bytes.rs
-@@ -16,5 +16,5 @@
+@@ -33,7 +33,7 @@
+ }
+ 
  pub fn vec_from_bytes<T: PodTrait>(bytes: &[u8]) -> Vec<T> {
 -    if !bytes.len().is_multiple_of(size_of::<T>()) {
 +    if bytes.len() % size_of::<T>() != 0 {

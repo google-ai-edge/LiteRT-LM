@@ -87,6 +87,12 @@ _SUBCOMMANDS = (
     "toml",
     "system_metadata",
     "llm_metadata",
+    "executor_metadata",
+    "embedding_metadata",
+    "speech2text_metadata",
+    "text2speech_metadata",
+    "text2image_metadata",
+    "any2any_metadata",
     "tflite_model",
     "tflite_weights",
     "sp_tokenizer",
@@ -178,6 +184,119 @@ def _add_llm_metadata_parser(subparsers) -> None:
   )
 
 
+def _add_executor_metadata_parser(subparsers) -> None:
+  """Adds a parser for executor metadata to the subparsers."""
+  executor_metadata_parser = subparsers.add_parser(
+      "executor_metadata",
+      description=(
+          "Add executor metadata to the LiteRT-LM file. Can be a text or binary"
+          " proto file."
+      ),
+      help="Add executor metadata.",
+  )
+  executor_metadata_parser.add_argument(
+      "--path",
+      type=str,
+      required=True,
+      help="The path to the executor metadata file.",
+  )
+  _add_metadata_arguments(executor_metadata_parser)
+
+
+def _add_embedding_metadata_parser(subparsers) -> None:
+  """Adds a parser for embedding metadata to the subparsers."""
+  embedding_metadata_parser = subparsers.add_parser(
+      "embedding_metadata",
+      description=(
+          "Add embedding metadata to the LiteRT-LM file. Can be a text or"
+          " binary proto file."
+      ),
+      help="Add embedding metadata.",
+  )
+  embedding_metadata_parser.add_argument(
+      "--path",
+      type=str,
+      required=True,
+      help="The path to the embedding metadata file.",
+  )
+
+
+def _add_speech2text_metadata_parser(subparsers) -> None:
+  """Adds a parser for speech2text metadata to the subparsers."""
+  speech2text_metadata_parser = subparsers.add_parser(
+      "speech2text_metadata",
+      description=(
+          "Add speech2text metadata to the LiteRT-LM file. Can be a text or"
+          " binary proto file."
+      ),
+      help="Add speech2text metadata.",
+  )
+  speech2text_metadata_parser.add_argument(
+      "--path",
+      type=str,
+      required=True,
+      help="The path to the speech2text metadata file.",
+  )
+  _add_metadata_arguments(speech2text_metadata_parser)
+
+
+def _add_text2speech_metadata_parser(subparsers) -> None:
+  """Adds a parser for text2speech metadata to the subparsers."""
+  text2speech_metadata_parser = subparsers.add_parser(
+      "text2speech_metadata",
+      description=(
+          "Add text2speech metadata to the LiteRT-LM file. Can be a text or"
+          " binary proto file."
+      ),
+      help="Add text2speech metadata.",
+  )
+  text2speech_metadata_parser.add_argument(
+      "--path",
+      type=str,
+      required=True,
+      help="The path to the text2speech metadata file.",
+  )
+  _add_metadata_arguments(text2speech_metadata_parser)
+
+
+def _add_text2image_metadata_parser(subparsers) -> None:
+  """Adds a parser for text2image metadata to the subparsers."""
+  text2image_metadata_parser = subparsers.add_parser(
+      "text2image_metadata",
+      description=(
+          "Add text2image metadata to the LiteRT-LM file. Can be a text or"
+          " binary proto file."
+      ),
+      help="Add text2image metadata.",
+  )
+  text2image_metadata_parser.add_argument(
+      "--path",
+      type=str,
+      required=True,
+      help="The path to the text2image metadata file.",
+  )
+  _add_metadata_arguments(text2image_metadata_parser)
+
+
+def _add_any2any_metadata_parser(subparsers) -> None:
+  """Adds a parser for any2any metadata to the subparsers."""
+  any2any_metadata_parser = subparsers.add_parser(
+      "any2any_metadata",
+      description=(
+          "Add any2any metadata to the LiteRT-LM file. Can be a text or binary"
+          " proto file."
+      ),
+      help="Add any2any metadata.",
+  )
+  any2any_metadata_parser.add_argument(
+      "--path",
+      type=str,
+      required=True,
+      help="The path to the any2any metadata file.",
+  )
+  _add_metadata_arguments(any2any_metadata_parser)
+
+
 def _add_tflite_model_parser(subparsers) -> None:
   """Adds a parser for tflite model to the subparsers."""
   tflite_model_parser = subparsers.add_parser(
@@ -195,10 +314,7 @@ def _add_tflite_model_parser(subparsers) -> None:
       "--model_type",
       type=str,
       required=True,
-      choices=[
-          str(model_type.value).lower().replace("tf_lite_", "")
-          for model_type in litertlm_builder.TfLiteModelType
-      ],
+      choices=litertlm_builder.get_all_tflite_model_types(),
       help="The type of the tflite model.",
   )
   tflite_model_parser.add_argument(
@@ -237,10 +353,7 @@ def _add_tflite_weights_parser(subparsers) -> None:
       "--model_type",
       type=str,
       required=True,
-      choices=[
-          str(model_type.value).lower().replace("tf_lite_", "")
-          for model_type in litertlm_builder.TfLiteModelType
-      ],
+      choices=litertlm_builder.get_all_tflite_model_types(),
       help="The type of the tflite model these weights correspond to.",
   )
   _add_metadata_arguments(tflite_weights_parser)
@@ -259,6 +372,14 @@ def _add_sentencepiece_tokenizer_parser(subparsers) -> None:
       required=True,
       help="The path to the sentencepiece tokenizer file.",
   )
+  sp_tokenizer_parser.add_argument(
+      "--model_type",
+      type=str,
+      required=False,
+      default=None,
+      choices=litertlm_builder.get_all_tflite_model_types(),
+      help="The type of the model this tokenizer corresponds to.",
+  )
   _add_metadata_arguments(sp_tokenizer_parser)
 
 
@@ -275,7 +396,25 @@ def _add_hf_tokenizer_parser(subparsers) -> None:
       required=True,
       help="The path to the huggingface tokenizer `tokenizer.json` file.",
   )
+  hf_tokenizer_parser.add_argument(
+      "--model_type",
+      type=str,
+      required=False,
+      default=None,
+      choices=litertlm_builder.get_all_tflite_model_types(),
+      help="The type of the model this tokenizer corresponds to.",
+  )
   _add_metadata_arguments(hf_tokenizer_parser)
+
+
+def _parse_bool(value: str) -> bool:
+  """Parses a "true" or "false" flag value (case-insensitive)."""
+  value_lower = value.lower()
+  if value_lower == "true":
+    return True
+  if value_lower == "false":
+    return False
+  raise argparse.ArgumentTypeError(f"expected true or false, got {value!r}")
 
 
 def _add_output_path_parser(subparsers) -> None:
@@ -290,6 +429,45 @@ def _add_output_path_parser(subparsers) -> None:
       type=str,
       required=True,
       help="The path to the output LiteRT-LM file.",
+  )
+
+  output_path_parser.add_argument(
+      "--weights-in-model-graph",
+      nargs="?",
+      const=True,
+      default=None,
+      type=_parse_bool,
+      metavar="{true,false}",
+      help=(
+          "Whether to keep TFLite weights inside each model's FlatBuffer. If"
+          " false, eligible weights are moved out of every TFLiteModel section"
+          " into TFLiteWeights sections at the end of the output file, which"
+          " the web runtime requires (except with the Artisan GPU backend)."
+          " Defaults to"
+          f" {str(litertlm_builder.DEFAULT_WEIGHTS_IN_MODEL_GRAPH).lower()}."
+      ),
+  )
+  output_path_parser.add_argument(
+      "--dedupe-shared-weights",
+      nargs="?",
+      const=True,
+      default=None,
+      type=_parse_bool,
+      metavar="{true,false}",
+      help=(
+          "Whether to keep weight payloads that are byte-identical across"
+          " TFLiteModel sections (e.g. a tied token embedding table) in only"
+          " one model's TFLiteWeights section; the other models reference it."
+          " Setting it to true implies --weights-in-model-graph=false unless"
+          " that flag is also set. Defaults to"
+          f" {str(litertlm_builder.DEFAULT_DEDUPE_SHARED_WEIGHTS).lower()} when"
+          " weights are not in the model graph."
+      ),
+  )
+  output_path_parser.add_argument(
+      "--validate-metadata",
+      action="store_true",
+      help="Validate mandatory LLM and Vision metadata fields.",
   )
 
 
@@ -328,6 +506,12 @@ def _build_parser() -> argparse.ArgumentParser:
   _add_toml_parser(subparsers)
   _add_system_metadata_parser(subparsers)
   _add_llm_metadata_parser(subparsers)
+  _add_executor_metadata_parser(subparsers)
+  _add_embedding_metadata_parser(subparsers)
+  _add_speech2text_metadata_parser(subparsers)
+  _add_text2speech_metadata_parser(subparsers)
+  _add_text2image_metadata_parser(subparsers)
+  _add_any2any_metadata_parser(subparsers)
   _add_tflite_model_parser(subparsers)
   _add_tflite_weights_parser(subparsers)
   _add_sentencepiece_tokenizer_parser(subparsers)
@@ -439,6 +623,60 @@ def _build_llm_metadata(
   builder.add_llm_metadata(args.path, additional_metadata=metadata)
 
 
+def _build_executor_metadata(
+    args: argparse.Namespace,
+    builder: litertlm_builder.LitertLmFileBuilder,
+) -> None:
+  """Builds executor metadata from the parsed arguments."""
+  metadata = _get_metadata_from_args(args)
+  builder.add_executor_metadata(args.path, additional_metadata=metadata)
+
+
+def _build_embedding_metadata(
+    args: argparse.Namespace,
+    builder: litertlm_builder.LitertLmFileBuilder,
+) -> None:
+  """Builds embedding metadata from the parsed arguments."""
+  metadata = _get_metadata_from_args(args)
+  builder.add_embedding_metadata(args.path, additional_metadata=metadata)
+
+
+def _build_speech2text_metadata(
+    args: argparse.Namespace,
+    builder: litertlm_builder.LitertLmFileBuilder,
+) -> None:
+  """Builds speech2text metadata from the parsed arguments."""
+  metadata = _get_metadata_from_args(args)
+  builder.add_speech2text_metadata(args.path, additional_metadata=metadata)
+
+
+def _build_text2speech_metadata(
+    args: argparse.Namespace,
+    builder: litertlm_builder.LitertLmFileBuilder,
+) -> None:
+  """Builds text2speech metadata from the parsed arguments."""
+  metadata = _get_metadata_from_args(args)
+  builder.add_text2speech_metadata(args.path, additional_metadata=metadata)
+
+
+def _build_text2image_metadata(
+    args: argparse.Namespace,
+    builder: litertlm_builder.LitertLmFileBuilder,
+) -> None:
+  """Builds text2image metadata from the parsed arguments."""
+  metadata = _get_metadata_from_args(args)
+  builder.add_text2image_metadata(args.path, additional_metadata=metadata)
+
+
+def _build_any2any_metadata(
+    args: argparse.Namespace,
+    builder: litertlm_builder.LitertLmFileBuilder,
+) -> None:
+  """Builds any2any metadata from the parsed arguments."""
+  metadata = _get_metadata_from_args(args)
+  builder.add_any2any_metadata(args.path, additional_metadata=metadata)
+
+
 def _build_tflite_model(
     args: argparse.Namespace,
     builder: litertlm_builder.LitertLmFileBuilder,
@@ -447,9 +685,7 @@ def _build_tflite_model(
   metadata = _get_metadata_from_args(args)
   builder.add_tflite_model(
       args.path,
-      litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
-          args.model_type
-      ),
+      args.model_type,
       backend_constraint=args.backend_constraint,
       prefer_activation_type=args.prefer_activation_type,
       additional_metadata=metadata,
@@ -464,9 +700,7 @@ def _build_tflite_weights(
   metadata = _get_metadata_from_args(args)
   builder.add_tflite_weights(
       args.path,
-      litertlm_builder.TfLiteModelType.get_enum_from_tf_free_value(
-          args.model_type
-      ),
+      args.model_type,
       additional_metadata=metadata,
   )
 
@@ -477,7 +711,9 @@ def _build_sp_tokenizer(
 ) -> None:
   """Builds sentencepiece tokenizer from the parsed arguments."""
   metadata = _get_metadata_from_args(args)
-  builder.add_sentencepiece_tokenizer(args.path, additional_metadata=metadata)
+  builder.add_sentencepiece_tokenizer(
+      args.path, model_type=args.model_type, additional_metadata=metadata
+  )
 
 
 def _build_hf_tokenizer(
@@ -486,7 +722,9 @@ def _build_hf_tokenizer(
 ) -> None:
   """Builds huggingface tokenizer from the parsed arguments."""
   metadata = _get_metadata_from_args(args)
-  builder.add_hf_tokenizer(args.path, additional_metadata=metadata)
+  builder.add_hf_tokenizer(
+      args.path, model_type=args.model_type, additional_metadata=metadata
+  )
 
 
 def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
@@ -505,6 +743,9 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
         f" (TOML configuration saved at {toml_path})"
     )
     return
+  weights_in_model_graph = None
+  dedupe_shared_weights = None
+  validate_metadata = False
   if "toml" in [pa.command for pa in parsed_args]:
     toml_path = None
     output_path = None
@@ -512,6 +753,9 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
       match parsed_arg.command:
         case "output":
           output_path = parsed_arg.path
+          weights_in_model_graph = parsed_arg.weights_in_model_graph
+          dedupe_shared_weights = parsed_arg.dedupe_shared_weights
+          validate_metadata = parsed_arg.validate_metadata
         case "toml":
           toml_path = parsed_arg.path
         case _:
@@ -525,7 +769,12 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
       os.makedirs(output_dir, exist_ok=True)
     with litertlm_core.open_file(output_path, "wb") as f:
       builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(toml_path)
-      builder.build(f)
+      builder.build(
+          cast(BinaryIO, f),
+          weights_in_model_graph=weights_in_model_graph,
+          dedupe_shared_weights=dedupe_shared_weights,
+          validate_metadata=validate_metadata,
+      )
   else:
     builder = litertlm_builder.LitertLmFileBuilder()
     output_path = None
@@ -535,6 +784,18 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           _build_system_metadata(parsed_arg, builder)
         case "llm_metadata":
           _build_llm_metadata(parsed_arg, builder)
+        case "executor_metadata":
+          _build_executor_metadata(parsed_arg, builder)
+        case "embedding_metadata":
+          _build_embedding_metadata(parsed_arg, builder)
+        case "speech2text_metadata":
+          _build_speech2text_metadata(parsed_arg, builder)
+        case "text2speech_metadata":
+          _build_text2speech_metadata(parsed_arg, builder)
+        case "text2image_metadata":
+          _build_text2image_metadata(parsed_arg, builder)
+        case "any2any_metadata":
+          _build_any2any_metadata(parsed_arg, builder)
         case "tflite_model":
           _build_tflite_model(parsed_arg, builder)
         case "tflite_weights":
@@ -545,15 +806,22 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           _build_hf_tokenizer(parsed_arg, builder)
         case "output":
           output_path = parsed_arg.path
+          weights_in_model_graph = parsed_arg.weights_in_model_graph
+          dedupe_shared_weights = parsed_arg.dedupe_shared_weights
+          validate_metadata = parsed_arg.validate_metadata
         case _:
           raise ValueError(f"Unknown subcommand: {parsed_arg.command}")
-
     assert output_path, "Output path is required."
     output_dir = os.path.dirname(output_path)
     if output_dir:
       os.makedirs(output_dir, exist_ok=True)
     with litertlm_core.open_file(output_path, "wb") as f:
-      builder.build(cast(BinaryIO, f))
+      builder.build(
+          cast(BinaryIO, f),
+          weights_in_model_graph=weights_in_model_graph,
+          dedupe_shared_weights=dedupe_shared_weights,
+          validate_metadata=validate_metadata,
+      )
 
   print(f"LiteRT-LM file successfully created at {output_path}")
 

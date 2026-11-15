@@ -1,0 +1,129 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef THIRD_PARTY_ODML_LITERT_LM_SUPPORT_PREPROCESSOR_IMAGE_PREPROCESSOR_UTILS_H_
+#define THIRD_PARTY_ODML_LITERT_LM_SUPPORT_PREPROCESSOR_IMAGE_PREPROCESSOR_UTILS_H_
+
+#include <cstddef>
+#include <cstdint>
+#include <utility>
+
+#include "absl/functional/function_ref.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "support/preprocessor/image_preprocessor.h"
+#include "support/util/io_types.h"
+
+namespace litert::support {
+
+// Returns the dimensions of the image after resizing it to preserve the
+// aspect ratio.
+//
+// The resizing is done such that the number of patches is less than or equal
+// to the maximum number of patches specified in the patchify config, and the
+// resulted width and height are integer multiples of the (pooling kernel size x
+// patch size). The patch width must be equal to the patch height.
+//
+// args:
+//   width: The original width of the image.
+//   height: The original height of the image.
+//   patchify_config: The patchify config to use for resizing.
+//
+// returns:
+//   The dimensions of the image after resizing it to preserve the aspect ratio.
+absl::StatusOr<std::pair<int, int>> GetAspectRatioPreservingSize(
+    int width, int height,
+    const ImagePreprocessParameter::PatchifyConfig& patchify_config);
+
+// Patchify the image into a tensor buffer.
+//
+// args:
+//   image_data: The flat image data in RGB float format.
+//   parameter: The image preprocess parameter containing patchify config.
+//
+// returns:
+//   The InputImage containing the patchified image and positions.
+absl::StatusOr<InputImage> PatchifyImage(
+    absl::Span<const float> image_data,
+    const ImagePreprocessParameter& parameter);
+
+// Creates an InputImage holding an uninitialized "positions_xy" tensor with the
+// same shape ([1, num_patches, 2]) that PatchifyImage() emits for an image of
+// `height` x `width`, without the "images" pixel tensor. The patch grid is
+// identical to PatchifyImage()'s.
+//
+// This is for callers that only need the shape of the patchified image, such as
+// token counting. The result must not be fed to a vision encoder.
+//
+// args:
+//   height: The height of the resized image, in pixels.
+//   width: The width of the resized image, in pixels.
+//   parameter: The image preprocess parameter containing the patchify config.
+//     The patchify config must emit positions.
+//
+// returns:
+//   The InputImage containing only the "positions_xy" tensor.
+absl::StatusOr<InputImage> CreatePatchPositionsImage(
+    int height, int width, const ImagePreprocessParameter& parameter);
+
+// Returns the size an image of `original_width` x `original_height` is resized
+// to by an image preprocessor configured with `parameter`: the aspect ratio
+// preserving size that fits the patchify config (see
+// GetAspectRatioPreservingSize()), or the fixed target dimensions.
+absl::StatusOr<ImageSize> ComputeResizedImageSize(
+    int original_width, int original_height,
+    const ImagePreprocessParameter& parameter);
+
+// Returns the result of a dry run (see ImagePreprocessParameter::SetDryRun())
+// of preprocessing the raw `input_image`, which the preprocessor resizes to
+// `resized_size`:
+// - With a patchify config that emits positions, an InputImage holding only an
+//   uninitialized "positions_xy" tensor (see CreatePatchPositionsImage()).
+// - Otherwise, a copy of `input_image`, since the token count of the image does
+//   not depend on its pixels. If there is a patchify config, the patch grid of
+//   `resized_size` is still validated as PatchifyImage() would.
+absl::StatusOr<InputImage> CreateDryRunImage(
+    const InputImage& input_image, const ImageSize& resized_size,
+    const ImagePreprocessParameter& parameter);
+
+// Converts `num_pixels` interleaved uint8 pixels starting at `src` into floats
+// at `dst` (e.g. rescaling and normalizing them). `dst` holds
+// `num_pixels * channels` floats and never aliases `src`.
+using Uint8RowConverter =
+    absl::FunctionRef<void(const uint8_t* src, float* dst, size_t num_pixels)>;
+
+// Patchifies uint8 image pixels straight into the float "images" tensor,
+// converting each patch row with `convert_row`. This fuses the uint8 -> float
+// conversion into patchification, so no intermediate float image is needed.
+// The conversion itself is supplied by the caller, which keeps this library
+// free of SIMD dependencies.
+//
+// args:
+//   image_data: The flat NHWC image data in uint8 format (e.g. RGB), sized
+//     to match the target dimensions of `parameter`.
+//   parameter: The image preprocess parameter containing the target
+//     dimensions and the patchify config.
+//   convert_row: Converts one patch row of uint8 pixels into floats.
+//
+// returns:
+//   The InputImage containing the patchified image and, if requested by the
+//   patchify config, the patch positions. Returns an error if the patchify
+//   config is missing or the dimensions are inconsistent.
+absl::StatusOr<InputImage> PatchifyImage(
+    absl::Span<const uint8_t> image_data,
+    const ImagePreprocessParameter& parameter, Uint8RowConverter convert_row);
+
+}  // namespace litert::support
+
+#endif  // THIRD_PARTY_ODML_LITERT_LM_SUPPORT_PREPROCESSOR_IMAGE_PREPROCESSOR_UTILS_H_

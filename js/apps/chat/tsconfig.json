@@ -10,7 +10,7 @@
     "forceConsistentCasingInFileNames": true,
     "experimentalDecorators": true,
     "useDefineForClassFields": false,
-    "types": ["@webgpu/types", "jasmine"]
+    "types": ["@webgpu/types", "jasmine", "vite/client"]
   },
   "include": ["src/**/*", "test/**/*", "vite.config.ts"]
 }

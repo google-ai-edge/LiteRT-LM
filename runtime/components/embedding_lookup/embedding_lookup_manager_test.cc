@@ -38,6 +38,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/components/embedding_lookup/embedding_lookup_text.h"
 #include "runtime/executor/llm_executor_io_types.h"
 
 namespace litert::lm {
@@ -1699,6 +1700,28 @@ TEST_F(EmbeddingLookupManagerTest,
     }
   }
   ASSERT_OK(embedding_lookup_manager_->CleanupMultiModalEmbeddings());
+}
+
+TEST_F(EmbeddingLookupManagerTest, CreateFromPrebuiltEmbeddingLookupText) {
+  auto text_embedding_model_path = std::filesystem::path(::testing::SrcDir()) /
+                                   kTestdataDir /
+                                   "dummy_embedding_cpu_model.tflite";
+  auto text_embedding_model =
+      Model::CreateFromFile(text_embedding_model_path.string());
+  ASSERT_TRUE(text_embedding_model.HasValue());
+
+  auto model = std::move(*text_embedding_model);
+  ASSERT_OK_AND_ASSIGN(auto text_lookup, EmbeddingLookupText::Create(
+                                             *env_, &model, std::nullopt));
+
+  ASSERT_OK_AND_ASSIGN(auto manager, EmbeddingLookupManager::Create(
+                                         *env_, std::move(text_lookup)));
+  EXPECT_NE(manager, nullptr);
+
+  std::vector<float> output_vector;
+  int32_t token = 1;
+  ASSERT_OK(manager->LookupDecode(token, output_vector));
+  EXPECT_EQ(output_vector.size(), 4 * 32);
 }
 
 }  // namespace litert::lm

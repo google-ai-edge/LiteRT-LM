@@ -15,8 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_SAMPLING_CPU_UTIL_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_SAMPLING_CPU_UTIL_H_
 
-#include <memory>
-#include <random>
 #include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -60,7 +58,10 @@ absl::StatusOr<std::vector<std::vector<float>>> Softmax(
 //   - k: the number of top k.
 //   - p: the probability threshold use by Top-P sampling.
 //   - temperature: the temperature used for calculating the softmax.
-//   - rng: the random generator.
+//   - uniforms: batch_size * sequence_size values in [0, 1). The token of
+//     (batch b, position s) is the one at which the cumulative probability of
+//     the nucleus reaches uniforms[b * sequence_size + s] times its mass. The
+//     values are checked but unused for greedy sampling (k <= 1).
 //   - batch_size: the batch size of the logits.
 //   - sequence_size: the sequence length of the logits.
 //   - sampled_scores: this is an output parameter to store the sampled scores
@@ -71,8 +72,8 @@ absl::StatusOr<std::vector<std::vector<float>>> Softmax(
 //     sampled_scores are always 1.0.
 absl::StatusOr<std::vector<std::vector<int>>> TopKTopPSampling(
     absl::Span<const float> logits, int k, float p, float temperature,
-    std::shared_ptr<std::default_random_engine> rng, int batch_size,
-    int sequence_size, std::vector<std::vector<float>>& sampled_scores);
+    absl::Span<const float> uniforms, int batch_size, int sequence_size,
+    std::vector<std::vector<float>>& sampled_scores);
 
 }  // namespace litert::lm
 

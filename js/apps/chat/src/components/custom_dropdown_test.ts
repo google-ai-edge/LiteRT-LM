@@ -20,154 +20,148 @@ import {CustomDropdown} from './custom_dropdown.js';
 
 describe('custom-dropdown', () => {
   let element: CustomDropdown;
+  let trigger: HTMLButtonElement;
+  let content: HTMLElement;
 
   beforeEach(async () => {
     element = document.createElement('custom-dropdown');
     element.innerHTML = `
+      <button slot="trigger" type="button">Model</button>
       <div class="dropdown-item" data-value="option1">Option 1</div>
       <div class="dropdown-item" data-value="option2" disabled>Option 2</div>
-      <div class="dropdown-item" data-value="option3">
-        <span class="model-name">Option 3 (Fancy)</span>
+      <div class="dropdown-row">
+        <div class="dropdown-item" data-value="option3">Option 3</div>
         <button class="delete-cache-btn">X</button>
       </div>
     `;
     document.body.appendChild(element);
     await element.updateComplete;
+    trigger = element.querySelector('[slot="trigger"]')!;
+    content = element.shadowRoot!.querySelector('.dropdown-content')!;
   });
 
   afterEach(() => {
     element.remove();
   });
 
-  it('renders default state', () => {
-    const button = element.shadowRoot!.querySelector('.dropdown-button');
-    expect(button!.textContent!.trim()).toBe('Select...');
+  function item(value: string): HTMLElement {
+    return element.querySelector(`[data-value="${value}"]`)!;
+  }
 
-    const content = element.shadowRoot!.querySelector('.dropdown-content');
-    expect(content!.classList.contains('show')).toBeFalse();
+  it('toggles open when the trigger is clicked', async () => {
+    expect(content.classList.contains('show')).toBeFalse();
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+
+    trigger.click();
+    await element.updateComplete;
+    expect(content.classList.contains('show')).toBeTrue();
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(trigger.classList.contains('open')).toBeTrue();
+
+    trigger.click();
+    await element.updateComplete;
+    expect(content.classList.contains('show')).toBeFalse();
   });
 
-  it('toggles open on click', async () => {
-    const button = element.shadowRoot!.querySelector('.dropdown-button') as HTMLButtonElement;
-    button.click();
+  it('selects an item and fires a change event', async () => {
+    const changeSpy = jasmine.createSpy('change');
+    element.addEventListener('change', changeSpy);
+    trigger.click();
     await element.updateComplete;
 
-    let content = element.shadowRoot!.querySelector('.dropdown-content');
-    expect(content!.classList.contains('show')).toBeTrue();
-    expect(button.classList.contains('open')).toBeTrue();
-
-    button.click();
-    await element.updateComplete;
-
-    content = element.shadowRoot!.querySelector('.dropdown-content');
-    expect(content!.classList.contains('show')).toBeFalse();
-    expect(button.classList.contains('open')).toBeFalse();
-  });
-
-  it('shows selected item text', async () => {
-    element.value = 'option1';
-    await element.updateComplete;
-
-    const button = element.shadowRoot!.querySelector('.dropdown-button');
-    expect(button!.textContent!.trim()).toBe('Option 1');
-  });
-
-  it('shows selected item model-name if present', async () => {
-    element.value = 'option3';
-    await element.updateComplete;
-
-    const button = element.shadowRoot!.querySelector('.dropdown-button');
-    expect(button!.textContent!.trim()).toBe('Option 3 (Fancy)');
-  });
-
-  it('selects item and fires change event', async () => {
-    // Open first
-    const button = element.shadowRoot!.querySelector('.dropdown-button') as HTMLButtonElement;
-    button.click();
-    await element.updateComplete;
-
-    let changeValue: string | null = null;
-    element.addEventListener('change', (e: Event) => {
-      changeValue = (e as CustomEvent<string>).detail;
-    });
-
-    const item1 = element.querySelector('[data-value="option1"]') as HTMLElement;
-    item1.click();
+    item('option1').click();
     await element.updateComplete;
 
     expect(element.value).toBe('option1');
-    expect(changeValue as string | null).toBe('option1');
-
-    // Should close after selection
-    const content = element.shadowRoot!.querySelector('.dropdown-content');
-    expect(content!.classList.contains('show')).toBeFalse();
+    expect(changeSpy).toHaveBeenCalledTimes(1);
+    expect(content.classList.contains('show')).toBeFalse();
   });
 
   it('does not select disabled items', async () => {
-    const button = element.shadowRoot!.querySelector('.dropdown-button') as HTMLButtonElement;
-    button.click();
+    trigger.click();
     await element.updateComplete;
 
-    let changeFired = false;
-    element.addEventListener('change', () => {
-      changeFired = true;
-    });
-
-    const item2 = element.querySelector('[data-value="option2"]') as HTMLElement;
-    item2.click();
+    item('option2').click();
     await element.updateComplete;
 
     expect(element.value).toBe('');
-    expect(changeFired).toBeFalse();
-
-    // Should stay open
-    const content = element.shadowRoot!.querySelector('.dropdown-content');
-    expect(content!.classList.contains('show')).toBeTrue();
+    expect(content.classList.contains('show')).toBeTrue();
   });
 
-  it('does not select or close when clicking delete button', async () => {
-    const button = element.shadowRoot!.querySelector('.dropdown-button') as HTMLButtonElement;
-    button.click();
-    await element.updateComplete;
+  it('does not select or close when another button in the menu is clicked',
+     async () => {
+       const changeSpy = jasmine.createSpy('change');
+       element.addEventListener('change', changeSpy);
+       trigger.click();
+       await element.updateComplete;
 
-    let changeFired = false;
-    element.addEventListener('change', () => {
-      changeFired = true;
-    });
+       element.querySelector<HTMLButtonElement>('.delete-cache-btn')!.click();
+       await element.updateComplete;
 
-    const deleteBtn = element.querySelector('.delete-cache-btn') as HTMLElement;
-    deleteBtn.click();
-    await element.updateComplete;
-
-    expect(element.value).toBe('');
-    expect(changeFired).toBeFalse();
-
-    // Should stay open
-    const content = element.shadowRoot!.querySelector('.dropdown-content');
-    expect(content!.classList.contains('show')).toBeTrue();
-  });
+       expect(changeSpy).not.toHaveBeenCalled();
+       expect(content.classList.contains('show')).toBeTrue();
+     });
 
   it('closes when clicking outside', async () => {
-    const button = element.shadowRoot!.querySelector('.dropdown-button') as HTMLButtonElement;
-    button.click();
+    trigger.click();
+    await element.updateComplete;
+    // The outside-click listener is added after the opening click.
+    await new Promise(resolve => setTimeout(resolve));
+
+    document.body.click();
     await element.updateComplete;
 
-    // Wait for the setTimeout(..., 0) in setOpen to register the document listener
-    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(content.classList.contains('show')).toBeFalse();
+  });
 
-    let content = element.shadowRoot!.querySelector('.dropdown-content');
-    expect(content!.classList.contains('show')).toBeTrue();
-
-    // Click outside
-    const outsideEl = document.createElement('div');
-    document.body.appendChild(outsideEl);
-    outsideEl.click();
-    
+  it('closes on Escape and returns focus to the trigger', async () => {
+    trigger.click();
     await element.updateComplete;
 
-    content = element.shadowRoot!.querySelector('.dropdown-content');
-    expect(content!.classList.contains('show')).toBeFalse();
+    window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}));
+    await element.updateComplete;
 
-    outsideEl.remove();
+    expect(element.isOpen).toBeFalse();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('exposes listbox and option ARIA roles with aria-selected state',
+     async () => {
+       element.value = 'option1';
+       await element.updateComplete;
+
+       expect(trigger.getAttribute('aria-haspopup')).toBe('listbox');
+       expect(content.getAttribute('role')).toBe('listbox');
+       expect(item('option1').getAttribute('role')).toBe('option');
+       expect(item('option1').getAttribute('aria-selected')).toBe('true');
+       expect(item('option2').getAttribute('aria-selected')).toBe('false');
+       expect(item('option2').getAttribute('aria-disabled')).toBe('true');
+     });
+
+  it('navigates enabled items with the arrow, Home, and End keys', async () => {
+    element.value = 'option3';
+    await element.updateComplete;
+    const press = async (key: string) => {
+      trigger.dispatchEvent(new KeyboardEvent(
+          'keydown', {key, bubbles: true, cancelable: true}));
+      await element.updateComplete;
+    };
+
+    // ArrowUp opens the menu on the selected item.
+    await press('ArrowUp');
+    expect(element.isOpen).toBeTrue();
+    expect(item('option3').hasAttribute('data-focused')).toBeTrue();
+
+    // Disabled items are skipped.
+    await press('ArrowUp');
+    expect(item('option1').hasAttribute('data-focused')).toBeTrue();
+    await press('End');
+    expect(item('option3').hasAttribute('data-focused')).toBeTrue();
+    await press('Home');
+    expect(item('option1').hasAttribute('data-focused')).toBeTrue();
+
+    await press('Enter');
+    expect(element.value).toBe('option1');
+    expect(element.isOpen).toBeFalse();
   });
 });

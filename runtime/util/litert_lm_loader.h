@@ -15,23 +15,26 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_LITERT_LM_LOADER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_LITERT_LM_LOADER_H_
 
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
+#include <vector>
 
-#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "runtime/components/model_resources.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/memory_mapped_file.h"
 #include "runtime/util/scoped_file.h"
 #include "schema/core/litertlm_header_schema_generated.h"
@@ -42,32 +45,26 @@ namespace litert::lm {
 inline constexpr uint64_t kLitertLmHeaderMaxSize = 16 * 1024;
 
 // Each buffer is keyed by the data type as the major key and the model type
-// as the optional secondary key when the data type is TFLiteModel or
-// TFLiteWeights.
+// wire string as the optional secondary key when the data type is TFLiteModel
+// or TFLiteWeights, or name when the data type is GenericBinaryData.
 struct BufferKey {
   schema::AnySectionDataType data_type;
-  std::optional<ModelType>
-      model_type;  // This can be nullopt for data types
-                   // other than TFLiteModel or TFLiteWeights!
+  std::optional<std::string> model_type;
 
-  // Constructor for common cases (no ModelType needed)
-  explicit BufferKey(schema::AnySectionDataType type)
-      : data_type(type), model_type(std::nullopt) {}
+  // Constructor for common cases (no model_type needed)
+  explicit BufferKey(schema::AnySectionDataType type);
 
-  // Constructor for TFLiteModel or TFLiteWeights case
-  explicit BufferKey(schema::AnySectionDataType type, ModelType model_type)
-      : data_type(type), model_type(model_type) {
-    if (type != schema::AnySectionDataType_TFLiteModel &&
-        type != schema::AnySectionDataType_TFLiteWeights) {
-      ABSL_LOG(ERROR) << "ModelType should only be provided for TFLiteModel or "
-                         "TFLiteWeights";
-    }
-  }
+  // Constructor for string-keyed TFLiteModel, TFLiteWeights, SP_Tokenizer,
+  // HF_Tokenizer_Zlib, or GenericBinaryData case
+  explicit BufferKey(schema::AnySectionDataType type,
+                     absl::string_view model_type_str);
+
+  // Constructor for the LLM capability-scoped Protobuf model type enum.
+  explicit BufferKey(schema::AnySectionDataType type,
+                     proto::LlmMetadata::TfLiteModelType model_type);
 
   // Equality operator (REQUIRED for std::unordered_map, good for std::map)
-  bool operator==(const BufferKey& other) const {
-    return data_type == other.data_type && model_type == other.model_type;
-  }
+  bool operator==(const BufferKey& other) const;
 };
 
 // The hint for the TfLite models, that is used to validate the model settings
@@ -83,16 +80,7 @@ ExtractBufferKeyAndTfLiteSectionHint(const schema::SectionObject* section);
 
 // Hash function for BufferKey
 struct BufferKeyHash {
-  size_t operator()(const BufferKey& k) const {
-    size_t h1 = std::hash<schema::AnySectionDataType>{}(k.data_type);
-    size_t h2 = 0;
-    if (k.model_type.has_value()) {
-      h2 = std::hash<ModelType>{}(k.model_type.value());
-    }
-    // A simple hash combine. For more robust hashing, consider
-    // boost::hash_combine
-    return h1 ^ (h2 << 1);
-  }
+  size_t operator()(const BufferKey& k) const;
 };
 
 // A class to load the Litert LM model from the .litertlm file. The loader will
@@ -104,88 +92,143 @@ class LitertLmLoader {
   static absl::StatusOr<std::unique_ptr<LitertLmLoader>> Create(
       ScopedFile model_file);
 
+  // Creates a LitertLmLoader from a shared ScopedFile.
+  static absl::StatusOr<std::unique_ptr<LitertLmLoader>> Create(
+      std::shared_ptr<ScopedFile> shared_scoped_file);
+
   // Creates a LitertLmLoader from an already memory-mapped model file.
   // This is useful when the file is managed externally.
+  //
+  // `scoped_file` is optional and does not affect how sections are loaded:
+  // sections are still served directly out of `memory_mapped_model_file`. It
+  // only backs `GetScopedFile()`, which callers need when a section has to be
+  // referenced by file descriptor rather than by pointer - most notably
+  // external weights, which LiteRT loads via
+  // `Options::SetExternalWeightScopedFile`. Pass it whenever a path or
+  // descriptor for the same file is available.
   static absl::StatusOr<std::unique_ptr<LitertLmLoader>> Create(
-      std::shared_ptr<MemoryMappedFile> memory_mapped_model_file);
+      std::shared_ptr<MemoryMappedFile> memory_mapped_model_file,
+      std::shared_ptr<ScopedFile> scoped_file = nullptr);
 
-  // Returns the tokenizer section buffer for the SentencePiece tokenizer.
-  // If not found, returns std::nullopt.
-  std::optional<litert::BufferRef<uint8_t>> GetSentencePieceTokenizer() {
-    return GetSectionBuffer(BufferKey(schema::AnySectionDataType_SP_Tokenizer));
+  // Returns the tokenizer section buffer for the SentencePiece tokenizer
+  // for a given model type enum or wire string.
+  std::optional<litert::BufferRef<uint8_t>> GetSentencePieceTokenizer(
+      proto::LlmMetadata::TfLiteModelType model_type =
+          proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
+  std::optional<litert::BufferRef<uint8_t>> GetSentencePieceTokenizer(
+      absl::string_view model_type_str);
+
+  // Returns the tokenizer section buffer for the HuggingFace tokenizer
+  // for a given model type enum or wire string.
+  std::optional<litert::OwningBufferRef<uint8_t>> GetHuggingFaceTokenizer(
+      proto::LlmMetadata::TfLiteModelType model_type =
+          proto::LlmMetadata::TF_LITE_PREFILL_DECODE);
+  std::optional<litert::OwningBufferRef<uint8_t>> GetHuggingFaceTokenizer(
+      absl::string_view model_type_str);
+
+  // Returns true if a section with the given buffer key is declared in the
+  // model header.
+  bool HasSection(const BufferKey& buffer_key) const;
+
+  // Returns true if a TFLite model section for the given model type is
+  // declared in the model header.
+  bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) const;
+  bool HasTFLiteModel(absl::string_view model_type_str) const;
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
+  bool HasTFLiteModel(TfLiteModelTypeT model_type) const {
+    return HasTFLiteModel(TfLiteModelTypeToWireString(model_type));
   }
 
-  // Returns the tokenizer section buffer for the HuggingFace tokenizer.
-  // If not found, returns std::nullopt.
-  std::optional<litert::OwningBufferRef<uint8_t>> GetHuggingFaceTokenizer();
+  // Returns the section buffer for the given buffer key, mapping the section
+  // on first use. Returns kNotFound when the model file has no such section
+  // and propagates the mapping error when the section exists but could not be
+  // mapped (e.g. the file is truncated or the OS refuses the mapping).
+  absl::StatusOr<litert::BufferRef<uint8_t>> GetSectionBuffer(
+      BufferKey buffer_key) ABSL_LOCKS_EXCLUDED(section_buffers_mutex_);
 
-  // Returns the TFLite model section buffer.
-  litert::BufferRef<uint8_t> GetTFLiteModel(ModelType model_type) {
-    auto optional_section_buffer = GetSectionBuffer(
-        BufferKey(schema::AnySectionDataType_TFLiteModel, model_type));
-    if (optional_section_buffer.has_value()) {
-      return optional_section_buffer.value();
-    }
-    ABSL_LOG(WARNING) << "TFLite model for type: "
-                      << ModelTypeToString(model_type)
-                      << " not found. Skipping.";
-    return litert::BufferRef<uint8_t>();
-  };
+  // Returns the TFLite model section buffer, or an empty buffer when the
+  // section is missing or could not be mapped. This cannot distinguish the two
+  // cases; prefer GetSectionBuffer() when the failure must be surfaced.
+  litert::BufferRef<uint8_t> GetTFLiteModel(
+      proto::LlmMetadata::TfLiteModelType model_type);
+  litert::BufferRef<uint8_t> GetTFLiteModel(absl::string_view model_type_str);
+  template <
+      typename TfLiteModelTypeT,
+      typename = std::enable_if_t<kIsNonLlmTfLiteModelType<TfLiteModelTypeT>>>
+  litert::BufferRef<uint8_t> GetTFLiteModel(TfLiteModelTypeT model_type) {
+    return GetTFLiteModel(TfLiteModelTypeToWireString(model_type));
+  }
 
-  litert::BufferRef<uint8_t> GetTFLiteWeights(ModelType model_type) {
-    auto optional_section_buffer = GetSectionBuffer(
-        BufferKey(schema::AnySectionDataType_TFLiteWeights, model_type));
-    if (optional_section_buffer.has_value()) {
-      return optional_section_buffer.value();
-    }
-    ABSL_LOG(WARNING) << "TFLite weights for type: "
-                      << ModelTypeToString(model_type)
-                      << " not found. Skipping.";
-    return litert::BufferRef<uint8_t>();
-  };
+  litert::BufferRef<uint8_t> GetTFLiteWeights(
+      proto::LlmMetadata::TfLiteModelType model_type);
+  litert::BufferRef<uint8_t> GetTFLiteWeights(absl::string_view model_type_str);
 
   // Returns the TFLite model backend constraint.
   // If not found, returns std::nullopt.
   std::optional<std::string> GetTFLiteModelBackendConstraint(
-      ModelType model_type) {
-    if (section_hints_map_.contains(
-            BufferKey(schema::AnySectionDataType_TFLiteModel, model_type))) {
-      return section_hints_map_[BufferKey(
-                                    schema::AnySectionDataType_TFLiteModel,
-                                    model_type)]
-          .backend_constraint;
-    }
-    ABSL_LOG(WARNING) << "TFLite model type: " << ModelTypeToString(model_type)
-                      << " not found for backend constraints. Skipping.";
-    return std::nullopt;
-  };
+      proto::LlmMetadata::TfLiteModelType model_type);
+  std::optional<std::string> GetTFLiteModelBackendConstraint(
+      absl::string_view model_type_str);
 
   // Returns the TFLite model section buffer's prefer activation type.
   // If not found, returns std::nullopt.
   std::optional<std::string> GetTFLiteModelPreferActivationType(
-      ModelType model_type) {
-    if (section_hints_map_.contains(
-            BufferKey(schema::AnySectionDataType_TFLiteModel, model_type))) {
-      return section_hints_map_[BufferKey(
-                                    schema::AnySectionDataType_TFLiteModel,
-                                    model_type)]
-          .prefer_activation_type;
-    }
-    ABSL_LOG(WARNING)
-        << "TFLite model type: " << ModelTypeToString(model_type)
-        << " not found for prefer activation type. Use system's "
-           "default backend activation type. System's default activation "
-           "type for Text decoder is fp16. Vision encoder and audio encoder "
-           "default is fp32.";
-    return std::nullopt;
-  };
+      proto::LlmMetadata::TfLiteModelType model_type);
+  std::optional<std::string> GetTFLiteModelPreferActivationType(
+      absl::string_view model_type_str);
 
-  // Returns the tokenizer section buffer.
+  // Checks whether the model container includes an LlmMetadata section.
+  // Non-LLM containers (e.g. TTS, ASR, embedding) do not have this section.
+  //
+  // returns
+  // - True if an LlmMetadataProto section exists in the file, false otherwise.
+  bool HasLlmMetadata();
+
+  // Returns the LlmMetadata section buffer. Requires HasLlmMetadata().
   litert::BufferRef<uint8_t> GetLlmMetadata() {
-    return GetSectionBuffer(
+    return GetOptionalSectionBuffer(
                BufferKey(schema::AnySectionDataType_LlmMetadataProto))
         .value();
   }
+
+  // Returns the executor metadata section buffer.
+  std::optional<litert::BufferRef<uint8_t>> GetExecutorMetadata() {
+    return GetOptionalSectionBuffer(
+        BufferKey(schema::AnySectionDataType_ExecutorMetadataProto));
+  }
+
+  // Returns the embedding metadata section buffer. If not found, returns
+  // std::nullopt.
+  std::optional<litert::BufferRef<uint8_t>> GetEmbeddingMetadata() {
+    return GetOptionalSectionBuffer(
+        BufferKey(schema::AnySectionDataType_EmbeddingMetadataProto));
+  }
+
+  // Returns the Text2Speech metadata section buffer. If not found, returns
+  // std::nullopt.
+  std::optional<litert::BufferRef<uint8_t>> GetText2SpeechMetadata();
+
+  // Returns the Speech2Text metadata section buffer. If not found, returns
+  // std::nullopt.
+  std::optional<litert::BufferRef<uint8_t>> GetSpeech2TextMetadata();
+
+  // Returns the Text2Image metadata section buffer. If not found, returns
+  // std::nullopt.
+  std::optional<litert::BufferRef<uint8_t>> GetText2ImageMetadata();
+
+  // Returns the Any2Any metadata section buffer. If not found, returns
+  // std::nullopt.
+  std::optional<litert::BufferRef<uint8_t>> GetAny2AnyMetadata();
+
+  // Returns a GenericBinaryData section buffer matching the given name.
+  std::optional<litert::BufferRef<uint8_t>> GetGenericBinaryData(
+      absl::string_view name);
+
+  // Returns the names of all named GenericBinaryData sections in the model
+  // container.
+  std::vector<std::string> GetGenericBinaryDataNames() const;
 
   absl::StatusOr<std::pair<size_t, size_t>> GetSectionLocation(
       BufferKey buffer_key) const;
@@ -198,25 +241,35 @@ class LitertLmLoader {
   explicit LitertLmLoader(ScopedFile model_file)
       : model_source_(std::make_shared<ScopedFile>(std::move(model_file))) {}
 
+  explicit LitertLmLoader(std::shared_ptr<ScopedFile> shared_scoped_file)
+      : model_source_(std::move(shared_scoped_file)) {}
+
   explicit LitertLmLoader(
-      std::shared_ptr<MemoryMappedFile> memory_mapped_model_file)
-      : model_source_(std::move(memory_mapped_model_file)) {}
+      std::shared_ptr<MemoryMappedFile> memory_mapped_model_file,
+      std::shared_ptr<ScopedFile> scoped_file = nullptr)
+      : model_source_(std::move(memory_mapped_model_file)),
+        scoped_file_(std::move(scoped_file)) {}
   // Initializes the LitertLmLoader. Includes reading the model header and
   // recording the section locations for on-demand loading later.
   absl::Status Initialize();
   absl::Status MapSection(BufferKey buffer_key, uint64_t begin_offset,
                           uint64_t end_offset)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(section_buffers_mutex_);
-  // Returns the section buffer for the given buffer key. Will map the section
-  // if it has not been mapped yet. If not found, returns std::nullopt.
-  std::optional<litert::BufferRef<uint8_t>> GetSectionBuffer(
+  // Like GetSectionBuffer(), but collapses every failure into std::nullopt.
+  // Used by the optional-section accessors that have no error channel.
+  std::optional<litert::BufferRef<uint8_t>> GetOptionalSectionBuffer(
       BufferKey buffer_key) ABSL_LOCKS_EXCLUDED(section_buffers_mutex_);
 
   // The model file to be loaded, can be either a ScopedFile or a
   // memory-mapped file.
-  std::variant<std::shared_ptr<ScopedFile>,
-               std::shared_ptr<MemoryMappedFile>>
+  std::variant<std::shared_ptr<ScopedFile>, std::shared_ptr<MemoryMappedFile>>
       model_source_;
+
+  // An optional descriptor for the same file as `model_source_`, set only when
+  // `model_source_` holds a MemoryMappedFile. Sections are never read through
+  // it; it exists so `GetScopedFile()` can still hand out a descriptor for
+  // features that require one (e.g. external weights).
+  std::shared_ptr<ScopedFile> scoped_file_;
 
   // The header of the model file. Use this to understand what sections are
   // available and their offsets.

@@ -22,6 +22,7 @@ the litert_lm C++ engine.
 
 import os
 import subprocess
+import sys
 from typing import Callable
 
 import pytest
@@ -44,14 +45,48 @@ def pytest_addoption(parser: pytest.Parser) -> None:
       help="The build system to use for the engine binary (bazel or cmake).",
   )
 
+  parser.addoption(
+      "--build-name",
+      action="store",
+      default="default",
+      help=(
+          "The name of the CMake build directory (e.g., 'default',"
+          " 'android-x86_64')."
+      ),
+  )
 
-@pytest.fixture(scope="session")
-def model_path(request: pytest.FixtureRequest) -> str:
+  parser.addoption(
+      "--backend",
+      action="store",
+      default="cpu",
+      choices=["cpu", "gpu"],
+      help="The backend to use for the engine binary (cpu or gpu).",
+  )
+
+  parser.addoption(
+      "--dynamic",
+      action="store_true",
+      default=False,
+      help=(
+          "If set, configures the environment to support dynamically linked"
+          " libraries."
+      ),
+  )
+
+
+@pytest.fixture(scope="session", name="model_path")
+def fixture_model_path(request: pytest.FixtureRequest) -> str:
   """Extracts the model path from the CLI and ensures the file exists."""
   path = request.config.getoption("--model-path")
   if not os.path.exists(path):
     pytest.fail(f"CRITICAL: Model file not found at {path}")
   return path
+
+
+@pytest.fixture(scope="session", name="backend")
+def fixture_backend(request: pytest.FixtureRequest) -> str:
+  """Extracts the backend configuration from the CLI."""
+  return request.config.getoption("--backend")
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -68,6 +103,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     return
 
   build_system = metafunc.config.getoption("--build-system")
+  build_name = metafunc.config.getoption("--build-name")
   repo_root = os.path.abspath(
       os.path.join(os.path.dirname(__file__), "..", "..")
   )
@@ -83,7 +119,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     )
   else:
     binary_path = os.path.join(
-        repo_root, "cmake", "build", f"litert_lm_main{exe_ext}"
+        repo_root, "cmake", "build", build_name, "litert_lm", "build",
+        f"litert_lm_main{exe_ext}"
     )
 
   if not os.path.exists(binary_path):
@@ -95,9 +132,70 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
   metafunc.parametrize("engine_binary", [binary_path])
 
 
+def _get_dynamic_lib_dirs(engine_binary: str) -> list[str]:
+  """Returns a list of directories containing dynamic libraries."""
+  lib_dirs = set()
+
+  if sys.platform == "win32":
+    ext = ".dll"
+    prebuilt_subdir = "windows_x86_64"
+  elif sys.platform == "darwin":
+    ext = ".dylib"
+    prebuilt_subdir = "macos_arm64"
+  else:
+    ext = ".so"
+    prebuilt_subdir = "linux_x86_64"
+
+  repo_root = os.path.abspath(
+      os.path.join(os.path.dirname(__file__), "..", "..")
+  )
+  prebuilt_path = os.path.join(repo_root, "prebuilt", prebuilt_subdir)
+  if os.path.exists(prebuilt_path):
+    lib_dirs.add(prebuilt_path)
+
+  path_parts = os.path.normpath(engine_binary).split(os.sep)
+  if "bazel-bin" in path_parts:
+    bazel_bin_idx = path_parts.index("bazel-bin")
+    bazel_bin_root = os.sep.join(path_parts[: bazel_bin_idx + 1])
+
+    if os.path.exists(bazel_bin_root):
+      for item in os.listdir(bazel_bin_root):
+        if item.startswith("_solib_"):
+          lib_dirs.add(os.path.join(bazel_bin_root, item))
+
+      litert_c_dir = os.path.join(
+          bazel_bin_root, "external", "litert", "litert", "c"
+      )
+      if os.path.exists(litert_c_dir):
+        lib_dirs.add(litert_c_dir)
+
+      litert_gpu_dir = os.path.join(
+          bazel_bin_root,
+          "external",
+          "litert",
+          "litert",
+          "runtime",
+          "accelerators",
+          "gpu",
+      )
+      if os.path.exists(litert_gpu_dir):
+        lib_dirs.add(litert_gpu_dir)
+
+  runfiles_dir = engine_binary + ".runfiles"
+  if os.path.exists(runfiles_dir):
+    for root, _, files in os.walk(runfiles_dir):
+      if any(f.endswith(ext) for f in files):
+        lib_dirs.add(root)
+
+  return list(lib_dirs)
+
+
 @pytest.fixture
 def run_engine(
-    engine_binary: str, model_path: str
+    engine_binary: str,
+    model_path: str,
+    backend: str,
+    request: pytest.FixtureRequest,
 ) -> Callable[..., str]:
   """Provides a helper fixture that tests can call to execute the C++ engine.
 
@@ -106,18 +204,46 @@ def run_engine(
   Args:
     engine_binary: Path to the engine executable.
     model_path: Path to the model file.
+    backend: The backend to use for the engine binary (cpu or gpu).
+    request: The pytest request object.
   """
 
+  is_dynamic = request.config.getoption("--dynamic")
+
   def _run(prompt: str, timeout: int = 120) -> str:
+
+    env = os.environ.copy()
+
+    if is_dynamic:
+      discovered_dirs = _get_dynamic_lib_dirs(engine_binary)
+      print(f"\n[DEBUG] Found dynamic libraries in: {discovered_dirs}\n")
+      lib_paths = os.pathsep.join(discovered_dirs)
+
+      if sys.platform == "win32":
+        env["PATH"] = lib_paths + os.pathsep + env.get("PATH", "")
+      elif sys.platform == "darwin":
+        env["DYLD_LIBRARY_PATH"] = (
+            lib_paths + os.pathsep + env.get("DYLD_LIBRARY_PATH", "")
+        )
+      else:
+        env["LD_LIBRARY_PATH"] = (
+            lib_paths + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+        )
+
     cmd = [
         engine_binary,
-        "--backend=cpu",
+        f"--backend={backend}",
         f"--model_path={model_path}",
         f"--input_prompt={prompt}",
     ]
 
     result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout, check=False
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        env=env,
     )
 
     # Instantly fail the test if the C++ engine segfaults or OOMs

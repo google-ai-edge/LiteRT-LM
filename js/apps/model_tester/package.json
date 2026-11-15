@@ -28,7 +28,7 @@
     "@litert-lm/core": "^0.12.1",
     "@material/web": "^2.3.0",
     "argparse": "^2.0.1",
-    "esbuild": "^0.23.0",
+    "esbuild": "^0.28.2",
     "express": "^5.1.0",
     "lit": "^3.2.1",
     "mkdirp": "^3.0.1",

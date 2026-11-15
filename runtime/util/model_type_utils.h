@@ -18,9 +18,10 @@
 #include <string>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "support/tokenizer/tokenizer.h"  // from @litert
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -37,6 +38,9 @@ absl::StatusOr<proto::LlmModelType> InferLlmModelType(
 absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
     const proto::PromptTemplates& prompt_templates,
     const proto::LlmModelType& llm_model_type);
+
+// Get the model type name for the given model type.
+absl::string_view GetModelTypeName(const proto::LlmModelType& model_type);
 
 }  // namespace litert::lm
 

@@ -1,0 +1,83 @@
+// Copyright 2025 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_LLGUIDANCE_SCHEMA_UTILS_H_
+#define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_LLGUIDANCE_SCHEMA_UTILS_H_
+
+#include <string>
+#include <vector>
+
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
+#include "runtime/components/constrained_decoding/tool_choice.h"
+
+namespace litert::lm {
+
+// Supported function call formats.
+enum class FuncallFormat {
+  // Simplified JSON-based FC format.
+  kFc,
+  kPython,
+};
+
+// Supported constraint modes.
+enum class LlgConstraintMode {
+  kTextAndOrFunctionCalls,  // Optional text + optional function calls ("auto").
+  kFunctionCallsOnly,       // Only function calls are allowed (no text). Like
+                            // FST's FUNCTION_CALL_ONLY mode, the turn may also
+                            // end without a call.
+  kTextOnly,                // Only text is allowed (no function calls, "none").
+  kFunctionCallsRequired,   // Like kFunctionCallsOnly, but at least one
+                            // function call is required ("required").
+};
+
+// Options for formatting constraints.
+struct LlgConstraintsOptions {
+  FuncallFormat funcall_format;
+  LlgConstraintMode constraint_mode;
+
+  std::string code_fence_start;
+  std::string code_fence_end;
+  std::string open_quote;
+  std::string close_quote;
+  std::string function_response_start;
+
+  // If both are set, the start and end of a channel, e.g. "<|channel>" and
+  // "<channel|>" for the thought channel. Both must be special tokens. In
+  // kTextOnly, and in kTextAndOrFunctionCalls with the FC format, the model may
+  // open channels at the start of its turn, e.g. to think when thinking is
+  // enabled only in the prompt. kTextOnly still needs a visible answer after
+  // them.
+  std::string channel_start;
+  std::string channel_end;
+
+  // If non-empty, tool calls can only use these functions, which must be in
+  // the provided tools. If empty, all provided tools are available. Applies to
+  // every mode that allows tool calls; kTextOnly ignores it.
+  std::vector<std::string> allowed_function_names;
+};
+
+// Converts tools to a Lark grammar string.
+absl::StatusOr<std::string> CreateLarkGrammarForTools(
+    const nlohmann::ordered_json& tools, const LlgConstraintsOptions& options);
+
+// Sets the constraint mode and the allowed functions in `options` for
+// `tool_choice`. Returns InvalidArgument if a ForcedFunction has no name or an
+// AllowedTools has no names.
+absl::Status ApplyToolChoiceToOptions(const ToolChoice& tool_choice,
+                                      LlgConstraintsOptions& options);
+
+}  // namespace litert::lm
+
+#endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_COMPONENTS_CONSTRAINED_DECODING_LLGUIDANCE_SCHEMA_UTILS_H_

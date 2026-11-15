@@ -23,3 +23,5 @@ filegroup(
     name = "testdata",
     srcs = glob(["*"]),
 )
+
+exports_files(glob(["*.jinja"]))

@@ -50,6 +50,53 @@ extracted sections and a reconstructed `model.toml`:
 litert-lm-builder unpack --input demo.litertlm --output ./unpacked_dir
 ```
 
+### Weight placement
+
+By default, `litert-lm-builder` and `litert-lm pack` move the large weights of
+every TFLite model out of its FlatBuffer and into `TFLiteWeights` sections at
+the end of the `.litertlm` file. The web runtime requires this layout (except
+with the Artisan GPU backend). Weights that are byte-identical across models,
+such as a token embedding table that is also the tied output projection, are
+stored only once.
+
+To keep the weights inside each model's FlatBuffer instead, pass
+`--weights-in-model-graph`. To keep weights outside the model graph without
+deduplicating them, pass `--dedupe-shared-weights=false`.
+
+```bash
+litert-lm-builder toml --path example.toml \
+  output --path in_graph.litertlm --weights-in-model-graph
+litert-lm pack ./unpacked_dir --output in_graph.litertlm --weights-in-model-graph
+```
+
+The Python API has the same defaults. `LitertLmFileBuilder.build`, `pack` and
+`pack_with_summary` take `weights_in_model_graph` and `dedupe_shared_weights`
+keyword arguments:
+
+```python
+with open("in_graph.litertlm", "wb") as f:
+  builder.build(f, weights_in_model_graph=True)
+```
+
+### Reproducible builds
+
+By default, every build writes a new `uuid` and the current time as
+`creation_timestamp` into the system metadata, so two builds from the same
+inputs give different files. To get the same bytes, set the
+[`SOURCE_DATE_EPOCH`](https://reproducible-builds.org/docs/source-date-epoch/)
+environment variable and add a `uuid`: the builder then keeps the `uuid` and
+`creation_timestamp` you add, and takes a missing `creation_timestamp` from
+`SOURCE_DATE_EPOCH` (seconds since the Unix epoch).
+
+```bash
+SOURCE_DATE_EPOCH=1767225600 litert-lm-builder \
+  system_metadata --str Authors "ODML Team" \
+    --str uuid "6f1b8f0e-2c3d-4e5f-8a9b-0c1d2e3f4a5b" \
+  tflite_model --path schema/testdata/attention.tflite --model_type prefill_decode \
+  sp_tokenizer --path runtime/components/testdata/sentencepiece.model \
+  output --path demo.litertlm
+```
+
 ### litert-lm-peek (Inspection & Extraction)
 
 This tool is designed to inspect the contents of a `.litertlm` file. It reads
@@ -84,16 +131,17 @@ from litert_lm_builder import (
     LitertLmFileBuilder,
     Metadata,
     DType,
-    TfLiteModelType,
     Backend,
     peek_litertlm_file
 )
+from litert_lm_builder.runtime.proto import llm_metadata_pb2
 
 def build_demo_model():
     """Builds a .litertlm file programmatically using the Python API."""
     # Paths to your assets
     model_path = "schema/testdata/attention.tflite"
     sp_path = "runtime/components/testdata/sentencepiece.model"
+    llm_metadata_path = "runtime/components/testdata/llm_metadata.pb"
     output_path = "demo_api.litertlm"
 
     # Initialize the core builder object
@@ -102,11 +150,12 @@ def build_demo_model():
     # Add metadata
     builder.add_system_metadata(Metadata(key="Authors", value="ODML Team", dtype=DType.STRING))
     builder.add_system_metadata(Metadata(key="TargetBackend", value=Backend.CPU.name, dtype=DType.STRING))
+    builder.add_llm_metadata(llm_metadata_path=llm_metadata_path)
 
     # Add main TfLite model
     builder.add_tflite_model(
         tflite_model_path=model_path,
-        model_type=TfLiteModelType.PREFILL_DECODE
+        model_type=llm_metadata_pb2.LlmMetadata.TF_LITE_PREFILL_DECODE,
     )
 
     # Add auxiliary tokens & tokenizers

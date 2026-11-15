@@ -25,7 +25,7 @@ from litert_lm_cli import model
 
 @click.command(
     cls=help_formatter.ColorCommand,
-    help="Deletes a model from the local storage.",
+    help="Deletes an imported model.",
 )
 @click.argument("model_id")
 def delete(model_id):

@@ -27,6 +27,18 @@ export const CustomModelSchema = z.object({
 /** Type for custom model stored in the file system. */
 export type CustomModel = z.infer<typeof CustomModelSchema>;
 
+/** Compute backend choice for a model modality in experimental settings. */
+export const ModalityBackendSchema = z.enum(['gpu', 'cpu']);
+
+/** Compute backend choice (`'gpu'` or `'cpu'`). */
+export type ModalityBackend = z.infer<typeof ModalityBackendSchema>;
+
+/** Activation precision override for GPU modalities. */
+export const ActivationPrecisionSchema = z.enum(['default', 'fp16', 'fp32']);
+
+/** Activation precision override (`'default'`, `'fp16'`, or `'fp32'`). */
+export type ActivationPrecision = z.infer<typeof ActivationPrecisionSchema>;
+
 /** Schema for inference configuration settings. */
 export const SettingsSchema = z.object({
   selectedModelPath: z.string(),
@@ -37,6 +49,20 @@ export const SettingsSchema = z.object({
   topP: z.number().min(0).max(1),
   topK: z.number().int().nonnegative(),
   enableThinking: z.boolean(),
+  /**
+   * Whether to use speculative decoding (e.g. MTP) with models that support
+   * it.
+   */
+  enableSpeculativeDecoding: z.boolean(),
+  systemPrompt: z.string(),
+  /** Names of the tools in `CHAT_TOOLS` that the model can't use. */
+  disabledTools: z.array(z.string()),
+  textBackend: ModalityBackendSchema.default('gpu'),
+  visionBackend: ModalityBackendSchema.default('gpu'),
+  audioBackend: ModalityBackendSchema.default('gpu'),
+  textPrecision: ActivationPrecisionSchema.default('default'),
+  visionPrecision: ActivationPrecisionSchema.default('default'),
+  audioPrecision: ActivationPrecisionSchema.default('default'),
   customModels: z.array(CustomModelSchema).default([]),
   localDirModels: z.array(CustomModelSchema).default([]),
 });
@@ -47,55 +73,281 @@ export const PartialSettingsSchema = SettingsSchema.partial();
 /** Type for inference configuration settings. */
 export type Settings = z.infer<typeof SettingsSchema>;
 
-/** List of supported default models available for selection. */
+/** Model-specific settings subset. */
+export type ModelSettings = Pick<
+    Settings,
+    'selectedModelPath' | 'contextLength' | 'maxOutputTokens' | 'samplerType' |
+    'temperature' | 'topP' | 'topK' | 'enableThinking' |
+    'enableSpeculativeDecoding' | 'systemPrompt' | 'disabledTools' |
+    ExperimentalSettingKey>;
+
+/** The settings in the "Model Config" tab, which can be reset together. */
+const DEFAULT_MODEL_CONFIG = {
+  contextLength: 4096,
+  maxOutputTokens: 2048,
+  samplerType: 'greedy',
+  temperature: 1.0,
+  topP: 0.95,
+  topK: 64,
+  enableThinking: true,
+  enableSpeculativeDecoding: false,
+};
+
+/** The settings in the "System Prompt" tab, which can be reset together. */
+const DEFAULT_SYSTEM_PROMPT_CONFIG = {
+  systemPrompt: '',
+  disabledTools: [] as string[],
+};
+
+/** The settings in the "Experimental" tab, which can be reset together. */
+export const EXPERIMENTAL_SETTING_KEYS = [
+  'textBackend',
+  'visionBackend',
+  'audioBackend',
+  'textPrecision',
+  'visionPrecision',
+  'audioPrecision',
+] as const;
+
+type ExperimentalSettingKey = (typeof EXPERIMENTAL_SETTING_KEYS)[number];
+
+const DEFAULT_EXPERIMENTAL_CONFIG: Pick<Settings, ExperimentalSettingKey> = {
+  textBackend: 'gpu',
+  visionBackend: 'gpu',
+  audioBackend: 'gpu',
+  textPrecision: 'default',
+  visionPrecision: 'default',
+  audioPrecision: 'default',
+};
+
+/** A group of settings that can be reset to their defaults together. */
+export type SettingsGroup = 'modelConfig'|'systemPrompt'|'experimental';
+
+/**
+ * List of supported default models available for selection.
+ *
+ * They're `hf://` URIs, so they load the file that each repo's web model
+ * currently is: the `-gpu.litertlm` file, on the repo's `web` branch while it
+ * has one. The sizes are approximate.
+ */
 export const MODELS = [
   {
     name: 'Gemma 4 E2B',
-    filename: 'gemma-4-E2B-it-web.litertlm',
-    path:
-        'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it-web.litertlm',
-    size: '1.9 GB'
+    filename: 'gemma-4-E2B-it-gpu.litertlm',
+    path: 'hf://litert-community/gemma-4-E2B-it-litert-lm',
+    size: '2.3 GB'
   },
   {
     name: 'Gemma 4 E4B',
-    filename: 'gemma-4-E4B-it-web.litertlm',
-    path:
-        'https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it-web.litertlm',
-    size: '2.8 GB'
+    filename: 'gemma-4-E4B-it-gpu.litertlm',
+    path: 'hf://litert-community/gemma-4-E4B-it-litert-lm',
+    size: '3.3 GB'
+  },
+  {
+    name: 'Gemma 4 12B',
+    filename: 'gemma-4-12B-it-gpu.litertlm',
+    path: 'hf://litert-community/gemma-4-12B-it-litert-lm',
+    size: '6.2 GB'
+  },
+  {
+    name: 'Gemma 4 26B A4B',
+    filename: 'gemma-4-26B-A4B-it-gpu.litertlm',
+    path: 'hf://litert-community/gemma-4-26B-A4B-it-litert-lm',
+    size: '16.4 GB'
+  },
+  {
+    name: 'Gemma 4 31B',
+    filename: 'gemma-4-31B-it-gpu.litertlm',
+    path: 'hf://litert-community/gemma-4-31B-it-litert-lm',
+    size: '19.8 GB'
   }
 ];
 
+/**
+ * The default models' old paths, which loaded their `-web.litertlm` files from
+ * `main`, and the paths that replaced them.
+ */
+export const LEGACY_MODEL_PATHS = new Map(
+    MODELS.map(model => {
+      const repo = model.path.slice('hf://'.length);
+      const oldFile =
+          model.filename.replace(/-gpu\.litertlm$/, '-web.litertlm');
+      return [
+        `https://huggingface.co/${repo}/resolve/main/${oldFile}`,
+        model.path,
+      ];
+    }));
+
+/** Returns the path that replaced a default model's old path, if it is one. */
+export function migrateModelPath(path: string): string {
+  return LEGACY_MODEL_PATHS.get(path) ?? path;
+}
+
+/** Finds a built-in, custom, or local-directory model by path. */
+export function findModel(
+    models: Partial<Pick<Settings, 'customModels'|'localDirModels'>>,
+    path: string): CustomModel|undefined {
+  return [
+    ...MODELS,
+    ...(models.customModels ?? []),
+    ...(models.localDirModels ?? []),
+  ].find(m => m.path === path);
+}
+
+/**
+ * Returns true if `modelPath` points to a `-gpu.litertlm` WebGPU Artisan model
+ * package, which cannot execute its text decoder on `Backend.CPU`.
+ */
+export function isGpuOnlyTextModel(
+    modelPath: string,
+    models?: Partial<Pick<Settings, 'customModels'|'localDirModels'>>):
+    boolean {
+  const matched = findModel(models ?? {}, modelPath);
+  if (matched && /-gpu\.litertlm$/i.test(matched.filename)) {
+    return true;
+  }
+  const cleanPath = modelPath.split(/[?#]/)[0] ?? modelPath;
+  return /-gpu\.litertlm$/i.test(cleanPath);
+}
+
+/** Modalities with their own experimental backend and precision settings. */
+export const MODALITIES = ['text', 'vision', 'audio'] as const;
+
+/** A modality with its own experimental settings. */
+export type Modality = (typeof MODALITIES)[number];
+
+/** The backend and activation precision that a modality runs with. */
+export interface ModalityConfig {
+  backend: ModalityBackend;
+  precision: ActivationPrecision;
+}
+
+/**
+ * Returns the backend and precision each modality runs with. Text always runs
+ * on GPU for WebGPU-only (`-gpu.litertlm`) models.
+ */
+export function getModalityConfigs(
+    settings: Pick<Settings, 'selectedModelPath'|ExperimentalSettingKey>&
+    Partial<Pick<Settings, 'customModels'|'localDirModels'>>):
+    Record<Modality, ModalityConfig> {
+  const gpuOnlyText = isGpuOnlyTextModel(settings.selectedModelPath, settings);
+  return {
+    text: {
+      backend: gpuOnlyText ? 'gpu' : settings.textBackend,
+      precision: settings.textPrecision,
+    },
+    vision: {backend: settings.visionBackend, precision: settings.visionPrecision},
+    audio: {backend: settings.audioBackend, precision: settings.audioPrecision},
+  };
+}
+
+/** Switches text back to GPU if the selected model can't run it on CPU. */
+export function coerceGpuOnlyTextBackend(
+    settings: Pick<Settings, 'selectedModelPath'|'textBackend'>&
+    Partial<Pick<Settings, 'customModels'|'localDirModels'>>) {
+  if (settings.textBackend === 'cpu' &&
+      isGpuOnlyTextModel(settings.selectedModelPath, settings)) {
+    settings.textBackend = 'gpu';
+  }
+}
+
+/** Summary of non-default modality backend overrides (`WebGPU · CPU` / `CPU`). */
+export interface NonDefaultBackendSummary {
+  label: 'WebGPU · CPU'|'CPU';
+  detail: string;
+}
+
+/**
+ * Returns a compact backend summary when any modality is configured off the
+ * default all-WebGPU path, or `null` when all modalities run on WebGPU.
+ */
+export function getNonDefaultBackendSummary(
+    settings: Parameters<typeof getModalityConfigs>[0]):
+    NonDefaultBackendSummary|null {
+  const configs = getModalityConfigs(settings);
+  const cpuModalities = MODALITIES.filter(m => configs[m].backend === 'cpu')
+                            .map(m => m[0].toUpperCase() + m.slice(1));
+  if (cpuModalities.length === 0) {
+    return null;
+  }
+  if (cpuModalities.length === MODALITIES.length) {
+    return {
+      label: 'CPU',
+      detail: 'Backend: CPU (Text, Vision, Audio in WASM FP32)',
+    };
+  }
+  return {
+    label: 'WebGPU · CPU',
+    detail: `Backend: WebGPU · CPU (${cpuModalities.join(', ')} on CPU)`,
+  };
+}
 
 /** Store for managing inference configuration and persistence. */
 export class SettingsStore implements Settings {
   // Active model configuration parameters
   selectedModelPath = MODELS[0]!.path;
-  contextLength = 4096;
-  maxOutputTokens = 2048;
-  samplerType = 'greedy';
-  temperature = 1.0;
-  topP = 0.95;
-  topK = 64;
-  enableThinking = true;
+  contextLength = DEFAULT_MODEL_CONFIG.contextLength;
+  maxOutputTokens = DEFAULT_MODEL_CONFIG.maxOutputTokens;
+  samplerType = DEFAULT_MODEL_CONFIG.samplerType;
+  temperature = DEFAULT_MODEL_CONFIG.temperature;
+  topP = DEFAULT_MODEL_CONFIG.topP;
+  topK = DEFAULT_MODEL_CONFIG.topK;
+  enableThinking = DEFAULT_MODEL_CONFIG.enableThinking;
+  enableSpeculativeDecoding = DEFAULT_MODEL_CONFIG.enableSpeculativeDecoding;
+  systemPrompt = DEFAULT_SYSTEM_PROMPT_CONFIG.systemPrompt;
+  disabledTools: string[] = [...DEFAULT_SYSTEM_PROMPT_CONFIG.disabledTools];
+  textBackend: ModalityBackend = DEFAULT_EXPERIMENTAL_CONFIG.textBackend;
+  visionBackend: ModalityBackend = DEFAULT_EXPERIMENTAL_CONFIG.visionBackend;
+  audioBackend: ModalityBackend = DEFAULT_EXPERIMENTAL_CONFIG.audioBackend;
+  textPrecision: ActivationPrecision =
+      DEFAULT_EXPERIMENTAL_CONFIG.textPrecision;
+  visionPrecision: ActivationPrecision =
+      DEFAULT_EXPERIMENTAL_CONFIG.visionPrecision;
+  audioPrecision: ActivationPrecision =
+      DEFAULT_EXPERIMENTAL_CONFIG.audioPrecision;
   customModels: CustomModel[] = [];
   localDirModels: CustomModel[] = [];
 
+  get modelSettings(): ModelSettings {
+    return {
+      selectedModelPath: this.selectedModelPath,
+      contextLength: this.contextLength,
+      maxOutputTokens: this.maxOutputTokens,
+      samplerType: this.samplerType,
+      temperature: this.temperature,
+      topP: this.topP,
+      topK: this.topK,
+      enableThinking: this.enableThinking,
+      enableSpeculativeDecoding: this.enableSpeculativeDecoding,
+      systemPrompt: this.systemPrompt,
+      disabledTools: [...this.disabledTools],
+      textBackend: this.textBackend,
+      visionBackend: this.visionBackend,
+      audioBackend: this.audioBackend,
+      textPrecision: this.textPrecision,
+      visionPrecision: this.visionPrecision,
+      audioPrecision: this.audioPrecision,
+    };
+  }
+
   private readonly SETTINGS_KEY = 'litertlm-chat-settings';
 
-  constructor(private readonly updateCallback: () => void) {
+  constructor(
+      private readonly updateCallback: () => void,
+      private readonly storage: Storage = window.localStorage) {
     this.loadSettings();
   }
 
   loadSettings() {
     try {
-      const data = window.localStorage.getItem(this.SETTINGS_KEY);
+      const data = this.storage.getItem(this.SETTINGS_KEY);
       if (data) {
         const parsed = JSON.parse(data);
         const result = PartialSettingsSchema.safeParse(parsed);
         if (result.success) {
           const validated = result.data;
-          this.selectedModelPath =
-              validated.selectedModelPath ?? this.selectedModelPath;
+          this.selectedModelPath = migrateModelPath(
+              validated.selectedModelPath ?? this.selectedModelPath);
           this.contextLength = validated.contextLength ?? this.contextLength;
           this.maxOutputTokens =
               validated.maxOutputTokens ?? this.maxOutputTokens;
@@ -104,8 +356,20 @@ export class SettingsStore implements Settings {
           this.topP = validated.topP ?? this.topP;
           this.topK = validated.topK ?? this.topK;
           this.enableThinking = validated.enableThinking ?? this.enableThinking;
+          this.enableSpeculativeDecoding = validated.enableSpeculativeDecoding ??
+              this.enableSpeculativeDecoding;
+          this.systemPrompt = validated.systemPrompt ?? this.systemPrompt;
+          this.disabledTools = validated.disabledTools ?? this.disabledTools;
+          this.textBackend = validated.textBackend ?? this.textBackend;
+          this.visionBackend = validated.visionBackend ?? this.visionBackend;
+          this.audioBackend = validated.audioBackend ?? this.audioBackend;
+          this.textPrecision = validated.textPrecision ?? this.textPrecision;
+          this.visionPrecision =
+              validated.visionPrecision ?? this.visionPrecision;
+          this.audioPrecision = validated.audioPrecision ?? this.audioPrecision;
           this.customModels = validated.customModels ?? [];
           this.localDirModels = validated.localDirModels ?? [];
+          coerceGpuOnlyTextBackend(this);
         } else {
           console.warn(
               '[LiteRT-LM] Invalid settings in LocalStorage, using defaults:',
@@ -128,30 +392,66 @@ export class SettingsStore implements Settings {
         topP: this.topP,
         topK: this.topK,
         enableThinking: this.enableThinking,
+        enableSpeculativeDecoding: this.enableSpeculativeDecoding,
+        systemPrompt: this.systemPrompt,
+        disabledTools: this.disabledTools,
+        textBackend: this.textBackend,
+        visionBackend: this.visionBackend,
+        audioBackend: this.audioBackend,
+        textPrecision: this.textPrecision,
+        visionPrecision: this.visionPrecision,
+        audioPrecision: this.audioPrecision,
         customModels: this.customModels,
         localDirModels: this.localDirModels,
       };
-      window.localStorage.setItem(this.SETTINGS_KEY, JSON.stringify(payload));
+      this.storage.setItem(this.SETTINGS_KEY, JSON.stringify(payload));
       this.updateCallback();
     } catch (e) {
       console.error('[LiteRT-LM] Failed to save settings:', e);
     }
   }
 
-  resetDefaults() {
-    const confirmReset = confirm(
-        'Are you sure you want to reset all inference settings to their defaults?');
-    if (!confirmReset) return false;
-
-    this.contextLength = 4096;
-    this.maxOutputTokens = 2048;
-    this.samplerType = 'greedy';
-    this.temperature = 1.0;
-    this.topP = 0.95;
-    this.topK = 64;
-    this.enableThinking = true;
-
+  /**
+   * Resets a group of settings to their defaults. Callers confirm with the user
+   * first.
+   */
+  resetDefaults(group: SettingsGroup = 'modelConfig') {
+    switch (group) {
+      case 'modelConfig':
+        Object.assign(this, DEFAULT_MODEL_CONFIG);
+        break;
+      case 'systemPrompt':
+        this.systemPrompt = DEFAULT_SYSTEM_PROMPT_CONFIG.systemPrompt;
+        this.disabledTools = [...DEFAULT_SYSTEM_PROMPT_CONFIG.disabledTools];
+        break;
+      case 'experimental':
+        Object.assign(this, DEFAULT_EXPERIMENTAL_CONFIG);
+        break;
+      default: {
+        // Fails to compile if a group isn't handled.
+        const unhandled: never = group;
+        throw new Error(`Unknown settings group: ${unhandled}`);
+      }
+    }
     this.saveSettings();
-    return true;
   }
+}
+
+/**
+ * Adds a model to the custom models, unless it's already there, and selects
+ * it.
+ */
+export function selectCustomModel(
+    settings: Pick<
+        SettingsStore,
+        'customModels'|'selectedModelPath'|'saveSettings'|'textBackend'>&
+    Partial<Pick<SettingsStore, 'localDirModels'>>,
+    model: CustomModel) {
+  if (!MODELS.some(m => m.path === model.path) &&
+      !settings.customModels.some(m => m.path === model.path)) {
+    settings.customModels = [...settings.customModels, model];
+  }
+  settings.selectedModelPath = model.path;
+  coerceGpuOnlyTextBackend(settings);
+  settings.saveSettings();
 }

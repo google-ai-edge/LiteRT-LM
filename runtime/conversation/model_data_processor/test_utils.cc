@@ -34,13 +34,22 @@ namespace {
 constexpr char kTestdataDir[] =
     "litert_lm/runtime/components/testdata/";
 
+constexpr char kModelsDir[] =
+    "litert_lm/models/";
+
 constexpr char kImageTestdataDir[] =
-    "litert/support/preprocessor/testdata/";
+    "litert_lm/support/preprocessor/testdata/";
 
 }  // namespace
 
 std::string GetTestdataPath(const std::string& file_name) {
   return (std::filesystem::path(::testing::SrcDir()) / kTestdataDir / file_name)
+      .string();
+}
+
+std::string GetModelPath(absl::string_view relative_path) {
+  return (std::filesystem::path(::testing::SrcDir()) / kModelsDir /
+          std::string_view(relative_path))
       .string();
 }
 

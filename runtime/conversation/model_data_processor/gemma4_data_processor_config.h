@@ -17,6 +17,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace litert::lm {
 
@@ -51,6 +52,10 @@ struct Gemma4DataProcessorConfig {
   // patchifying the image.
   int pooling_kernel_size = 3;
 
+  // Whether to perform 2-stage sub-patch merging in the image preprocessor.
+  // Only Gemma4 12B model uses this feature.
+  bool merge_patches = false;
+
   // The string for beginning of audio token.
   std::string boa_token = "<|audio>";
   // The string for end of audio token.
@@ -66,17 +71,28 @@ struct Gemma4DataProcessorConfig {
   std::string open_quote = "<|\"|>";
   std::string close_quote = "<|\"|>";
   std::string function_response_start = "<|tool_response>";
+  // The start and end of the channel that the model may open at the start of
+  // its turn, e.g. "<|channel>thought\n" and "<channel|>" for the thought
+  // channel. Set from the channels in the model metadata. With LLGuidance tool
+  // call constraints, the first token of each is a special token that text
+  // can't match, so with the "none" tool choice the model still has to give a
+  // visible answer after the channel. Empty disables this.
+  std::string channel_start;
+  std::string channel_end;
   // The syntax type of the tool call.
   std::string syntax_type = "fc";
   // Whether to escape the fence strings for regex matching.
   bool escape_fence_strings = true;
   // An optional regex to match each line of the tool code block.
   std::string tool_code_regex = "";
-  // Whether to use the chat template for applying FC format.
-  bool use_template_for_fc_format = true;
   // The constraint mode when constrained decoding is enabled. Default is
   // kTextAndOr.
   ConstraintMode constraint_mode = ConstraintMode::kTextAndOr;
+  // If non-empty, restricts tool calling strictly to these function names.
+  // Requires LLGuidance tool call constraints
+  // (--define=LITERT_LM_FST_CONSTRAINTS_DISABLED=1); otherwise
+  // CreateConstraint() returns FailedPreconditionError.
+  std::vector<std::string> allowed_function_names = {};
 };
 
 // Arguments for Gemma4DataProcessor.
@@ -99,6 +115,10 @@ struct Gemma4DataProcessorArguments {
   // If not set, the system will use the max_num_patches in the config to
   // determine the visual token budget.
   std::optional<int> visual_token_budget;
+
+  // Whether to only dry run the media preprocessing, to count the tokens the
+  // input consumes. See ModelDataProcessor::WithDryRun().
+  bool dry_run = false;
 };
 
 }  // namespace litert::lm

@@ -23,6 +23,10 @@
 #include <vector>
 
 #include "absl/flags/declare.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/executor/ynnpack_mode.h"
 
 // Common flags for litert_lm_main and litert_lm_example.
 ABSL_DECLARE_FLAG(std::optional<std::string>, vision_backend);
@@ -33,9 +37,11 @@ ABSL_DECLARE_FLAG(std::optional<std::string>, log_sink_file);
 ABSL_DECLARE_FLAG(int, max_num_tokens);
 ABSL_DECLARE_FLAG(int, max_output_tokens);
 ABSL_DECLARE_FLAG(int, max_num_images);
+ABSL_DECLARE_FLAG(int, visual_token_budget);
 ABSL_DECLARE_FLAG(std::vector<std::string>, prefill_batch_sizes);
 ABSL_DECLARE_FLAG(int, num_output_candidates);
 ABSL_DECLARE_FLAG(bool, benchmark);
+ABSL_DECLARE_FLAG(bool, enable_profiling);
 ABSL_DECLARE_FLAG(int, benchmark_prefill_tokens);
 ABSL_DECLARE_FLAG(int, benchmark_decode_tokens);
 ABSL_DECLARE_FLAG(bool, async);
@@ -43,8 +49,10 @@ ABSL_DECLARE_FLAG(bool, report_peak_memory_footprint);
 ABSL_DECLARE_FLAG(bool, force_f32);
 ABSL_DECLARE_FLAG(bool, multi_turns);
 ABSL_DECLARE_FLAG(int, num_cpu_threads);
+ABSL_DECLARE_FLAG(litert::lm::YnnpackMode, enable_ynnpack);
 ABSL_DECLARE_FLAG(bool, gpu_external_tensor_mode);
 ABSL_DECLARE_FLAG(bool, configure_magic_numbers);
+ABSL_DECLARE_FLAG(bool, allow_context_length_expansion);
 ABSL_DECLARE_FLAG(bool, verify_magic_numbers);
 ABSL_DECLARE_FLAG(bool, clear_kv_cache_before_prefill);
 ABSL_DECLARE_FLAG(int, num_logits_to_print_after_decode);
@@ -75,12 +83,44 @@ ABSL_DECLARE_FLAG(int, no_repeat_ngram_window_size);
 ABSL_DECLARE_FLAG(std::string, suppress_tokens);
 ABSL_DECLARE_FLAG(std::string, constraint_regex);
 ABSL_DECLARE_FLAG(bool, use_submodel);
+ABSL_DECLARE_FLAG(std::string, speculative_decoding);
+// Deprecated: use --speculative_decoding=on instead.
 ABSL_DECLARE_FLAG(bool, enable_speculative_decoding);
-ABSL_DECLARE_FLAG(bool, enable_neon_for_npu_greedy_sampling);
-ABSL_DECLARE_FLAG(bool, use_hw_masking_for_npu);
-ABSL_DECLARE_FLAG(bool, use_hw_cache_update_for_npu);
-ABSL_DECLARE_FLAG(bool, use_hw_ple_for_npu);
+ABSL_DECLARE_FLAG(std::optional<double>, mtp_gating_half_life);
+ABSL_DECLARE_FLAG(std::optional<double>, mtp_gating_deadband);
+ABSL_DECLARE_FLAG(std::optional<double>, mtp_gating_margin);
+ABSL_DECLARE_FLAG(std::optional<int>, mtp_gating_probe_interval);
+ABSL_DECLARE_FLAG(std::optional<int>, mtp_gating_probe_length);
+ABSL_DECLARE_FLAG(std::optional<int>, mtp_gating_forced_switch_period);
+ABSL_DECLARE_FLAG(std::optional<double>, speculative_lenience);
+ABSL_DECLARE_FLAG(std::optional<int>, sampler_top_k);
+ABSL_DECLARE_FLAG(std::optional<double>, sampler_top_p);
+ABSL_DECLARE_FLAG(std::optional<double>, sampler_temperature);
+ABSL_DECLARE_FLAG(std::optional<int>, sampler_seed);
+ABSL_DECLARE_FLAG(std::optional<bool>, enable_neon_for_npu_greedy_sampling);
+ABSL_DECLARE_FLAG(std::optional<bool>, use_hw_masking_for_npu);
+ABSL_DECLARE_FLAG(std::optional<bool>, use_hw_cache_update_for_npu);
+ABSL_DECLARE_FLAG(std::optional<bool>, use_hw_ple_for_npu);
 ABSL_DECLARE_FLAG(bool, enable_npu_debug_logging);
 ABSL_DECLARE_FLAG(bool, disable_input_prompt_as_hint);
+ABSL_DECLARE_FLAG(bool, gpu_enable_metal_residency_set);
+ABSL_DECLARE_FLAG(std::string, gpu_use_ir_model);
+ABSL_DECLARE_FLAG(std::vector<std::string>, custom_backend_options);
+
+namespace litert::lm {
+
+// Parses a `--speculative_decoding` value, case-insensitively, into the
+// engine's default speculative decoding mode:
+// - "" (unset): std::nullopt, the runtime default (off).
+// - "off": no speculative decoding.
+// - "on": loads the drafter and speculates on every decode step.
+// - "adaptive": loads the drafter and speculates while it is measured to be
+//   faster than plain decoding (on every step on backends that do not support
+//   adaptive gating).
+// Returns an InvalidArgument error for any other value.
+absl::StatusOr<std::optional<SpeculativeDecodingMode>>
+ParseSpeculativeDecodingFlag(absl::string_view value);
+
+}  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_ENGINE_SHARED_FLAGS_H_

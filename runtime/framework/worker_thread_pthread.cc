@@ -105,8 +105,8 @@ void* WorkerThreadPthread::ThreadBody(void* arg) {
       CreateThreadName(thread->name_prefix_, syscall(SYS_gettid));
   if (nice_priority_level != 0) {
     if (nice(nice_priority_level) != -1 || errno == 0) {
-      ABSL_LOG(INFO) << "Changed the nice priority level by "
-                     << nice_priority_level;
+      ABSL_VLOG(1) << "Changed the nice priority level by "
+                   << nice_priority_level;
     } else {
       ABSL_LOG(ERROR) << "Error : " << strerror(errno) << std::endl
                       << "Could not change the nice priority level by "
@@ -122,8 +122,8 @@ void* WorkerThreadPthread::ThreadBody(void* arg) {
     if (sched_setaffinity(syscall(SYS_gettid), sizeof(cpu_set_t), &cpu_set) !=
             -1 ||
         errno == 0) {
-      ABSL_LOG(INFO) << "Pinned the thread pool executor to processor "
-                     << absl::StrJoin(selected_cpus, ", processor ") << ".";
+      ABSL_VLOG(1) << "Pinned the thread pool executor to processor "
+                   << absl::StrJoin(selected_cpus, ", processor ") << ".";
     } else {
       ABSL_LOG(ERROR) << "Error : " << strerror(errno) << std::endl
                       << "Failed to set processor affinity. Ignore processor "

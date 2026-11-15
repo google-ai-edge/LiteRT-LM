@@ -15,7 +15,6 @@
 #include "runtime/util/file_util.h"
 
 #include <cerrno>
-#include <chrono>      // NOLINT: Required for file metadata retrieval.
 #include <filesystem>  // NOLINT: Required for file metadata retrieval.
 #include <string>
 #include <system_error>  // NOLINT: Required for file metadata retrieval.
@@ -26,8 +25,12 @@
 
 #if defined(_WIN32)
 #include <Windows.h>
+#include <io.h>
+
+#include <cstdint>
 #else
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 #include "absl/base/no_destructor.h"  // from @com_google_absl
@@ -68,6 +71,52 @@ std::pair<absl::string_view, absl::string_view> SplitPath(
                         absl::ClippedSubstr(path, pos + 1));
 }
 
+#if defined(_WIN32)
+int64_t FileTimeToUnixSeconds(const FILETIME& ft) {
+  ULARGE_INTEGER ull;
+  ull.LowPart = ft.dwLowDateTime;
+  ull.HighPart = ft.dwHighDateTime;
+  return static_cast<int64_t>(ull.QuadPart / 10000000ULL) - 11644473600LL;
+}
+#endif
+
+// Computes the `<mtime_sec>_<size>` cache identifier for `path` without
+// consulting the in-process path cache.
+//
+// Uses `stat()` on POSIX and `GetFileAttributesExW()` on Windows directly
+// rather than opening a file descriptor/handle for `fstat()` / `GetFileTime()`:
+// querying metadata by path takes a single syscall without `open()` + `close()`
+// file-descriptor overhead or requiring read permissions on the file itself,
+// while returning the exact same timestamp and size fields as
+// `GetFileCacheIdentifier(const ScopedFile&)`.
+absl::StatusOr<std::string> ComputeFileCacheIdentifier(absl::string_view path) {
+  std::string path_str(path);
+#if defined(_WIN32)
+  std::filesystem::path p{path_str};
+  WIN32_FILE_ATTRIBUTE_DATA data;
+  if (!GetFileAttributesExW(p.c_str(), GetFileExInfoStandard, &data)) {
+    return absl::InternalError(
+        absl::StrCat("GetFileAttributesExW() failed for: ", path));
+  }
+  if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+    return absl::InternalError(absl::StrCat("Path is a directory: ", path));
+  }
+  int64_t seconds = FileTimeToUnixSeconds(data.ftLastWriteTime);
+  uint64_t size = (static_cast<uint64_t>(data.nFileSizeHigh) << 32) |
+                  static_cast<uint64_t>(data.nFileSizeLow);
+  return absl::StrCat(seconds, "_", size);
+#else
+  struct stat info;
+  if (stat(path_str.c_str(), &info) < 0) {
+    return absl::InternalError(absl::StrCat("stat() failed for: ", path));
+  }
+  if (S_ISDIR(info.st_mode)) {
+    return absl::InternalError(absl::StrCat("Path is a directory: ", path));
+  }
+  return absl::StrCat(info.st_mtime, "_", info.st_size);
+#endif
+}
+
 }  // namespace
 
 // 40% of the time in JoinPath() is from calls with 2 arguments, so we
@@ -100,47 +149,21 @@ absl::StatusOr<std::string> GetFileCacheIdentifier(absl::string_view path) {
   static absl::NoDestructor<absl::Mutex> cached_identifiers_mutex;
   std::string path_str(path);
   {
-    absl::MutexLock lock(cached_identifiers_mutex.get());
+    absl::MutexLock lock(*cached_identifiers_mutex);
     if (auto it = cached_identifiers->find(path_str);
         it != cached_identifiers->end()) {
       return it->second;
     }
   }
 
-  std::error_code ec;
-  std::filesystem::path p{path_str};
-
-  if (!std::filesystem::exists(p, ec) || ec) {
-    return absl::InternalError(absl::StrCat("File does not exist: ", path));
+  absl::StatusOr<std::string> identifier = ComputeFileCacheIdentifier(path);
+  if (!identifier.ok()) {
+    return identifier.status();
   }
 
-  auto size = std::filesystem::file_size(p, ec);
-  if (ec) {
-    return absl::InternalError(
-        absl::StrCat("Failed to get file size: ", ec.message()));
-  }
-
-  auto mtime = std::filesystem::last_write_time(p, ec);
-  if (ec) {
-    return absl::InternalError(
-        absl::StrCat("Failed to get last write time: ", ec.message()));
-  }
-
-  auto current_file_time = std::filesystem::file_time_type::clock::now();
-  auto current_sys_time = std::chrono::system_clock::now();
-  auto sys_time =
-      std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-          mtime - current_file_time + current_sys_time);
-  auto duration = sys_time.time_since_epoch();
-  auto seconds =
-      std::chrono::duration_cast<std::chrono::seconds>(duration).count();
-
-  std::string identifier = absl::StrCat(seconds, "_", size);
-  {
-    absl::MutexLock lock(cached_identifiers_mutex.get());
-    (*cached_identifiers)[path_str] = identifier;
-  }
-  return identifier;
+  absl::MutexLock lock(*cached_identifiers_mutex);
+  (*cached_identifiers)[path_str] = *identifier;
+  return *identifier;
 }
 
 #if defined(_WIN32)
@@ -154,11 +177,7 @@ absl::StatusOr<std::string> GetFileCacheIdentifier(
   if (!GetFileTime(hFile, NULL, NULL, &ftWrite)) {
     return absl::InternalError("Failed to get file time by handle on Windows");
   }
-  ULARGE_INTEGER ull;
-  ull.LowPart = ftWrite.dwLowDateTime;
-  ull.HighPart = ftWrite.dwHighDateTime;
-  int64_t seconds =
-      static_cast<int64_t>(ull.QuadPart / 10000000ULL) - 11644473600LL;
+  int64_t seconds = FileTimeToUnixSeconds(ftWrite);
 
   LARGE_INTEGER size;
   if (!GetFileSizeEx(hFile, &size)) {
@@ -187,6 +206,24 @@ bool FileExists(absl::string_view path) {
   std::filesystem::path p{std::string(path)};
   return std::filesystem::exists(p, ec) &&
          std::filesystem::is_regular_file(p, ec);
+}
+
+bool IsDirectoryWritable(absl::string_view path) {
+  if (path.empty()) {
+    return false;
+  }
+  std::string path_str(path);
+  std::error_code ec;
+  std::filesystem::path p{path_str};
+  if (!std::filesystem::exists(p, ec) ||
+      !std::filesystem::is_directory(p, ec)) {
+    return false;
+  }
+#if defined(_WIN32)
+  return _waccess(p.c_str(), 2) == 0;
+#else
+  return access(path_str.c_str(), W_OK) == 0;
+#endif
 }
 
 absl::StatusOr<int> DeleteStaleCaches(absl::string_view cache_dir,

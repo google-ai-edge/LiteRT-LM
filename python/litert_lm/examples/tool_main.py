@@ -62,12 +62,9 @@ def main(argv: Sequence[str]) -> None:
     # Send message (async streaming)
     # We use yellow for model output as in the Kotlin example
     for chunk in conversation.send_message_async(user_input):
-      content_list = chunk.get("content", [])
-      for item in content_list:
-        if item.get("type") == "text":
-          print("\033[33m", end="")
-          print(item.get("text", ""), end="", flush=True)
-          print("\033[0m", end="")
+      text = str(chunk)
+      if text:
+        print(f"\033[33m{text}\033[0m", end="", flush=True)
     print("")
 
 

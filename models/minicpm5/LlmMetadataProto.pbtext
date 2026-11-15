@@ -1,0 +1,127 @@
+# proto-file: runtime/proto/llm_metadata.proto
+# proto-message: LlmMetadataProto
+
+start_token {
+  token_str: "<s>"
+}
+stop_tokens {
+  token_ids {
+    ids: 1
+  }
+}
+stop_tokens {
+  token_ids {
+    ids: 130073
+  }
+}
+max_num_tokens: 4096
+llm_model_type {
+  generic_model {
+  }
+}
+supports_thinking: true
+supports_function_calling: true
+tool_call_config {
+  fence_start: "<function"
+  fence_end: "</function>"
+  regex_syntax {
+    tool_call_regex: "(?s)\\s*name\\s*=\\s*[\"']([^\"']+)[\"']\\s*>(.*)"
+    argument_regex: "(?s)<param\\s+name\\s*=\\s*[\"']([^\"']+)[\"']\\s*>(?:<!\\[CDATA\\[)?(.*?)(?:\\]\\]>)?\\s*</param>"
+  }
+}
+
+jinja_prompt_template:
+  "{%- macro format_content(content) -%}\n"
+  "    {%- for item in content -%}\n"
+  "        {%- if item['type'] == 'text' -%}\n"
+  "            {{- item['text'] -}}\n"
+  "        {%- elif item['type'] == 'tool_response' -%}\n"
+  "            {%- if item['response'] is mapping or item['response'] is sequence -%}\n"
+  "                {{- item['response'] | tojson -}}\n"
+  "            {%- else -%}\n"
+  "                {{- item['response'] | string -}}\n"
+  "            {%- endif -%}\n"
+  "        {%- endif -%}\n"
+  "    {%- endfor -%}\n"
+  "{%- endmacro -%}\n"
+  "\n"
+  "{%- set is_first_system = messages and messages[0]['role'] == 'system' -%}\n"
+  "{%- set loop_messages = messages[1:] if is_first_system else messages -%}\n"
+  "{#- Handle System/Tool Definitions Block -#}\n"
+  "{%- if tools or is_first_system -%}\n"
+  "    {{- '<|im_start|>system\\n' -}}\n"
+  "    {%- if is_first_system -%}\n"
+  "        {{- format_content(messages[0]['content']) -}}\n"
+  "    {%- endif -%}\n"
+  "    {%- if tools -%}\n"
+  "        {%- if is_first_system -%}\n"
+  "            {{- '\\n\\n' -}}\n"
+  "        {%- endif -%}\n"
+  "        {{- \"# Tools\\n\\nYou are provided with function signatures within <tools></tools> XML tags:\\n<tools>\" -}}\n"
+  "        {%- for tool in tools -%}\n"
+  "            {{- '\\n' + tool | tojson -}}\n"
+  "        {%- endfor -%}\n"
+  "        {{- '\\n</tools>\\n\\nTool usage guidelines:\\n- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.\\n- When calling a function, return an XML object within <function ... </function> using:\\n<function name=\"function-name\"><param name=\"param-name\">param-value</param></function>\\n- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name=\"param-name\"><![CDATA[...multi-line value...]]></param>' -}}\n"
+  "    {%- endif -%}\n"
+  "    {{- '<|im_end|>\\n' -}}\n"
+  "{%- endif -%}\n"
+  "\n"
+  "{%- for message in loop_messages -%}\n"
+  "    {%- if message['role'] == 'user' or message['role'] == 'system' -%}\n"
+  "        {{- '<|im_start|>' + message['role'] + '\\n' + format_content(message['content']) + '<|im_end|>\\n' -}}\n"
+  "    {%- elif message['role'] == 'assistant' -%}\n"
+  "        {%- set content = format_content(message['content']) -%}\n"
+  "        {{- '<|im_start|>' + message['role'] + '\\n' + content -}}\n"
+  "        {%- if message['tool_calls'] -%}\n"
+  "            {%- for tool_call in message['tool_calls'] -%}\n"
+  "                {%- if content or not loop.first -%}\n"
+  "                    {{- '\\n' -}}\n"
+  "                {%- endif -%}\n"
+  "                {%- set function = tool_call['function'] if 'function' in tool_call else tool_call -%}\n"
+  "                {{- '<function name=\"' + function['name'] + '\">' -}}\n"
+  "                {%- if function['arguments'] is mapping -%}\n"
+  "                    {%- for name, value in function['arguments'] | dictsort -%}\n"
+  "                        {%- set val_str = value | string -%}\n"
+  "                        {%- if '<' in val_str or '&' in val_str or '\\n' in val_str -%}\n"
+  "                            {{- '<param name=\"' + name + '\"><![CDATA[' + val_str + ']]></param>' -}}\n"
+  "                        {%- else -%}\n"
+  "                            {{- '<param name=\"' + name + '\">' + val_str + '</param>' -}}\n"
+  "                        {%- endif -%}\n"
+  "                    {%- endfor -%}\n"
+  "                {%- elif function['arguments'] is string -%}\n"
+  "                    {{- function['arguments'] -}}\n"
+  "                {%- endif -%}\n"
+  "                {{- '</function>' -}}\n"
+  "            {%- endfor -%}\n"
+  "        {%- endif -%}\n"
+  "        {{- '<|im_end|>\\n' -}}\n"
+  "    {%- elif message['role'] == 'tool' -%}\n"
+  "        {%- if loop.first or loop_messages[loop.index0 - 1]['role'] != 'tool' -%}\n"
+  "            {{- '<|im_start|>user' -}}\n"
+  "        {%- endif -%}\n"
+  "        {%- for item in message['content'] -%}\n"
+  "            {{- '\\n<tool_response>\\n' + format_content([item]) + '\\n</tool_response>' -}}\n"
+  "        {%- endfor -%}\n"
+  "        {%- if loop.last or loop_messages[loop.index0 + 1]['role'] != 'tool' -%}\n"
+  "            {{- '<|im_end|>\\n' -}}\n"
+  "        {%- endif -%}\n"
+  "    {%- endif -%}\n"
+  "{%- endfor -%}\n"
+  "\n"
+  "{%- if add_generation_prompt -%}\n"
+  "    {{- '<|im_start|>assistant\\n' -}}\n"
+  "    {%- if enable_thinking | default(false) -%}\n"
+  "        {{- '<think>\\n' -}}\n"
+  "    {%- else -%}\n"
+  "        {{- '<think>\\n\\n</think>\\n\\n' -}}\n"
+  "    {%- endif -%}\n"
+  "{%- endif -%}\n"
+
+channels {
+  channel_name: "thought"
+  start: "<think>\n"
+  end: "</think>"
+}
+
+# Function calling support is added in 0.19.0.
+min_runtime_version: "0.19.0"

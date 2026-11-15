@@ -31,6 +31,15 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
+    name = "model_info",
+    srcs = ["model_info.py"],
+    deps = [
+        ":_ffi",
+        ":interfaces",
+    ],
+)
+
+pytype_strict_library(
     name = "_messages",
     srcs = ["_messages.py"],
 )
@@ -90,11 +99,22 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
+    name = "embedding_engine",
+    srcs = ["embedding_engine.py"],
+    deps = [
+        ":_ffi",
+        ":_messages",
+        ":interfaces",
+    ],
+)
+
+pytype_strict_library(
     name = "benchmark",
     srcs = ["benchmark.py"],
     deps = [
         ":_ffi",
         ":interfaces",
+        ":utils",
     ],
 )
 
@@ -117,8 +137,10 @@ pytype_strict_library(
         ":_messages",
         ":benchmark",
         ":conversation",
+        ":embedding_engine",
         ":engine",
         ":interfaces",
+        ":model_info",
         ":session",
         ":tools",
     ],
@@ -127,6 +149,50 @@ pytype_strict_library(
 py_test(
     name = "engine_test",
     srcs = ["engine_test.py"],
+    data = [
+        "//models/gemma4:chat_template_e2b_e4b.jinja",
+        "//runtime/components/testdata",
+        "//runtime/testdata",
+    ],
+    tags = ["nowindows"],
+    deps = [
+        ":litert_lm",
+        "@absl_py//absl/flags",
+        "@absl_py//absl/testing:absltest",
+        "@absl_py//absl/testing:parameterized",
+    ],
+    imports = [".."],
+)
+
+py_test(
+    name = "model_info_test",
+    srcs = ["model_info_test.py"],
+    data = ["//runtime/testdata"],
+    tags = ["nowindows"],
+    deps = [
+        ":litert_lm",
+        "@absl_py//absl/flags",
+        "@absl_py//absl/testing:absltest",
+    ],
+    imports = [".."],
+)
+
+py_test(
+    name = "debug_artifacts_test",
+    srcs = ["debug_artifacts_test.py"],
+    tags = ["nowindows"],
+    deps = [
+        ":interfaces",
+        ":litert_lm",
+        ":session",
+        "@absl_py//absl/testing:absltest",
+    ],
+    imports = [".."],
+)
+
+py_test(
+    name = "embedding_engine_test",
+    srcs = ["embedding_engine_test.py"],
     data = ["//runtime/testdata"],
     tags = ["nowindows"],
     deps = [
@@ -166,13 +232,18 @@ py_test(
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("//:version.bzl", "VERSION")
-load("//python/litert_lm:cc_runfiles.bzl", "cc_runfiles")
 
+# Prebuilt shared libraries staged alongside liblitert-lm.{so,dylib,dll} so
+# they can be resolved via $ORIGIN / @loader_path / same-directory lookup at
+# runtime.
 _PREBUILT_LIBS = [
     "libGemmaModelConstraintProvider",
-    "libLiteRtWebGpuAccelerator",
-    "libLiteRtTopKWebGpuSampler",
-    "libLiteRt",
+    "libwebgpu_dawn",
+]
+
+_WINDOWS_PREBUILT_LIBS = [
+    "libGemmaModelConstraintProvider",
+    "webgpu_dawn",
 ]
 
 genrule(
@@ -225,6 +296,29 @@ genrule(
     tags = ["manual"],
 )
 
+genrule(
+    name = "copy_windows_prebuilt_libs_dll",
+    srcs = select({
+        "@platforms//os:windows": ["//prebuilt/windows_x86_64:" + lib + ".dll" for lib in _WINDOWS_PREBUILT_LIBS],
+        "//conditions:default": [],
+    }),
+    outs = [lib + ".dll" for lib in _WINDOWS_PREBUILT_LIBS],
+    cmd = """
+        SRCS_ARRAY=($(SRCS))
+        OUTS_ARRAY=($(OUTS))
+        if [ $${#SRCS_ARRAY[@]} -gt 0 ]; then
+            for i in $${!SRCS_ARRAY[@]}; do
+                cp $${SRCS_ARRAY[$$i]} $${OUTS_ARRAY[$$i]}
+            done
+        else
+            for out in $${OUTS_ARRAY[@]}; do
+                touch $$out
+            done
+        fi
+    """,
+    tags = ["manual"],
+)
+
 copy_file(
     name = "copy_dxcompiler_dll",
     src = "@directx_shader_compiler//:dxcompiler",
@@ -244,6 +338,17 @@ copy_file(
 )
 
 filegroup(
+    name = "copy_prebuilt_libs_dll",
+    srcs = [
+        ":copy_dxcompiler_dll",
+        ":copy_dxil_dll",
+        ":copy_openvino_dispatch_dll",
+        ":copy_windows_prebuilt_libs_dll",
+    ],
+    tags = ["manual"],
+)
+
+filegroup(
     name = "prebuilt_litert_lm_so_sources",
     srcs = select({
         ":wheel_platform_linux_x86_64": ["//prebuilt/linux_x86_64:liblitert-lm.so"],
@@ -258,6 +363,14 @@ filegroup(
     name = "prebuilt_litert_lm_dylib_sources",
     srcs = select({
         ":wheel_platform_macos_arm64": ["//prebuilt/macos_arm64:liblitert-lm.dylib"],
+        "//conditions:default": [],
+    }),
+)
+
+filegroup(
+    name = "prebuilt_litert_lm_dll_sources",
+    srcs = select({
+        ":wheel_platform_windows_x86_64": ["//prebuilt/windows_x86_64:litert-lm.dll"],
         "//conditions:default": [],
     }),
 )
@@ -298,11 +411,22 @@ genrule(
     """,
 )
 
-copy_file(
-    name = "copy_prebuilt_litert_lm_dll",
-    src = "//prebuilt/windows_x86_64:litert-lm.dll",
-    out = "litert-lm.dll",
-    tags = ["manual"],
+genrule(
+    name = "copy_litert_lm_dll",
+    srcs = select({
+        ":use_prebuilt_c_api": [":prebuilt_litert_lm_dll_sources"],
+        "//conditions:default": ["//c:litert-lm"],
+    }),
+    outs = ["litert-lm.dll"],
+    cmd = """
+        SRCS_ARRAY=($(SRCS))
+        OUTS_ARRAY=($(OUTS))
+        if [ $${#SRCS_ARRAY[@]} -gt 0 ]; then
+            cp $${SRCS_ARRAY[0]} $${OUTS_ARRAY[0]}
+        else
+            touch $${OUTS_ARRAY[0]}
+        fi
+    """,
 )
 
 filegroup(
@@ -312,7 +436,7 @@ filegroup(
         # no native binaries is built.
         ":wheel_platform_macos_arm64": [":copy_litert_lm_dylib"],
         ":wheel_platform_windows_x86_64": [
-            ":copy_prebuilt_litert_lm_dll",
+            ":copy_litert_lm_dll",
             ":copy_dxcompiler_dll",
             ":copy_dxil_dll",
             ":copy_openvino_dispatch_dll",
@@ -326,26 +450,15 @@ filegroup(
     }),
 )
 
-# On Windows, copy the .dll from runfiles to avoid the Bazel duplicated
-# labels.
-cc_runfiles(
-    name = "litert_lm_windows_runfiles",
-    cc_binary = "//c:litert-lm",
-)
-
 filegroup(
     name = "default_libs",
     srcs = select({
-        "@platforms//os:windows": [":litert_lm_windows_runfiles"],
+        "@platforms//os:windows": [":copy_litert_lm_dll"],
         "@platforms//os:macos": [":copy_litert_lm_dylib"],
         "//conditions:default": [":copy_litert_lm_so"],
     }) + select({
         "@platforms//os:macos": [":copy_prebuilt_libs_dylib"],
-        "@platforms//os:windows": [
-            ":copy_dxcompiler_dll",
-            ":copy_dxil_dll",
-            ":copy_openvino_dispatch_dll",
-        ],
+        "@platforms//os:windows": [":copy_prebuilt_libs_dll"],
         "@platforms//os:linux": [":copy_prebuilt_libs_so"],
         "//conditions:default":  [],
     }),

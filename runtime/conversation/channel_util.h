@@ -27,6 +27,9 @@
 
 namespace litert::lm {
 
+inline constexpr absl::string_view kThoughtChannelName = "thought";
+inline constexpr absl::string_view kReasoningContentKey = "reasoning_content";
+
 // Extracts channel content from responses and removes it from the responses
 // in-place. Returns a map from channel name to extracted content.
 // Args:
@@ -42,11 +45,22 @@ ExtractChannelContent(
     const std::vector<Channel>& channels, Responses& responses,
     const std::optional<std::string>& open_channel_name = std::nullopt);
 
+// Returns true if the channel is considered a reasoning channel, either
+// explicitly via `is_reasoning_channel` or implicitly if its name is "thought".
+bool IsReasoningChannel(const Channel& channel);
+
+// Returns true if the channel_name is "thought" or if it matches a configured
+// Channel with is_reasoning_channel set to true.
+bool IsReasoningChannel(absl::string_view channel_name,
+                        const std::vector<Channel>& channels = {});
+
 // Inserts extracted channel content into the assistant message under the
-// "channels" key.
+// "channels" key. If a channel is a reasoning channel (e.g. "thought" or marked
+// with is_reasoning_channel = true), it is also copied to a top-level Message
+// field called "reasoning_content".
 void InsertChannelContentIntoMessage(
     const absl::flat_hash_map<std::string, std::string>& channel_content,
-    Message& assistant_message);
+    Message& assistant_message, const std::vector<Channel>& channels);
 
 // Detects if there is an open channel at the end of the text.
 // A channel is open if the start tag is present but the end tag is not.

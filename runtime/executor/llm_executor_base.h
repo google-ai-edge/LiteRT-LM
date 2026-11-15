@@ -18,14 +18,18 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -93,6 +97,31 @@ class LlmExecutorBase {
                      ExecutorBackendName()));
   };
 
+  // Returns OK if the executor can verify draft tokens, i.e. run them through
+  // the model in parallel and keep the longest prefix that decoding would have
+  // produced. Otherwise returns FailedPrecondition with the reason why it
+  // can't. The result doesn't change over the executor's lifetime.
+  virtual absl::Status CheckDraftVerificationSupport() const {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Draft verification is not supported by backend: ",
+                     ExecutorBackendName()));
+  }
+
+  // Verifies `draft_token_ids`, draft tokens that follow the pending token:
+  // runs them through the model in parallel, accepts their longest prefix that
+  // `Decode(decode_params)` steps would have produced, and decodes the token
+  // after it, as these steps would have. With a speculative lenience c > 0 in
+  // `decode_params`, a draft token that disagrees with them is still accepted
+  // with probability c (see `SpeculativeDecodingConfig::lenience`). Fails if
+  // `CheckDraftVerificationSupport()` fails.
+  virtual absl::StatusOr<DraftVerificationResult> VerifyDraft(
+      absl::Span<const int> draft_token_ids,
+      const ExecutorDecodeParams& decode_params) {
+    ABSL_RETURN_IF_ERROR(CheckDraftVerificationSupport());
+    return absl::UnimplementedError(absl::StrCat(
+        "VerifyDraft not implemented for backend: ", ExecutorBackendName()));
+  }
+
   virtual absl::string_view ExecutorBackendName() const = 0;
 
   // Get vocabulary size used to build tensor buffers for decode functions.
@@ -119,10 +148,17 @@ class LlmExecutorBase {
                      ExecutorBackendName()));
   };
 
+  // Validates that the provided executor settings are supported by this
+  // executor.
+  virtual absl::Status ValidateConfig(
+      const LlmExecutorSettings& executor_settings) const {
+    return absl::OkStatus();
+  }
+
   // Updates the executor settings.
   virtual absl::Status UpdateExecutorSettings(
       const LlmExecutorSettings& executor_settings) {
-    return absl::OkStatus();
+    return ValidateConfig(executor_settings);
   }
 
   // Gets the runtime configuration.
@@ -212,6 +248,54 @@ class LlmExecutorBase {
     return absl::UnimplementedError(absl::StrCat(
         "RestoreContext not implemented for backend: ", ExecutorBackendName()));
   };
+
+  // Saves the processed context from the executor and returns it as an opaque
+  // container to the caller.
+  virtual absl::StatusOr<std::unique_ptr<ProcessedContext>> SaveContext()
+      const {
+    return absl::UnimplementedError(absl::StrCat(
+        "SaveContext not implemented for backend: ", ExecutorBackendName()));
+  }
+
+  // Restores the processed context of the executor with the provided processed
+  // context.
+  virtual absl::Status RestoreContext(
+      std::unique_ptr<ProcessedContext> processed_context) {
+    return absl::UnimplementedError(absl::StrCat(
+        "RestoreContext not implemented for backend: ", ExecutorBackendName()));
+  }
+
+  // ------------Profiling APIs------------:
+  // Starts profiling if supported by the underlying executor/backend.
+  virtual absl::Status StartProfiling() {
+    return absl::UnimplementedError(absl::StrCat(
+        "StartProfiling not implemented for backend: ", ExecutorBackendName()));
+  }
+
+  // Stops profiling if supported by the underlying executor/backend.
+  virtual absl::Status StopProfiling() {
+    return absl::UnimplementedError(absl::StrCat(
+        "StopProfiling not implemented for backend: ", ExecutorBackendName()));
+  }
+
+  // Gets the profile summary string if supported by the underlying
+  // executor/backend.
+  virtual absl::StatusOr<std::string> GetProfileSummary() {
+    return absl::UnimplementedError(
+        absl::StrCat("GetProfileSummary not implemented for backend: ",
+                     ExecutorBackendName()));
+  }
+
+  // Gets the accumulated executor statistics if supported by the underlying
+  // executor/backend. The statistics are executor-wide: an executor shared by
+  // several sessions accumulates the steps of all of them.
+  virtual std::optional<ExecutorStats> GetExecutorStats() const {
+    return std::nullopt;
+  }
+
+  // Resets the accumulated executor statistics if supported by the underlying
+  // executor/backend.
+  virtual void ResetExecutorStats() {}
 };
 
 }  // namespace litert::lm

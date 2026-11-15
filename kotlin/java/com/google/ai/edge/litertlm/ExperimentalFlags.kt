@@ -36,12 +36,14 @@ object ExperimentalFlags {
   /**
    * Whether to enable speculative decoding.
    *
-   * If null, use the model's default. If true, enable speculative decoding; an error will be thrown
-   * if the model does not support it. If false, disable it.
+   * Deprecated: use [EngineConfig.speculativeDecodingConfig] instead. Read only when that config
+   * sets no mode: `true` is mode [SpeculativeDecodingMode.ON] and `false` is mode
+   * [SpeculativeDecodingMode.OFF]; `null` leaves the runtime default (off).
    *
    * Note: This flag is read only when a new [Engine] is created. Changing this value will not
    * affect any existing [Engine] or [Conversation] instances.
    */
+  @Deprecated("Use EngineConfig.speculativeDecodingConfig instead.")
   var enableSpeculativeDecoding: Boolean? = null
 
   /**
@@ -81,7 +83,7 @@ object ExperimentalFlags {
    * Note: This flag is read only when a new [Conversation] is created. Changing this value will not
    * affect any existing [Conversation] instances.
    */
-  var filterChannelContentFromKvCache: Boolean = false
+  var filterChannelContentFromKvCache: Boolean? = null
 
   /**
    * A prompt template to overwrite the default one.
@@ -89,22 +91,100 @@ object ExperimentalFlags {
    * Note: This flag is read only when a new [Conversation] is created. Changing this value will not
    * affect any existing [Conversation] instances.
    */
+  @Deprecated("Use ConversationConfig.chatTemplate instead.")
   var overwritePromptTemplate: String? = null
 
   /**
    * The visual token budget.
    *
    * The number of visual tokens that the model can generate for a single image. If null, there is
-   * no budget limit and the engine use as much as needed.
+   * no budget limit and the engine uses as much as needed.
    *
    * Currently, this is only supported by Gemma4. If this flag is set for a non-Gemma4 model, it
-   * will result in a no-ops. The Gemma4 budget options are 70, 140, 280, 560, or 1120 tokens. See
+   * will result in a no-op. The Gemma4 budget options are 70, 140, 280, 560, or 1120 tokens. See
    * https://ai.google.dev/gemma/docs/capabilities/vision#variable-resolution for more details.
    *
-   * Note: This flag takes effect immediately and change alter the behaivor of created
-   * [Conversation].
+   * Note:
+   * 1. This flag takes effect immediately and change alter the behavior of created [Conversation].
+   * 2. If the flag is set before the [Engine] is created, it determines the max visual tokens per
+   *    image for the [Engine]. For [Conversation] using the same [Engine], if the value is updated
+   *    after the [Conversation] is created, the value should not be set to a value that exceeds the
+   *    engine's max visual tokens per image.
    */
   var visualTokenBudget: Int? = null
+
+  /**
+   * Whether YNNPACK should delegate supported CPU operations before XNNPACK.
+   *
+   * If null, use the engine's default. If true, force enable YNNPACK. If false, force disable
+   * YNNPACK.
+   *
+   * Note: This flag is read only when a new [Engine] is created or [benchmark] is called. Changing
+   * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
+   *
+   * This feature requires build-time flag "--define=litert_enable_ynnpack=true". The release
+   * version might not have it.
+   */
+  var enableYnnpack: Boolean? = null
+
+  /**
+   * Experimental: whether the GPU backend initializes models with the IrModel pipeline instead of
+   * the legacy GraphFloat32 pipeline.
+   *
+   * This flag is experimental and may change or be removed without notice. It only affects
+   * executors (main, vision and audio) that run on [Backend.GPU]; it is ignored by other backends.
+   *
+   * If null, use the engine's default (currently disabled). If true, force enable the IrModel
+   * pipeline. If false, force disable it.
+   *
+   * Note: This flag is read only when a new [Engine] is created or [benchmark] is called. Changing
+   * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
+   */
+  var gpuUseIrModel: Boolean? = null
+
+  /**
+   * Whether to use NEON optimizations for greedy sampling on NPU.
+   *
+   * If null, defer to the model's `LlmNpuExecutorMetadata` (or false if absent). If true or false,
+   * override the model's setting.
+   *
+   * Note: This flag is read only when a new [Engine] is created or [benchmark] is called. Changing
+   * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
+   */
+  var enableNeonForNpuGreedySampling: Boolean? = null
+
+  /**
+   * Whether to use handwritten mask update logic on NPU.
+   *
+   * If null, defer to the model's `LlmNpuExecutorMetadata` (or false if absent). If true or false,
+   * override the model's setting.
+   *
+   * Note: This flag is read only when a new [Engine] is created or [benchmark] is called. Changing
+   * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
+   */
+  var useHwMaskingForNpu: Boolean? = null
+
+  /**
+   * Whether to use handwritten KV-cache update logic on NPU.
+   *
+   * If null, defer to the model's `LlmNpuExecutorMetadata` (or false if absent; ring-buffer models
+   * always use the handwritten path). If true or false, override the model's setting.
+   *
+   * Note: This flag is read only when a new [Engine] is created or [benchmark] is called. Changing
+   * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
+   */
+  var useHwCacheUpdateForNpu: Boolean? = null
+
+  /**
+   * Whether to use handwritten per-layer embedding lookup on NPU.
+   *
+   * If null, defer to the model's `LlmNpuExecutorMetadata` (or false if absent). If true or false,
+   * override the model's setting.
+   *
+   * Note: This flag is read only when a new [Engine] is created or [benchmark] is called. Changing
+   * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
+   */
+  var useHwPleForNpu: Boolean? = null
 }
 
 // Mark this annotation itself as requiring opt-in

@@ -12,18 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 include(FetchContent)
 
 # --- ANTLR ---
-set(ANTLR_SRC_DIR ${CMAKE_BINARY_DIR}/_deps/antlr_lib-src/runtime/Cpp/runtime/src CACHE PATH "Path to antlr source directory")
+set(LITERTLM_ANTLR_SRC_DIR 
+  ${CMAKE_BINARY_DIR}/_deps/antlr_lib-src/runtime/Cpp/runtime/src 
+  CACHE PATH "Path to antlr source directory"
+)
+set(LITERTLM_ANTLR_TAG "7d5770395bb7b02eb56e7c62662cb1d7c08f42a3" CACHE STRING "ANTLR git tag")
+# No GIT_SHALLOW: the pinned commit is not a branch tip, so a shallow clone
+# cannot check it out ("unable to read tree").
 FetchContent_Declare(
   antlr_lib
   GIT_REPOSITORY https://github.com/antlr/antlr4.git
-  GIT_TAG 7d5770395bb7b02eb56e7c62662cb1d7c08f42a3
-  GIT_SHALLOW true
+  GIT_TAG ${LITERTLM_ANTLR_TAG}
   SOURCE_SUBDIR runtime/Cpp
-  PATCH_COMMAND ${CMAKE_COMMAND} -DTARGET_FILE=${ANTLR_SRC_DIR}/../../CMakeLists.txt -P${LITERTLM_PATCHES_DIR}/antlr_patch.cmake
+  PATCH_COMMAND 
+    ${CMAKE_COMMAND} 
+    -DTARGET_FILE=${LITERTLM_ANTLR_SRC_DIR}/../../CMakeLists.txt 
+    -P${LITERTLM_PATCHES_DIR}/antlr_patch.cmake
 )
 block()
   set(CMAKE_POLICY_VERSION_MINIMUM "3.5")
@@ -38,7 +45,7 @@ endif()
 FetchContent_Declare(
   antlr_tool
   URL "https://www.antlr.org/download/antlr-4.13.2-complete.jar"
-  DOWNLOAD_DIR "${THIRD_PARTY_DIR}/antlr"
+  DOWNLOAD_DIR "${LITERTLM_THIRD_PARTY_DIR}/antlr"
   DOWNLOAD_NO_EXTRACT TRUE
 )
 
@@ -47,19 +54,18 @@ if(NOT antlr_tool_POPULATED)
   message(STATUS "[LiteRTLM] Fetching ANTLR 4.13.2 Tool...")
   FetchContent_Populate(antlr_tool)
 endif()
-
-set(ANTLR_JAR_PATH "${THIRD_PARTY_DIR}/antlr/antlr-4.13.2-complete.jar")
+set(ANTLR_JAR_PATH "${LITERTLM_THIRD_PARTY_DIR}/antlr/antlr-4.13.2-complete.jar")
 message(STATUS "[LiteRTLM] ANTLR JAR located at: ${ANTLR_JAR_PATH}")
 
-
 # --- Corrosion ---
-set(CORROSION_SRC_DIR ${THIRD_PARTY_DIR}/corrosion CACHE PATH "Path to corrosion source directory")
-set(CORROSION_INCLUDE_DIR "${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/litertlm_cxx_bridge/include")
+set(LITERTLM_CORROSION_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/corrosion CACHE PATH "Path to corrosion source directory")
+set(LITERTLM_CORROSION_INCLUDE_DIR "${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/litertlm_cxx_bridge/include")
+set(LITERTLM_CORROSION_TAG "v0.6.1" CACHE STRING "Corrosion git tag")
 FetchContent_Declare(
     Corrosion
     GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-    GIT_TAG v0.6.1
-    SOURCE_DIR ${CORROSION_SRC_DIR}
+    GIT_TAG ${LITERTLM_CORROSION_TAG}
+    SOURCE_DIR ${LITERTLM_CORROSION_SRC_DIR}
 )
 FetchContent_MakeAvailable(Corrosion)
 
@@ -68,24 +74,26 @@ if(TARGET Corrosion)
 endif()
 
 # --- Llguidance ---
-set(LLGUIDANCE_SRC_DIR ${THIRD_PARTY_DIR}/llguidance CACHE PATH "Path to llguidance source directory")
-set(LLGUIDANCE_INCLUDE_DIR "${THIRD_PARTY_DIR}/llguidance/parser")
+set(LITERTLM_LLGUIDANCE_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/llguidance CACHE PATH "Path to llguidance source directory")
+set(LITERTLM_LLGUIDANCE_INCLUDE_DIR "${LITERTLM_THIRD_PARTY_DIR}/llguidance/parser")
+set(LITERTLM_LLGUIDANCE_TAG "v1.9.1" CACHE STRING "Llguidance git tag")
 FetchContent_Declare(
   llguidance
   GIT_REPOSITORY https://github.com/guidance-ai/llguidance.git
-  GIT_TAG v1.3.0
-  SOURCE_DIR ${LLGUIDANCE_SRC_DIR}
+  GIT_TAG ${LITERTLM_LLGUIDANCE_TAG}
+  SOURCE_DIR ${LITERTLM_LLGUIDANCE_SRC_DIR}
 )
 FetchContent_Populate(llguidance)
 
 # --- LibPNG ---
-set(LIBPNG_SRC_DIR ${THIRD_PARTY_DIR}/libpng CACHE PATH "Path to libpng source directory")
+set(LITERTLM_LIBPNG_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/libpng CACHE PATH "Path to libpng source directory")
+set(LITERTLM_LIBPNG_TAG "v1.6.40" CACHE STRING "LibPNG git tag")
 FetchContent_Declare(
   libpng_lib
   GIT_REPOSITORY https://github.com/glennrp/libpng.git
-  GIT_TAG v1.6.40
+  GIT_TAG ${LITERTLM_LIBPNG_TAG}
   GIT_SHALLOW true
-  SOURCE_DIR ${LIBPNG_SRC_DIR}
+  SOURCE_DIR ${LITERTLM_LIBPNG_SRC_DIR}
 )
 block()
   set(PNG_SHARED OFF)
@@ -109,13 +117,14 @@ if(TARGET png_static)
 endif()
 
 # --- KissFFT ---
-set(KISSFFT_SRC_DIR ${THIRD_PARTY_DIR}/kissfft CACHE PATH "Path to kissfft source directory")
+set(LITERTLM_KISSFFT_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/kissfft CACHE PATH "Path to kissfft source directory")
+set(LITERTLM_KISSFFT_TAG "131.2.0" CACHE STRING "KissFFT git tag")
 FetchContent_Declare(
   kissfft_lib
   GIT_REPOSITORY https://github.com/mborgerding/kissfft
-  GIT_TAG 131.2.0
+  GIT_TAG ${LITERTLM_KISSFFT_TAG}
   GIT_SHALLOW true
-  SOURCE_DIR ${KISSFFT_SRC_DIR}
+  SOURCE_DIR ${LITERTLM_KISSFFT_SRC_DIR}
 )
 block()
   cmake_policy(SET CMP0077 OLD)
@@ -128,13 +137,14 @@ if(TARGET kissfft)
 endif()
 
 # --- MiniAudio ---
-set(MINIAUDIO_SRC_DIR ${THIRD_PARTY_DIR}/miniaudio CACHE PATH "Path to miniaudio source directory")
+set(LITERTLM_MINIAUDIO_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/miniaudio CACHE PATH "Path to miniaudio source directory")
+set(LITERTLM_MINIAUDIO_TAG "0.11.25" CACHE STRING "MiniAudio git tag")
 FetchContent_Declare(
   miniaudio_lib
   GIT_REPOSITORY https://github.com/mackron/miniaudio
-  GIT_TAG 0.11.25
+  GIT_TAG ${LITERTLM_MINIAUDIO_TAG}
   GIT_SHALLOW true
-  SOURCE_DIR ${MINIAUDIO_SRC_DIR}
+  SOURCE_DIR ${LITERTLM_MINIAUDIO_SRC_DIR}
 )
 FetchContent_MakeAvailable(miniaudio_lib)
 if(TARGET miniaudio)
@@ -142,13 +152,13 @@ if(TARGET miniaudio)
 endif()
 
 # --- MiniZip ---
-set(MINIZIP_SRC_DIR ${THIRD_PARTY_DIR}/minizip CACHE PATH "Path to minizip source directory")
+set(LITERTLM_MINIZIP_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/minizip CACHE PATH "Path to minizip source directory")
+set(LITERTLM_MINIZIP_TAG aee7fbddf118d9363575af96310c29fa747d70c0 CACHE STRING "MiniZip git tag")
 FetchContent_Declare(
   minizip_lib
   GIT_REPOSITORY https://github.com/domoticz/minizip
-  GIT_TAG aee7fbddf118d9363575af96310c29fa747d70c0
-  GIT_SHALLOW true
-  SOURCE_DIR ${MINIZIP_SRC_DIR}
+  GIT_TAG ${LITERTLM_MINIZIP_TAG}
+  SOURCE_DIR ${LITERTLM_MINIZIP_SRC_DIR}
 )
 block()
   FetchContent_MakeAvailable(minizip_lib)
@@ -159,14 +169,14 @@ if(TARGET minizip)
 endif()
 
 # --- Minja ---
-set(MINJA_SRC_DIR ${THIRD_PARTY_DIR}/minja CACHE PATH "Path to minja source directory")
+set(LITERTLM_MINJA_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/minja CACHE PATH "Path to minja source directory")
+set(LITERTLM_MINJA_TAG "021c2293c187789ef13d56c6cfd89c9b134fd80f" CACHE STRING "Minja git tag")
 FetchContent_Declare(
   minja_lib
   GIT_REPOSITORY https://github.com/google/minja
-  GIT_TAG 021c2293c187789ef13d56c6cfd89c9b134fd80f
-  GIT_SHALLOW true
-  SOURCE_DIR ${MINJA_SRC_DIR}
-  PATCH_COMMAND ${CMAKE_COMMAND} -DTARGET_FILE=${MINJA_SRC_DIR}/CMakeLists.txt -P${LITERTLM_PATCHES_DIR}/minja_patch.cmake
+  GIT_TAG ${LITERTLM_MINJA_TAG}
+  SOURCE_DIR ${LITERTLM_MINJA_SRC_DIR}
+  PATCH_COMMAND ${CMAKE_COMMAND} -DTARGET_FILE=${LITERTLM_MINJA_SRC_DIR}/CMakeLists.txt -P${LITERTLM_PATCHES_DIR}/minja_patch.cmake
 )
   # Turn off tests and examples
 set(MINJA_TEST_ENABLED OFF CACHE BOOL "")
@@ -181,18 +191,19 @@ if(TARGET minja)
 endif()
 
 # --- JSON (Header Only - Populated) ---
-set(JSON_SRC_DIR ${THIRD_PARTY_DIR}/json CACHE PATH "Path to json headers")
+set(LITERTLM_JSON_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/json CACHE PATH "Path to json headers")
+set(LITERTLM_JSON_TAG "v3.12.0" CACHE STRING "JSON git tag")
 FetchContent_Declare(
   json_lib
   GIT_REPOSITORY https://github.com/nlohmann/json
-  GIT_TAG v3.12.0
+  GIT_TAG ${LITERTLM_JSON_TAG}
   GIT_SHALLOW true
-  SOURCE_DIR ${JSON_SRC_DIR}
+  SOURCE_DIR ${LITERTLM_JSON_SRC_DIR}
 )
 FetchContent_Populate(json_lib)
 if(NOT TARGET json_lib)
-  add_library(json_lib INTERFACE)
-  target_include_directories(json_lib INTERFACE ${JSON_SRC_DIR}/include)
+  add_library(json_lib INTERFACE IMPORTED GLOBAL)
+  target_include_directories(json_lib INTERFACE ${LITERTLM_JSON_SRC_DIR}/include)
 endif()
 
 if(NOT TARGET nlohmann_json::nlohmann_json)
@@ -200,33 +211,80 @@ if(NOT TARGET nlohmann_json::nlohmann_json)
 endif()
 
 if(NOT TARGET LiteRTLM::nlohmann_json::nlohmann_json)
-  add_library(LiteRTLM::nlohmann_json::nlohmann_json INTERFACE IMPORTED GLOBAL)
-  target_link_libraries(LiteRTLM::nlohmann_json::nlohmann_json INTERFACE nlohmann_json::nlohmann_json)
+  add_library(LiteRTLM::nlohmann_json::nlohmann_json ALIAS json_lib)
 endif()
 
 # --- STB (Header Only - Populated) ---
-set(STB_SRC_DIR ${THIRD_PARTY_DIR}/stb_lib CACHE PATH "Path to libstb headers")
+set(LITERTLM_STB_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/stb_lib CACHE PATH "Path to libstb headers")
+# Pinned to the same stb commit as the Bazel WORKSPACE. Upstream removed
+# stb_image_resize2.h from master on 2026-10-19 (moved to a separate
+# repository), so tracking `master` no longer builds.
+set(LITERTLM_STB_TAG "f58f558c120e9b32c217290b80bad1a0729fbb2c" CACHE STRING "STB git tag")
+# No GIT_SHALLOW: the pinned commit is not a branch tip, so a shallow clone
+# cannot check it out ("reference is not a tree"). The repository is small.
 FetchContent_Declare(
   stb_lib
   GIT_REPOSITORY https://github.com/nothings/stb.git
-  GIT_TAG master
-  GIT_SHALLOW true
-  SOURCE_DIR ${STB_SRC_DIR}
+  GIT_TAG ${LITERTLM_STB_TAG}
+  SOURCE_DIR ${LITERTLM_STB_SRC_DIR}
 )
 FetchContent_Populate(stb_lib)
-if(NOT TARGET stb_lib)
-  add_library(stb_lib INTERFACE)
-  target_include_directories(stb_lib INTERFACE ${STB_SRC_DIR})
+
+# An stb header only emits its implementation in a translation unit that
+# defines the matching STB_*_IMPLEMENTATION macro before including it. Generate
+# that single translation unit here so consumers can simply include the
+# headers; if two of them defined the macros themselves the link would fail
+# with duplicate symbols.
+set(LITERTLM_STB_IMPL_SRC ${CMAKE_CURRENT_BINARY_DIR}/stb_impl/stb_impl.cc)
+file(CONFIGURE
+  OUTPUT ${LITERTLM_STB_IMPL_SRC}
+  CONTENT [[
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize2.h"
+]]
+  @ONLY
+)
+
+if(NOT TARGET stb_impl)
+  add_litertlm_library(stb_impl STATIC ${LITERTLM_STB_IMPL_SRC})
+  target_include_directories(stb_impl PUBLIC ${LITERTLM_STB_SRC_DIR})
+endif()
+
+# --- Highway (portable SIMD with runtime dispatch) ---
+set(LITERTLM_HIGHWAY_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/highway CACHE PATH "Path to highway source directory")
+# Keep in sync with the `highway` http_archive in the Bazel WORKSPACE.
+set(LITERTLM_HIGHWAY_TAG "1.3.0" CACHE STRING "Highway git tag")
+FetchContent_Declare(
+  highway_lib
+  GIT_REPOSITORY https://github.com/google/highway
+  GIT_TAG ${LITERTLM_HIGHWAY_TAG}
+  GIT_SHALLOW true
+  SOURCE_DIR ${LITERTLM_HIGHWAY_SRC_DIR}
+)
+block()
+  set(BUILD_SHARED_LIBS OFF)
+  set(HWY_ENABLE_CONTRIB OFF CACHE BOOL "" FORCE)
+  set(HWY_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(HWY_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+  set(HWY_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(highway_lib)
+endblock()
+if(TARGET hwy)
+  add_library(highway_lib ALIAS hwy)
 endif()
 
 # --- ZLIB ---
-set(ZLIB_SRC_DIR ${THIRD_PARTY_DIR}/zlib CACHE PATH "Path to zlib source directory")
+set(LITERTLM_ZLIB_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/zlib CACHE PATH "Path to zlib source directory")
+set(LITERTLM_ZLIB_TAG "master" CACHE STRING "ZLIB git tag")
 FetchContent_Declare(
   zlib_lib
   GIT_REPOSITORY https://github.com/madler/zlib
-  GIT_TAG master
+  GIT_TAG ${LITERTLM_ZLIB_TAG}
   GIT_SHALLOW true
-  SOURCE_DIR ${ZLIB_SRC_DIR}
+  SOURCE_DIR ${LITERTLM_ZLIB_SRC_DIR}
 )
 block()
   set(BUILD_SHARED_LIBS OFF)
@@ -239,28 +297,44 @@ elseif(TARGET zlib)
 endif()
 
 # --- Path Exports ---
-set(FETCHCONTENT_MODULE_SRC_DIRS
-  ${ANTLR_SRC_DIR}
-  ${KISSFFT_SRC_DIR}
-  ${LLGUIDANCE_SRC_DIR}/parser
-  ${MINIAUDIO_SRC_DIR}
-  ${MINIZIP_SRC_DIR}
-  ${MINJA_SRC_DIR}
-  ${JSON_SRC_DIR}
-  ${STB_SRC_DIR}
-  ${ZLIB_SRC_DIR}
-  ${CORROSION_SRC_DIR}
+set(LITERTLM_FETCHCONTENT_MODULE_SRC_DIRS
+  ${LITERTLM_ANTLR_SRC_DIR}
+  ${LITERTLM_KISSFFT_SRC_DIR}
+  ${LITERTLM_LLGUIDANCE_SRC_DIR}/parser
+  ${LITERTLM_MINIAUDIO_SRC_DIR}
+  ${LITERTLM_MINIZIP_SRC_DIR}
+  ${LITERTLM_MINJA_SRC_DIR}
+  ${LITERTLM_JSON_SRC_DIR}
+  ${LITERTLM_STB_SRC_DIR}
+  ${LITERTLM_HIGHWAY_SRC_DIR}
+  ${LITERTLM_ZLIB_SRC_DIR}
+  ${LITERTLM_CORROSION_SRC_DIR}
 )
 
-set(FETCHCONTENT_MODULE_INCLUDE_DIR
-  ${ANTLR_SRC_DIR}
-  ${KISSFFT_SRC_DIR}
-  ${LLGUIDANCE_SRC_DIR}/parser
-  ${MINIAUDIO_SRC_DIR}
-  ${MINIZIP_SRC_DIR}/minizip
-  ${MINJA_SRC_DIR}/include
-  ${JSON_SRC_DIR}/include
-  ${STB_SRC_DIR}
-  ${ZLIB_SRC_DIR}
-  ${CORROSION_INCLUDE_DIR}
+set(LITERTLM_FETCHCONTENT_MODULE_INCLUDE_DIR
+  ${LITERTLM_ANTLR_SRC_DIR}
+  ${LITERTLM_KISSFFT_SRC_DIR}
+  ${LITERTLM_LLGUIDANCE_SRC_DIR}/parser
+  ${LITERTLM_MINIAUDIO_SRC_DIR}
+  ${LITERTLM_MINIZIP_SRC_DIR}/minizip
+  ${LITERTLM_MINJA_SRC_DIR}/include
+  ${LITERTLM_JSON_SRC_DIR}/include
+  ${LITERTLM_STB_SRC_DIR}
+  ${LITERTLM_HIGHWAY_SRC_DIR}
+  ${LITERTLM_ZLIB_SRC_DIR}
+  ${LITERTLM_CORROSION_INCLUDE_DIR}
+)
+
+add_custom_target(fetch_content_complete)
+add_dependencies(fetch_content_complete
+    antlr_lib
+    libpng_lib
+    kissfft_lib
+    miniaudio_lib
+    minizip_lib
+    minja_lib
+    json_lib
+    stb_impl
+    highway_lib
+    zlib_lib
 )

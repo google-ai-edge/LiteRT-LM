@@ -1,0 +1,1920 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "runtime/components/constrained_decoding/llg_fc_tool_calls.h"
+
+#include <cstdint>
+#include <filesystem>  // NOLINT: Required for path manipulation.
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/escaping.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_replace.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/constrained_decoding/bitmap.h"
+#include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/constraint_provider.h"
+#include "runtime/components/constrained_decoding/llg_constraint_config.h"
+#include "runtime/components/constrained_decoding/llg_constraint_provider.h"
+#include "runtime/components/constrained_decoding/llguidance_schema_utils.h"
+#include "runtime/util/status_macros.h"
+#include "runtime/util/test_utils.h"  // NOLINT
+#include "support/tokenizer/sentencepiece_tokenizer.h"
+#include "support/tokenizer/tokenizer.h"
+
+namespace litert::lm {
+namespace {
+
+constexpr char kTestdataDir[] =
+    "litert_lm/runtime/components/testdata/";
+
+std::string GetTestdataPath(const std::string& file_name) {
+  return (std::filesystem::path(::testing::SrcDir()) / kTestdataDir / file_name)
+      .string();
+}
+
+// Returns a Gemma 4 call to `tool` with `arguments`, in which ' stands for the
+// string delimiter <|"|>.
+std::string FcCall(absl::string_view tool, absl::string_view arguments) {
+  return absl::StrCat("<|tool_call>call:", tool, "{",
+                      absl::StrReplaceAll(arguments, {{"'", "<|\"|>"}}),
+                      "}<tool_call|><|tool_response>");
+}
+
+using Tokenizer = ::litert::support::Tokenizer;
+using TokenizerType = ::litert::support::TokenizerType;
+using TokenIds = ::litert::support::TokenIds;
+
+using ::testing::status::StatusIs;
+
+class TestSentencePieceTokenizer : public Tokenizer {
+ public:
+  explicit TestSentencePieceTokenizer(
+      std::unique_ptr<::litert::support::SentencePieceTokenizer> tokenizer)
+      : tokenizer_(std::move(tokenizer)) {}
+
+  TokenizerType GetTokenizerType() const override {
+    return tokenizer_->GetTokenizerType();
+  }
+
+  absl::StatusOr<TokenIds> TextToTokenIds(absl::string_view text) override {
+    return tokenizer_->TextToTokenIds(text);
+  }
+
+  absl::StatusOr<int> TokenToId(absl::string_view token) override {
+    return tokenizer_->TokenToId(token);
+  }
+
+  absl::StatusOr<std::string> TokenIdsToText(
+      absl::Span<const int> ids, bool skip_special_tokens) override {
+    return tokenizer_->TokenIdsToText(ids);
+  }
+
+  std::vector<std::string> GetTokens() const override {
+    return tokenizer_->GetTokens();
+  }
+
+  int GetVocabSize() const override { return tokenizer_->GetVocabSize(); }
+
+  const ::litert::support::SentencePieceTokenizer& GetInternalTokenizer()
+      const {
+    return *tokenizer_;
+  }
+
+ private:
+  std::unique_ptr<::litert::support::SentencePieceTokenizer> tokenizer_;
+};
+
+class LlgFcToolCallsTest : public testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    ASSERT_OK_AND_ASSIGN(
+        auto tokenizer,
+        ::litert::support::SentencePieceTokenizer::CreateFromFile(
+            GetTestdataPath("gemma4_sentencepiece.model")));
+    tokenizer_ = new TestSentencePieceTokenizer(std::move(tokenizer));
+    ASSERT_OK_AND_ASSIGN(
+        auto provider, LlgConstraintProvider::Create(*tokenizer_, GetConfig()));
+    provider_ = provider.release();
+  }
+
+  static void TearDownTestSuite() {
+    delete provider_;
+    provider_ = nullptr;
+    delete tokenizer_;
+    tokenizer_ = nullptr;
+  }
+
+  static const LlGuidanceConfig& GetConfig() {
+    // Gemma4DataProcessor makes the channel tokens special too.
+    static const auto* const config = new LlGuidanceConfig{
+        .eos_ids = {1, 50, 106},
+        .special_tokens = {"<eos>", "<|tool_call>", "<tool_call|>",
+                           "<|tool_response>", "<tool_response|>", "<|\"|>",
+                           "<|channel>", "<channel|>"}};
+    return *config;
+  }
+  static inline TestSentencePieceTokenizer* tokenizer_ = nullptr;
+  static inline ConstraintProvider* provider_ = nullptr;
+
+  LlgConstraintsOptions GetDefaultFcOptions(LlgConstraintMode mode) {
+    LlgConstraintsOptions options;
+    options.funcall_format = FuncallFormat::kFc;
+    options.constraint_mode = mode;
+
+    // Gemma 4 token expectations:
+    options.code_fence_start = "<|tool_call>";
+    options.code_fence_end = "<tool_call|>";
+    options.function_response_start = "<|tool_response>";
+    options.open_quote = "<|\"|>";
+    options.close_quote = "<|\"|>";
+
+    return options;
+  }
+
+  // <|tool_response> (50) is a stop token too, but the grammar consumes it as
+  // fc_resp, so it is covered separately by
+  // ToolResponseStartIsBothEosAndFcResp.
+  static constexpr uint32_t kTurnEndTokenIds[] = {1, 106};  // <eos>, <turn|>
+
+  absl::StatusOr<bool> AcceptsInternal(Constraint& constraint,
+                                       absl::string_view text) {
+    ABSL_ASSIGN_OR_RETURN(TokenIds ids, tokenizer_->TextToTokenIds(text));
+    auto state = constraint.Start();
+    for (int i = 0; i < ids.size(); ++i) {
+      int id = ids[i];
+      ABSL_ASSIGN_OR_RETURN(auto bitmap, constraint.ComputeBitmap(*state));
+
+      if (!bitmap->Get(id)) {
+        return false;
+      }
+      ABSL_ASSIGN_OR_RETURN(state, constraint.ComputeNext(*state, id));
+    }
+    ABSL_ASSIGN_OR_RETURN(auto final_bitmap, constraint.ComputeBitmap(*state));
+    // llguidance allows every EOS token exactly when the grammar accepts, so
+    // the turn-ending tokens must agree. A split decision means one of them
+    // is being matched as text.
+    const bool accepts = final_bitmap->Get(kTurnEndTokenIds[0]);
+    for (uint32_t id : kTurnEndTokenIds) {
+      EXPECT_EQ(final_bitmap->Get(id), accepts)
+          << "stop token " << id << " disagrees with " << kTurnEndTokenIds[0]
+          << " after \"" << absl::Utf8SafeCEscape(text) << "\"";
+    }
+    return accepts;
+  }
+
+  void AssertAccepts(Constraint& constraint, absl::string_view text) {
+    auto accepts = AcceptsInternal(constraint, text);
+    if (!accepts.ok()) {
+      ADD_FAILURE() << "AcceptsInternal failed for text: \"" << text
+                    << "\"\nStatus: " << accepts.status();
+      return;
+    }
+    if (!*accepts) {
+      ADD_FAILURE() << "Constraint failed to ACCEPT text: \""
+                    << absl::Utf8SafeCEscape(text) << "\"";
+    }
+  }
+
+  void AssertRejects(Constraint& constraint, absl::string_view text) {
+    auto accepts = AcceptsInternal(constraint, text);
+    if (!accepts.ok() || !*accepts) return;
+    if (*accepts) {
+      ADD_FAILURE() << "Constraint failed to REJECT text: \""
+                    << absl::Utf8SafeCEscape(text) << "\"";
+    }
+  }
+
+  std::unique_ptr<Constraint> CreateConstraint(
+      const nlohmann::ordered_json& tools,
+      const LlgConstraintsOptions& options) {
+    if (!provider_) {
+      ADD_FAILURE() << "Constraint provider is not initialized.";
+      return nullptr;
+    }
+
+    auto res = CreateLarkGrammarForFcToolCalls(tools, options);
+    EXPECT_OK(res);
+    if (!res.ok()) return nullptr;
+
+    auto constraint = provider_->CreateConstraint(
+        LlGuidanceConstraintArg{.constraint_type = LlgConstraintType::kLark,
+                                .constraint_string = *res});
+    if (!constraint.ok()) {
+      ADD_FAILURE() << "Failed to create constraint: " << constraint.status();
+      return nullptr;
+    }
+    return std::move(*constraint);
+  }
+};
+
+TEST_F(LlgFcToolCallsTest, TextOnly) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather"
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kTextOnly));
+
+  AssertAccepts(*constraint, "This is just plain text.");
+  AssertAccepts(*constraint, "Some html tags <div>some text</div>");
+  AssertRejects(*constraint,
+                "Something <|tool_call>call:get_weather{}<tool_call|>");
+}
+
+TEST_F(LlgFcToolCallsTest, TextOnlyRejectsEmptyAnswer) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array();
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kTextOnly));
+  AssertRejects(*constraint, "");
+  AssertAccepts(*constraint, "A");
+}
+
+// An answer of only whitespace isn't visible either. After a tool response,
+// Gemma 4 2.3B answered "none" with only "\n". The model can't end the turn
+// before a visible character, so only two whitespace characters can come
+// before it, and the model can't keep writing whitespace instead.
+TEST_F(LlgFcToolCallsTest, TextOnlyRejectsWhitespaceOnlyAnswer) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array();
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kTextOnly);
+  options.channel_start = "<|channel>";
+  options.channel_end = "<channel|>";
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  for (absl::string_view answer : {
+           "\n",
+           " ",
+           "\t\n",
+           "<|channel>thought\nI planted them.<channel|>",
+           "<|channel>thought\nI planted them.<channel|>\n",
+           "\n\n\nI planted them.",
+       }) {
+    AssertRejects(*constraint, answer);
+  }
+  for (absl::string_view answer : {
+           "\nI planted them.",
+           "\n\nI planted them.",
+           " I planted\n\n\nthem.\n\n\n",
+           "<|channel>thought\nDone.<channel|>\nI planted them.",
+       }) {
+    AssertAccepts(*constraint, answer);
+  }
+}
+
+// The code fence is matched literally. The `|` in "<|tool_call>" isn't an
+// alternation, so answers that end with "<" or start with "tool_call>" are
+// fine. Text that only looks like a call isn't one, since only the fence starts
+// a call.
+TEST_F(LlgFcToolCallsTest, TextOnlyMatchesCodeFenceLiterally) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::parse(R"json([
+    {"name": "get_weather"}
+  ])json");
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kTextOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, "1 <");
+  AssertAccepts(*constraint, "tool_call> starts the answer.");
+  AssertAccepts(*constraint, "call:get_weather{city:Paris}");
+
+  // The fence written with ordinary tokens is still the fence, because the
+  // parser reads the text.
+  std::vector<int> ids;
+  const std::vector<std::string> pieces = {"Sure ", "<",    "|", "tool",
+                                           "_",     "call", ">"};
+  for (const std::string& piece : pieces) {
+    ASSERT_OK_AND_ASSIGN(TokenIds piece_ids,
+                         tokenizer_->TextToTokenIds(piece));
+    ids.insert(ids.end(), piece_ids.begin(), piece_ids.end());
+  }
+  ASSERT_OK_AND_ASSIGN(
+      std::string text,
+      tokenizer_->TokenIdsToText(ids, /*skip_special_tokens=*/false));
+  ASSERT_EQ(text, "Sure <|tool_call>");
+  auto state = constraint->Start();
+  bool rejected = false;
+  for (int id : ids) {
+    ASSERT_OK_AND_ASSIGN(auto bitmap, constraint->ComputeBitmap(*state));
+    if (!bitmap->Get(id)) {
+      rejected = true;
+      break;
+    }
+    ASSERT_OK_AND_ASSIGN(state, constraint->ComputeNext(*state, id));
+  }
+  EXPECT_TRUE(rejected);
+}
+
+// The model may open channels first, e.g. to think when thinking is enabled
+// only in the prompt, but a text-only answer must still follow them.
+TEST_F(LlgFcToolCallsTest, TextOnlyAllowsChannelBeforeAnswer) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::parse(R"json([
+    {"name": "get_weather"}
+  ])json");
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kTextOnly);
+  options.channel_start = "<|channel>";
+  options.channel_end = "<channel|>";
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint, "It is sunny.");
+  AssertAccepts(*constraint,
+                "<|channel>thought\nThe user asks about the weather.<channel|>"
+                "It is sunny.");
+  // Gemma 4 sometimes thinks in more than one block.
+  AssertAccepts(*constraint,
+                "<|channel>thought\nThe user asks about the weather.<channel|>"
+                "<|channel>thought\nI can't call tools.<channel|>It is sunny.");
+  // No visible answer.
+  AssertRejects(*constraint, "<|channel>thought\nIt is sunny.<channel|>");
+  AssertRejects(*constraint,
+                "<|channel>thought\nHmm.<channel|><|channel>thought\nIt is "
+                "sunny.<channel|>");
+  // Channels are only allowed at the start.
+  AssertRejects(*constraint, "It is sunny.<|channel>thought\nDone.<channel|>");
+}
+
+TEST_F(LlgFcToolCallsTest, TextAndOrFunctionCallsAllowsChannelFirst) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::parse(R"json([
+    {
+      "name": "get_weather",
+      "parameters": {
+        "type": "object",
+        "properties": {"location": {"type": "string"}},
+        "required": ["location"]
+      }
+    }
+  ])json");
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kTextAndOrFunctionCalls);
+
+  // Without the channel options, the channel markup can't appear at all.
+  auto no_channel = CreateConstraint(tools, options);
+  ASSERT_NE(no_channel, nullptr);
+  AssertRejects(*no_channel, "<|channel>thought\nHmm.<channel|>It is sunny.");
+
+  options.channel_start = "<|channel>";
+  options.channel_end = "<channel|>";
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+  AssertAccepts(*constraint, "<|channel>thought\nHmm.<channel|>It is sunny.");
+  AssertAccepts(*constraint,
+                R"(<|channel>thought
+Check the weather.<channel|><|tool_call>call:get_weather{location:<|"|>Paris<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(*constraint, "It is sunny.<|channel>thought\nDone.<channel|>");
+}
+
+TEST_F(LlgFcToolCallsTest, TextAndOrFunctionCalls) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["celsius", "fahrenheit"]
+        }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genres": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kTextAndOrFunctionCalls));
+
+  // Text only
+  AssertAccepts(*constraint, "A normal text");
+  // Single function call.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>,unit:<|"|>celsius<|"|>}<tool_call|><|tool_response>)");
+  // Single function call with text before.
+  AssertAccepts(
+      *constraint,
+      R"(Some normal text<|tool_call>call:find_movies{genres:[<|"|>Action<|"|>]}<tool_call|><|tool_response>)");
+  // Multiple function calls.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_call>call:find_movies{genres:[<|"|>Action<|"|>]}<tool_call|><|tool_response>)");
+  // Multiple function calls with text before.
+  AssertAccepts(
+      *constraint,
+      R"(Some normal text ... <|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>,unit:<|"|>celsius<|"|>}<tool_call|><|tool_call>call:find_movies{genres:[<|"|>Action<|"|>,<|"|>Comedy<|"|>]}<tool_call|><|tool_response>)");
+
+  // Rejects function call without <|tool_response> suffix.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>,unit:<|"|>celsius<|"|>}<tool_call|>)");
+  // Rejects function call with wrong function name.
+  AssertRejects(*constraint,
+                R"(<|tool_call>call:get_weath{}<tool_call|><|tool_response>)");
+  // Rejects function call with extra text after it.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:get_weather{}<tool_call|><|tool_response>extra text)");
+}
+
+TEST_F(LlgFcToolCallsTest, FunctionCallsOnly) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["celsius", "fahrenheit"]
+        }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genres": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  })json");
+  nlohmann::ordered_json tool3 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_time"
+  })json");
+  nlohmann::ordered_json tool4 = nlohmann::ordered_json::parse(R"json({
+    "name": "set_timer",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "duration": {
+          "type": "integer"
+        },
+        "sound": {
+          "type": "boolean"
+        }
+      },
+      "required": ["duration"]
+    }
+  })json");
+  nlohmann::ordered_json tools =
+      nlohmann::ordered_json::array({tool1, tool2, tool3, tool4});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  // Single function call.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>,unit:<|"|>celsius<|"|>}<tool_call|><|tool_response>)");
+  // Single function call without params.
+  AssertAccepts(*constraint,
+                R"(<|tool_call>call:get_time{}<tool_call|><|tool_response>)");
+  // Multiple function calls with different primitive parameters.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:find_movies{genres:[<|"|>Action<|"|>]}<tool_call|><|tool_call>call:set_timer{duration:10,sound:true}<tool_call|><|tool_call>call:set_timer{duration:5,sound:false}<tool_call|><|tool_response>)");
+
+  // Rejects Text only
+  AssertRejects(*constraint, "A normal text");
+  // Rejects single function call with text before
+  AssertRejects(
+      *constraint,
+      R"(Some normal text<|tool_call>call:find_movies{genres:[<|"|>Action<|"|>,<|"|>Comedy<|"|>]}<tool_call|><|tool_response>)");
+  // Rejects multiple function calls with text before.
+  AssertRejects(
+      *constraint,
+      R"(Some normal text <|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>,unit:<|"|>celsius<|"|>}<tool_call|><|tool_call>call:find_movies{genres:[<|"|>Action<|"|>,<|"|>Comedy<|"|>]}<tool_call|><|tool_response>)");
+  // Rejects function call without <|tool_response> suffix.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>,unit:<|"|>celsius<|"|>}<tool_call|>)");
+  // Rejects function call with wrong function name.
+  AssertRejects(*constraint,
+                R"(<|tool_call>call:get_weath{}<tool_call|><|tool_response>)");
+  // Rejects function call with extra text after it.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:get_weather{}<tool_call|><|tool_response>extra text)");
+}
+
+TEST_F(LlgFcToolCallsTest, EmptyTools_TextOnly_Lark) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array();
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kTextOnly));
+  AssertAccepts(*constraint, "Any text is fine.");
+  AssertRejects(*constraint,
+                "Text with <|tool_call>call:some_tool{}<tool_call|>");
+}
+
+TEST_F(LlgFcToolCallsTest, EmptyTools_TextAndOrFunctionCalls_Lark) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array();
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kTextAndOrFunctionCalls));
+  AssertAccepts(*constraint, "Any text is fine.");
+  AssertRejects(*constraint,
+                "Text with <|tool_call>call:some_tool{}<tool_call|>");
+}
+
+TEST_F(LlgFcToolCallsTest, EmptyTools_FunctionCallsOnly_Lark) {
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array();
+  auto res = CreateLarkGrammarForFcToolCalls(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+  EXPECT_THAT(res, StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(LlgFcToolCallsTest, ParameterNameConstraint) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["celsius", "fahrenheit"]
+        }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  // Accept valid parameters.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>,unit:<|"|>celsius<|"|>}<tool_call|><|tool_response>)");
+
+  // Reject unexpected parameter name.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>,extra:<|"|>data<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, NoParameters) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_time"
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  // Accept valid call.
+  AssertAccepts(*constraint,
+                R"(<|tool_call>call:get_time{}<tool_call|><|tool_response>)");
+
+  // Reject call with unexpected parameters.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:get_time{timezone:<|"|>PST<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, RequiredParameter) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string"
+        }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  // Accept with required parameter.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
+
+  // Reject missing required parameter.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:get_weather{}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, OptionalParameter) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "ping",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "timeout": { "type": "integer" }
+      }
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  // Valid without optional parameter.
+  AssertAccepts(*constraint,
+                R"(<|tool_call>call:ping{}<tool_call|><|tool_response>)");
+
+  // Valid with optional parameter.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:ping{timeout:5}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, RequiredAndOptionalParameters) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "set_timer",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "duration": {
+          "type": "integer"
+        },
+        "sound": {
+          "type": "boolean"
+        }
+      },
+      "required": ["duration"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  // Accept with required parameter and optional parameter.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:set_timer{duration:10,sound:true}<tool_call|><|tool_response>)");
+
+  // Accept with required parameter only.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:set_timer{duration:10}<tool_call|><|tool_response>)");
+
+  // Reject with optional parameter only.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:set_timer{sound:true}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, PrimitiveTypes) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "set_timer",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "duration": {
+          "type": "integer"
+        },
+        "sound": {
+          "type": "boolean"
+        }
+      },
+      "required": ["duration"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  // Accept valid types.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:set_timer{duration:10}<tool_call|><|tool_response>)");
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:set_timer{duration:10,sound:true}<tool_call|><|tool_response>)");
+
+  // Reject invalid type (string instead of integer).
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:set_timer{duration:<|"|>10<|"|>,sound:true}<tool_call|><|tool_response>)");
+
+  // Reject invalid type (string instead of boolean).
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:set_timer{duration:10,sound:<|"|>true<|"|>}<tool_call|><|tool_response>)");
+
+  // Accept other well-formed integers.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:set_timer{duration:0}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:set_timer{duration:-5}<tool_call|><|tool_response>)");
+
+  // Reject floats. "integer" and "number" are distinct JSON Schema types, so
+  // a fraction or an exponent must not be permitted here. Consumers that
+  // decode into a fixed-width integer reject 10.0 outright.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:set_timer{duration:10.5}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:set_timer{duration:10.0}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:set_timer{duration:1e3}<tool_call|><|tool_response>)");
+}
+
+// Guards the other direction: tightening "integer" must not also tighten
+// "number", which is still allowed a fraction and an exponent.
+TEST_F(LlgFcToolCallsTest, NumberParametersStillAcceptFloats) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "set_temperature",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "celsius": {
+          "type": "number"
+        }
+      },
+      "required": ["celsius"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:set_temperature{celsius:21.5}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:set_temperature{celsius:21}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:set_temperature{celsius:2.15e1}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, EnumParameters) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "set_device_state",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "enum": ["on", "off"]
+        }
+      },
+      "required": ["device", "state"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  // Accept valid enum value.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:set_device_state{device:<|"|>light<|"|>,state:<|"|>on<|"|>}<tool_call|><|tool_response>)");
+
+  // Reject invalid enum value.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:set_device_state{device:<|"|>light<|"|>,state:<|"|>dimmed<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, FcArgumentTypes) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "complex_tool",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "str": { "type": "string" },
+        "num": { "type": "number" },
+        "int": { "type": "integer" },
+        "bool": { "type": "boolean" },
+        "list": { "type": "array", "items": { "type": "string" } },
+        "dict": { "type": "object", "additionalProperties": { "type": "string" } },
+        "null_val": { "type": "null" }
+      },
+      "required": ["str", "num", "int", "bool", "list", "dict", "null_val"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  // Accepts all supported types.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:complex_tool{bool:true,dict:{k:<|"|>v<|"|>},int:3,list:[<|"|>a<|"|>,<|"|>b<|"|>],null_val:null,num:1.2,str:<|"|>abc<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, FcNullValue) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" },
+        "unit": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>MV<|"|>,unit:null}<tool_call|><|tool_response>)");
+
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" },
+        "unit": { "type": ["string", "null"] }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools2 = nlohmann::ordered_json::array({tool2});
+  auto constraint2 = CreateConstraint(
+      tools2, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint2,
+      R"(<|tool_call>call:get_weather{location:<|"|>MV<|"|>,unit:null}<tool_call|><|tool_response>)");
+
+  nlohmann::ordered_json tool3 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": ["string", "null"] }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tools3 = nlohmann::ordered_json::array({tool3});
+  auto constraint3 = CreateConstraint(
+      tools3, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint3,
+      R"(<|tool_call>call:get_weather{location:null}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint3,
+      R"(<|tool_call>call:get_weather{}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, FcNestedStructures) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "nested_tool",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "nested_arr": {
+          "type": "array",
+          "items": { "type": "array", "items": { "type": "integer" } }
+        },
+        "nested_obj": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
+        }
+      }
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:nested_tool{nested_arr:[[1,2],[3]],nested_obj:{a:{b:<|"|>c<|"|>}}}<tool_call|><|tool_response>)");
+  // Reject non-integer items in the inner array.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:nested_tool{nested_arr:[[<|"|>a<|"|>]]}<tool_call|><|tool_response>)");
+  // Reject non-string values in the inner map.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:nested_tool{nested_obj:{a:{b:123}}}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, FcAddElementsNestedSchemaRejectsMalformedToolCall) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "_0_add-elements",
+    "description": "Draws shapes, text, arrows, lines and frames.",
+    "parameters": {
+      "properties": {
+        "absolute": {"type": "boolean"},
+        "elements": {
+          "items": {
+            "properties": {
+              "arrowKind": {
+                "enum": ["straight", "curved", "elbow"],
+                "type": "string"
+              },
+              "backgroundColor": {"type": "string"},
+              "children": {
+                "items": {"type": "string"},
+                "type": "array"
+              },
+              "endArrowhead": {
+                "enum": [
+                  "arrow", "bar", "circle", "circle_outline",
+                  "triangle", "triangle_outline", "diamond", "diamond_outline"
+                ],
+                "type": "string"
+              },
+              "fillStyle": {
+                "enum": ["hachure", "cross-hatch", "solid", "zigzag"],
+                "type": "string"
+              },
+              "fontFamily": {
+                "enum": [
+                  "Virgil", "Helvetica", "Cascadia", "Excalifont", "Nunito",
+                  "Lilita One", "Comic Shanns", "Liberation Sans", "Assistant"
+                ],
+                "type": "string"
+              },
+              "fontSize": {"type": "number"},
+              "from": {"type": "string"},
+              "height": {"type": "number"},
+              "id": {"type": "string"},
+              "label": {"type": "string"},
+              "name": {"type": "string"},
+              "opacity": {"type": "number"},
+              "points": {
+                "items": {
+                  "items": {"type": "number"},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "roughness": {"type": "number"},
+              "roundness": {
+                "enum": ["round", "sharp"],
+                "type": "string"
+              },
+              "startArrowhead": {
+                "enum": [
+                  "arrow", "bar", "circle", "circle_outline",
+                  "triangle", "triangle_outline", "diamond", "diamond_outline"
+                ],
+                "type": "string"
+              },
+              "strokeColor": {"type": "string"},
+              "strokeStyle": {
+                "enum": ["solid", "dashed", "dotted"],
+                "type": "string"
+              },
+              "strokeWidth": {"type": "number"},
+              "text": {"type": "string"},
+              "textAlign": {
+                "enum": ["left", "center", "right"],
+                "type": "string"
+              },
+              "textColor": {"type": "string"},
+              "to": {"type": "string"},
+              "type": {
+                "enum": [
+                  "rectangle", "ellipse", "diamond", "text",
+                  "arrow", "line", "frame"
+                ],
+                "type": "string"
+              },
+              "verticalAlign": {
+                "enum": ["top", "middle", "bottom"],
+                "type": "string"
+              },
+              "width": {"type": "number"},
+              "x": {"type": "number"},
+              "y": {"type": "number"}
+            },
+            "required": ["type"],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "expectedSceneVersion": {"type": "integer"},
+        "position": {
+          "properties": {
+            "x": {"type": "number"},
+            "y": {"type": "number"}
+          },
+          "required": ["x", "y"],
+          "type": "object"
+        },
+        "reveal": {"type": "boolean"},
+        "select": {"type": "boolean"}
+      },
+      "required": ["elements"],
+      "type": "object"
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kTextAndOrFunctionCalls);
+  ASSERT_OK_AND_ASSIGN(std::string grammar,
+                       CreateLarkGrammarForTools(tools, options));
+  ASSERT_OK_AND_ASSIGN(
+      auto constraint,
+      provider_->CreateConstraint(LlGuidanceConstraintArg{
+          .constraint_type = LlgConstraintType::kLark,
+          .constraint_string = grammar}));
+
+  // Valid nested tool call with each element's properties in alphabetical
+  // order, like the tool's arguments, a nested `points` array, and a nested
+  // `position` object.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{height:10,id:<|"|>c1<|"|>,label:<|"|>circle<|"|>,type:<|"|>ellipse<|"|>,width:10},{from:<|"|>c1<|"|>,points:[[0,0],[10,5]],type:<|"|>arrow<|"|>}],position:{x:0,y:0}}<tool_call|><|tool_response>)");
+
+  // Reject missing required `type` in an element.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{id:<|"|>c1<|"|>}]}<tool_call|><|tool_response>)");
+
+  // Optional `id` comes before required `type` in alphabetical order, so it
+  // must be written first.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{id:<|"|>c1<|"|>,type:<|"|>ellipse<|"|>}]}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{type:<|"|>ellipse<|"|>,id:<|"|>c1<|"|>}]}<tool_call|><|tool_response>)");
+
+  // Reject invalid `type` enum value ("circle" is not in the enum).
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{type:<|"|>circle<|"|>}]}<tool_call|><|tool_response>)");
+
+  // Reject unknown nested property (`properties` is not in the element schema).
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{type:<|"|>ellipse<|"|>,properties:{r:5}}]}<tool_call|><|tool_response>)");
+
+  // Reject missing required `y` in nested `position` object.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{type:<|"|>ellipse<|"|>}],position:{x:0}}<tool_call|><|tool_response>)");
+
+  // Reject the malformed output from Gemma 4, where `type` had an empty string
+  // and undeclared nested fields were emitted.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:_0_add-elements{elements:[{id:<|"|>label":"circle"1",type:<|"|>,properties:{r:5,_0_1_add_elements_add:1,_add:1,id:1,type:<|"|>,r_0_:5,type_"}},{"point_0_:00", "0", "05", "1},{ "10",", "0", "0", "0", "5"]]}<tool_response|>)");
+}
+
+// A schema feature: the parameters of a tool "f", arguments that match them,
+// and arguments that don't.
+struct SchemaFeature {
+  std::string name;
+  std::string parameters;
+  std::vector<std::string> accepted;
+  std::vector<std::string> rejected;
+};
+
+// Returns parameters with a required "v" that has the schema `v_schema`.
+std::string RequiredV(absl::string_view v_schema) {
+  return absl::StrCat(R"({"properties": {"v": )", v_schema,
+                      R"(}, "required": ["v"]})");
+}
+
+// Every new or otherwise untested schema feature has arguments that the grammar
+// must reject, so it can't stop being enforced without a test failing.
+TEST_F(LlgFcToolCallsTest, EnforcesSchemaFeatures) {
+  const std::vector<SchemaFeature> features = {
+      {.name = "string",
+       .parameters = RequiredV(R"({"type": "string"})"),
+       .accepted = {"v:'abc'", "v:''"},
+       .rejected = {"v:1", "v:true", "v:null"}},
+      {.name = "number",
+       .parameters = RequiredV(R"({"type": "number"})"),
+       .accepted = {"v:1.5", "v:-2e3"},
+       .rejected = {"v:'1.5'", "v:true"}},
+      {.name = "null",
+       .parameters = RequiredV(R"({"type": "null"})"),
+       .accepted = {"v:null"},
+       .rejected = {"v:0", "v:'null'"}},
+      {.name = "enum of numbers",
+       .parameters = RequiredV(R"({"enum": [1, 2.5]})"),
+       .accepted = {"v:1", "v:2.5"},
+       .rejected = {"v:3", "v:'1'"}},
+      {.name = "list of types",
+       .parameters = RequiredV(R"({"type": ["string", "integer"]})"),
+       .accepted = {"v:'a'", "v:1"},
+       .rejected = {"v:true", "v:1.5"}},
+      {.name = "anyOf",
+       .parameters =
+           RequiredV(R"({"anyOf": [{"type": "integer"}, {"enum": ["auto"]}]})"),
+       .accepted = {"v:3", "v:'auto'"},
+       .rejected = {"v:'manual'", "v:true"}},
+      {.name = "oneOf",
+       .parameters =
+           RequiredV(R"({"oneOf": [{"type": "boolean"}, {"type": "null"}]})"),
+       .accepted = {"v:true", "v:null"},
+       .rejected = {"v:0", "v:'true'"}},
+      {.name = "nullable",
+       .parameters = RequiredV(R"({"type": "string", "nullable": true})"),
+       .accepted = {"v:'a'", "v:null"},
+       .rejected = {"v:1"}},
+      {.name = "no additional properties",
+       .parameters =
+           RequiredV(R"({"type": "object", "additionalProperties": false})"),
+       .accepted = {"v:{}"},
+       .rejected = {"v:{a:1}"}},
+      {.name = "any object",
+       .parameters = RequiredV(R"({"type": "object"})"),
+       .accepted = {"v:{a:[1,'x',null]}"},
+       .rejected = {"v:1", "v:'x'", "v:[]"}},
+      {.name = "any array",
+       .parameters = RequiredV(R"({"type": "array"})"),
+       .accepted = {"v:[1,'x',{a:true}]"},
+       .rejected = {"v:{}", "v:1"}},
+  };
+
+  for (const SchemaFeature& feature : features) {
+    SCOPED_TRACE(feature.name);
+    nlohmann::ordered_json tool;
+    tool["name"] = "f";
+    tool["parameters"] = nlohmann::ordered_json::parse(feature.parameters);
+    nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+    auto constraint = CreateConstraint(
+        tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+    ASSERT_NE(constraint, nullptr);
+    for (const std::string& arguments : feature.accepted) {
+      AssertAccepts(*constraint, FcCall("f", arguments));
+    }
+    for (const std::string& arguments : feature.rejected) {
+      AssertRejects(*constraint, FcCall("f", arguments));
+    }
+  }
+}
+
+// Gemma 4 and FunctionGemma write the arguments in alphabetical order, whatever
+// the order of "required", and Gemma 4's chat template sorts them that way in
+// the history too. Like in Gallery, "required" here is in declaration order
+// (b/581415640).
+TEST_F(LlgFcToolCallsTest, RequiredParametersInAlphabeticalOrder) {
+  nlohmann::ordered_json plant_seed = nlohmann::ordered_json::parse(R"json({
+    "name": "plant_seed",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "seed": { "type": "string" },
+        "plots": { "type": "array", "items": { "type": "integer" } }
+      },
+      "required": ["seed", "plots"]
+    }
+  })json");
+  nlohmann::ordered_json run_js = nlohmann::ordered_json::parse(R"json({
+    "name": "run_js",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "skill_name": { "type": "string" },
+        "script_name": { "type": "string" },
+        "data": { "type": "string" }
+      },
+      "required": ["skill_name", "script_name", "data"]
+    }
+  })json");
+  nlohmann::ordered_json tools =
+      nlohmann::ordered_json::array({plant_seed, run_js});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:plant_seed{plots:[1,2,3],seed:<|"|>sunflower<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:run_js{data:<|"|>{}<|"|>,script_name:<|"|>index.html<|"|>,skill_name:<|"|>query-wikipedia<|"|>}<tool_call|><|tool_response>)");
+
+  // The order of "required".
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:plant_seed{seed:<|"|>sunflower<|"|>,plots:[1,2,3]}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:run_js{skill_name:<|"|>query-wikipedia<|"|>,script_name:<|"|>index.html<|"|>,data:<|"|>{}<|"|>}<tool_call|><|tool_response>)");
+}
+
+// The optional arguments are in the same order, before, between or after the
+// required ones. Each can be left out, but not repeated.
+TEST_F(LlgFcToolCallsTest, OptionalParametersInAlphabeticalOrder) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "search",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "zone": { "type": "string" },
+        "sort": { "type": "string" },
+        "query": { "type": "string" },
+        "limit": { "type": "integer" }
+      },
+      "required": ["zone", "query"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,query:<|"|>cat<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,sort:<|"|>date<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,query:<|"|>cat<|"|>,sort:<|"|>date<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+
+  // Out of order.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{zone:<|"|>US<|"|>,query:<|"|>cat<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,limit:5,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{sort:<|"|>date<|"|>,query:<|"|>cat<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+  // A required argument is missing.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,query:<|"|>cat<|"|>}<tool_call|><|tool_response>)");
+  // An argument is repeated.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,limit:6,query:<|"|>cat<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,sort:<|"|>date<|"|>,sort:<|"|>name<|"|>,zone:<|"|>US<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, OnlyOptionalParametersInAlphabeticalOrder) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "search",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "limit": { "type": "integer" },
+        "filter": { "type": "string" }
+      }
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(*constraint,
+                R"(<|tool_call>call:search{}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:search{filter:<|"|>images<|"|>,query:<|"|>cat<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,query:<|"|>cat<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:search{filter:<|"|>images<|"|>,limit:5,query:<|"|>cat<|"|>}<tool_call|><|tool_response>)");
+
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{query:<|"|>cat<|"|>,filter:<|"|>images<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,limit:6}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{,limit:5}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:search{limit:5,}<tool_call|><|tool_response>)");
+}
+
+// Like Jinja's dictsort, the order ignores case, so "text_color" comes before
+// "textAlign", though '_' comes after 'A'.
+TEST_F(LlgFcToolCallsTest, ParametersSortedIgnoringCase) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "set_style",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "textAlign": { "type": "string" },
+        "text_color": { "type": "string" }
+      },
+      "required": ["textAlign", "text_color"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:set_style{text_color:<|"|>red<|"|>,textAlign:<|"|>left<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:set_style{textAlign:<|"|>left<|"|>,text_color:<|"|>red<|"|>}<tool_call|><|tool_response>)");
+}
+
+// Gemma 4 and FunctionGemma write calls without whitespace. If the grammar
+// allowed whitespace in a call, the model could keep writing it without moving
+// on, until it ran out of tokens (b/581415640).
+TEST_F(LlgFcToolCallsTest, RejectsWhitespaceInCall) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "plant_seed",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "seed": { "type": "string" },
+        "plots": { "type": "array", "items": { "type": "integer" } }
+      },
+      "required": ["seed", "plots"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:plant_seed{plots:[1,2],seed:<|"|>sunflower<|"|>}<tool_call|><|tool_response>)");
+  // Strings can still have whitespace.
+  AssertAccepts(*constraint,
+                "<|tool_call>call:plant_seed{plots:[1,2],seed:<|\"|>giant\tsun "
+                "flower\n<|\"|>}<tool_call|><|tool_response>");
+
+  for (absl::string_view call : {
+           "call: plant_seed{plots:[1,2],seed:<|\"|>sunflower<|\"|>}",
+           "call:plant_seed {plots:[1,2],seed:<|\"|>sunflower<|\"|>}",
+           "call:plant_seed{\n\tplots:[1,2],seed:<|\"|>sunflower<|\"|>}",
+           "call:plant_seed{plots: [1,2],seed:<|\"|>sunflower<|\"|>}",
+           "call:plant_seed{plots:[1, 2],seed:<|\"|>sunflower<|\"|>}",
+           "call:plant_seed{plots:[1,2], seed:<|\"|>sunflower<|\"|>}",
+           "call:plant_seed{plots:[1,2],seed:<|\"|>sunflower<|\"|>\n}",
+       }) {
+    AssertRejects(*constraint, absl::StrCat("<|tool_call>", call,
+                                            "<tool_call|><|tool_response>"));
+  }
+}
+
+TEST_F(LlgFcToolCallsTest, MultipleFunctionCalls) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string"
+        }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_time"
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_call>call:get_time{}<tool_call|><|tool_response>)");
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_time{}<tool_call|><|tool_call>call:get_time{}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, OneOfPropertyConstraint) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "selection",
+    "description": "Select an element",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "bounds": {
+          "one_of": [
+            { "type": "string" },
+            { "type": "number" }
+          ]
+        }
+      },
+      "required": ["bounds"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:selection{bounds:<|"|>top_left<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:selection{bounds:42}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:selection{bounds:true}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, OneOfCamelCasePropertyConstraint) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "selection",
+    "description": "Select an element",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "bounds": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" }
+          ]
+        }
+      },
+      "required": ["bounds"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:selection{bounds:<|"|>top_left<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:selection{bounds:42}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:selection{bounds:true}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, OneOfToolsObjectWrapper) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_time"
+  })json");
+  nlohmann::ordered_json tools_obj = nlohmann::ordered_json::parse(R"json({
+    "oneOf": [
+      {
+        "name": "get_time"
+      }
+    ]
+  })json");
+
+  auto constraint = CreateConstraint(
+      tools_obj, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+
+  AssertAccepts(*constraint,
+                R"(<|tool_call>call:get_time{}<tool_call|><|tool_response>)");
+}
+
+class LlgFcToolNameTest : public LlgFcToolCallsTest,
+                          public testing::WithParamInterface<std::string> {};
+
+TEST_P(LlgFcToolNameTest, AcceptsValidToolName) {
+  const std::string& tool_name = GetParam();
+  nlohmann::ordered_json tool = {
+      {"name", tool_name},
+      {"parameters",
+       {{"type", "object"},
+        {"properties",
+         {{"zipCode", {{"type", "integer"}}}, {"_unit", {{"type", "string"}}}}},
+        {"required", {"zipCode"}}}}};
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(*constraint,
+                absl::StrCat("<|tool_call>call:", tool_name,
+                             R"({zipCode:94043}<tool_call|><|tool_response>)"));
+  AssertAccepts(
+      *constraint,
+      absl::StrCat(
+          "<|tool_call>call:", tool_name,
+          R"({_unit:<|"|>C<|"|>,zipCode:94043}<tool_call|><|tool_response>)"));
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:other_tool{zipCode:94043}<tool_call|><|tool_response>)");
+}
+
+INSTANTIATE_TEST_SUITE_P(ToolNamesWithCapitalsAndPrefixes, LlgFcToolNameTest,
+                         testing::Values("f0_Get_weather", "getWeather",
+                                         "Get_weather", "_0_get_weather",
+                                         "0_get_weather", "__get_weather",
+                                         "get-weather", "get.weather", "fc"));
+
+TEST_F(LlgFcToolCallsTest, CaseSensitiveToolNamesCoexist) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_Weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "zip_code": { "type": "integer" }
+      },
+      "required": ["zip_code"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_Weather{zip_code:94043}<tool_call|><|tool_response>)");
+
+  // Each tool must enforce its own parameter schema, not the other's.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:get_weather{zip_code:94043}<tool_call|><|tool_response>)");
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:get_Weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, AllowedFunctionsWithFunctionCallsOnlyMode) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly);
+  options.allowed_function_names = {"get_weather"};
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  // Allowed function is accepted.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|><|tool_response>)");
+
+  // Non-allowed function is rejected.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:find_movies{genre:<|"|>Action<|"|>}<tool_call|><|tool_response>)");
+
+  // Text only is rejected.
+  AssertRejects(*constraint, "Just plain text.");
+}
+
+TEST_F(LlgFcToolCallsTest, AllowedFunctionsWithTextAndOrMode) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kTextAndOrFunctionCalls);
+  options.allowed_function_names = {"get_weather"};
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  // Plain text accepted in TextAndOr mode
+  AssertAccepts(*constraint, "Just talking without tool.");
+  // Non-allowed tool rejected
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:find_movies{genre:<|"|>Comedy<|"|>}<tool_call|><|tool_response>)");
+  // Allowed tool accepted with prefix text
+  AssertAccepts(
+      *constraint,
+      R"(I'll look up the weather:<|tool_call>call:get_weather{location:<|"|>London<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, FunctionCallsRequired) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  auto constraint = CreateConstraint(
+      tools, GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsRequired));
+  ASSERT_NE(constraint, nullptr);
+
+  // Pure text without tool calls is rejected.
+  AssertRejects(*constraint, "Just plain text without any tool call.");
+
+  // Tool call without surrounding text is accepted.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
+
+  // Tool call preceded by text is rejected in call-first mode.
+  AssertRejects(
+      *constraint,
+      R"(Let me check the weather:<|tool_call>call:get_weather{location:<|"|>Mountain View<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, AllowedFunctionNamesRestrictsChoices) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tool3 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_time",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "timezone": { "type": "string" }
+      },
+      "required": ["timezone"]
+    }
+  })json");
+  nlohmann::ordered_json tools =
+      nlohmann::ordered_json::array({tool1, tool2, tool3});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsRequired);
+  options.allowed_function_names = {"get_weather", "get_time"};
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  // Both allowed functions are accepted.
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_time{timezone:<|"|>UTC<|"|>}<tool_call|><|tool_response>)");
+
+  // Disallowed function and empty turn are rejected.
+  AssertRejects(
+      *constraint,
+      R"(<|tool_call>call:find_movies{genre:<|"|>Action<|"|>}<tool_call|><|tool_response>)");
+  AssertRejects(*constraint, "");
+}
+
+TEST_F(LlgFcToolCallsTest, AllowedFunctionNamesEmptyAllowsAll) {
+  nlohmann::ordered_json tool1 = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "location": { "type": "string" }
+      },
+      "required": ["location"]
+    }
+  })json");
+  nlohmann::ordered_json tool2 = nlohmann::ordered_json::parse(R"json({
+    "name": "find_movies",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "genre": { "type": "string" }
+      },
+      "required": ["genre"]
+    }
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool1, tool2});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsRequired);
+  options.allowed_function_names = {};
+
+  auto constraint = CreateConstraint(tools, options);
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:get_weather{location:<|"|>Tokyo<|"|>}<tool_call|><|tool_response>)");
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:find_movies{genre:<|"|>Action<|"|>}<tool_call|><|tool_response>)");
+}
+
+TEST_F(LlgFcToolCallsTest, AllowedFunctionNotFoundReturnsError) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "get_weather"
+  })json");
+  nlohmann::ordered_json tools = nlohmann::ordered_json::array({tool});
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsRequired);
+  options.allowed_function_names = {"non_existent_tool"};
+
+  auto result = CreateLarkGrammarForFcToolCalls(tools, options);
+  EXPECT_THAT(result.status(),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       testing::HasSubstr("not found in provided tools")));
+}
+
+TEST_F(LlgFcToolCallsTest, FunctionCallsRequiredEmptyToolsReturnsError) {
+  nlohmann::ordered_json empty_tools = nlohmann::ordered_json::array();
+
+  LlgConstraintsOptions options =
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsRequired);
+
+  auto result = CreateLarkGrammarForFcToolCalls(empty_tools, options);
+  EXPECT_THAT(
+      result.status(),
+      StatusIs(
+          absl::StatusCode::kInvalidArgument,
+          testing::HasSubstr("No tools provided for FunctionCallsRequired")));
+}
+
+TEST_F(LlgFcToolCallsTest, FunctionCallsOnlyCanEndTurnWithoutCall) {
+  nlohmann::ordered_json tool = nlohmann::ordered_json::parse(R"json({
+    "name": "harvestPlots",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "plots": {"type": "array", "items": {"type": "integer"}}
+      },
+      "required": ["plots"]
+    }
+  })json");
+  auto constraint = CreateConstraint(
+      nlohmann::ordered_json::array({tool}),
+      GetDefaultFcOptions(LlgConstraintMode::kFunctionCallsOnly));
+  ASSERT_NE(constraint, nullptr);
+
+  AssertAccepts(
+      *constraint,
+      R"(<|tool_call>call:harvestPlots{plots:[1]}<tool_call|><|tool_response>)");
+  // Like FST's FUNCTION_CALL_ONLY mode, the model can end its turn without a
+  // call, e.g. after the tool responses. Otherwise it is forced to call tools
+  // until the context is full.
+  AssertAccepts(*constraint, "");
+  AssertRejects(*constraint, "Harvested plot 1.");
+}
+
+}  // namespace
+}  // namespace litert::lm

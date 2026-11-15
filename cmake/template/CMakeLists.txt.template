@@ -1,0 +1,72 @@
+# Copyright 2026 Google LLC.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ==============================================================================
+# Static Library Example
+# ==============================================================================
+#
+# Macro to add target into LiteRTLM::Aggregate
+add_litertlm_library(template_static_lib_example STATIC
+  static_lib_example_src.cc
+)
+# Namespaced ALIAS for fail-fast typo protection and consumer consistency
+add_library(LiteRTLM::Template::StaticLibExample ALIAS template_static_lib_example) 
+
+target_include_directories(template_static_lib_example
+  PRIVATE
+    "${LITERTLM_INCLUDE_PATHS}"        # Contains include paths for all dependencies and LiteRT-LM targets
+    "${TARGET_SPECIFIC_INCLUDE_PATH}"  # Path that may not be shared to other targets
+)
+
+target_link_libraries(template_static_lib_example
+  PUBLIC
+    LITERTLM_DEPS                                 # Aggregate of all external dependencies
+    LiteRTLM::Runtime::Utils                      # Link all libraries from //runtime/util
+    LiteRTLM::Runtime::Conversation::IoTypes      # Link target library //runtime/conversation:io_types
+)
+
+# ==============================================================================
+# Interface Example
+# ==============================================================================
+#
+# INTERFACE target representing a header-only library (aligns with BUILD file)
+#
+# Note: Name the target after the header file, but do not include the file in the sources.
+#
+add_litertlm_library(template_interface_example INTERFACE) 
+add_library(LiteRTLM::Template::InterfaceExample ALIAS template_interface_example)
+
+target_include_directories(template_interface_example
+  INTERFACE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(template_interface_example
+  INTERFACE
+    LITERTLM_DEPS
+)
+
+
+# ==============================================================================
+# Folder Facade
+# ==============================================================================
+#
+# Bundles all sub-targets into a single INTERFACE for convenient linking.
+add_library(template_libs INTERFACE)
+add_library(LiteRTLM::Template ALIAS template_libs)
+
+target_link_libraries(template_libs INTERFACE
+  LiteRTLM::Template::StaticLibExample
+  LiteRTLM::Template::InterfaceExample
+)

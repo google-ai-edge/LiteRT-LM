@@ -28,6 +28,8 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_common.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
@@ -724,6 +726,22 @@ TEST_F(EmbeddingLookupTextTest, LookupDecodeVectorSpecifySignatureKeyNotFound) {
   EXPECT_TRUE(model_.has_value());
   auto status = EmbeddingLookupText::Create(*env_, &*model_, "not_found");
   EXPECT_TRUE(!status.ok());
+}
+
+TEST_F(EmbeddingLookupTextTest, CreateFromCompiledModel) {
+  auto model_path = std::filesystem::path(::testing::SrcDir()) / kTestdataDir /
+                    "dummy_embedding_cpu_model.tflite";
+  auto compiled_model_res = CompiledModel::Create(*env_, model_path.string(),
+                                                  litert::HwAccelerators::kCpu);
+  ASSERT_TRUE(compiled_model_res.HasValue());
+  auto compiled_model = std::move(compiled_model_res.Value());
+  ASSERT_OK_AND_ASSIGN(auto embedding, EmbeddingLookupText::Create(
+                                           *env_, std::move(compiled_model)));
+  EXPECT_NE(embedding, nullptr);
+
+  std::vector<float> output_vector(4 * 32);
+  int32_t token = 1;
+  EXPECT_OK(embedding->LookupDecode(token, output_vector));
 }
 
 }  // namespace litert::lm

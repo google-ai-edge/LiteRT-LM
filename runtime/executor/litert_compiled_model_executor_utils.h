@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_INFRA_GENAI_INFERENCE_EXECUTOR_LITERT_COMPILED_MODEL_EXECUTOR_UTILS_H_
 #define THIRD_PARTY_ODML_INFRA_GENAI_INFERENCE_EXECUTOR_LITERT_COMPILED_MODEL_EXECUTOR_UTILS_H_
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -27,15 +28,29 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "litert/c/litert_common.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/options/litert_cpu_options.h"  // from @litert
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
+#include "runtime/executor/llm_executor_settings.h"
+#include "runtime/proto/embedding_metadata.pb.h"
+#include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/scoped_file.h"
+
+namespace tflite {
+class Model;
+}  // namespace tflite
 
 namespace litert::lm {
 
@@ -60,6 +75,9 @@ struct ModelSignatures {
   // Input attention mask signature name. For both prefill and decode.
   // Not all models require this input.
   std::optional<std::string> input_attn_mask;
+  // Input attention mask signature name for local attention. For both prefill
+  // and decode. Not all models require this input.
+  std::optional<std::string> input_attn_mask_local;
   // Input embeddings signature name. For both prefill and decode. When this
   // is provided, the embedding model will be used to look up the embeddings and
   // the input_tokens value must not be set.
@@ -96,38 +114,172 @@ absl::Status GetKVCacheRootNames(std::vector<absl::string_view> input_names,
                                  std::string& k_root_name,
                                  std::string& v_root_name);
 
+// Returns true if `name` is the name of a linear attention / convolution
+// recurrent state tensor (e.g. "kv_cache_c_0" for conv state, "kv_cache_r_0"
+// for recurrent state) of a hybrid model such as LFM2 or Qwen3.5. Unlike the
+// standard KV cache, these states are overwritten every step and must always
+// be fed as inputs.
+bool IsLinearAttentionStateName(absl::string_view name);
+
 // Gets a set of prefill signature runners from the interpreter.
 // The signature runners are sorted by the input tokens dimension.
 // signature_name_base is the prefix of the prefill signature names, e.g.
 // "prefill".
 // input_tokens_name is the name of the input tokens signature, e.g. "token_ids"
-// for Gemma2 JAX and "tokens" for Gemma2 PyTorch.
+// for Gemma2 JAX and "tokens" for Gemma2 PyTorch. A nonempty
+// selected_signatures limits the result to active signatures; empty keeps the
+// existing behavior.
 absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
     const ::litert::Model& model, absl::string_view signature_name_base,
-    absl::string_view input_positions_name);
+    absl::string_view input_positions_name,
+    absl::Span<const std::string> selected_signatures = {});
+
+// Gets a set of prefill signature runners from an already compiled model.
+//
+// This is equivalent to the `::litert::Model` overload above, but inspects the
+// signatures exposed by the `CompiledModel` instead of the flatbuffer model.
+// Use this when only the CompiledModel is available (e.g. the model was
+// compiled from streamed weights and no `::litert::Model` is retained).
+//
+// Arguments:
+// - model: The compiled model whose signatures are inspected.
+// - signature_name_base: Prefix of the prefill signature names, e.g.
+//   "prefill". Signatures whose key does not start with this prefix are
+//   ignored.
+// - input_positions_name: Name of the input positions tensor in each prefill
+//   signature, e.g. "input_pos". Its shape ([seq_len] or
+//   [batch_size, seq_len]) determines the prefill length of the signature.
+// - selected_signatures: If nonempty, only signatures whose key is in this
+//   list are considered. If empty, all signatures are considered.
+//
+// Returns a map from prefill length to signature name, sorted by prefill
+// length in descending order. Returns an error if a matching signature does
+// not have an `input_positions_name` input, or if that input has an
+// unsupported rank.
+absl::StatusOr<SortedPrefillSignatureMap> GetPrefillRunnerSetFromModel(
+    CompiledModel& model, absl::string_view signature_name_base,
+    absl::string_view input_positions_name,
+    absl::Span<const std::string> selected_signatures = {});
 
 // Get a list of prefill work groups, each of which contains the signature
 // runner and prefill length for a single prefill call.
 // The work groups are calculated to maximize prefill performance.
-// Output: A vector of std::pair<SignatureRunner*, int>
-// SignatureRunner* - the prefill runner to be used for current prefill call.
-// int - the prefill length for current prefill call.
+//
+// Arguments:
+// - prefill_runner_set: Map of sequence length to prefill signature runner
+//   name.
+// - input_length: Total number of input tokens to prefill.
+// - max_prefill_sequence_length: Optional remaining capacity of KV cache /
+//   state
+//   entries. If specified, prefill runners with sequence length >
+//   max_prefill_sequence_length are filtered out, and work groups are
+//   constrained so that the allocated prefill runners do not exceed remaining
+//   capacity.
+//
+// Caveats:
+// - If max_prefill_sequence_length filters out all available runners or if the
+//   input length cannot be accommodated within the remaining state capacity, an
+//   absl::InvalidArgumentError status is returned.
+// - When max_prefill_sequence_length is provided, prefill runner selection
+//   adapts to use smaller runners that fit in the remaining capacity instead of
+//   larger ones.
+//
+// - use_greedy_chunking: If true, uses strictly greedy chunking by cascading
+//   remainders to smaller buckets without upgrading to a larger bucket. On CPU,
+//   this should be set to true because linear compute scaling favors cascading
+//   to smaller runners to avoid padding waste.
+//
+// Output: A vector of std::pair<std::string, int>
+//   std::string - the prefill runner signature to be used for the current
+//   prefill call.
+//   int - the prefill input length for the current prefill call.
 absl::StatusOr<std::vector<std::pair<std::string, int>>>
 GetOptimizedPrefillWorkGroups(
-    const SortedPrefillSignatureMap& prefill_runner_set, int input_length);
+    const SortedPrefillSignatureMap& prefill_runner_set, int input_length,
+    std::optional<int> max_prefill_sequence_length = std::nullopt,
+    bool use_greedy_chunking = false);
 
 // Initializes the attention mask tensor for prefill/decode.
 // The mask is a 4D tensor with shape [batch=1, seq_len, 1, max_kv_len].
 // is_f16 only applies to FLOAT mask data type.
 absl::Status InitializeAttentionMask(::litert::TensorBuffer& mask, bool is_f16);
 
+// Parameters extracted from ExecutorMetadata for attention mask generation.
+struct AttentionMaskParams {
+  proto::AttentionMaskType global_type = proto::ATTENTION_MASK_TYPE_CAUSAL;
+  proto::AttentionMaskType local_type = proto::ATTENTION_MASK_TYPE_CAUSAL;
+  std::optional<int> sliding_window_size = std::nullopt;
+};
+
+// Extracts attention mask parameters (global type, local type, sliding
+// window size) from the optional ExecutorMetadata protobuf.
+// If metadata is null or does not specify types, defaults to causal type.
+AttentionMaskParams GetAttentionMaskParams(
+    const proto::ExecutorMetadata* executor_metadata);
+
+// Returns true if host-side attention mask initialization and filling can be
+// skipped because the GPU compiled model pruned the boolean causal mask
+// input(s) (e.g., when FlashAttention / FlashDecode SDPA computes causal
+// masking directly on the GPU from `param_tensor`). When
+// `signatures.input_attn_mask_local` is present, both `attn_mask_buffer` and
+// `attn_mask_local_buffer` must be causal boolean masks on host memory
+// (pruned by the GPU delegate) in order to skip.
+bool ShouldSkipGlobalCausalAttentionMask(
+    Backend backend, bool gpu_optimized_single_buffer_cache,
+    const ModelSignatures& signatures, const AttentionMaskParams& attn_params,
+    const ::litert::TensorBuffer* attn_mask_buffer = nullptr,
+    const ::litert::TensorBuffer* attn_mask_local_buffer = nullptr);
+
+// The operational mode for filling the ring-buffer attention mask.
+enum class RingBufferAttentionMaskMode {
+  // Prefill mode: keys are split into past cache and fresh chunk.
+  kPrefill = 0,
+  // Single-step decode mode.
+  kDecode,
+  // Multi-step verifier mode.
+  kVerify,
+};
+
 // Fills attention mask for a given range of timesteps.
 // The mask is a 4D tensor with shape [batch=1, seq_len, 1, max_kv_len].
 // mask - The attention mask tensor to be filled.
 // start_timestep - The starting timestep to be filled at seq = 1.
 // steps - The number of steps to fill (the number of sequences to be filled).
-absl::Status FillAttentionMask(::litert::TensorBuffer& mask, int start_timestep,
-                               int steps);
+// attention_mask_type - The attention mask type.
+// token_ids - The token ids of the full context. Required for
+//             kVisionBidirectional attention mask type during prefill.
+// sliding_window_size - The sliding window size.
+// mode - Explicit operational mode for ring-buffer masks (prefill, decode, or
+// verify).
+absl::Status FillAttentionMask(
+    ::litert::TensorBuffer& mask, int start_timestep, int steps,
+    proto::AttentionMaskType attention_mask_type,
+    std::optional<absl::Span<const int>> token_ids = std::nullopt,
+    std::optional<int> sliding_window_size = std::nullopt,
+    std::optional<RingBufferAttentionMaskMode> mode = std::nullopt);
+
+// Initializes and fills the attention mask tensor for a given range of
+// timesteps in a single TensorBuffer lock scope.
+// The mask is a 4D tensor with shape [batch=1, seq_len, 1, max_kv_len].
+// mask - The attention mask tensor to be initialized and filled.
+// is_f16 - Whether to use the FP16 mask floor (-45824) when initializing a
+//          Float32 mask tensor; ignored for Bool and Float16 masks.
+// start_timestep - The starting timestep to be filled at seq = 1.
+// steps - The number of steps to fill (the number of sequences to be filled).
+// attention_mask_type - The attention mask type.
+// token_ids - The token ids of the full context. Required for
+//             kVisionBidirectional attention mask type during prefill.
+// sliding_window_size - The sliding window size.
+// mode - Explicit operational mode for ring-buffer masks (prefill, decode, or
+//        verify).
+// Returns absl::OkStatus() on success, or an error status if locking the
+// buffer fails, the mask element type is unsupported, or filling fails.
+absl::Status InitializeAndFillAttentionMask(
+    ::litert::TensorBuffer& mask, bool is_f16, int start_timestep, int steps,
+    proto::AttentionMaskType attention_mask_type,
+    std::optional<absl::Span<const int>> token_ids = std::nullopt,
+    std::optional<int> sliding_window_size = std::nullopt,
+    std::optional<RingBufferAttentionMaskMode> mode = std::nullopt);
 
 // Fills the parameters used by single buffer cache update from
 // start_index to start_index + update_length.
@@ -136,12 +288,20 @@ absl::Status FillAttentionMask(::litert::TensorBuffer& mask, int start_timestep,
 absl::Status FillSingleBufferCacheParamTensor(
     ::litert::TensorBuffer& param_tensor, int start_index, int update_length);
 
+// Creates a float16 buffer for the output `output_name`, at index
+// `output_index` of the signature `signature_index` of `compiled_model`, with
+// the output's runtime layout and buffer requirements. Used for the logits that
+// a GPU sampler reads in float16.
+absl::StatusOr<::litert::TensorBuffer> CreateFP16OutputBuffer(
+    ::litert::Environment& env, ::litert::CompiledModel& compiled_model,
+    size_t signature_index, absl::string_view output_name, size_t output_index);
+
 // Builds the model resources from the model_path for compiled model only.
 // Supports .task and .litertlm formats.
 absl::StatusOr<std::unique_ptr<ModelResources>>
-BuildLiteRtCompiledModelResources(
-    const ModelAssets& model_assets,
-    bool enable_file_backed_model_loading = false);
+BuildLiteRtCompiledModelResources(const ModelAssets& model_assets,
+                                  bool enable_file_backed_model_loading = false,
+                                  bool enable_file_backed_for_aot_npu = false);
 
 // Computes token embeddings using the given lookup managers.
 absl::Status GenericComputeTokenEmbeddings(
@@ -149,6 +309,35 @@ absl::Status GenericComputeTokenEmbeddings(
     absl::Span<float> output_ple_embeddings,
     EmbeddingLookupManager* embedding_lookup_manager,
     EmbeddingLookupManager* per_layer_embedding_lookup_manager);
+
+// Set centralized CPU options (e.g. threads and default XNNPack flags).
+absl::Status SetCpuOptions(litert::CpuOptions& cpu_options,
+                           int num_threads = 4);
+
+// Set centralized standard GPU options common across executors.
+absl::Status SetCommonGpuOptions(
+    const ExecutorSettingsBase& executor_settings,
+    litert::GpuOptions& gpu_options,
+    std::optional<ActivationDataType> fallback_activation_data_type =
+        std::nullopt);
+
+#if !defined(LITERT_DISABLE_NPU)
+// Applies `npu_options` (common cross-vendor options and vendor-specific
+// sub-options) to the vendor-specific NPU options (currently Qualcomm, Google
+// Tensor, and MediaTek) in `options`.
+//
+// `npu_options.performance_mode` is mapped to the Qualcomm HTP performance mode
+// and the Google Tensor performance mode. `NpuPerformanceMode::kVendorDefault`
+// leaves the vendor performance modes untouched.
+//
+// `npu_options.performance_control` is mapped to the Qualcomm HTP performance
+// control mode (kWhileLoaded -> kManual, kPerInference -> kAuto).
+//
+// `npu_options.mediatek_options.sdk_version` is mapped to the MediaTek
+// NeuroPilot SDK version (`MediatekSdkVersion::kDefault` leaves it untouched).
+absl::Status SetNpuOptions(const NpuOptions& npu_options,
+                           litert::Options& options);
+#endif  // !defined(LITERT_DISABLE_NPU)
 
 // Set the CPU weight cache options for XNNPACK.
 // Args:
@@ -161,8 +350,7 @@ absl::Status SetCpuCacheOptions(
     const absl::StatusOr<
         std::variant<std::string, std::shared_ptr<litert::lm::ScopedFile>>>&
         weight_cache_file,
-    absl::string_view logging_prefix,
-    litert::CpuOptions& cpu_options);
+    absl::string_view logging_prefix, litert::CpuOptions& cpu_options);
 
 // Set the GPU weight cache options for ML Drift.
 // Args:
@@ -200,6 +388,105 @@ struct GpuModelCacheData {
 absl::StatusOr<GpuModelCacheData> GetGpuModelCacheData(
     const ExecutorSettingsBase& executor_settings,
     absl::string_view cache_name);
+
+// Holds a model's external weights so they can be registered with a
+// litert::Options instance before compilation. External weights live in a
+// dedicated file section rather than being embedded in (and mmapped with) the
+// model, so they are represented as a file handle plus the sections sliced from
+// it.
+struct ExternalWeightResources {
+  // File that backs the external weight sections. Empty when the model has no
+  // external weights, e.g. it uses embedded weights or its resource format does
+  // not support external weight sections.
+  std::optional<ScopedFile> scoped_file;
+  // Maps each external buffer group name to its region (offset and length)
+  // within scoped_file. Empty when scoped_file is empty.
+  litert::Options::ScopedWeightSectionMap sections;
+};
+
+// Returns the external weights for the model type wire string
+// `model_type_str` (e.g. "tf_lite_prefill_decode") when present. An empty
+// result means the model has embedded weights or its resource format does not
+// support external weight sections.
+//
+// args:
+//   resources: The model resources to read the weights section from.
+//   model_type_str: The model type wire string.
+// returns:
+//   The external weight resources, or an error if reading the section failed.
+absl::StatusOr<ExternalWeightResources> GetExternalWeightResources(
+    ModelResources& resources, absl::string_view model_type_str);
+
+// Returns the external weights for a capability-scoped Protobuf model type
+// enum (e.g. proto::LlmMetadata::TF_LITE_PREFILL_DECODE or
+// proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER). See
+// GetExternalWeightResources(ModelResources&, absl::string_view).
+template <typename TfLiteModelTypeT,
+          typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
+absl::StatusOr<ExternalWeightResources> GetExternalWeightResources(
+    ModelResources& resources, TfLiteModelTypeT model_type) {
+  return GetExternalWeightResources(resources,
+                                    TfLiteModelTypeToWireString(model_type));
+}
+
+// Adds the external weight section of the model type wire string
+// `model_type_str` to compilation_options when one is present.
+//
+// args:
+//   resources: The model resources to read the weights section from.
+//   model_type_str: The model type wire string.
+//   compilation_options: The compilation options to update.
+// returns:
+//   OkStatus, or an error if reading the section failed.
+absl::Status SetExternalWeightOptions(ModelResources& resources,
+                                      absl::string_view model_type_str,
+                                      litert::Options& compilation_options);
+
+// Adds the external weight section of a capability-scoped Protobuf model type
+// enum to compilation_options when one is present. See
+// SetExternalWeightOptions(ModelResources&, absl::string_view, ...).
+template <typename TfLiteModelTypeT,
+          typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
+absl::Status SetExternalWeightOptions(ModelResources& resources,
+                                      TfLiteModelTypeT model_type,
+                                      litert::Options& compilation_options) {
+  return SetExternalWeightOptions(
+      resources, TfLiteModelTypeToWireString(model_type), compilation_options);
+}
+
+// Returns true if the TFLite model contains an SDPA composite op
+// ("odml.scaled_dot_product_attention" or "odml.sdpa_transposed").
+bool ModelContainsSdpa(const tflite::Model* model);
+
+// Returns true if the main text decoder (prefill/decode) model in resources
+// contains an SDPA composite op.
+bool ModelResourcesContainSdpa(ModelResources& resources);
+
+// Initializes the embedding lookup and per-layer embedding lookup managers from
+// the given model resources and environment.
+absl::Status InitializeEmbeddingLookups(
+    ::litert::Environment& env, ModelResources& resources,
+    std::unique_ptr<EmbeddingLookupManager>& embedding_lookup,
+    std::unique_ptr<EmbeddingLookupManager>& per_layer_embedding_lookup);
+
+// Starts hardware-specific metrics collection on a compiled model.
+void StartCompiledModelMetricsCollection(LiteRtCompiledModel compiled_model,
+                                         int detail_level = 100);
+inline void StartCompiledModelMetricsCollection(
+    const ::litert::CompiledModel& compiled_model, int detail_level = 100) {
+  StartCompiledModelMetricsCollection(compiled_model.Get(), detail_level);
+}
+
+// Stops hardware-specific metrics collection and records the collected metrics
+// into `stats` with an optional prefix for metric names.
+void CollectCompiledModelMetrics(LiteRtCompiledModel compiled_model,
+                                 ExecutorStats& stats,
+                                 absl::string_view prefix = "");
+inline void CollectCompiledModelMetrics(
+    const ::litert::CompiledModel& compiled_model, ExecutorStats& stats,
+    absl::string_view prefix = "") {
+  CollectCompiledModelMetrics(compiled_model.Get(), stats, prefix);
+}
 
 }  // namespace litert::lm
 

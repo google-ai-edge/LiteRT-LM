@@ -1,0 +1,230 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2SPEECH_KOKORO_COMMON_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2SPEECH_KOKORO_COMMON_H_
+
+#include <cstddef>
+#include <string>
+#include <vector>
+
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "omni/text2speech/kokoro/kokoro_io_types.h"
+#include "runtime/components/model_resources.h"
+
+namespace litert::omni::tts::kokoro {
+
+// =============================================================================
+// Model & Pipeline Architecture Constants
+// =============================================================================
+
+// Default target sequence length for bucketing.
+constexpr int kDefaultBucketSize = 128;
+
+// Capacity divisor threshold when searching backwards for chunk split points.
+constexpr int kSplitCapacityDivisor = 2;
+
+// =============================================================================
+// Voice Style Embedding Constants
+// =============================================================================
+
+// Number of token embeddings in the voice pack style table (510 token
+// embeddings).
+constexpr int kVoicePackNumTokens = 510;
+
+// Maximum token index in the 510x256 voice pack embedding table (0..509).
+constexpr int kMaxVoiceTokens = 509;
+
+// Total embedding dimension per voice style token (256 floats).
+constexpr int kVoiceEmbeddingDim = 256;
+
+// Dimension of style vector slice passed to the prosody predictor (first 128
+// floats).
+constexpr int kStyleSliceDim = 128;
+
+// Total float count of a pre-extracted voice pack embedding file (510 * 256 =
+// 130,560).
+constexpr int kVoicePackSize = kVoicePackNumTokens * kVoiceEmbeddingDim;
+
+// =============================================================================
+// Token IDs in Kokoro Phoneme Vocabulary
+// =============================================================================
+
+// BOS (Beginning of Sequence) and EOS (End of Sequence) token ID in Kokoro
+// vocabulary.
+constexpr int kBosTokenId = 0;
+constexpr int kEosTokenId = 0;
+
+// Whitespace delimiter token ID in Kokoro vocabulary (' ').
+constexpr int kSpaceTokenId = 16;
+
+// Range of sentence and clause punctuation token IDs in Kokoro vocabulary
+// (1..6: ';', ':', ',', '.', '!', '?').
+constexpr int kMinPunctuationTokenId = 1;
+constexpr int kMaxPunctuationTokenId = 6;
+
+// =============================================================================
+// Tensor & Feature Dimensions
+// =============================================================================
+
+// Expanded phoneme text embeddings feature dimension (formerly t_en: 640
+// floats).
+constexpr int kExpandedTextEmbeddingDim = 640;
+
+// Acoustic feature representation tensor dimension (formerly asr: 512 floats).
+constexpr int kAcousticFeatureDim = 512;
+
+// Combined pitch (F0) and energy (N) auxiliary contour dimension (f0_n: 1024
+// floats).
+constexpr int kF0NDim = 1024;
+
+// Maximum number of output speech acoustic frames supported (512 frames).
+// Kept for backward compatibility with stage implementations.
+constexpr int kMaxSpeechFrames = 512;
+
+// Recovers the acoustic frame capacity baked into an `acoustic_features`
+// tensor, whose static shape is [1, kAcousticFeatureDim, max_frames].
+constexpr int FrameCapacityFromPackedSize(size_t packed_size_bytes) {
+  return static_cast<int>(packed_size_bytes / sizeof(float) /
+                          kAcousticFeatureDim);
+}
+
+// Acoustic frames of output capacity that must be reserved per input phoneme
+// token when slicing text.
+//
+// The exported acoustic graph clamps its predicted duration to a fixed frame
+// capacity that is baked into the shape of its `acoustic_features` output. If a
+// token slice asks for more frames than that, the graph silently truncates the
+// slice and the tail of the sentence is never spoken. Measured English speech
+// averages ~2.5 frames per phoneme token and reaches ~2.7 on long clauses, so 3
+// leaves headroom without wasting much of the token budget.
+constexpr int kFramesPerTokenBudget = 3;
+
+// TODO(b/538727793): refactor to configurable parameters.
+// =============================================================================
+// Audio DSP & Synthesis Constants
+// =============================================================================
+
+// Output audio sampling rate in Hz (24kHz).
+constexpr int kSampleRate = 24000;
+
+// Audio hop size multiplier from speech frames to time-domain PCM samples
+// (24000 / 40 = 600).
+constexpr int kAudioHop = 600;
+
+// Number of frequency bins in inverse short-time Fourier transform (iSTFT).
+constexpr int kIstftBins = 11;
+
+// Window frame length in samples for iSTFT synthesis.
+constexpr int kIstftFrameLen = 20;
+
+// Hop size in samples between consecutive iSTFT synthesis frames.
+constexpr int kIstftHop = 5;
+
+// Overlap-add sum normalization factor for Hann synthesis window with hop=5.
+constexpr float kHannOverlapAddScale = 1.5f;
+
+// =============================================================================
+// Slice Join Trimming
+// =============================================================================
+
+// Amplitude, relative to a slice's own peak, below which a sample counts as
+// silence when trimming an artificial slice join. -40 dB is well under any
+// voiced or fricative energy but still above the vocoder's noise floor.
+constexpr float kSliceJoinSilenceRatio = 0.01f;
+
+// Silence preserved on each side of a trimmed join (5 ms at 24 kHz). Cutting
+// exactly at the first suprathreshold sample clips plosive onsets and makes the
+// seam audible as a click, so a short lead-in is kept.
+constexpr int kSliceJoinMarginMs = 5;
+constexpr int kSliceJoinMarginSamples = kSampleRate * kSliceJoinMarginMs / 1000;
+
+// Silence preserved after a join that landed on punctuation (400 ms at 24 kHz).
+// The text does ask for a pause there, but a clause-length one; without a cap
+// the join would instead inherit the much longer silence the model emits at the
+// end of an utterance.
+constexpr int kSlicePunctuationPauseMs = 400;
+constexpr int kSlicePunctuationPauseSamples =
+    kSampleRate * kSlicePunctuationPauseMs / 1000;
+
+// One slice of a chunk's phoneme sequence, bounded by capacity, plus join
+// classifications for both leading and trailing edges.
+struct TokenSlice {
+  std::vector<int> token_ids;
+  SliceJoin join_before = SliceJoin::kChunkBoundary;
+  SliceJoin join_after = SliceJoin::kChunkBoundary;
+};
+
+// Slices long phoneme token sequences into manageable chunks fitting within
+// `max_capacity`, breaking preferentially at punctuation and falling back to
+// whitespace. Every slice begins with BOS and ends with EOS.
+std::vector<TokenSlice> SliceTokenIds(absl::Span<const int> token_ids,
+                                      int max_capacity);
+
+// Sentinel for an edge that must be left exactly as the model produced it.
+constexpr int kKeepEdgeIntact = -1;
+
+// Caps the near-silence at the head and/or tail of one slice of PCM.
+//
+// Each slice is synthesized as a self-contained utterance, so the model places
+// utterance-final lengthening and trailing silence at the end of one slice and
+// utterance-initial silence at the start of the next. Concatenated, a split
+// that exists only because the chunk exceeded the model's capacity turns those
+// two into one long pause. `head_keep_samples` and `tail_keep_samples` bound
+// how much silence survives at each edge, which shortens that pause without
+// ever lengthening it. Pass `kKeepEdgeIntact` for the real start and end of a
+// chunk, whose silence belongs to the text.
+void TrimSliceJoinSilence(std::vector<float>& pcm, int head_keep_samples,
+                          int tail_keep_samples);
+
+// Overload that takes SliceJoin directly for leading and trailing edges.
+void TrimSliceJoinSilence(std::vector<float>& pcm, SliceJoin join_before,
+                          SliceJoin join_after);
+
+// Silence budget for the leading edge of a slice.
+int HeadKeepSamples(SliceJoin join);
+
+// Silence budget for the trailing edge of a slice.
+int TailKeepSamples(SliceJoin join);
+
+// Voice used when no voice is requested, or when the requested voice is
+// missing from the model.
+constexpr absl::string_view kDefaultVoiceName = "af_heart";
+
+// Reduces a voice identifier to its bare voice name by dropping any directory
+// components and a trailing ".bin" extension, so that "voices/af_heart.bin"
+// and "af_heart" both resolve to "af_heart".
+std::string VoiceNameFromIdentifier(absl::string_view voice_identifier);
+
+// Loads a 510x256 voice style embedding vector from a .litertlm container or
+// binary file.
+//
+// args
+// - model_dir: Base model directory or .litertlm file path.
+// - voice_identifier: Voice name (e.g. "af_heart") or binary filename.
+// - lm_resources: Optional ModelResources container to load GenericBinaryData
+//   voice sections from. Sections are keyed by voice name.
+//
+// returns
+// - Float vector containing 130,560 elements on success, or error status.
+absl::StatusOr<std::vector<float>> LoadVoiceEmbedding(
+    absl::string_view model_dir,
+    absl::string_view voice_identifier = kDefaultVoiceName,
+    lm::ModelResources* lm_resources = nullptr);
+
+}  // namespace litert::omni::tts::kokoro
+
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2SPEECH_KOKORO_COMMON_H_

@@ -16,14 +16,13 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_PROCESSED_CONTEXT_H_
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <utility>
 
-#include "absl/container/flat_hash_map.h"  // from @com_google_absl
-#include "absl/strings/string_view.h"  // from @com_google_absl
-#include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
+#include "runtime/executor/state_interface.h"
 
 namespace litert::lm {
 
@@ -33,13 +32,13 @@ namespace litert::lm {
 class LlmProcessedContext : public ProcessedContext {
  public:
   explicit LlmProcessedContext(
-      std::optional<uint32_t> lora_id,
-      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-          kv_cache_buffers,
-      ::litert::lm::ProcessedTokens processed_tokens = {})
+      std::optional<uint32_t> lora_id, std::unique_ptr<StateInterface> state,
+      ::litert::lm::ProcessedTokens processed_tokens = {},
+      bool ran_decode = false)
       : lora_id_(lora_id),
         processed_tokens_(std::move(processed_tokens)),
-        kv_cache_buffers_(std::move(kv_cache_buffers)) {};
+        state_(std::move(state)),
+        ran_decode_(ran_decode) {};
 
   std::optional<uint32_t> lora_id() const override { return lora_id_; }
   void set_lora_id(std::optional<uint32_t> lora_id) override {
@@ -47,16 +46,14 @@ class LlmProcessedContext : public ProcessedContext {
   }
   ProcessedTokens& processed_tokens() override { return processed_tokens_; }
 
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
-  kv_cache_buffers() {
-    return kv_cache_buffers_;
-  }
+  std::unique_ptr<StateInterface>& state() { return state_; }
+  bool ran_decode() const { return ran_decode_; }
 
  private:
   std::optional<uint32_t> lora_id_;
   ProcessedTokens processed_tokens_;
-  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
-      kv_cache_buffers_;
+  std::unique_ptr<StateInterface> state_;
+  bool ran_decode_ = false;
 };
 
 }  // namespace litert::lm

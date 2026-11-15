@@ -15,27 +15,34 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_MODEL_DATA_PROCESSOR_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_MODEL_DATA_PROCESSOR_MODEL_DATA_PROCESSOR_H_
 
+#include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
+#include "absl/base/no_destructor.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
-#include "support/preprocessor/audio_preprocessor.h"  // from @litert
-#include "support/preprocessor/audio_preprocessor_miniaudio.h"  // from @litert
-#include "support/preprocessor/image_preprocessor.h"  // from @litert
-#include "support/preprocessor/stb_image_preprocessor.h"  // from @litert
-#include "support/tokenizer/sentencepiece_tokenizer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
-#include "runtime/components/logits_processor/constrained_decoding/constraint.h"
-#include "runtime/components/prompt_template.h"
+#include "runtime/components/constrained_decoding/constraint.h"
+#include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
+#include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/engine/io_types.h"
+#include "support/preprocessor/audio_preprocessor.h"
+#include "support/preprocessor/audio_preprocessor_miniaudio.h"
+#include "support/preprocessor/image_preprocessor.h"
+#include "support/preprocessor/stb_image_preprocessor.h"
+#include "support/tokenizer/sentencepiece_tokenizer.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -53,15 +60,6 @@ using ::litert::support::TokenizerType;
 // generic Json messages and the Litert LM InputData type.
 class ModelDataProcessor {
  public:
-  // The result of rendering a single turn template.
-  struct SingleTurnTemplateRenderResult {
-    // The rendered text.
-    std::string text;
-    // The new state of is_appending_message of Conversation should be updated
-    // to.
-    bool is_appending_message;
-  };
-
   virtual ~ModelDataProcessor() = default;
 
   // Converts a rendered template prompt and a list of messages to a vector of
@@ -70,6 +68,19 @@ class ModelDataProcessor {
       const std::string& rendered_template_prompt,
       const nlohmann::ordered_json& messages,
       const DataProcessorArguments& args) const = 0;
+
+  // Returns `args` with dry run enabled, for converting messages with
+  // ToInputDataVector() only to count the tokens they consume. In a dry run,
+  // model data processors may skip the expensive parts of media preprocessing
+  // (e.g. image decoding, audio feature extraction) and return InputData that
+  // only carries what CalculateInputDataTokens() needs. The result must not be
+  // fed to the LLM Session.
+  //
+  // Defaults to returning `args` unchanged, i.e. a full conversion.
+  virtual absl::StatusOr<DataProcessorArguments> WithDryRun(
+      const DataProcessorArguments& args) const {
+    return args;
+  }
 
   // Converts a list of responses from the LLM Session to a Message, which is
   // the output to the user.
@@ -85,51 +96,46 @@ class ModelDataProcessor {
   // For example, messages represent tool calls as a list of JSON objects, but a
   // model's Jinja template may expect the tool calls to already be formatted
   // in a particular tool calling syntax.
-  virtual absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
-      const nlohmann::ordered_json& message) const = 0;
-
-  // Renders a single turn template for the given message and history. Only the
-  // prompt template supporting single turn is valid for this method.
-  //  - history: The history of the conversation.
-  //  - preface: The preface of the conversation.
-  //  - message: The current message to be rendered.
-  //  - prompt_template: The prompt template to use for rendering.
-  //  - current_is_appending_message: Whether the current conversation is in
-  //  appending state.
-  //  - append_message: Whether the current message is for appending.
-  //  - extra_context: Optional context to merge into the PromptTemplateInput
-  //  for prompt template rendering.
   //
-  // Returns the rendered text and the new is_appending_message as a
-  // SingleTurnTemplateRenderResult.
-  virtual absl::StatusOr<SingleTurnTemplateRenderResult>
-  RenderSingleTurnTemplate(
-      std::vector<Message>& history, const Preface& preface,
-      const Message& message, const PromptTemplate& prompt_template,
-      bool current_is_appending_message, bool append_message,
-      std::optional<nlohmann::ordered_json> extra_context) const {
-    return absl::UnimplementedError(
-        "RenderSingleTurnTemplate is not implemented.");
+  // By default, this normalizes the message content to a list of multimodal
+  // parts using NormalizeMessageContent. Models that require specific tool
+  // syntax formatting (e.g. Gemma 3, Function Gemma) can override this method.
+  virtual absl::StatusOr<nlohmann::ordered_json> MessageToTemplateInput(
+      const nlohmann::ordered_json& message) const {
+    return NormalizeMessageContent(message);
   }
+
+  // Returns whether a dummy empty user message should be appended to the
+  // preface when rendering single-turn templates. Used for Gemma 3 templates.
+  virtual bool PushDummyUserMessageToPreface() const { return false; }
 
   // Formats the provided tools to be inserted into the system/developer
   // instruction of the prompt.
   virtual absl::StatusOr<nlohmann::ordered_json> FormatTools(
-      const nlohmann::ordered_json& tools) const = 0;
+      const nlohmann::ordered_json& tools) const {
+    return tools;
+  }
 
-  // Creates a constraint from the given tools. The constraint is used for
-  // constrained decoding. It is created from the tools defined in the preface,
-  // if any.
+  // Creates a constraint from the given tools and tool choice. The constraint
+  // is used for constrained decoding. It is created from the tools defined in
+  // the preface, if any. Without a tool choice, the model's default tool call
+  // mode is used.
+  virtual absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
+      const nlohmann::ordered_json& tools,
+      std::optional<ToolChoice> tool_choice) const {
+    return CreateConstraint(tools);
+  }
+
   virtual absl::StatusOr<std::unique_ptr<Constraint>> CreateConstraint(
       const nlohmann::ordered_json& tools) const {
     return absl::UnimplementedError("CreateConstraint is not implemented.");
-  };
+  }
 
   // Returns the start of tool call blocks.
-  virtual absl::string_view CodeFenceStart() const = 0;
+  virtual absl::string_view CodeFenceStart() const { return ""; }
 
   // Returns the end of tool call blocks.
-  virtual absl::string_view CodeFenceEnd() const = 0;
+  virtual absl::string_view CodeFenceEnd() const { return ""; }
 
   // Clones the state of the other model data processor.
   virtual absl::Status CloneState(const ModelDataProcessor& other) = 0;
@@ -174,6 +180,24 @@ class TypeSafeModelDataProcessor : public ModelDataProcessor {
         "DataProcessorArguments does not hold the expected type");
   }
 
+  // Returns `args` as ExpectedArgsT with dry run enabled, if ExpectedArgsT
+  // supports dry runs (i.e. has a `bool dry_run` field). An empty `args`
+  // (std::monostate) is treated as default ExpectedArgsT.
+  absl::StatusOr<DataProcessorArguments> WithDryRun(
+      const DataProcessorArguments& args) const final {
+    ExpectedArgsT typed_args;
+    if (std::holds_alternative<ExpectedArgsT>(args)) {
+      typed_args = std::get<ExpectedArgsT>(args);
+    } else if (!std::holds_alternative<std::monostate>(args)) {
+      return absl::InvalidArgumentError(
+          "DataProcessorArguments does not hold the expected type");
+    }
+    if constexpr (requires { typed_args.dry_run = true; }) {
+      typed_args.dry_run = true;
+    }
+    return typed_args;
+  }
+
   // Converts a list of responses from the LLM Session to a Message, with
   // arguments type validated.
   absl::StatusOr<Message> ToMessage(
@@ -208,14 +232,109 @@ class TypeSafeModelDataProcessor : public ModelDataProcessor {
   virtual absl::StatusOr<std::vector<InputData>> ToInputDataVectorImpl(
       const std::string& rendered_template_prompt,
       const nlohmann::ordered_json& messages,
-      const ExpectedArgsT& typed_args) const = 0;
+      const ExpectedArgsT& typed_args) const {
+    std::vector<InputData> input_data;
+    input_data.emplace_back(InputText(rendered_template_prompt));
+    return input_data;
+  }
 
   virtual absl::StatusOr<Message> ToMessageImpl(
-      const Responses& responses, const ExpectedArgsT& typed_args) const = 0;
+      const Responses& responses, const ExpectedArgsT& typed_args) const {
+    absl::string_view response_text = responses.GetTexts()[0];
+    return nlohmann::ordered_json::object(
+        {{"role", "assistant"},
+         {"content",
+          nlohmann::ordered_json::array(
+              {{{"type", "text"}, {"text", std::string(response_text)}}})}});
+  }
 
   virtual absl::Status CloneStateImpl(
-      const TypeSafeModelDataProcessor<ExpectedConfigT, ExpectedArgsT>&
-          other) = 0;
+      const TypeSafeModelDataProcessor<ExpectedConfigT, ExpectedArgsT>& other) {
+    return absl::OkStatus();
+  }
+};
+
+// Registry for ModelDataProcessor implementations.
+class ModelDataProcessorRegistry {
+ public:
+  using Creator =
+      std::function<absl::StatusOr<std::unique_ptr<ModelDataProcessor>>(
+          const DataProcessorConfig& config, std::optional<Preface> preface,
+          const Tokenizer* tokenizer,
+          const std::vector<std::vector<int>>& stop_token_ids,
+          bool enable_constrained_decoding)>;
+
+  static ModelDataProcessorRegistry& Instance() {
+    static absl::NoDestructor<ModelDataProcessorRegistry> instance;
+    return *instance;
+  }
+
+  template <typename ProcessorT, typename ConfigT>
+  bool Register() {
+    auto [it, inserted] = creators_.try_emplace(
+        VariantIndex<ConfigT>(),
+        [](const DataProcessorConfig& config, std::optional<Preface> preface,
+           const Tokenizer* tokenizer,
+           const std::vector<std::vector<int>>& stop_token_ids,
+           bool enable_constrained_decoding)
+            -> absl::StatusOr<std::unique_ptr<ModelDataProcessor>> {
+          const auto& typed_config = std::get<ConfigT>(config);
+          if constexpr (requires {
+                          ProcessorT::Create(typed_config, std::move(preface),
+                                             tokenizer, stop_token_ids,
+                                             enable_constrained_decoding);
+                        }) {
+            return ProcessorT::Create(typed_config, std::move(preface),
+                                      tokenizer, stop_token_ids,
+                                      enable_constrained_decoding);
+          } else if constexpr (requires {
+                                 ProcessorT::Create(typed_config,
+                                                    std::move(preface));
+                               }) {
+            return ProcessorT::Create(typed_config, std::move(preface));
+          } else if constexpr (requires { ProcessorT::Create(typed_config); }) {
+            return ProcessorT::Create(typed_config);
+          } else {
+            static_assert(sizeof(ProcessorT) == 0,
+                          "ProcessorT::Create does not match any known factory "
+                          "overload.");
+          }
+        });
+    return inserted;
+  }
+
+  absl::StatusOr<std::unique_ptr<ModelDataProcessor>> Create(
+      const DataProcessorConfig& config, std::optional<Preface> preface,
+      const Tokenizer* tokenizer,
+      const std::vector<std::vector<int>>& stop_token_ids,
+      bool enable_constrained_decoding) const {
+    auto it = creators_.find(config.index());
+    if (it == creators_.end()) {
+      return absl::UnimplementedError(
+          "ModelDataProcessor for the requested model family is not registered "
+          "or is disabled in this build.");
+    }
+    return it->second(config, std::move(preface), tokenizer, stop_token_ids,
+                      enable_constrained_decoding);
+  }
+
+ private:
+  template <typename ConfigT, size_t I = 0>
+  static constexpr size_t VariantIndex() {
+    static_assert(I < std::variant_size_v<DataProcessorConfig>,
+                  "ConfigT is not an alternative of DataProcessorConfig");
+    if constexpr (std::is_same_v<
+                      ConfigT,
+                      std::variant_alternative_t<I, DataProcessorConfig>>) {
+      return I;
+    } else {
+      return VariantIndex<ConfigT, I + 1>();
+    }
+  }
+
+  // Note: Do not use absl::flat_hash_map here, as its control block pointers
+  // may differ across Windows DLL boundaries (see b/508692203).
+  std::unordered_map<size_t, Creator> creators_;
 };
 
 }  // namespace litert::lm

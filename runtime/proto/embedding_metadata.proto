@@ -1,0 +1,135 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package litert.lm.proto;
+
+import "runtime/proto/embedding_model_type.proto";
+import "runtime/proto/token.proto";
+
+option java_multiple_files = true;
+option java_outer_classname = "EmbeddingMetadataOuterClass";
+
+// Parameters for MiniAudio-based Mel spectrogram preprocessing.
+message MiniAudioPreprocessorConfig {
+  // The padding type for FFT bins.
+  enum FftPaddingType {
+    FFT_PADDING_TYPE_UNSPECIFIED = 0;
+    FFT_PADDING_TYPE_RIGHT = 1;
+    FFT_PADDING_TYPE_CENTER = 2;
+  }
+
+  // The sample rate of the audio input in Hz.
+  int32 sample_rate_hz = 1;
+  // The number of audio channels in the audio input.
+  int32 num_channels = 2;
+  // The length of the audio frame in samples.
+  int32 frame_length = 3;
+  // The hop length of the audio frame in samples.
+  int32 hop_length = 4;
+  // The length of the FFT window in samples.
+  int32 fft_length = 5;
+  // The scale factor to apply to the audio input.
+  float input_scale = 6;
+  // The factor to apply to the audio signal for pre-emphasis.
+  float pre_emphasis_factor = 7;
+  // The number of Mel bins to use for the audio input.
+  int32 num_mel_bins = 8;
+  // The lower bound of the Mel frequency range in Hz.
+  float mel_low_hz = 9;
+  // The upper bound of the Mel frequency range in Hz.
+  float mel_high_hz = 10;
+  // The floor value to apply to the Mel spectrogram before taking the log.
+  float mel_floor = 11;
+  // Whether to normalize the Mel spectrogram.
+  bool normalize_mel = 12;
+  // Whether to add the floor value to the Mel spectrogram before taking the
+  // log.
+  bool add_floor_to_mel_before_log = 13;
+  // Whether to use semicausal padding for the audio input.
+  bool semicausal_padding = 14;
+  // Whether to use non-zero Hanning window for the audio input.
+  bool non_zero_hanning = 15;
+  // Whether to use periodic Hanning window for the audio input.
+  bool periodic_hanning = 16;
+  // The padding type for FFT bins.
+  FftPaddingType fft_padding_type = 17;
+  // Whether to skip the Mel spectrogram extraction.
+  bool skip_mel_spectrogram_extraction = 18;
+}
+
+// Wrapper with a oneof for audio preprocessor configurations.
+message AudioPreprocessorConfig {
+  oneof preprocessor {
+    MiniAudioPreprocessorConfig miniaudio = 1;
+  }
+}
+
+// Parameters for Embedding Models.
+message EmbeddingMetadata {
+  enum TfLiteModelType {
+    // Placeholder for uninitialized model type.
+    TF_LITE_MODEL_TYPE_UNSPECIFIED = 0;
+    // The text encoder model.
+    TF_LITE_TEXT_ENCODER = 1;
+    // The embedding model for the text encoder model.
+    TF_LITE_EMBEDDER = 2;
+    // The per-layer embedding model for the text encoder model.
+    TF_LITE_PER_LAYER_EMBEDDER = 3;
+    // The vision encoder model.
+    TF_LITE_VISION_ENCODER = 4;
+    // The vision adapter model.
+    TF_LITE_VISION_ADAPTER = 5;
+    // The end of vision token model.
+    TF_LITE_END_OF_VISION = 6;
+    // The audio encoder model.
+    TF_LITE_AUDIO_ENCODER_HW = 7;
+    // The audio adapter model.
+    TF_LITE_AUDIO_ADAPTER = 8;
+    // The audio frontend model. It is a weight-less Short-Time Fourier
+    // Transform (STFT) model converting audio to spectrogram.
+    TF_LITE_AUDIO_FRONTEND = 9;
+    // The end of audio token model.
+    TF_LITE_END_OF_AUDIO = 10;
+  }
+
+  // Embedding model type and encoder parameters.
+  EmbeddingModelType embedding_model_type = 1;
+
+  // BOS token prepended to the beginning of input sequence.
+  TokenUnion bos_token = 2;
+
+  // EOS token appended to the end of input sequence.
+  TokenUnion eos_token = 3;
+
+  // Audio preprocessor configuration.
+  AudioPreprocessorConfig audio_preprocessor = 4;
+
+  // Default minimum input length (in tokens) for the embedding model.
+  // When auto-selecting text encoder signatures to load, signatures with
+  // capacities strictly less than `min_input_length` will not be loaded.
+  optional int32 min_input_length = 5;
+
+  // Default maximum input length (in tokens) for the embedding model.
+  // The smallest signature that can accommodate `max_input_length` will be
+  // loaded. Signatures with capacity between `min_input_length` and
+  // `max_input_length` will also be loaded.
+  optional int32 max_input_length = 6;
+
+  // The minimum LiteRT-LM runtime version required to run this model (e.g.,
+  // "0.12.0"). Note: This refers to the official LiteRT-LM release version, not
+  // the C API release version.
+  optional string min_runtime_version = 7;
+}

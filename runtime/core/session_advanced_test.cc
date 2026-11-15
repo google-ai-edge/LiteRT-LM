@@ -16,6 +16,7 @@
 
 #include <array>
 #include <filesystem>  // NOLINT: Required for path manipulation.
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -28,6 +29,7 @@
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -37,20 +39,20 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
-#include "support/tokenizer/sentencepiece_tokenizer.h"  // from @litert
-#include "support/tokenizer/tokenizer.h"  // from @litert
-#include "runtime/components/logits_processor/constrained_decoding/fake_constraint.h"
-#include "runtime/components/logits_processor/no_repeat_ngram_config.h"
-#include "runtime/components/logits_processor/repetition_penalty_config.h"
-#include "runtime/components/logits_processor/suppress_tokens_config.h"
+#include "runtime/components/constrained_decoding/fake_constraint.h"
+#include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
+#include "runtime/components/constrained_decoding/repetition_penalty_config.h"
+#include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/core/session_utils.h"
+#include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
-#include "runtime/executor/audio_executor_settings.h"
+#include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/framework/resource_management/execution_manager.h"
@@ -59,6 +61,8 @@
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "support/tokenizer/sentencepiece_tokenizer.h"
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
 
@@ -142,7 +146,7 @@ class ExtendedTokenizer : public Tokenizer {
   }
 
   absl::StatusOr<std::string> TokenIdsToText(
-      const std::vector<int>& token_ids) override {
+      absl::Span<const int> token_ids, bool skip_special_tokens) override {
     std::vector<std::string> token_strs;
     std::vector<int> current_standard_tokens;
     for (int token_id : token_ids) {
@@ -217,7 +221,12 @@ class SessionAdvancedTest : public testing::Test {
                                              batch_size, audio_embedding);
   }
 
-  absl::StatusOr<std::unique_ptr<SessionAdvanced>> CreateTestSession() {
+  // Creates a session that prefills "Hello World!" and decodes "How's it
+  // going?". If set, `draft_verification_support` is what the executor
+  // reports about draft verification.
+  absl::StatusOr<std::unique_ptr<SessionAdvanced>> CreateTestSession(
+      const Engine* engine = nullptr,
+      std::optional<absl::Status> draft_verification_support = std::nullopt) {
     const std::vector<std::vector<int>> stop_token_ids = {{2294}};
     SessionConfig session_config = SessionConfig::CreateDefault();
     session_config.GetMutableSamplerParams() = sampler_params_;
@@ -231,6 +240,9 @@ class SessionAdvancedTest : public testing::Test {
         // "How's it going?"
         /*decode_tokens=*/{
             {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}});
+    if (draft_verification_support.has_value()) {
+      executor->SetDraftVerificationSupport(*draft_verification_support);
+    }
     fake_executor_ = executor.get();
     ABSL_ASSIGN_OR_RETURN(
         execution_manager_,
@@ -242,7 +254,8 @@ class SessionAdvancedTest : public testing::Test {
 
     return SessionAdvanced::Create(execution_manager_, tokenizer_.get(),
                                    session_config,
-                                   /*benchmark_info=*/std::nullopt);
+                                   /*benchmark_info=*/std::nullopt,
+                                   /*living_sessions_count=*/nullptr, engine);
   }
 
   std::unique_ptr<Tokenizer> tokenizer_;
@@ -259,9 +272,10 @@ CreateAudioExecutorSettings(const std::string& model_path,
   auto model_file_ptr = std::make_shared<ScopedFile>(std::move(model_file));
   ABSL_ASSIGN_OR_RETURN(auto model_assets, ModelAssets::Create(model_file_ptr));
   // Create the audio executor settings.
-  ABSL_ASSIGN_OR_RETURN(auto audio_executor_settings,
-                        AudioExecutorSettings::CreateDefault(
-                            model_assets, max_sequence_length, backend));
+  ABSL_ASSIGN_OR_RETURN(
+      auto audio_executor_settings,
+      AudioExecutorSettings::CreateDefault(model_assets, max_sequence_length,
+                                           backend, backend));
   return std::make_unique<AudioExecutorSettings>(
       std::move(audio_executor_settings));
 }
@@ -378,7 +392,7 @@ TEST_F(SessionAdvancedTest, RunDecodeWithInternalSampler) {
   EXPECT_EQ(responses.GetTexts().size(), 1);
   // The response is " How's it going?" since "!" is the stop token which is
   // not included in the response.
-  EXPECT_EQ(responses.GetTexts()[0], " How's it going?");
+  EXPECT_EQ(responses.GetTexts()[0], "How's it going?");
   EXPECT_THAT(responses.GetTokenIds()[0],
               testing::ElementsAre(224, 24, 8, 66, 246, 18, 2295));
   ASSERT_OK_AND_ASSIGN(auto text_from_ids,
@@ -418,11 +432,65 @@ TEST_F(SessionAdvancedTest, RunDecodeWithMaxOutputTokens) {
   ASSERT_OK_AND_ASSIGN(auto responses, session->RunDecode(decode_config));
   // Expect a single output candidate.
   EXPECT_EQ(responses.GetTexts().size(), 1);
-  EXPECT_EQ(responses.GetTexts()[0], " How'");
+  EXPECT_EQ(responses.GetTexts()[0], "How'");
   EXPECT_THAT(responses.GetTokenIds()[0], testing::ElementsAre(224, 24));
   ASSERT_OK_AND_ASSIGN(auto text_from_ids,
                        tokenizer_->TokenIdsToText(responses.GetTokenIds()[0]));
   EXPECT_EQ(text_from_ids, responses.GetTexts()[0]);
+}
+
+TEST_F(SessionAdvancedTest, RunDecodeVerifiesTheDraft) {
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<SessionAdvanced> session,
+      CreateTestSession(/*engine=*/nullptr,
+                        /*draft_verification_support=*/absl::OkStatus()));
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+  ASSERT_OK(session->RunPrefill(inputs));
+
+  DecodeConfig decode_config = DecodeConfig::CreateDefault();
+  decode_config.SetDraftTokenIds({224, 24, 8});
+  ASSERT_OK_AND_ASSIGN(Responses responses, session->RunDecode(decode_config));
+
+  EXPECT_THAT(responses.GetTexts(), testing::ElementsAre("How's it going?"));
+  EXPECT_THAT(fake_executor_->verified_drafts(),
+              testing::ElementsAre(testing::ElementsAre(224, 24, 8)));
+}
+
+TEST_F(SessionAdvancedTest, RunDecodeVerifiesTheDraftTokensThatFit) {
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<SessionAdvanced> session,
+      CreateTestSession(/*engine=*/nullptr,
+                        /*draft_verification_support=*/absl::OkStatus()));
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+  ASSERT_OK(session->RunPrefill(inputs));
+
+  DecodeConfig decode_config = DecodeConfig::CreateDefault();
+  decode_config.SetDraftTokenIds({224, 24, 8});
+  decode_config.SetMaxOutputTokens(3);
+  ASSERT_OK(session->RunDecode(decode_config));
+
+  // The 3 output tokens leave room for 2 draft tokens and the token after them.
+  EXPECT_THAT(fake_executor_->verified_drafts(),
+              testing::ElementsAre(testing::ElementsAre(224, 24)));
+}
+
+TEST_F(SessionAdvancedTest, RunDecodeFailsIfTheDraftCantBeVerified) {
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<SessionAdvanced> session,
+      CreateTestSession(/*engine=*/nullptr,
+                        /*draft_verification_support=*/
+                        absl::FailedPreconditionError("No verify signature.")));
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+  ASSERT_OK(session->RunPrefill(inputs));
+
+  DecodeConfig decode_config = DecodeConfig::CreateDefault();
+  decode_config.SetDraftTokenIds({224, 24});
+  EXPECT_THAT(session->RunDecode(decode_config),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       testing::HasSubstr("No verify signature.")));
 }
 
 TEST_F(SessionAdvancedTest, RunDecodeWithExternalSampler) {
@@ -458,7 +526,7 @@ TEST_F(SessionAdvancedTest, RunDecodeWithExternalSampler) {
   EXPECT_EQ(responses.GetTexts().size(), 1);
   // The response is " How's it going?" since "!" is the stop token which is
   // not included in the response.
-  EXPECT_EQ(responses.GetTexts()[0], " How's it going?");
+  EXPECT_EQ(responses.GetTexts()[0], "How's it going?");
   EXPECT_THAT(responses.GetTokenIds()[0],
               testing::ElementsAre(224, 24, 8, 66, 246, 18, 2295));
   ASSERT_OK_AND_ASSIGN(auto text_from_ids,
@@ -505,19 +573,19 @@ TEST_F(SessionAdvancedTest,
   EXPECT_EQ(responses.GetTexts().size(), 3);
   // The response is " How's it going?" since "!" is the stop token which is
   // not included in the response.
-  EXPECT_EQ(responses.GetTexts()[0], " How's it going?");
+  EXPECT_EQ(responses.GetTexts()[0], "How's it going?");
   EXPECT_THAT(responses.GetTokenIds()[0],
               testing::ElementsAre(224, 24, 8, 66, 246, 18, 2295));
   ASSERT_OK_AND_ASSIGN(auto text_from_ids0,
                        tokenizer_->TokenIdsToText(responses.GetTokenIds()[0]));
   EXPECT_EQ(text_from_ids0, responses.GetTexts()[0]);
-  EXPECT_EQ(responses.GetTexts()[1], " Hello World");
+  EXPECT_EQ(responses.GetTexts()[1], "Hello World");
   EXPECT_THAT(responses.GetTokenIds()[1],
               testing::ElementsAre(90, 547, 58, 735, 210, 466));
   ASSERT_OK_AND_ASSIGN(auto text_from_ids1,
                        tokenizer_->TokenIdsToText(responses.GetTokenIds()[1]));
   EXPECT_EQ(text_from_ids1, responses.GetTexts()[1]);
-  EXPECT_EQ(responses.GetTexts()[2], " How's it going?");
+  EXPECT_EQ(responses.GetTexts()[2], "How's it going?");
   EXPECT_THAT(responses.GetTokenIds()[2],
               testing::ElementsAre(224, 24, 8, 66, 246, 18, 2295));
   ASSERT_OK_AND_ASSIGN(auto text_from_ids2,
@@ -566,19 +634,19 @@ TEST_F(SessionAdvancedTest,
   EXPECT_EQ(responses.GetTexts().size(), 3);
   // The response is " How's it going?" since "!" is the stop token which is
   // not included in the response.
-  EXPECT_EQ(responses.GetTexts()[0], " How's it going?");
+  EXPECT_EQ(responses.GetTexts()[0], "How's it going?");
   EXPECT_THAT(responses.GetTokenIds()[0],
               testing::ElementsAre(224, 24, 8, 66, 246, 18, 2295));
   ASSERT_OK_AND_ASSIGN(auto text_from_ids0,
                        tokenizer_->TokenIdsToText(responses.GetTokenIds()[0]));
   EXPECT_EQ(text_from_ids0, responses.GetTexts()[0]);
-  EXPECT_EQ(responses.GetTexts()[1], " Hello World");
+  EXPECT_EQ(responses.GetTexts()[1], "Hello World");
   EXPECT_THAT(responses.GetTokenIds()[1],
               testing::ElementsAre(90, 547, 58, 735, 210, 466));
   ASSERT_OK_AND_ASSIGN(auto text_from_ids1,
                        tokenizer_->TokenIdsToText(responses.GetTokenIds()[1]));
   EXPECT_EQ(text_from_ids1, responses.GetTexts()[1]);
-  EXPECT_EQ(responses.GetTexts()[2], " How's it going?");
+  EXPECT_EQ(responses.GetTexts()[2], "How's it going?");
   EXPECT_THAT(responses.GetTokenIds()[2],
               testing::ElementsAre(224, 24, 8, 66, 246, 18, 2295));
   ASSERT_OK_AND_ASSIGN(auto text_from_ids2,
@@ -941,7 +1009,7 @@ TEST_F(SessionAdvancedTest, RunDecodeWithRepetitionPenaltyConfig) {
   // Expect the output to be " How's it go" instead of " How's it go go go"
   // because the repetition penalty is applied.
   EXPECT_EQ(responses.GetTexts().size(), 1);
-  EXPECT_EQ(responses.GetTexts()[0], " How's it go");
+  EXPECT_EQ(responses.GetTexts()[0], "How's it go");
   ASSERT_OK_AND_ASSIGN(auto text_from_ids,
                        tokenizer_->TokenIdsToText(responses.GetTokenIds()[0]));
   EXPECT_EQ(text_from_ids, responses.GetTexts()[0]);
@@ -989,7 +1057,7 @@ TEST_F(SessionAdvancedTest, RunDecodeWithNoRepeatNgramConfig) {
   // Expect the output to be " How's it going go" instead of " How's it going
   // going" because the second "going" is banned.
   EXPECT_EQ(responses.GetTexts().size(), 1);
-  EXPECT_EQ(responses.GetTexts()[0], " How's it going go");
+  EXPECT_EQ(responses.GetTexts()[0], "How's it going go");
   ASSERT_OK_AND_ASSIGN(auto text_from_ids,
                        tokenizer_->TokenIdsToText(responses.GetTokenIds()[0]));
   EXPECT_EQ(text_from_ids, responses.GetTexts()[0]);
@@ -1034,7 +1102,7 @@ TEST_F(SessionAdvancedTest, RunDecodeWithSuppressTokensConfig) {
   // Expect the output to be " How's it" instead of " How's it go go go"
   // because the token 246 is suppressed.
   EXPECT_EQ(responses.GetTexts().size(), 1);
-  EXPECT_EQ(responses.GetTexts()[0], " How's it");
+  EXPECT_EQ(responses.GetTexts()[0], "How's it");
   ASSERT_OK_AND_ASSIGN(auto text_from_ids,
                        tokenizer_->TokenIdsToText(responses.GetTokenIds()[0]));
   EXPECT_EQ(text_from_ids, responses.GetTexts()[0]);
@@ -1079,7 +1147,7 @@ TEST_F(SessionAdvancedTest,
   // Expect the output to be " How's it" instead of " How's it go go go"
   // because the token 246 is suppressed.
   EXPECT_EQ(responses.GetTexts().size(), 1);
-  EXPECT_EQ(responses.GetTexts()[0], " How's it go");
+  EXPECT_EQ(responses.GetTexts()[0], "How's it go");
   ASSERT_OK_AND_ASSIGN(auto text_from_ids,
                        tokenizer_->TokenIdsToText(responses.GetTokenIds()[0]));
   EXPECT_EQ(text_from_ids, responses.GetTexts()[0]);
@@ -1225,7 +1293,7 @@ TEST_F(SessionAdvancedTest, SaveAndRewindCheckpoint) {
   decode_config.SetMaxOutputTokens(2);
   ASSERT_OK_AND_ASSIGN(auto responses1, session->RunDecode(decode_config));
   EXPECT_EQ(responses1.GetTexts().size(), 1);
-  EXPECT_EQ(responses1.GetTexts()[0], " How'");
+  EXPECT_EQ(responses1.GetTexts()[0], "How'");
   EXPECT_THAT(responses1.GetTokenIds()[0], testing::ElementsAre(224, 24));
   ASSERT_OK_AND_ASSIGN(auto text_from_ids1,
                        tokenizer_->TokenIdsToText(responses1.GetTokenIds()[0]));
@@ -1238,7 +1306,7 @@ TEST_F(SessionAdvancedTest, SaveAndRewindCheckpoint) {
   decode_config.SetMaxOutputTokens(2);
   ASSERT_OK_AND_ASSIGN(auto responses3, session->RunDecode(decode_config));
   EXPECT_EQ(responses3.GetTexts().size(), 1);
-  EXPECT_EQ(responses3.GetTexts()[0], " How'");
+  EXPECT_EQ(responses3.GetTexts()[0], "How'");
   EXPECT_THAT(responses3.GetTokenIds()[0], testing::ElementsAre(224, 24));
   ASSERT_OK_AND_ASSIGN(auto text_from_ids3,
                        tokenizer_->TokenIdsToText(responses3.GetTokenIds()[0]));
@@ -1248,6 +1316,56 @@ TEST_F(SessionAdvancedTest, SaveAndRewindCheckpoint) {
               StatusIs(absl::StatusCode::kNotFound));
 
   EXPECT_THAT(session->RewindToCheckpoint("non-existent"),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST_F(SessionAdvancedTest, SaveAndRestoreContext) {
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
+
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+
+  EXPECT_OK(session->RunPrefill(inputs));
+
+  EXPECT_OK(session->SaveCheckpoint("regular-checkpoint"));
+  EXPECT_OK(session->SaveContext("context-1"));
+
+  auto decode_config = DecodeConfig::CreateDefault();
+  decode_config.SetMaxOutputTokens(2);
+  ASSERT_OK_AND_ASSIGN(auto responses1, session->RunDecode(decode_config));
+  EXPECT_EQ(responses1.GetTexts().size(), 1);
+  EXPECT_EQ(responses1.GetTexts()[0], "How'");
+  EXPECT_THAT(responses1.GetTokenIds()[0], testing::ElementsAre(224, 24));
+  ASSERT_OK_AND_ASSIGN(auto text_from_ids1,
+                       tokenizer_->TokenIdsToText(responses1.GetTokenIds()[0]));
+  EXPECT_EQ(text_from_ids1, responses1.GetTexts()[0]);
+
+  EXPECT_OK(session->SaveContext("context-2"));
+
+  // Restoring a regular checkpoint (without saved context) should fail.
+  EXPECT_THAT(session->RestoreContext("regular-checkpoint"),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+
+  EXPECT_OK(session->RestoreContext("context-1"));
+
+  decode_config.SetMaxOutputTokens(2);
+  ASSERT_OK_AND_ASSIGN(auto responses3, session->RunDecode(decode_config));
+  EXPECT_EQ(responses3.GetTexts().size(), 1);
+  EXPECT_EQ(responses3.GetTexts()[0], "How'");
+  EXPECT_THAT(responses3.GetTokenIds()[0], testing::ElementsAre(224, 24));
+  ASSERT_OK_AND_ASSIGN(auto text_from_ids3,
+                       tokenizer_->TokenIdsToText(responses3.GetTokenIds()[0]));
+  EXPECT_EQ(text_from_ids3, responses3.GetTexts()[0]);
+
+  // Saved contexts are single-use and consumed upon restore.
+  EXPECT_THAT(session->RestoreContext("context-1"),
+              StatusIs(absl::StatusCode::kNotFound));
+
+  // Checkpoints created after the target step should be pruned.
+  EXPECT_THAT(session->RestoreContext("context-2"),
+              StatusIs(absl::StatusCode::kNotFound));
+
+  EXPECT_THAT(session->RestoreContext("non-existent"),
               StatusIs(absl::StatusCode::kNotFound));
 }
 
@@ -1297,7 +1415,7 @@ TEST_F(SessionAdvancedTest, RewindToStep) {
   decode_config.SetMaxOutputTokens(2);
   ASSERT_OK_AND_ASSIGN(auto responses1, session->RunDecode(decode_config));
   EXPECT_EQ(responses1.GetTexts().size(), 1);
-  EXPECT_EQ(responses1.GetTexts()[0], " How'");
+  EXPECT_EQ(responses1.GetTexts()[0], "How'");
   EXPECT_THAT(responses1.GetTokenIds()[0], testing::ElementsAre(224, 24));
 
   // After decode, step should be 10.
@@ -1312,7 +1430,7 @@ TEST_F(SessionAdvancedTest, RewindToStep) {
   // Decoded tokens should be the same as the first decode call.
   ASSERT_OK_AND_ASSIGN(auto responses2, session->RunDecode(decode_config));
   EXPECT_EQ(responses2.GetTexts().size(), 1);
-  EXPECT_EQ(responses2.GetTexts()[0], " How'");
+  EXPECT_EQ(responses2.GetTexts()[0], "How'");
   EXPECT_THAT(responses2.GetTokenIds()[0], testing::ElementsAre(224, 24));
 
   // Rewind to step 0.
@@ -1357,7 +1475,7 @@ TEST_F(SessionAdvancedTest, RewindToCheckpointRecoversFromFailure) {
   // If fixed, it will succeed and return the expected tokens.
   ASSERT_OK_AND_ASSIGN(auto responses, session->RunDecode(decode_config));
   EXPECT_EQ(responses.GetTexts().size(), 1);
-  EXPECT_EQ(responses.GetTexts()[0], " How'");
+  EXPECT_EQ(responses.GetTexts()[0], "How'");
 }
 
 TEST_F(SessionAdvancedTest, RewindToStepRecoversFromFailure) {
@@ -1395,7 +1513,7 @@ TEST_F(SessionAdvancedTest, RewindToStepRecoversFromFailure) {
   // If fixed, it will succeed.
   ASSERT_OK_AND_ASSIGN(auto responses, session->RunDecode(decode_config));
   EXPECT_EQ(responses.GetTexts().size(), 1);
-  EXPECT_EQ(responses.GetTexts()[0], " How'");
+  EXPECT_EQ(responses.GetTexts()[0], "How'");
 }
 
 TEST_F(SessionAdvancedTest, RunPrefillAndDecodeAsyncWithInternalSampler) {
@@ -1437,7 +1555,7 @@ TEST_F(SessionAdvancedTest, RunPrefillAndDecodeAsyncWithInternalSampler) {
   EXPECT_EQ(task_state, TaskState::kDone);
   EXPECT_EQ(texts.size(), 7);
   EXPECT_THAT(texts,
-              testing::ElementsAre(" How", "'", "s", " it", " go", "ing", "?"));
+              testing::ElementsAre("How", "'", "s", " it", " go", "ing", "?"));
 }
 
 TEST_F(SessionAdvancedTest, RunPrefillAndDecodeAsyncWithExternalSampler) {
@@ -1481,7 +1599,7 @@ TEST_F(SessionAdvancedTest, RunPrefillAndDecodeAsyncWithExternalSampler) {
   EXPECT_EQ(task_state, TaskState::kDone);
   EXPECT_EQ(texts.size(), 7);
   EXPECT_THAT(texts,
-              testing::ElementsAre(" How", "'", "s", " it", " go", "ing", "?"));
+              testing::ElementsAre("How", "'", "s", " it", " go", "ing", "?"));
 }
 
 TEST_F(SessionAdvancedTest, GenerateContentStream) {
@@ -1521,7 +1639,7 @@ TEST_F(SessionAdvancedTest, GenerateContentStream) {
   EXPECT_EQ(task_state, TaskState::kDone);
   EXPECT_EQ(texts.size(), 7);
   EXPECT_THAT(texts,
-              testing::ElementsAre(" How", "'", "s", " it", " go", "ing", "?"));
+              testing::ElementsAre("How", "'", "s", " it", " go", "ing", "?"));
 }
 
 TEST_F(SessionAdvancedTest, RunPrefillEmptyInput) {
@@ -2111,6 +2229,7 @@ TEST_F(SessionAdvancedTest,
   ASSERT_OK_AND_ASSIGN(
       auto session, SessionAdvanced::Create(execution_manager, tokenizer_.get(),
                                             session_config, benchmark_info));
+  EXPECT_TRUE(session->GetSessionConfig().GetApplyPromptTemplateInSession());
 
   std::vector<InputData> inputs;
   inputs.emplace_back(InputText("Hello World!"));
@@ -2136,9 +2255,8 @@ TEST_F(SessionAdvancedTest,
 
   auto executor = CreateFakeLlmExecutor(
       // Expected tokens: "Hello World!" (No templates)
-      // Expected tokens: "Hello World!" (No templates)
       /*prefill_tokens=*/{{90, 547, 58, 735, 210, 466, 2294}},
-      /*decode_tokens=*/{{224}});
+      /*decode_tokens=*/{{224}, {2294}});
 
   proto::BenchmarkParams benchmark_params;
   benchmark_params.set_num_prefill_tokens(7);
@@ -2155,12 +2273,15 @@ TEST_F(SessionAdvancedTest,
   ASSERT_OK_AND_ASSIGN(
       auto session, SessionAdvanced::Create(execution_manager, tokenizer_.get(),
                                             session_config, benchmark_info));
+  EXPECT_FALSE(session->GetSessionConfig().GetApplyPromptTemplateInSession());
 
   std::vector<InputData> inputs;
   inputs.emplace_back(InputText("Hello World!"));
   EXPECT_OK(session->RunPrefill(inputs));
+  EXPECT_OK(session->RunDecode());
   ASSERT_OK_AND_ASSIGN(auto actual_benchmark_info, session->GetBenchmarkInfo());
   EXPECT_EQ(actual_benchmark_info.GetTotalPrefillTurns(), 1);
+  EXPECT_EQ(actual_benchmark_info.GetTotalDecodeTurns(), 1);
 }
 
 TEST_F(SessionAdvancedTest,
@@ -2357,8 +2478,6 @@ TEST_F(SessionAdvancedTest, RunIncrementalPrefillWithDecode) {
   }
 }
 
-#if !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
-    !defined(__NT__) && !defined(_WIN64)
 TEST_F(SessionAdvancedTest, ProcessAndCombineContentsTextAndAudioSuccess) {
   const std::vector<std::vector<int>> stop_token_ids = {{2294}};
   SessionConfig session_config = SessionConfig::CreateDefault();
@@ -2488,8 +2607,6 @@ TEST_F(SessionAdvancedTest, ProcessAndCombineContentsTextAudioTextSuccess) {
   inputs.emplace_back(InputText("What does the audio say?"));
   EXPECT_OK(session->RunPrefill(inputs));
 }
-#endif  // !defined(WIN32) && !defined(_WIN32) && !defined(__WIN32__) && \
-        // !defined(__NT__) && !defined(_WIN64)
 
 TEST_F(SessionAdvancedTest, RunTextScoringEmptyTargetTextFailure) {
   ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
@@ -2497,7 +2614,7 @@ TEST_F(SessionAdvancedTest, RunTextScoringEmptyTargetTextFailure) {
   EXPECT_THAT(session->RunTextScoring(target_text,
                                       /*store_token_lengths=*/false),
               StatusIs(absl::StatusCode::kInvalidArgument,
-                       "Target text size should be 1."));
+                       "Target text must not be empty."));
 }
 
 TEST_F(SessionAdvancedTest, RunTextScoringMultipleTargetTextFailure) {
@@ -2508,7 +2625,70 @@ TEST_F(SessionAdvancedTest, RunTextScoringMultipleTargetTextFailure) {
   EXPECT_THAT(
       session->RunTextScoring(target_text, /*store_token_lengths=*/false),
       StatusIs(absl::StatusCode::kInvalidArgument,
-               "Target text size should be 1."));
+               "Target text size should be 1 unless every target text is a "
+               "single token."));
+}
+
+TEST_F(SessionAdvancedTest, RunTextScoringMixedTokenLengthTargetsFailure) {
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
+  std::vector<absl::string_view> target_text = {"How", "How are you?"};
+  EXPECT_THAT(
+      session->RunTextScoring(target_text, /*store_token_lengths=*/false),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               "Target text size should be 1 unless every target text is a "
+               "single token."));
+}
+
+TEST_F(SessionAdvancedTest,
+       RunTextScoringSeveralTargetsWithMultipleOutputCandidatesFailure) {
+  const std::vector<std::vector<int>> stop_token_ids = {{2294}};
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.GetMutableSamplerParams() = sampler_params_;
+  session_config.GetMutableStopTokenIds() = stop_token_ids;
+  session_config.SetStartTokenId(2);
+  session_config.SetNumOutputCandidates(2);
+  auto executor = CreateFakeLlmExecutor(
+      // "Hello World!"
+      /*prefill_tokens=*/{{2, 90, 547, 58, 735, 210, 466, 2294}},
+      /*decode_tokens=*/{{224, 224}});
+  ASSERT_OK_AND_ASSIGN(
+      std::shared_ptr<ExecutionManager> execution_manager,
+      ThreadedExecutionManager::Create(tokenizer_.get(), model_resources_.get(),
+                                       std::move(executor),
+                                       /*vision_executor_settings=*/nullptr,
+                                       /*audio_executor_settings=*/nullptr,
+                                       /*litert_env=*/nullptr));
+  ASSERT_OK_AND_ASSIGN(
+      auto session,
+      SessionAdvanced::Create(execution_manager, tokenizer_.get(),
+                              session_config, /*benchmark_info=*/std::nullopt));
+  // All targets are single tokens, but a two-candidate session decodes two rows
+  // per step, so the targets cannot share one decode step. The call is rejected
+  // before any work is queued.
+  std::vector<absl::string_view> target_texts = {"How", "it", "How"};
+  EXPECT_THAT(
+      session->RunTextScoring(target_texts, /*store_token_lengths=*/true),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               "Scoring several target texts requires "
+               "num_output_candidates == 1."));
+}
+
+TEST_F(SessionAdvancedTest, RunTextScoringSingleTokenTargetsSuccess) {
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+  EXPECT_OK(session->RunPrefill(inputs));
+  // The first decode step puts all of the probability on "How", and the fake
+  // executor checks that the targets don't take more decode steps.
+  std::vector<absl::string_view> target_texts = {"How", "it"};
+  ASSERT_OK_AND_ASSIGN(
+      const auto responses,
+      session->RunTextScoring(target_texts, /*store_token_lengths=*/true));
+  EXPECT_THAT(
+      responses.GetScores(),
+      testing::ElementsAre(0.0f, -std::numeric_limits<float>::infinity()));
+  EXPECT_THAT(responses.GetTokenLengths(),
+              testing::Optional(testing::ElementsAre(1, 1)));
 }
 
 TEST_F(SessionAdvancedTest, RunTextScoringWithoutTokenLengthsSuccess) {
@@ -2551,8 +2731,9 @@ TEST_F(SessionAdvancedTest, RunTextScoringAsyncEmptyTargetTextFailure) {
   auto controller = session->RunTextScoringAsync(
       target_text, [](absl::StatusOr<Responses> r) {},
       /*store_token_lengths=*/false);
-  EXPECT_THAT(controller.status(), StatusIs(absl::StatusCode::kInvalidArgument,
-                                            "Target text size should be 1."));
+  EXPECT_THAT(controller.status(),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Target text must not be empty."));
 }
 
 TEST_F(SessionAdvancedTest, RunTextScoringAsyncMultipleTargetTextFailure) {
@@ -2563,8 +2744,11 @@ TEST_F(SessionAdvancedTest, RunTextScoringAsyncMultipleTargetTextFailure) {
   auto controller = session->RunTextScoringAsync(
       target_text, [](absl::StatusOr<Responses> r) {},
       /*store_token_lengths=*/false);
-  EXPECT_THAT(controller.status(), StatusIs(absl::StatusCode::kInvalidArgument,
-                                            "Target text size should be 1."));
+  EXPECT_THAT(
+      controller.status(),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               "Target text size should be 1 unless every target text is a "
+               "single token."));
 }
 
 TEST_F(SessionAdvancedTest, RunTextScoringAsyncWithoutTokenLengthsSuccess) {
@@ -2637,6 +2821,108 @@ TEST_F(SessionAdvancedTest, RunTextScoringAsyncWithTokenLengthsSuccess) {
   EXPECT_TRUE(responses->GetTokenLengths().has_value());
   EXPECT_EQ(responses->GetTokenLengths()->size(), 1);
   EXPECT_EQ((*responses->GetTokenLengths())[0], 7);
+}
+
+TEST_F(SessionAdvancedTest, RunTextScoringAsyncSingleTokenTargetsSuccess) {
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+  EXPECT_OK(session->RunPrefill(inputs));
+  // The first decode step puts all of the probability on "How", and the fake
+  // executor checks that the targets don't take more decode steps.
+  std::vector<absl::string_view> target_texts = {"How", "it"};
+
+  absl::Status status;
+  std::optional<Responses> responses;
+  ASSERT_OK_AND_ASSIGN(auto controller,
+                       session->RunTextScoringAsync(
+                           target_texts,
+                           [&](absl::StatusOr<Responses> r) {
+                             if (!r.ok()) {
+                               status = r.status();
+                               return;
+                             }
+                             if (IsTaskEndState(r->GetTaskState())) {
+                               responses.emplace(*std::move(r));
+                             }
+                           },
+                           /*store_token_lengths=*/true));
+
+  EXPECT_OK(controller->WaitUntilDone(absl::Seconds(10)));
+
+  EXPECT_OK(status);
+  ASSERT_TRUE(responses.has_value());
+  EXPECT_THAT(
+      responses->GetScores(),
+      testing::ElementsAre(0.0f, -std::numeric_limits<float>::infinity()));
+  EXPECT_THAT(responses->GetTokenLengths(),
+              testing::Optional(testing::ElementsAre(1, 1)));
+}
+
+class FakeEngineForEnvironmentTest : public Engine {
+ public:
+  explicit FakeEngineForEnvironmentTest(const ::litert::Environment* env)
+      : env_(env) {}
+
+  absl::StatusOr<const ::litert::Environment*> GetEnvironment() const override {
+    if (env_ == nullptr) {
+      return absl::NotFoundError("LiteRT environment is not available.");
+    }
+    return env_;
+  }
+
+  const EngineSettings& GetEngineSettings() const override {
+    ABSL_LOG(FATAL) << "Not needed for test.";
+  }
+
+  const support::Tokenizer& GetTokenizer() const override {
+    ABSL_LOG(FATAL) << "Not needed for test.";
+  }
+
+  absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
+      const override {
+    return absl::UnimplementedError("Not needed for test.");
+  }
+
+  absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
+      const override {
+    return absl::UnimplementedError("Not needed for test.");
+  }
+
+  absl::StatusOr<std::unique_ptr<SessionInterface>> CreateSession(
+      const SessionConfig& session_config) override {
+    return absl::UnimplementedError("Not needed for test.");
+  }
+
+ private:
+  const ::litert::Environment* env_;
+};
+
+TEST_F(SessionAdvancedTest, GetEnvironmentWithoutEngineReturnsNotFoundError) {
+  using ::testing::HasSubstr;
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession());
+  EXPECT_THAT(session->GetEnvironment(),
+              StatusIs(absl::StatusCode::kNotFound,
+                       HasSubstr("Engine is not available")));
+}
+
+TEST_F(SessionAdvancedTest, GetEnvironmentWithEngineReturnsEnvironment) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto litert_env,
+                              ::litert::Environment::Create({}));
+  FakeEngineForEnvironmentTest fake_engine(&litert_env);
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession(&fake_engine));
+  ASSERT_OK_AND_ASSIGN(const auto* env, session->GetEnvironment());
+  EXPECT_EQ(env, &litert_env);
+}
+
+TEST_F(SessionAdvancedTest, ClonedSessionPreservesEngine) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto litert_env,
+                              ::litert::Environment::Create({}));
+  FakeEngineForEnvironmentTest fake_engine(&litert_env);
+  ASSERT_OK_AND_ASSIGN(auto session, CreateTestSession(&fake_engine));
+  ASSERT_OK_AND_ASSIGN(auto clone, session->CloneAsync([](auto) {}));
+  ASSERT_OK_AND_ASSIGN(const auto* env, clone->GetEnvironment());
+  EXPECT_EQ(env, &litert_env);
 }
 
 }  // namespace

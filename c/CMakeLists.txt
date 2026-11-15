@@ -12,11 +12,73 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(PKG_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
+# ==============================================================================
+# Error Reporter
+# ==============================================================================
+add_litertlm_library(c_error_reporter STATIC
+  error_reporter.cc
+)
+add_library(LiteRTLM::C::ErrorReporter ALIAS c_error_reporter)
+
+target_include_directories(c_error_reporter
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(c_error_reporter
+  PUBLIC
+    LITERTLM_DEPS
+)
 
 # ==============================================================================
-# 1. Engine Library
-#    Bazel: cc_library(name = "engine", ...)
+# C API Internal
+# ==============================================================================
+add_litertlm_library(c_api_internal STATIC
+  c_api_internal.cc
+)
+add_library(LiteRTLM::C::Internal ALIAS c_api_internal)
+
+target_include_directories(c_api_internal
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(c_api_internal
+  PUBLIC
+    LITERTLM_DEPS
+    LiteRTLM::C::ErrorReporter
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Executor
+)
+
+# ==============================================================================
+# Conversation
+# ==============================================================================
+add_litertlm_library(c_conversation STATIC
+  conversation.cc
+)
+add_library(LiteRTLM::C::Conversation ALIAS c_conversation)
+
+target_include_directories(c_conversation
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(c_conversation
+  PUBLIC
+    LITERTLM_DEPS
+    LiteRTLM::C::ErrorReporter
+    LiteRTLM::C::Internal
+    LiteRTLM::Runtime::Conversation
+    LiteRTLM::Runtime::Core
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Executor
+    LiteRTLM::Support::Tokenizer
+)
+
+# ==============================================================================
+# Engine
 # ==============================================================================
 add_litertlm_library(c_engine STATIC
   engine.cc
@@ -25,30 +87,100 @@ add_library(LiteRTLM::C::Engine ALIAS c_engine)
 
 target_include_directories(c_engine
   PRIVATE
-    ${LITERTLM_INCLUDE_PATHS}        # Project Root & Generated Headers
-    ${LITERT_INCLUDE_PATHS}          # LiteRT External Headers
-    ${THIRD_PARTY_DIR}/json/include # @nlohmann_json//:json
+    ${LITERTLM_INCLUDE_PATHS}
 )
 
 target_link_libraries(c_engine
   PUBLIC
     LITERTLM_DEPS
-
+    LiteRTLM::C::EmbeddingEngine
+    LiteRTLM::C::Conversation
+    LiteRTLM::C::ErrorReporter
+    LiteRTLM::C::Internal
     LiteRTLM::Runtime::Conversation
-    LiteRTLM::Runtime::Conversation::IoTypes
-    LiteRTLM::Runtime::Core::EngineImpl
-    LiteRTLM::Runtime::Engine::Interface
-    LiteRTLM::Runtime::Engine::Settings
-    LiteRTLM::Runtime::Engine::IoTypes
-    LiteRTLM::Runtime::Executor::ExecutorSettingsBase
+    LiteRTLM::Runtime::Core
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Executor
+    LiteRTLM::Support::Tokenizer
 )
 
 # ==============================================================================
-# 2. Folder Facade
+# Embedding Engine
+# ==============================================================================
+add_litertlm_library(c_embedding_engine STATIC
+  embedding_engine.cc
+)
+add_library(LiteRTLM::C::EmbeddingEngine ALIAS c_embedding_engine)
+
+target_include_directories(c_embedding_engine
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(c_embedding_engine
+  PUBLIC
+    LITERTLM_DEPS
+    LiteRTLM::C::Conversation
+    LiteRTLM::C::ErrorReporter
+    LiteRTLM::C::Internal
+    LiteRTLM::Runtime::Components
+    LiteRTLM::Runtime::Engine
+    LiteRTLM::Runtime::Executor
+)
+
+# ==============================================================================
+# Model Info
+# ==============================================================================
+add_litertlm_library(c_model_info STATIC
+  model_info.cc
+)
+add_library(LiteRTLM::C::ModelInfo ALIAS c_model_info)
+
+target_include_directories(c_model_info
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(c_model_info
+  PUBLIC
+    LITERTLM_DEPS
+    LiteRTLM::C::ErrorReporter
+    LiteRTLM::Schema::ModelInfo
+)
+
+# ==============================================================================
+# Model Sync
+# ==============================================================================
+add_litertlm_library(c_model_sync STATIC
+  model_sync.cc
+)
+add_library(LiteRTLM::C::ModelSync ALIAS c_model_sync)
+
+target_include_directories(c_model_sync
+  PRIVATE
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(c_model_sync
+  PUBLIC
+    LITERTLM_DEPS
+    LiteRTLM::C::ErrorReporter
+    LiteRTLM::Sync::ModelSync
+)
+
+# ==============================================================================
+# Folder Facade
 # ==============================================================================
 add_library(c_libs INTERFACE)
 add_library(LiteRTLM::C ALIAS c_libs)
 
 target_link_libraries(c_libs INTERFACE
+  LiteRTLM::C::ErrorReporter
+  LiteRTLM::C::Internal
+  LiteRTLM::C::ModelInfo
+  LiteRTLM::C::ModelSync
+  LiteRTLM::C::Conversation
   LiteRTLM::C::Engine
+  LiteRTLM::C::EmbeddingEngine
 )

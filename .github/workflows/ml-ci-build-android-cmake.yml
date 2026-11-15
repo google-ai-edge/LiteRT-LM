@@ -1,0 +1,174 @@
+# Copyright 2026 The ODML Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: "ML-CI-Android-CMake"
+on:
+  push:
+    tags:
+      - v*.*.*
+  pull_request:
+    branches:
+    - main
+  workflow_dispatch:  # Manual trigger
+    inputs:
+      MyHaltForConnectionInput:
+        description: 'Should this workflow run wait for a remote connection?'
+        type: choice
+        default: 'no'
+        options:
+          - 'yes'
+          - 'no'
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/check-pr-state.yml
+
+  presubmit:
+    needs: gate
+    if: needs.gate.outputs.should_skip != 'true'
+    name: "Presubmit-Android-CMake"
+    runs-on: "linux-x86-c4-16"
+    container:
+      image: ubuntu:24.04@sha256:496754492fb28b4d3049432f2ca787449331e23fb14f0dd3fffea86bf5a93eb4
+    permissions:
+      id-token: write
+      actions: write
+      contents: write
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 16
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      RUSTC_WRAPPER: sccache
+      CARGO_INCREMENTAL: 0
+      SCCACHE_GCS_BUCKET: litert-lm-bazel-cache-us-central1
+      SCCACHE_GCS_KEY_PREFIX: sccache
+      SCCACHE_GCS_RW_MODE: READ_WRITE
+      SCCACHE_IDLE_TIMEOUT: 0
+      SCCACHE_IGNORE_SERVER_IO_ERROR: 1
+      MODEL_KEY: gemma-4-E2B-it.litertlm
+      MODEL_PATH: ./models/gemma4
+      GCS_MODEL_URL: gs://litert-lm-cicd/models/gemma4/gemma-4-E2B-it.litertlm
+      HF_MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
+      GH_TOKEN: ${{ github.token }}  # For gh release upload.
+
+    steps:
+      - name: Install System Dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          TZ: Etc/UTC
+        run: |
+          ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+          printf 'http://us-central1.gce.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://mirrors.edge.kernel.org/ubuntu/\tpriority:2\nhttp://archive.ubuntu.com/ubuntu/\tpriority:3\n' \
+            > /etc/apt/mirrors.txt
+          sed -i -E 's@https?://(archive|security)\.ubuntu\.com/ubuntu/?@mirror+file:/etc/apt/mirrors.txt@g' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries
+          apt-get update && apt-get install -yq \
+            build-essential gcc clang cmake make gdb pkg-config \
+            openjdk-17-jdk-headless git wget curl unzip \
+            tar python3 python3-dev python3-pip git-lfs \
+            python3-numpy ccache zlib1g-dev libssl-dev \
+            libpng-dev libcurl4-openssl-dev libfftw3-dev \
+            golang-go npm patchelf
+          git lfs install
+
+      - name: Install sccache
+        run: |
+          SCCACHE_VERSION="0.10.0"
+          curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C /usr/local/bin --strip-components=1 "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache"
+          chmod +x /usr/local/bin/sccache
+          sccache --version
+
+      - name: Install UV
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install pytest
+        run: python3 -m pip install --break-system-packages pytest==8.3.4
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          lfs: true
+          persist-credentials: false
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@98ddc00a17442e89a24bbf282954a3b65ce6d200 # v2.1.0
+
+      - name: Install Android SDK
+        run: |
+          export ANDROID_HOME="$GITHUB_WORKSPACE/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+
+          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          rm cmdline-tools.zip
+
+          set +o pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "platforms;android-33" "platforms;android-34" \
+            "build-tools;33.0.1" "build-tools;34.0.0" > /dev/null
+          set -o pipefail
+
+      - name: Export SDK Environment Variables
+        run: |
+          echo "ANDROID_HOME=$GITHUB_WORKSPACE/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$GITHUB_WORKSPACE/android-sdk" >> $GITHUB_ENV
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1.6.0
+        with:
+          ndk-version: r28b
+          add-to-path: false
+
+      - name: Export NDK Home globally
+        env:
+          NDK_PATH: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+
+      - name: Wait For MyRemoteConnection
+        uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
+        with:
+          halt-dispatch-input: ${{ inputs.MyHaltForConnectionInput }}
+
+      - name: Configure CMake
+        run: |
+          cmake --preset android-x86_64 -DANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+
+      - name: Build
+        run: cmake --build cmake/build/android-x86_64 -j16
+
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats

@@ -32,21 +32,12 @@
  */
 export class Mutex {
   private mutexPromise = Promise.resolve();
-  private queueCount = 0;
-
-  /**
-   * Whether the mutex is currently locked.
-   */
-  get isLocked(): boolean {
-    return this.queueCount > 0;
-  }
 
   /**
    * Executes the provided function once the mutex is acquired, and releases
    * the mutex when the function completes.
    */
   async acquireAndRun<T>(fn: () => Promise<T>| T): Promise<T> {
-    this.queueCount++;
     const previousPromise = this.mutexPromise;
     let resolveMutex!: () => void;
     this.mutexPromise = new Promise<void>((resolve) => {
@@ -56,7 +47,6 @@ export class Mutex {
       await previousPromise;
       return await fn();
     } finally {
-      this.queueCount--;
       resolveMutex();
     }
   }
