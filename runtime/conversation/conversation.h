@@ -15,6 +15,8 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_CONVERSATION_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_CONVERSATION_H_
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -544,6 +546,8 @@ class Conversation {
   static absl::StatusOr<std::unique_ptr<Conversation>> Create(
       Engine& engine, const ConversationConfig& config);
 
+  ~Conversation();
+
   // Sends a message to the LLM and returns the complete message.
   // Args:
   // - `message`: The message (a JSON object) to be sent to the LLM.
@@ -836,6 +840,11 @@ class Conversation {
   // heavy blobs from the input before applying the template.
   absl::StatusOr<std::string> ApplyTemplate(PromptTemplateInput& input);
 
+  // Wraps a session callback so active async tasks are tracked for safe
+  // cancellation/draining on Conversation destruction.
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> WrapSessionCallback(
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback);
+
   // Keep a reference to the creator engine to enable access to the shared
   // resources that might be required for features like cloning.
   Engine& engine_;
@@ -857,19 +866,6 @@ class Conversation {
   // Whether the current conversation is in message appending state.
   bool is_appending_message_ ABSL_GUARDED_BY(history_mutex_) = false;
 
-  // Mutex for task_controllers_.
-  mutable absl::Mutex task_controllers_mutex_;
-  // Map of task group id to task controllers.
-  absl::flat_hash_map<
-      std::string,
-      std::vector<std::unique_ptr<Engine::Session::TaskController>>>
-      task_controllers_ ABSL_GUARDED_BY(task_controllers_mutex_);
-
-  // Declare the session after model_data_processor_ and other members it
-  // depends on so that the session is destroyed before them. This is to avoid
-  // memory corruption and null-pointer deference issues.
-  std::unique_ptr<Engine::Session> session_;
-
   // The index of the message you have to rewind to in order to remove channel
   // content from the KV cache. nullopt means no rewind is needed.
   std::optional<int> checkpoint_message_index_ ABSL_GUARDED_BY(history_mutex_) =
@@ -878,6 +874,24 @@ class Conversation {
   // Whether the saved channel content checkpoint was taken after prefilling the
   // user turn (including the generation prompt).
   bool checkpoint_after_user_prefill_ ABSL_GUARDED_BY(history_mutex_) = false;
+
+  // Mutex for task_controllers_.
+  mutable absl::Mutex task_controllers_mutex_;
+  // Map of task group id to task controllers.
+  absl::flat_hash_map<
+      std::string,
+      std::vector<std::unique_ptr<Engine::Session::TaskController>>>
+      task_controllers_ ABSL_GUARDED_BY(task_controllers_mutex_);
+
+  std::shared_ptr<std::atomic<int>> active_tasks_ =
+      std::make_shared<std::atomic<int>>(0);
+  std::atomic<bool> shutting_down_{false};
+  std::atomic<uint64_t> cancel_generation_{0};
+
+  // Declare the session after model_data_processor_ and other members it
+  // depends on so that the session is destroyed before them. This is to avoid
+  // memory corruption and null-pointer deference issues.
+  std::unique_ptr<Engine::Session> session_;
 };
 }  // namespace litert::lm
 

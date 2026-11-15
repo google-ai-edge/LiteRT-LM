@@ -21,6 +21,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>  // NOLINT(build/c++11)
 #include <utility>
 #include <variant>
 #include <vector>
@@ -3707,6 +3708,38 @@ TEST_P(ConversationTest, CancelProcessDuringSendMessageAsync) {
 
   done.WaitForNotification();
   EXPECT_THAT(status, testing::status::StatusIs(absl::StatusCode::kCancelled));
+}
+
+TEST_P(ConversationTest, DestroyWhilePrefillInFlight) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  ASSERT_OK_AND_ASSIGN(MockConversation mock_conv,
+                       CreateMockConversation(std::move(mock_session)));
+
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> prefill_callback;
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .WillOnce([&](const std::vector<InputData>&,
+                    absl::AnyInvocable<void(absl::StatusOr<Responses>)> cb) {
+        prefill_callback = std::move(cb);
+        return nullptr;
+      });
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*mock_session_ptr, CancelProcess()).Times(1);
+  EXPECT_CALL(*mock_session_ptr, WaitUntilDone()).WillOnce([&]() {
+    std::thread callback_thread([cb = std::move(prefill_callback)]() mutable {
+      cb(Responses(TaskState::kDone));
+    });
+    callback_thread.join();
+    return absl::OkStatus();
+  });
+
+  absl::Status callback_status;
+  ASSERT_OK(mock_conv.conversation->SendMessageAsync(
+      Message{{"role", "user"}, {"content", "How are you?"}},
+      [&](absl::StatusOr<Message> msg) { callback_status = msg.status(); }));
+  mock_conv.conversation.reset();
+  EXPECT_THAT(callback_status, StatusIs(absl::StatusCode::kCancelled));
 }
 
 TEST_P(ConversationTest, CancelGroupWithRunTextScoringAsync) {
