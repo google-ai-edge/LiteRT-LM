@@ -62,6 +62,14 @@ jobs:
     steps:
       - name: Install System Dependencies
         run: |
+          # Resolve the runner's Python before installing Chocolatey packages.
+          # gcloudsdk ships a bundled python.exe that Chocolatey shims into
+          # chocolatey\bin, which shadows the runner's Python (and its pytest)
+          # once that directory is prepended to PATH via GITHUB_PATH below.
+          $python = (Get-Command python -ErrorAction Stop).Source
+          Write-Host "Using Python at $python"
+          echo "PYTHON_EXE=$python" >> $env:GITHUB_ENV
+
           [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
           Set-ExecutionPolicy Bypass -Scope Process -Force
           Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
@@ -73,7 +81,7 @@ jobs:
 
           choco install git make pkgconfiglite openjdk17 ccache bazelisk gcloudsdk 7zip --no-progress -y
 
-          python -m pip install --break-system-packages numpy pytest==8.3.4
+          & $python -m pip install --break-system-packages numpy pytest==8.3.4
 
       - name: Configure System Paths
         run: |
@@ -231,7 +239,8 @@ jobs:
 
       - name: Run pytest
         # Execute pytest via the python module (-m) to bypass missing pytest.exe PATH issues
-        run: python -m pytest tools/pytest/ --backend=cpu --model-path="$env:MODEL_PATH/$env:MODEL_KEY" --build-system=bazel
+        run: |
+          & $env:PYTHON_EXE -m pytest tools/pytest/ --backend=cpu --model-path="$env:MODEL_PATH/$env:MODEL_KEY" --build-system=bazel
 
       - name: Upload bazel test logs
         if: always()
@@ -266,6 +275,7 @@ jobs:
 
       - name: Run pytest for dynamic linking
         # Execute pytest via the python module (-m) to bypass missing pytest.exe PATH issues
-        run: python -m pytest tools/pytest/ -v `
-          --backend=cpu --dynamic `
-          --model-path="$env:MODEL_PATH/$env:MODEL_KEY" --build-system=bazel
+        run: |
+          & $env:PYTHON_EXE -m pytest tools/pytest/ -v `
+            --backend=cpu --dynamic `
+            --model-path="$env:MODEL_PATH/$env:MODEL_KEY" --build-system=bazel
