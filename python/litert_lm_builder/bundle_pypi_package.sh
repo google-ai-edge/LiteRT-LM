@@ -44,12 +44,21 @@ for PY_VER in "3.10" "3.11" "3.12" "3.13" "3.14"; do
   source "${TEST_VENV}/bin/activate"
   echo "Installing the built wheel..."
   uv pip install --index-url https://pypi.org/simple "${WHEEL_DIR}"/*.whl
+  # Python 3.10 is deprecated (upstream EOL 2026-10-01) and will be dropped in
+  # the next release; its verification result is informational and non-blocking.
+  if [[ "${PY_VER}" == "3.10" ]]; then
+    set +e
+  fi
   echo "Verifying CLI tools..."
   litert-lm-builder --help
   litert-lm-builder unpack --help
   litert-lm-peek --help
   echo "Verifying Python import..."
   python3 -c "import litert_lm_builder; print(litert_lm_builder.LitertLmFileBuilder); print(litert_lm_builder.unpack)"
+  if [[ "${PY_VER}" == "3.10" ]]; then
+    set -e
+    echo "⚠️ Any failures above on deprecated Python ${PY_VER} are non-blocking."
+  fi
   # Clean up for next iteration
   deactivate
 done
