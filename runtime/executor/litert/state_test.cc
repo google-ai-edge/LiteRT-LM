@@ -284,13 +284,20 @@ TEST_F(LitertStateTest, CopyContentsFromKeepsDestinationPingPongBankParity) {
                                   LitertState::AllocationPolicy::kPingPong,
                                   /*batch_size=*/1));
   // Advance the destination by one step, so that it reads bank 2 next. The
-  // buffers written in this step are the ones it must read in the next step.
+  // buffers written in this step are the ones it must read in the next step,
+  // while bank 1 becomes the inactive output bank.
   absl::flat_hash_map<std::string, LiteRtTensorBuffer> expected_next_inputs;
+  absl::flat_hash_map<std::string, LiteRtTensorBuffer> expected_next_outputs;
   {
     ASSERT_OK_AND_ASSIGN(
         auto step,
         kv_cache_->GetStateBuffers(*compiled_model_, kDecodeSignatureRunner));
+    ASSERT_FALSE(step.input_buffers.empty());
     ASSERT_FALSE(step.output_buffers.empty());
+    for (auto& [name, buffer] : step.input_buffers) {
+      expected_next_outputs[name] = buffer.Get();
+      ASSERT_NO_FATAL_FAILURE(FillBuffer(buffer, 7));
+    }
     for (auto& [name, buffer] : step.output_buffers) {
       expected_next_inputs[name] = buffer.Get();
     }
@@ -298,7 +305,7 @@ TEST_F(LitertStateTest, CopyContentsFromKeepsDestinationPingPongBankParity) {
 
   // The source runs two steps, so it reads bank 1 next, i.e. its parity
   // differs from the destination's. Its next input bank (bank 1) holds 3 and
-  // its next output bank (bank 2) holds 5.
+  // its inactive bank (bank 2) holds 5.
   ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<LitertState> source,
       LitertState::Create(*env_, *compiled_model_, kDecodeSignatureRunner,
@@ -330,8 +337,11 @@ TEST_F(LitertStateTest, CopyContentsFromKeepsDestinationPingPongBankParity) {
     EXPECT_EQ(buffer.Get(), expected_next_inputs.at(name)) << name;
     ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, 3)) << name;
   }
+  // The inactive bank is not copied and keeps its existing buffers untouched.
+  ASSERT_EQ(next.output_buffers.size(), expected_next_outputs.size());
   for (auto& [name, buffer] : next.output_buffers) {
-    ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, 5)) << name;
+    EXPECT_EQ(buffer.Get(), expected_next_outputs.at(name)) << name;
+    ASSERT_NO_FATAL_FAILURE(ExpectBufferFilledWith(buffer, 7)) << name;
   }
 }
 
@@ -345,6 +355,7 @@ TEST_F(LitertStateTest, CopyContentsFromRejectsMismatchedAllocationPolicy) {
                           /*executor_metadata=*/nullptr,
                           LitertState::AllocationPolicy::kPingPong,
                           /*batch_size=*/1));
+  EXPECT_FALSE(kv_cache_->CanCopyContentsFrom(*source));
   EXPECT_THAT(kv_cache_->CopyContentsFrom(*source),
               StatusIs(absl::StatusCode::kInternal));
 }
@@ -358,6 +369,7 @@ TEST_F(LitertStateTest, CopyContentsFromRejectsMismatchedNumEntries) {
   auto* source = dynamic_cast<LitertState*>(source_interface.get());
   ASSERT_NE(source, nullptr);
   ASSERT_OK(source->Resize(*compiled_model_, kDecodeSignatureRunner, 16));
+  EXPECT_FALSE(kv_cache_->CanCopyContentsFrom(*source));
   EXPECT_THAT(kv_cache_->CopyContentsFrom(*source),
               StatusIs(absl::StatusCode::kInternal));
 }

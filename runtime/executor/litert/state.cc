@@ -456,21 +456,11 @@ absl::Status LitertState::CopyContentsFrom(const LitertState& other) {
   RET_CHECK_EQ(bank_2_state_buffers_.has_value(),
                other.bank_2_state_buffers_.has_value());
 
-  if (!bank_2_state_buffers_.has_value()) {
-    return CopyBankContents(bank_1_state_buffers_, other.bank_1_state_buffers_);
-  }
-  // Keep this state's bank parity so that the next runs bind the same buffers
-  // as they would have without the copy. If the parities differ, the bank that
-  // `other` reads next is bank 2 while this state reads bank 1 next (or vice
-  // versa), so the banks are copied crosswise.
-  const bool same_parity = bank_1_is_input_ == other.bank_1_is_input_;
-  ABSL_RETURN_IF_ERROR(CopyBankContents(
-      bank_1_state_buffers_, same_parity ? other.bank_1_state_buffers_
-                                         : *other.bank_2_state_buffers_));
-  ABSL_RETURN_IF_ERROR(CopyBankContents(
-      *bank_2_state_buffers_, same_parity ? *other.bank_2_state_buffers_
-                                          : other.bank_1_state_buffers_));
-  return absl::OkStatus();
+  // Only the active input bank needs to be copied: for kPingPong, the inactive
+  // bank is overwritten as `output_buffers` on the next `GetStateBuffers()`
+  // run, and leaving `bank_1_is_input_` untouched keeps this state's bank
+  // parity so subsequent runs bind the same buffers as before.
+  return CopyBankContents(ActiveInputBank(), other.ActiveInputBank());
 }
 
 bool LitertState::Contains(absl::string_view tensor_name) const {

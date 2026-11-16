@@ -105,18 +105,18 @@ class LitertState : public StateInterface {
   // returns: true if the layouts of both states match.
   bool CanCopyContentsFrom(const LitertState& other) const;
 
-  // Copies the contents of all state buffers (both banks for kPingPong) from
-  // `other` into this state's existing buffers, without reallocating them.
+  // Copies the contents of all active input state buffers from `other` into
+  // this state's existing active input buffers, without reallocating them.
   // `other` must satisfy `CanCopyContentsFrom()`. The buffer types may differ
   // (e.g. restoring a host memory snapshot into NPU or GPU buffers in place
   // without replacing bound hardware buffer handles).
   //
-  // This state keeps its own ping-pong bank parity: the bank that `other` would
-  // read from in its next run is copied into the bank that this state reads
-  // from in its next run. This keeps the GPU resource bindings of the next runs
-  // identical to the ones before the copy, which GPU command buffers prepared
-  // in advance (`SetNumStepsOfCommandBufferPreparations()`) rely on. Buffers of
-  // the same device type are copied on the device when supported.
+  // For `kPingPong`, only the active input bank is copied because the inactive
+  // bank is overwritten as `output_buffers` on the next run. Leaving the
+  // inactive bank and `bank_1_is_input_` untouched keeps this state's ping-pong
+  // bank parity so the GPU resource bindings of the next runs stay identical to
+  // the ones before the copy, which GPU command buffers prepared in advance
+  // (`SetNumStepsOfCommandBufferPreparations()`) rely on.
   //
   // args:
   //   other: the state to copy contents from.
