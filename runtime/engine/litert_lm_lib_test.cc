@@ -21,6 +21,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <streambuf>
@@ -31,19 +32,26 @@
 #include <gtest/gtest.h>
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/log/log_sink_registry.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/components/prompt_template.h"
+#include "runtime/conversation/conversation.h"
+#include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/mtp_gating_policy.h"
 #include "runtime/executor/speculative_decoding_mode.h"
+#include "runtime/proto/engine.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "support/tokenizer/tokenizer.h"
 
 namespace litert {
 namespace lm {
@@ -1208,6 +1216,191 @@ TEST(PrintMessageTest, StreamingTransitionChannelToContent) {
   EXPECT_EQ(coopt.GetOutput(),
             ColorBlue("[/thought]") + "\n" + ColorYellow("Final answer."));
   EXPECT_EQ(active_channel, "");
+}
+
+TEST(LiteRtLmLibTest, CreateEngineSettingsAppendChunksValidation) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+
+  LiteRtLmSettings valid;
+  valid.model_path = model_path.string();
+  valid.backend = "cpu";
+  valid.disable_cache = true;
+  valid.benchmark = true;
+  valid.benchmark_prefill_tokens = 256;
+  valid.benchmark_decode_tokens = 256;
+  valid.benchmark_append_chunks = 4;
+  ASSERT_OK_AND_ASSIGN(const EngineSettings engine_settings,
+                       CreateEngineSettings(valid));
+  ASSERT_TRUE(engine_settings.GetBenchmarkParams().has_value());
+
+  LiteRtLmSettings invalid = valid;
+  invalid.benchmark_append_chunks = -1;
+  EXPECT_THAT(CreateEngineSettings(invalid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  invalid = valid;
+  invalid.benchmark = false;
+  EXPECT_THAT(CreateEngineSettings(invalid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  invalid = valid;
+  invalid.use_session = true;
+  EXPECT_THAT(CreateEngineSettings(invalid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  invalid = valid;
+  invalid.multi_turns = true;
+  EXPECT_THAT(CreateEngineSettings(invalid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  invalid = valid;
+  invalid.input_prompt = "";
+  EXPECT_THAT(CreateEngineSettings(invalid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  invalid = valid;
+  invalid.score_target_text = "target";
+  EXPECT_THAT(CreateEngineSettings(invalid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // test_lm.litertlm's default template does not support incremental prefill.
+  EXPECT_THAT(RunLiteRtLm(valid),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(LiteRtLmLibTest, LogMultiPrefillBenchmarkMetricsToLogSink) {
+  const std::filesystem::path log_sink_path =
+      std::filesystem::path(testing::TempDir()) / "multi_prefill_benchmark.log";
+  std::filesystem::remove(log_sink_path);
+
+  proto::BenchmarkParams params;
+  params.set_num_prefill_tokens(256);
+  params.set_num_decode_tokens(256);
+  BenchmarkInfo info(params);
+  for (int chunk = 0; chunk < 4; ++chunk) {
+    ABSL_CHECK_OK(info.TimePrefillTurnStart());
+    ABSL_CHECK_OK(info.TimePrefillTurnEnd(256));
+  }
+  ABSL_CHECK_OK(info.TimePrefillTurnStart());
+  ABSL_CHECK_OK(info.TimePrefillTurnEnd(5));
+  ABSL_CHECK_OK(info.TimeDecodeTurnStart());
+  ABSL_CHECK_OK(info.TimeDecodeTurnEnd(256));
+
+  LiteRtLmSettings settings;
+  settings.backend = "gpu";
+  settings.benchmark = true;
+  settings.benchmark_prefill_tokens = 256;
+  settings.benchmark_decode_tokens = 256;
+  settings.benchmark_append_chunks = 4;
+  settings.log_sink_file = log_sink_path.string();
+
+  {
+    FileLogSink sink(log_sink_path.string());
+    absl::AddLogSink(&sink);
+    LogBenchmarkInfo(info, settings);
+    absl::RemoveLogSink(&sink);
+  }
+
+  std::ifstream log_file(log_sink_path);
+  ASSERT_TRUE(log_file.is_open());
+  const std::string log_contents((std::istreambuf_iterator<char>(log_file)),
+                                 std::istreambuf_iterator<char>());
+  EXPECT_THAT(
+      log_contents,
+      testing::HasSubstr(
+          "] Benchmark flags: "
+          "benchmark_prefill_tokens=256,benchmark_decode_tokens=256,"
+          "backend=gpu,append_chunks=4\n"));
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_THAT(
+        log_contents,
+        testing::HasSubstr(absl::StrCat("] Prefill speed turn ", i, ": ")));
+  }
+  EXPECT_THAT(log_contents, testing::HasSubstr("] Decode speed turn 0: "));
+  EXPECT_THAT(log_contents,
+              testing::Not(testing::HasSubstr("] Decode speed turn 1:")));
+}
+
+constexpr absl::string_view kMultiPrefillTestTemplate = R"jinja(
+{%- if is_appending_to_prefill -%}
+  {%- if is_first_part -%}<start_of_turn>{{ message.role + '\n' }}{%- endif -%}
+  {%- if message.content is string -%}{{ message.content }}
+  {%- else -%}{%- for item in message.content -%}{{ item.text }}{%- endfor -%}
+  {%- endif -%}
+  {%- if is_last_part -%}{{- '<end_of_turn>\n' -}}{%- endif -%}
+{%- endif -%}
+{%- if add_generation_prompt -%}{{- '<start_of_turn>model\n' -}}{%- endif -%}
+)jinja";
+
+TEST(LiteRtLmLibTest, RunSingleTurnConversationWithAppendChunks) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+
+  LiteRtLmSettings base_settings;
+  base_settings.model_path = model_path.string();
+  base_settings.backend = "cpu";
+  base_settings.disable_cache = true;
+  base_settings.benchmark = true;
+  base_settings.max_num_tokens = 128;
+  base_settings.benchmark_prefill_tokens = 8;
+  base_settings.benchmark_decode_tokens = 4;
+  base_settings.benchmark_append_chunks = 4;
+
+  ASSERT_OK_AND_ASSIGN(const EngineSettings engine_settings,
+                       CreateEngineSettings(base_settings));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Engine> engine,
+                       CreateEngine(base_settings, engine_settings));
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<int> closing_token_ids,
+      const_cast<support::Tokenizer&>(engine->GetTokenizer())
+          .TextToTokenIds("<end_of_turn>\n<start_of_turn>model\n"));
+  std::vector<InputData> inputs;
+  inputs.push_back(InputText(base_settings.input_prompt));
+  ASSERT_OK_AND_ASSIGN(const json content_list,
+                       BuildContentList(inputs, base_settings));
+
+  SessionConfig session_config = CreateSessionConfig(base_settings);
+  *session_config.GetMutableLlmModelType().mutable_gemma3() = {};
+
+  for (const bool async_mode : {true, false}) {
+    SCOPED_TRACE(absl::StrCat("async=", async_mode));
+    LiteRtLmSettings settings = base_settings;
+    settings.async = async_mode;
+    ASSERT_OK_AND_ASSIGN(
+        const ConversationConfig config,
+        ConversationConfig::Builder()
+            .SetSessionConfig(session_config)
+            .SetOverwritePromptTemplate(
+                PromptTemplate(kMultiPrefillTestTemplate))
+            .Build(*engine));
+    ASSERT_OK_AND_ASSIGN(std::unique_ptr<Conversation> conversation,
+                         Conversation::Create(*engine, config));
+
+    ASSERT_OK_AND_ASSIGN(
+        const Message reply,
+        RunSingleTurnConversation(content_list, settings, engine.get(),
+                                  conversation.get()));
+    EXPECT_EQ(reply.value("role", ""), "assistant");
+
+    ASSERT_OK_AND_ASSIGN(const BenchmarkInfo benchmark_info,
+                         conversation->GetBenchmarkInfo());
+    ASSERT_EQ(benchmark_info.GetTotalPrefillTurns(), 5);
+    for (int turn = 0; turn < 4; ++turn) {
+      ASSERT_OK_AND_ASSIGN(const BenchmarkTurnData prefill_turn,
+                           benchmark_info.GetPrefillTurn(turn));
+      EXPECT_EQ(prefill_turn.num_tokens, 8);
+    }
+    ASSERT_OK_AND_ASSIGN(const BenchmarkTurnData closing_prefill_turn,
+                         benchmark_info.GetPrefillTurn(4));
+    EXPECT_EQ(closing_prefill_turn.num_tokens, closing_token_ids.size());
+    ASSERT_EQ(benchmark_info.GetTotalDecodeTurns(), 1);
+    ASSERT_OK_AND_ASSIGN(const BenchmarkTurnData decode_turn,
+                         benchmark_info.GetDecodeTurn(0));
+    EXPECT_EQ(decode_turn.num_tokens, 4);
+  }
 }
 
 }  // namespace
