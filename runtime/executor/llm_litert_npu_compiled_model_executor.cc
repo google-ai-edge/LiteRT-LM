@@ -409,19 +409,41 @@ LlmLiteRtNpuCompiledModelExecutor::CreateTextDecoderInferenceContext(
       prefill_input_buffers.insert_or_assign(key, std::move(dup));
     }
     // Duplicate all kv cache buffers to prefill inputs.
-    LITERT_ASSIGN_OR_RETURN(auto prefill_input_names,
-                            text_decoder_compiled_model.GetSignatureInputNames(
-                                prefill_signatures.prefill));
+    LITERT_ASSIGN_OR_RETURN(
+        size_t prefill_sig_idx,
+        text_decoder_compiled_model.GetSignatureIndex(
+            prefill_signatures.prefill));
+    LITERT_ASSIGN_OR_RETURN(
+        auto prefill_input_names,
+        text_decoder_compiled_model.GetSignatureInputNames(prefill_sig_idx));
     for (const auto& [key, value] : input_kv_cache_buffers) {
       // Check if the kv cache buffer is used in the prefill signature.
-      if (absl::c_find(prefill_input_names, std::string(key)) ==
-          prefill_input_names.end()) {
+      auto it = absl::c_find(prefill_input_names, key);
+      if (it == prefill_input_names.end()) {
         continue;
       }
+      const size_t input_index =
+          static_cast<size_t>(it - prefill_input_names.begin());
 
-      LITERT_ASSIGN_OR_RETURN(auto prefill_tensor_type,
-                              text_decoder_compiled_model.GetInputTensorType(
-                                  prefill_signatures.prefill, key));
+      LITERT_ASSIGN_OR_RETURN(
+          auto prefill_tensor_type,
+          text_decoder_compiled_model.GetInputTensorType(prefill_sig_idx,
+                                                         input_index));
+      // Models that support dynamic resizing mark their resizable dimensions
+      // (e.g., the KV cache context length) with -1 in the TFLite signature, so
+      // GetInputTensorType() still reports -1 here.
+      // AllocateTextDecoderBuffers() resized the litert::CompiledModel to the
+      // actual context length, so read the layout from the CompiledModel, which
+      // carries the actual (resized) shape, and compare that against decode's
+      // allocated KV cache buffer.
+      if (auto prefill_layout =
+              text_decoder_compiled_model.GetInputTensorLayout(prefill_sig_idx,
+                                                               input_index);
+          prefill_layout.HasValue()) {
+        prefill_tensor_type =
+            RankedTensorType(prefill_tensor_type.ElementType(),
+                             std::move(prefill_layout.Value()));
+      }
       LITERT_ASSIGN_OR_RETURN(auto decode_tensor_type, value.TensorType());
       if (prefill_tensor_type == decode_tensor_type) {
         LITERT_ASSIGN_OR_RETURN(auto dup, value.Duplicate());
@@ -452,9 +474,12 @@ LlmLiteRtNpuCompiledModelExecutor::CreateTextDecoderInferenceContext(
         return absl::InvalidArgumentError(absl::StrCat(
             "Incompatible KV cache tensor types for '", key,
             "' between prefill (element_type=",
-            static_cast<int>(prefill_tensor_type.ElementType()),
-            ") and decode (element_type=",
-            static_cast<int>(decode_tensor_type.ElementType()), ")."));
+            static_cast<int>(prefill_tensor_type.ElementType()), ", dims=[",
+            absl::StrJoin(prefill_tensor_type.Layout().Dimensions(), ", "),
+            "]) and decode (element_type=",
+            static_cast<int>(decode_tensor_type.ElementType()), ", dims=[",
+            absl::StrJoin(decode_tensor_type.Layout().Dimensions(), ", "),
+            "])."));
       }
     }
   }
