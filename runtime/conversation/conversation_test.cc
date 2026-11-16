@@ -3598,6 +3598,76 @@ TEST_P(ConversationTest, GetBenchmarkInfoWithChannelContent) {
   EXPECT_EQ(decode_turn.num_tokens, 4);
 }
 
+TEST(ConversationBenchmarkTest,
+     GetBenchmarkInfoDoesNotResizeClosingPrefillOfAppendedTurn) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(128);
+  proto::BenchmarkParams& benchmark_params =
+      engine_settings.GetMutableBenchmarkParams();
+  benchmark_params.set_num_prefill_tokens(8);
+  benchmark_params.set_num_decode_tokens(4);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  *session_config.GetMutableLlmModelType().mutable_gemma3() = {};
+  ASSERT_OK_AND_ASSIGN(
+      auto config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config)
+          .SetOverwritePromptTemplate(PromptTemplate(
+              ReadFile(GetTestdataPath(kGemma3ToolsMultiPrefillTemplatePath))))
+          .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*engine, config));
+
+  // Append two chunks, then close the turn with an empty message to decode.
+  ASSERT_OK_AND_ASSIGN(
+      const Message first_chunk_response,
+      conversation->SendMessage(
+          Message{{"role", "user"}, {"content", "Hello world!"}},
+          {.has_pending_message = true}));
+  EXPECT_TRUE(first_chunk_response.is_null());
+  ASSERT_OK_AND_ASSIGN(
+      const Message second_chunk_response,
+      conversation->SendMessage(
+          Message{{"role", "user"}, {"content", " This is a long message."}},
+          {.has_pending_message = true}));
+  EXPECT_TRUE(second_chunk_response.is_null());
+  ASSERT_OK_AND_ASSIGN(
+      const Message closing_response,
+      conversation->SendMessage(Message{{"role", "user"}, {"content", ""}},
+                                {.has_pending_message = false}));
+  ASSERT_TRUE(closing_response.is_object());
+  EXPECT_EQ(closing_response.value("role", ""), "assistant");
+
+  // Each appended chunk is resized to 8 tokens, while the closing prefill only
+  // holds the closing prompt template tokens.
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<int> closing_token_ids,
+      const_cast<Tokenizer&>(engine->GetTokenizer())
+          .TextToTokenIds("<end_of_turn>\n<start_of_turn>model\n"));
+  ASSERT_OK_AND_ASSIGN(const BenchmarkInfo benchmark_info,
+                       conversation->GetBenchmarkInfo());
+  ASSERT_EQ(benchmark_info.GetTotalPrefillTurns(), 3);
+  for (int turn = 0; turn < 2; ++turn) {
+    ASSERT_OK_AND_ASSIGN(const BenchmarkTurnData prefill_turn,
+                         benchmark_info.GetPrefillTurn(turn));
+    EXPECT_EQ(prefill_turn.num_tokens, 8);
+  }
+  ASSERT_OK_AND_ASSIGN(const BenchmarkTurnData closing_prefill_turn,
+                       benchmark_info.GetPrefillTurn(2));
+  EXPECT_EQ(closing_prefill_turn.num_tokens, closing_token_ids.size());
+  ASSERT_EQ(benchmark_info.GetTotalDecodeTurns(), 1);
+  ASSERT_OK_AND_ASSIGN(const BenchmarkTurnData decode_turn,
+                       benchmark_info.GetDecodeTurn(0));
+  EXPECT_EQ(decode_turn.num_tokens, 4);
+}
+
 TEST_P(ConversationTest, CancelGroupWithSendMessageAsync) {
   // Set up mock Session.
   auto mock_session = CreateMockSession();

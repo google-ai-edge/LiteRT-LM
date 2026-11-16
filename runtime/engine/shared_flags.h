@@ -44,6 +44,7 @@ ABSL_DECLARE_FLAG(bool, benchmark);
 ABSL_DECLARE_FLAG(bool, enable_profiling);
 ABSL_DECLARE_FLAG(int, benchmark_prefill_tokens);
 ABSL_DECLARE_FLAG(int, benchmark_decode_tokens);
+ABSL_DECLARE_FLAG(int, benchmark_append_chunks);
 ABSL_DECLARE_FLAG(bool, async);
 ABSL_DECLARE_FLAG(bool, report_peak_memory_footprint);
 ABSL_DECLARE_FLAG(bool, force_f32);
