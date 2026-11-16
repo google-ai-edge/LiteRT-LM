@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -48,6 +49,7 @@
 #include "runtime/executor/npu/llm_litert_npu_kv_cache.h"
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
 #include "runtime/executor/npu/llm_litert_npu_rope.h"
+#include "runtime/proto/sampler_params.pb.h"
 
 namespace litert::lm {
 
@@ -175,11 +177,21 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
 
   absl::StatusOr<const ProcessedTokens*> GetProcessedTokens() const override;
 
+  // Gets the runtime configuration.
+  absl::StatusOr<RuntimeConfig> GetRuntimeConfig() const override {
+    return runtime_config_;
+  }
+
   // Updates the runtime configuration.
   absl::Status UpdateRuntimeConfig(
-      const RuntimeConfig& runtime_config) override {
-    return absl::OkStatus();
-  }
+      const RuntimeConfig& runtime_config) override;
+
+  // Gets the runtime state.
+  absl::StatusOr<RuntimeState> GetRuntimeState() const override;
+
+  // Updates the runtime state (e.g. when switching between cloned sessions
+  // that share the same ProcessedContext).
+  absl::Status UpdateRuntimeState(const RuntimeState& runtime_state) override;
 
   // Gets the current step of the executor.
   // Public API, the return value is the current step that user expects (e.g.
@@ -600,8 +612,10 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   std::optional<DrafterContext> drafter_context_;
   std::optional<DrafterAuxContext> drafter_aux_context_;
 
-  // The sampler parameters to use for internal sampling.
+  // Active session runtime configuration and resolved sampler parameters.
+  RuntimeConfig runtime_config_;
   proto::SamplerParameters sampler_params_;
+  std::shared_ptr<std::default_random_engine> rand_gen_;
 
   // Internal timestep.
   int current_step_ = 0;

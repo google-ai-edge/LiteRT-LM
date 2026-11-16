@@ -21,6 +21,7 @@
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -1171,10 +1172,11 @@ LlmLiteRtNpuCompiledModelExecutor::DecodeNonSpeculative(
     LITERT_ASSIGN_OR_RETURN(auto masked_logits,
                             DecodeLogits(ExecutorInputs(), decode_params));
     auto start_sample = absl::Now();
-    LITERT_ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         max_index,
-        ApplyGreedySampling(
-            masked_logits,
+        ApplySampling(
+            masked_logits, sampler_params_, rand_gen_, /*scale=*/1.0f,
+            /*zero_point=*/0,
             npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
     latency_stats_.decode_sampling_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start_sample);
@@ -1203,12 +1205,14 @@ LlmLiteRtNpuCompiledModelExecutor::DecodeNonSpeculative(
 
     // Sample the output of the main decode.
     auto start_sample = absl::Now();
-    LITERT_ASSIGN_OR_RETURN(
+    ABSL_ASSIGN_OR_RETURN(
         max_index,
-        ApplyGreedySampling(
+        ApplySampling(
             ActiveContextGroup()
                 .text_decoder_inference_context.decode_output_buffers
                     [TextDecoderSignatures::kDecodeLogitsOutput],
+            sampler_params_, rand_gen_, per_tensor_logits_scale_,
+            per_tensor_logits_zero_point_,
             npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
     latency_stats_.decode_sampling_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start_sample);
@@ -1321,7 +1325,8 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
   }
   if (speculative_decoding_type_ != SpeculativeDecodingType::kMTP ||
       speculative_decoding_mode == SpeculativeDecodingMode::kOff ||
-      decode_params.GetConstrainedDecoder() != nullptr) {
+      decode_params.GetConstrainedDecoder() != nullptr ||
+      !IsGreedySampling(sampler_params_)) {
     return DecodeNonSpeculative(decode_params, start);
   }
   if (speculative_decoding_mode == SpeculativeDecodingMode::kAdaptive) {
@@ -2596,6 +2601,48 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Reset() {
   return absl::OkStatus();
 }
 
+absl::Status LlmLiteRtNpuCompiledModelExecutor::UpdateRuntimeConfig(
+    const RuntimeConfig& runtime_config) {
+  const bool seed_changed = runtime_config.sampler_params.has_value() &&
+                            (!runtime_config_.sampler_params.has_value() ||
+                             runtime_config_.sampler_params->seed() !=
+                                 runtime_config.sampler_params->seed());
+  runtime_config_ = runtime_config;
+  sampler_params_ =
+      runtime_config_.sampler_params.value_or(proto::SamplerParameters());
+  if (seed_changed || rand_gen_ == nullptr) {
+    rand_gen_ =
+        std::make_shared<std::default_random_engine>(sampler_params_.seed());
+  }
+  return absl::OkStatus();
+}
+
+absl::StatusOr<RuntimeState>
+LlmLiteRtNpuCompiledModelExecutor::GetRuntimeState() const {
+  RuntimeState runtime_state;
+  runtime_state.current_step = current_step_;
+  runtime_state.ran_decode = ran_decode_;
+  runtime_state.rand_gen =
+      rand_gen_ != nullptr
+          ? std::make_shared<std::default_random_engine>(*rand_gen_)
+          : std::make_shared<std::default_random_engine>(
+                sampler_params_.seed());
+  return runtime_state;
+}
+
+absl::Status LlmLiteRtNpuCompiledModelExecutor::UpdateRuntimeState(
+    const RuntimeState& runtime_state) {
+  DiscardSpeculativeState();
+  current_step_ = runtime_state.current_step;
+  ran_decode_ = runtime_state.ran_decode;
+  rand_gen_ = runtime_state.rand_gen != nullptr
+                  ? std::make_shared<std::default_random_engine>(
+                        *runtime_state.rand_gen)
+                  : std::make_shared<std::default_random_engine>(
+                        sampler_params_.seed());
+  return absl::OkStatus();
+}
+
 absl::StatusOr<std::unique_ptr<LlmContext>>
 LlmLiteRtNpuCompiledModelExecutor::CreateNewContext(
     std::optional<uint32_t> lora_id, RuntimeConfig runtime_config) const {
@@ -2605,10 +2652,16 @@ LlmLiteRtNpuCompiledModelExecutor::CreateNewContext(
           std::make_unique<LegacyMapState>(
               absl::flat_hash_map<std::string, ::litert::TensorBuffer>()));
 
+  auto runtime_state = std::make_unique<RuntimeState>();
+  const uint32_t seed = runtime_config.sampler_params.has_value()
+                            ? runtime_config.sampler_params->seed()
+                            : 0;
+  runtime_state->rand_gen = std::make_shared<std::default_random_engine>(seed);
+
   return std::make_unique<LlmContext>(
       std::move(processed_context),
       std::make_unique<RuntimeConfig>(std::move(runtime_config)),
-      std::make_unique<RuntimeState>());
+      std::move(runtime_state));
 }
 
 absl::StatusOr<std::unique_ptr<LlmContext>>
@@ -2630,15 +2683,18 @@ LlmLiteRtNpuCompiledModelExecutor::CloneContext() const {
           std::make_unique<LegacyMapState>(std::move(kv_cache_buffers)),
           processed_tokens_);
 
-  RuntimeConfig runtime_config;
-  runtime_config.sampler_params = sampler_params_;
-
   RuntimeState runtime_state;
   runtime_state.current_step = current_step_;
+  runtime_state.ran_decode = ran_decode_;
+  runtime_state.rand_gen =
+      rand_gen_ != nullptr
+          ? std::make_shared<std::default_random_engine>(*rand_gen_)
+          : std::make_shared<std::default_random_engine>(
+                sampler_params_.seed());
 
   return std::make_unique<LlmContext>(
       std::move(processed_context),
-      std::make_unique<RuntimeConfig>(std::move(runtime_config)),
+      std::make_unique<RuntimeConfig>(runtime_config_),
       std::make_unique<RuntimeState>(std::move(runtime_state)));
 }
 
@@ -2646,10 +2702,16 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RestoreContext(
     std::unique_ptr<LlmContext> context_data) {
   DiscardSpeculativeState();
   current_step_ = context_data->runtime_state().current_step;
+  ran_decode_ = context_data->runtime_state().ran_decode;
   processed_tokens_ = context_data->processed_context().processed_tokens();
-  if (context_data->runtime_config().sampler_params.has_value()) {
-    sampler_params_ = *context_data->runtime_config().sampler_params;
-  }
+  runtime_config_ = context_data->runtime_config();
+  sampler_params_ =
+      runtime_config_.sampler_params.value_or(proto::SamplerParameters());
+  rand_gen_ = context_data->runtime_state().rand_gen != nullptr
+                  ? std::make_shared<std::default_random_engine>(
+                        *context_data->runtime_state().rand_gen)
+                  : std::make_shared<std::default_random_engine>(
+                        sampler_params_.seed());
 
   if (current_step_ > 0) {
     auto& processed_ctx =
