@@ -60,6 +60,7 @@
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/util/model_type_utils.h"
@@ -352,6 +353,12 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
   const EngineSettings& engine_settings = engine.GetEngineSettings();
   if (engine_settings.IsBenchmarkEnabled() &&
       engine_settings.GetBenchmarkParams()->num_prefill_tokens() > 0) {
+    filter_channel_content_from_kv_cache = false;
+  }
+  // The NPU executor's SetCurrentStep can only roll back one token, so
+  // rewinding the KV cache to drop a reply's channel content fails at the end
+  // of the turn. Keep the channel content in the KV cache on NPU instead.
+  if (engine_settings.GetMainExecutorSettings().GetBackend() == Backend::NPU) {
     filter_channel_content_from_kv_cache = false;
   }
 
