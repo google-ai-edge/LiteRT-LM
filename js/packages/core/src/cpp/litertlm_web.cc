@@ -789,18 +789,8 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
       .class_function(
           "createDefault",
           optional_override([](const litert::lm::Engine& engine) {
-            litert::lm::ConversationConfig::Builder builder;
-            const auto& main_settings =
-                engine.GetEngineSettings().GetMainExecutorSettings();
-            auto gpu_artisan_config =
-                main_settings.GetBackendConfig<litert::lm::GpuArtisanConfig>();
-            if (main_settings.GetBackend() ==
-                    litert::lm::Backend::GPU_ARTISAN &&
-                gpu_artisan_config.ok() &&
-                gpu_artisan_config->use_autosized_ringbuffers) {
-              builder.SetEnableRewinding(false);
-            }
-            return StatusOrToVal(builder.Build(engine));
+            return StatusOrToVal(
+                litert::lm::ConversationConfig::CreateDefault(engine));
           }))
       .class_function(
           "createCustom",
@@ -819,17 +809,6 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                   builder.SetPrefillPrefaceOnInit(prefill_preface_on_init);
                   builder.SetFilterChannelContentFromKvCache(
                       filter_channel_content_from_kv_cache);
-                  const auto& main_settings =
-                      engine.GetEngineSettings().GetMainExecutorSettings();
-                  auto gpu_artisan_config =
-                      main_settings
-                          .GetBackendConfig<litert::lm::GpuArtisanConfig>();
-                  if (main_settings.GetBackend() ==
-                          litert::lm::Backend::GPU_ARTISAN &&
-                      gpu_artisan_config.ok() &&
-                      gpu_artisan_config->use_autosized_ringbuffers) {
-                    builder.SetEnableRewinding(false);
-                  }
 
                   if (!preface_json.empty()) {
                     ABSL_ASSIGN_OR_RETURN(auto json,
