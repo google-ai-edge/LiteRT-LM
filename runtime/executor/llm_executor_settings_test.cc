@@ -295,6 +295,7 @@ TEST(LlmExecutorConfigTest, LlmExecutorSettingsWithAdvancedSettings) {
       .preferred_device_substr = "nvidia",
       .num_threads_to_upload = 4,
       .num_threads_to_compile = 2,
+      .num_steps_of_command_buffer_preparations = 0,
       .convert_weights_on_gpu = true,
       .wait_for_weights_conversion_complete_in_benchmark = false,
       .optimize_shader_compilation = false,
@@ -355,6 +356,7 @@ enable_profiling: 1
 preferred_device_substr: nvidia
 num_threads_to_upload: 4
 num_threads_to_compile: 2
+num_steps_of_command_buffer_preparations: 0
 convert_weights_on_gpu: 1
 wait_for_weights_conversion_complete_in_benchmark: 0
 optimize_shader_compilation: 0

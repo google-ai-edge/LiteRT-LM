@@ -166,6 +166,8 @@ std::ostream& operator<<(std::ostream& os, const AdvancedSettings& settings) {
   os << "preferred_device_substr: " << settings.preferred_device_substr << "\n";
   os << "num_threads_to_upload: " << settings.num_threads_to_upload << "\n";
   os << "num_threads_to_compile: " << settings.num_threads_to_compile << "\n";
+  os << "num_steps_of_command_buffer_preparations: "
+     << settings.num_steps_of_command_buffer_preparations << "\n";
   os << "convert_weights_on_gpu: " << settings.convert_weights_on_gpu << "\n";
   os << "wait_for_weights_conversion_complete_in_benchmark: "
      << settings.wait_for_weights_conversion_complete_in_benchmark << "\n";

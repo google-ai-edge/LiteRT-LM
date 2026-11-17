@@ -47,6 +47,7 @@ namespace {
 // Default number of threads for WebGPU weight upload and kernel compilation.
 constexpr int kDefaultNumThreadsToUpload = 2;
 constexpr int kDefaultNumThreadsToCompile = 1;
+constexpr int kDefaultNumStepsOfCommandBufferPreparations = 2;
 
 }  // namespace
 
@@ -242,7 +243,10 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
       //   2) other input tensors when they are prepared on GPU
       // are swapped and the GPU resource bindings are the same as the previous
       // step.
-      gpu_compilation_options.SetNumStepsOfCommandBufferPreparations(2);
+      gpu_compilation_options.SetNumStepsOfCommandBufferPreparations(
+          advanced_settings.num_steps_of_command_buffer_preparations >= 0
+              ? advanced_settings.num_steps_of_command_buffer_preparations
+              : kDefaultNumStepsOfCommandBufferPreparations);
       gpu_compilation_options.SetNumThreadsToUpload(
           advanced_settings.num_threads_to_upload >= 0
               ? advanced_settings.num_threads_to_upload

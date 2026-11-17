@@ -278,6 +278,12 @@ struct AdvancedSettings {
   // Number of threads for WebGPU kernel shader compilation. -1 means it's
   // determined by the runtime.
   int num_threads_to_compile = -1;
+  // Number of future steps for which the GPU backend (WebGPU or Vulkan)
+  // encodes command buffers ahead of time. -1 uses the LiteRT-LM default
+  // (currently 2, see CreateCompilationOptions). 0 disables the preparation,
+  // which avoids redundant encoding when other inference contexts dispatch on
+  // the same GPU environment between steps (e.g. streaming ASR).
+  int num_steps_of_command_buffer_preparations = -1;
 
   // If true, the executor will convert weights on GPU.
   // It is not supported by the all backends so this flag is ignored when using
