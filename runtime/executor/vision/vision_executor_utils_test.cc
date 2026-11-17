@@ -15,25 +15,34 @@
 #include "runtime/executor/vision/vision_executor_utils.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>  // NOLINT
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "flatbuffers/buffer.h"  // from @flatbuffers
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
+#include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
+#include "tflite/schema/schema_generated.h"  // from @litert
 
 namespace litert::lm {
 namespace {
@@ -218,6 +227,238 @@ TEST(VisionExecutorUtilsTest, AdapterError) {
   EXPECT_EQ(properties_or.status().code(), absl::StatusCode::kInternal);
   EXPECT_THAT(properties_or.status().message(),
               ::testing::HasSubstr("Adapter error"));
+}
+
+std::vector<uint8_t> BuildMultiSigVisionEncoderBuffer(
+    const std::vector<std::string>& signature_keys,
+    const std::vector<int32_t>& patch_counts,
+    const std::vector<int32_t>& token_counts) {
+  flatbuffers::FlatBufferBuilder builder;
+  auto opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ABS);
+  auto opcodes_vec = builder.CreateVector({opcode});
+
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> sig_defs;
+
+  for (size_t i = 0; i < signature_keys.size(); ++i) {
+    std::vector<int32_t> images_dims = {1, patch_counts[i], 768};
+    std::vector<int32_t> pos_dims = {1, patch_counts[i], 2};
+    std::vector<int32_t> features_dims = {1, token_counts[i], 768};
+
+    auto pos_tensor = tflite::CreateTensor(
+        builder, builder.CreateVector(pos_dims), tflite::TensorType_INT32,
+        /*buffer=*/0, builder.CreateString(absl::StrCat("positions_xy_", i)));
+    auto images_tensor = tflite::CreateTensor(
+        builder, builder.CreateVector(images_dims), tflite::TensorType_FLOAT32,
+        /*buffer=*/0, builder.CreateString(absl::StrCat("images_", i)));
+    auto features_tensor = tflite::CreateTensor(
+        builder, builder.CreateVector(features_dims),
+        tflite::TensorType_FLOAT32,
+        /*buffer=*/0, builder.CreateString(absl::StrCat("features_", i)));
+    // Deliberately place `positions_xy` at input index 0 and `images` at index
+    // 1 to verify lookup by tensor name (`images`) as well.
+    auto tensors_vec =
+        builder.CreateVector({pos_tensor, images_tensor, features_tensor});
+
+    std::vector<int32_t> op_inputs = {1};
+    std::vector<int32_t> op_outputs = {2};
+    auto op = tflite::CreateOperator(builder, /*opcode_index=*/0,
+                                     builder.CreateVector(op_inputs),
+                                     builder.CreateVector(op_outputs));
+    auto ops_vec = builder.CreateVector({op});
+
+    std::vector<int32_t> sg_inputs = {0, 1};
+    std::vector<int32_t> sg_outputs = {2};
+    auto subgraph = tflite::CreateSubGraph(
+        builder, tensors_vec, builder.CreateVector(sg_inputs),
+        builder.CreateVector(sg_outputs), ops_vec,
+        builder.CreateString(absl::StrCat("subgraph_", i)));
+    subgraphs.push_back(subgraph);
+
+    auto pos_map = tflite::CreateTensorMap(
+        builder, builder.CreateString("positions_xy"), 0);
+    auto images_map =
+        tflite::CreateTensorMap(builder, builder.CreateString("images"), 1);
+    auto features_map =
+        tflite::CreateTensorMap(builder, builder.CreateString("features"), 2);
+    auto inputs_map_vec = builder.CreateVector({pos_map, images_map});
+    auto outputs_map_vec = builder.CreateVector({features_map});
+
+    auto sig_def = tflite::CreateSignatureDef(
+        builder, inputs_map_vec, outputs_map_vec,
+        builder.CreateString(signature_keys[i]), /*subgraph_index=*/i);
+    sig_defs.push_back(sig_def);
+  }
+
+  auto buffer = tflite::CreateBuffer(builder);
+  auto model = tflite::CreateModel(
+      builder, /*version=*/3, opcodes_vec, builder.CreateVector(subgraphs),
+      builder.CreateString("multi_sig_vision_encoder"),
+      builder.CreateVector({buffer}),
+      /*metadata_buffer=*/0, /*metadata=*/0, builder.CreateVector(sig_defs));
+  tflite::FinishModelBuffer(builder, model);
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+std::vector<uint8_t> BuildMultiSigVisionAdapterBuffer(
+    const std::vector<std::string>& signature_keys,
+    const std::vector<int32_t>& token_counts) {
+  flatbuffers::FlatBufferBuilder builder;
+  auto opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ABS);
+  auto opcodes_vec = builder.CreateVector({opcode});
+
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> sig_defs;
+
+  for (size_t i = 0; i < signature_keys.size(); ++i) {
+    std::vector<int32_t> in_dims = {1, token_counts[i], 768};
+    std::vector<int32_t> out_dims = {1, token_counts[i], 2560};
+
+    auto in_tensor = tflite::CreateTensor(
+        builder, builder.CreateVector(in_dims), tflite::TensorType_FLOAT32,
+        /*buffer=*/0, builder.CreateString(absl::StrCat("soft_tokens_", i)));
+    auto out_tensor = tflite::CreateTensor(
+        builder, builder.CreateVector(out_dims), tflite::TensorType_FLOAT32,
+        /*buffer=*/0, builder.CreateString(absl::StrCat("mm_embedding_", i)));
+    auto tensors_vec = builder.CreateVector({in_tensor, out_tensor});
+
+    std::vector<int32_t> op_inputs = {0};
+    std::vector<int32_t> op_outputs = {1};
+    auto op = tflite::CreateOperator(builder, /*opcode_index=*/0,
+                                     builder.CreateVector(op_inputs),
+                                     builder.CreateVector(op_outputs));
+    auto ops_vec = builder.CreateVector({op});
+
+    std::vector<int32_t> sg_inputs = {0};
+    std::vector<int32_t> sg_outputs = {1};
+    auto subgraph = tflite::CreateSubGraph(
+        builder, tensors_vec, builder.CreateVector(sg_inputs),
+        builder.CreateVector(sg_outputs), ops_vec,
+        builder.CreateString(absl::StrCat("subgraph_", i)));
+    subgraphs.push_back(subgraph);
+
+    auto in_map = tflite::CreateTensorMap(
+        builder, builder.CreateString("soft_tokens"), 0);
+    auto out_map = tflite::CreateTensorMap(
+        builder, builder.CreateString("mm_embedding"), 1);
+    auto sig_def = tflite::CreateSignatureDef(
+        builder, builder.CreateVector({in_map}),
+        builder.CreateVector({out_map}),
+        builder.CreateString(signature_keys[i]), /*subgraph_index=*/i);
+    sig_defs.push_back(sig_def);
+  }
+
+  auto buffer = tflite::CreateBuffer(builder);
+  auto model = tflite::CreateModel(
+      builder, /*version=*/3, opcodes_vec, builder.CreateVector(subgraphs),
+      builder.CreateString("multi_sig_vision_adapter"),
+      builder.CreateVector({buffer}),
+      /*metadata_buffer=*/0, /*metadata=*/0, builder.CreateVector(sig_defs));
+  tflite::FinishModelBuffer(builder, model);
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+TEST(VisionExecutorUtilsTest, MultiSignatureMismatchedOrderWithAdapter) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, ::litert::Environment::Create(
+                    std::vector<::litert::Environment::Option>()));
+  // Reproduces Converter V2 DenseMap ordering: encoder has [vision_140,
+  // vision_70] while adapter has [vision_adapter_70, vision_adapter_140].
+  auto enc_buf = BuildMultiSigVisionEncoderBuffer(
+      {"vision_140", "vision_70"}, {1260, 630}, {140, 70});
+  auto adp_buf = BuildMultiSigVisionAdapterBuffer(
+      {"vision_adapter_70", "vision_adapter_140"}, {70, 140});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto enc_model,
+      ::litert::Model::CreateFromBuffer(
+          env, ::litert::BufferRef<uint8_t>(enc_buf.data(), enc_buf.size())));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto adp_model,
+      ::litert::Model::CreateFromBuffer(
+          env, ::litert::BufferRef<uint8_t>(adp_buf.data(), adp_buf.size())));
+
+  FakeModelResources fake_resources(&enc_model, &adp_model);
+  ASSERT_OK_AND_ASSIGN(
+      auto properties,
+      GetVisionExecutorPropertiesFromModelResources(fake_resources));
+  EXPECT_EQ(properties.num_tokens_per_image, 140);
+  EXPECT_EQ(properties.patch_num_shrink_factor, 9);
+}
+
+TEST(VisionExecutorUtilsTest, MultiSignatureAscendingOrderWithAdapter) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, ::litert::Environment::Create(
+                    std::vector<::litert::Environment::Option>()));
+  auto enc_buf = BuildMultiSigVisionEncoderBuffer(
+      {"vision_70", "vision_140"}, {630, 1260}, {70, 140});
+  auto adp_buf = BuildMultiSigVisionAdapterBuffer(
+      {"vision_adapter_70", "vision_adapter_140"}, {70, 140});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto enc_model,
+      ::litert::Model::CreateFromBuffer(
+          env, ::litert::BufferRef<uint8_t>(enc_buf.data(), enc_buf.size())));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto adp_model,
+      ::litert::Model::CreateFromBuffer(
+          env, ::litert::BufferRef<uint8_t>(adp_buf.data(), adp_buf.size())));
+
+  FakeModelResources fake_resources(&enc_model, &adp_model);
+  ASSERT_OK_AND_ASSIGN(
+      auto properties,
+      GetVisionExecutorPropertiesFromModelResources(fake_resources));
+  EXPECT_EQ(properties.num_tokens_per_image, 140);
+  EXPECT_EQ(properties.patch_num_shrink_factor, 9);
+}
+
+TEST(VisionExecutorUtilsTest, MultiSignatureWithoutAdapter) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, ::litert::Environment::Create(
+                    std::vector<::litert::Environment::Option>()));
+  auto enc_buf = BuildMultiSigVisionEncoderBuffer(
+      {"vision_70", "vision_140"}, {630, 1260}, {70, 140});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto enc_model,
+      ::litert::Model::CreateFromBuffer(
+          env, ::litert::BufferRef<uint8_t>(enc_buf.data(), enc_buf.size())));
+
+  FakeModelResources fake_resources(&enc_model, nullptr);
+  ASSERT_OK_AND_ASSIGN(
+      auto properties,
+      GetVisionExecutorPropertiesFromModelResources(fake_resources));
+  EXPECT_EQ(properties.num_tokens_per_image, 140);
+  EXPECT_EQ(properties.patch_num_shrink_factor, 9);
+}
+
+TEST(VisionExecutorUtilsTest,
+     MultiSignatureNoMatchingSignatureNameReturnsError) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, ::litert::Environment::Create(
+                    std::vector<::litert::Environment::Option>()));
+  auto enc_buf = BuildMultiSigVisionEncoderBuffer(
+      {"vision_140", "vision_280"}, {1260, 2520}, {140, 280});
+  auto adp_buf = BuildMultiSigVisionAdapterBuffer(
+      {"vision_adapter_70", "vision_adapter_560"}, {70, 560});
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto enc_model,
+      ::litert::Model::CreateFromBuffer(
+          env, ::litert::BufferRef<uint8_t>(enc_buf.data(), enc_buf.size())));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto adp_model,
+      ::litert::Model::CreateFromBuffer(
+          env, ::litert::BufferRef<uint8_t>(adp_buf.data(), adp_buf.size())));
+
+  FakeModelResources fake_resources(&enc_model, &adp_model);
+  auto properties_or =
+      GetVisionExecutorPropertiesFromModelResources(fake_resources);
+  EXPECT_EQ(properties_or.status().code(), absl::StatusCode::kInvalidArgument);
 }
 
 }  // namespace
