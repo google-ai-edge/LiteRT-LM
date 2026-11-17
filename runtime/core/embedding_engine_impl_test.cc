@@ -3823,5 +3823,108 @@ TEST(EmbeddingEngineImplTest,
                HasSubstr("min_vision_tokens_per_image (140) cannot be greater "
                          "than vision_tokens_per_image (70)")));
 }
+
+class StubPerTokenEmbeddingExecutor : public EmbeddingExecutorBase {
+ public:
+  explicit StubPerTokenEmbeddingExecutor(Environment* env) : env_(env) {}
+
+  absl::StatusOr<EmbeddingOutput> ComputeEmbedding(
+      const ExecutorInputs& inputs,
+      const ComputeEmbeddingOptions& options) override {
+    last_options_ = options;
+    EmbeddingOutput output;
+    output.embedding = {3.0f, 4.0f, 0.0f, 0.0f};
+    output.input_length = 3;
+    if (options.return_token_embeddings) {
+      output.token_embedding_dim = 4;
+      output.token_embeddings = {
+          1.0f, 2.0f,  3.0f,  4.0f,  // token 0
+          5.0f, 6.0f,  7.0f,  8.0f,  // token 1
+          9.0f, 10.0f, 11.0f, 12.0f  // token 2
+      };
+    }
+    for (int layer : options.return_hidden_state_layers) {
+      output.hidden_state_dim = 2;
+      output.hidden_states[layer] = {
+          0.1f * layer, 0.2f * layer,  // token 0
+          0.3f * layer, 0.4f * layer,  // token 1
+          0.5f * layer, 0.6f * layer   // token 2
+      };
+    }
+    return output;
+  }
+
+  absl::StatusOr<std::vector<EmbeddingOutput>> ComputeEmbeddingBatch(
+      const std::vector<ExecutorInputs>& batch_inputs,
+      const ComputeEmbeddingOptions& options) override {
+    std::vector<EmbeddingOutput> results;
+    for (const auto& input : batch_inputs) {
+      LITERT_ASSIGN_OR_RETURN(auto out, ComputeEmbedding(input, options));
+      results.push_back(std::move(out));
+    }
+    return results;
+  }
+
+  absl::string_view ExecutorBackendName() const override { return "CPU"; }
+  absl::StatusOr<std::vector<int>> GetExpectedInputDimension() const override {
+    return std::vector<int>{1, 8, 4};
+  }
+  absl::StatusOr<int> GetEmbeddingDimension() const override { return 4; }
+  Environment* GetEnvironment() const override { return env_; }
+
+  const ComputeEmbeddingOptions& last_options() const { return last_options_; }
+
+ private:
+  Environment* env_;
+  ComputeEmbeddingOptions last_options_;
+};
+
+TEST(
+    EmbeddingEngineImplTest,
+    ComputeEmbeddingForwardsPerTokenOptionsWithoutNormalizingOrTruncatingTaps) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto stub_executor =
+      std::make_unique<StubPerTokenEmbeddingExecutor>(&env->env);
+  StubPerTokenEmbeddingExecutor* stub_ptr = stub_executor.get();
+  EmbeddingEngineImpl engine(std::move(env), /*tokenizer=*/nullptr,
+                             std::move(stub_executor));
+
+  ASSERT_OK_AND_ASSIGN(auto token_tensor,
+                       Tokenizer::TokenIdsToTensorBuffer({10, 20, 30}));
+  std::vector<InputData> contents;
+  contents.push_back(InputText(std::move(token_tensor)));
+
+  EmbeddingOptions options{
+      .normalize = true,
+      .insert_special_tokens = false,
+      .output_size = 2,
+      .return_token_embeddings = true,
+      .return_hidden_state_layers = {6, 14},
+  };
+  ASSERT_OK_AND_ASSIGN(EmbeddingResponse response,
+                       engine.ComputeEmbedding(contents, options));
+
+  EXPECT_TRUE(stub_ptr->last_options().return_token_embeddings);
+  EXPECT_THAT(stub_ptr->last_options().return_hidden_state_layers,
+              ElementsAre(6, 14));
+
+  // Pooled embedding is truncated to 2 and L2-normalized ({3, 4} -> {0.6,
+  // 0.8}).
+  EXPECT_THAT(response.embedding,
+              Pointwise(FloatNear(1e-5f), std::vector<float>{0.6f, 0.8f}));
+
+  // Per-token embeddings and hidden states retain full unnormalized values.
+  EXPECT_EQ(response.token_embedding_dim, 4);
+  EXPECT_THAT(response.token_embeddings,
+              ElementsAre(1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f, 9.0f,
+                          10.0f, 11.0f, 12.0f));
+  EXPECT_EQ(response.hidden_state_dim, 2);
+  ASSERT_TRUE(response.hidden_states.contains(6));
+  ASSERT_TRUE(response.hidden_states.contains(14));
+  EXPECT_THAT(
+      response.hidden_states.at(6),
+      Pointwise(FloatNear(1e-5f),
+                std::vector<float>{0.6f, 1.2f, 1.8f, 2.4f, 3.0f, 3.6f}));
+}
 }  // namespace
 }  // namespace litert::lm
