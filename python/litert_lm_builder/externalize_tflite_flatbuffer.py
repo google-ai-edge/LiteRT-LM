@@ -158,6 +158,69 @@ def _materialize_appended_buffer_data(model, input_bytes: bytes) -> set[int]:
   return appended_buffers
 
 
+def _custom_options_bytes(op) -> memoryview[int] | None:
+  if op.customOptions is None:
+    return None
+  try:
+    data = memoryview(op.customOptions)
+  except TypeError:
+    data = memoryview(bytes(op.customOptions))
+  if data.nbytes == 0:
+    return None
+  if data.format != "B" or data.ndim != 1:
+    data = data.cast("B")
+  return data
+
+
+def _materialize_appended_custom_options(
+    model, input_bytes: bytes
+) -> set[tuple[int, int]]:
+  """Moves appended `Operator.largeCustomOptions` payloads into `customOptions`."""
+  input_size = len(input_bytes)
+  appended_ops: set[tuple[int, int]] = set()
+  for sg_idx, subgraph in enumerate(model.subgraphs or []):
+    for op_idx, op in enumerate(subgraph.operators or []):
+      offset = int(op.largeCustomOptionsOffset or 0)
+      size = int(op.largeCustomOptionsSize or 0)
+      if offset == 0 and size == 0:
+        continue
+      if size == 0:
+        if op.customOptions is None and offset > 1:
+          op.customOptions = (
+              np.empty(0, dtype=np.uint8) if np is not None else b""
+          )
+        op.largeCustomOptionsOffset = 0
+        op.largeCustomOptionsSize = 0
+        continue
+      if offset <= 1 or size < 0:
+        raise ValueError(
+            f"TFLite operator ({sg_idx}, {op_idx}) has invalid external custom"
+            f" options range: offset={offset}, size={size}"
+        )
+      if _custom_options_bytes(op) is not None:
+        raise ValueError(
+            f"TFLite operator ({sg_idx}, {op_idx}) has both inline and appended"
+            " custom options"
+        )
+      end = offset + size
+      if end > input_size:
+        raise ValueError(
+            f"TFLite operator ({sg_idx}, {op_idx}) custom options range exceeds"
+            f" the model file: offset={offset}, size={size},"
+            f" file_size={input_size}"
+        )
+      if np is not None:
+        op.customOptions = np.frombuffer(
+            input_bytes, dtype=np.uint8, count=size, offset=offset
+        )
+      else:
+        op.customOptions = memoryview(input_bytes)[offset:end]
+      op.largeCustomOptionsOffset = 0
+      op.largeCustomOptionsSize = 0
+      appended_ops.add((sg_idx, op_idx))
+  return appended_ops
+
+
 def _bias_tensor_indices(model) -> set[tuple[int, int]]:
   """Returns `(subgraph_index, tensor_index)` pairs of bias tensors."""
   bias_ops = {
@@ -256,26 +319,40 @@ def _make_external_buffer_id(model) -> int:
   return (1 << 31) | len(model.externalBuffers or [])
 
 
+def _inline_payload_bytes(model) -> int:
+  """Returns total inline bytes across buffers and operator custom options."""
+  total = sum(len(b.data) for b in model.buffers or [] if b.data is not None)
+  for sg in model.subgraphs or []:
+    for op in sg.operators or []:
+      if op.customOptions is not None:
+        total += len(op.customOptions)
+  return total
+
+
 def _write_model(
-    model, appended_buffers: set[int], output_model: pathlib.Path
+    model,
+    appended_buffers: set[int],
+    output_model: pathlib.Path,
+    appended_custom_options: set[tuple[int, int]] | None = None,
 ) -> None:
   """Serializes `model` to `output_model`.
 
-  Buffers that were appended in the input file are appended again (instead of
-  being packed into the FlatBuffer) when the inline payload would otherwise
-  approach the FlatBuffer size limit.
+  Buffers and custom options that were appended in the input file are appended
+  again (instead of being packed into the FlatBuffer) when the inline payload
+  would otherwise approach the FlatBuffer size limit.
 
   Args:
-    model: The `ModelT` to serialize. Appended buffers must already be
-      materialized (see `_materialize_appended_buffer_data`).
+    model: The `ModelT` to serialize. Appended buffers and custom options must
+      already be materialized.
     appended_buffers: Indices of buffers whose payloads were appended in the
       input file.
     output_model: Destination `.tflite` path.
+    appended_custom_options: Optional `(subgraph_index, op_index)` pairs whose
+      custom options were appended in the input file.
   """
-  remaining_inline_bytes = sum(
-      len(b.data) for b in model.buffers or [] if b.data is not None
-  )
+  remaining_inline_bytes = _inline_payload_bytes(model)
   reappend_payloads: list[tuple[int, memoryview[int]]] = []
+  reappend_custom_options: list[tuple[int, int, memoryview[int]]] = []
   if remaining_inline_bytes >= _MAX_INLINE_BUFFER_BYTES:
     for buf_idx in sorted(appended_buffers):
       buf = model.buffers[buf_idx]
@@ -285,6 +362,14 @@ def _write_model(
         buf.data = None
         buf.offset = 1
         buf.size = len(data)
+    for sg_idx, op_idx in sorted(appended_custom_options or ()):
+      op = model.subgraphs[sg_idx].operators[op_idx]
+      data = _custom_options_bytes(op)
+      if data is not None:
+        reappend_custom_options.append((sg_idx, op_idx, data))
+        op.customOptions = None
+        op.largeCustomOptionsOffset = 1
+        op.largeCustomOptionsSize = len(data)
 
   def _pack_flatbuffer() -> bytes:
     builder = flatbuffers.Builder(1024)
@@ -293,7 +378,7 @@ def _write_model(
     return bytes(builder.Output())
 
   packed_fb = _pack_flatbuffer()
-  if reappend_payloads:
+  if reappend_payloads or reappend_custom_options:
     cursor = len(packed_fb)
     for buf_idx, data in reappend_payloads:
       cursor = (
@@ -303,11 +388,29 @@ def _write_model(
       )
       model.buffers[buf_idx].offset = cursor
       cursor += len(data)
+    for sg_idx, op_idx, data in reappend_custom_options:
+      cursor = (
+          (cursor + _TFLITE_BUFFER_ALIGNMENT - 1)
+          // _TFLITE_BUFFER_ALIGNMENT
+          * _TFLITE_BUFFER_ALIGNMENT
+      )
+      model.subgraphs[sg_idx].operators[
+          op_idx
+      ].largeCustomOptionsOffset = cursor
+      cursor += len(data)
     packed_fb = _pack_flatbuffer()
     with output_model.open("wb") as out_f:
       out_f.write(packed_fb)
       for buf_idx, data in reappend_payloads:
         pad = model.buffers[buf_idx].offset - out_f.tell()
+        if pad > 0:
+          out_f.write(b"\0" * pad)
+        out_f.write(data)
+      for sg_idx, op_idx, data in reappend_custom_options:
+        pad = (
+            model.subgraphs[sg_idx].operators[op_idx].largeCustomOptionsOffset
+            - out_f.tell()
+        )
         if pad > 0:
           out_f.write(b"\0" * pad)
         out_f.write(data)
@@ -330,6 +433,9 @@ def externalize(
   input_bytes = input_model.read_bytes()
   model = schema.ModelT.InitFromPackedBuf(input_bytes, 0)
   appended_buffers = _materialize_appended_buffer_data(model, input_bytes)
+  appended_custom_options = _materialize_appended_custom_options(
+      model, input_bytes
+  )
   if model.externalBuffers is None:
     model.externalBuffers = []
 
@@ -416,7 +522,7 @@ def externalize(
     # data) byte-for-byte instead of repacking it.
     output_model.write_bytes(input_bytes)
   else:
-    _write_model(model, appended_buffers, output_model)
+    _write_model(model, appended_buffers, output_model, appended_custom_options)
 
   logging.info(
       "Externalized %s: wrote %s and %s (%s bytes, %s newly externalized);"
@@ -563,6 +669,9 @@ def redirect_external_weights(
     shutil.copyfile(input_weights, output_weights)
     return RedirectResult(redirected_buffers=0, removed_bytes=0)
   appended_buffers = _materialize_appended_buffer_data(model, input_bytes)
+  appended_custom_options = _materialize_appended_custom_options(
+      model, input_bytes
+  )
 
   with _map_weights(input_weights) as blob:
     kept = []
@@ -608,7 +717,7 @@ def redirect_external_weights(
           weights_file.write(blob[key[0] : key[0] + key[1]])
         external_buffer.offset = new_offsets[key]
 
-  _write_model(model, appended_buffers, output_model)
+  _write_model(model, appended_buffers, output_model, appended_custom_options)
   removed_bytes = input_weights.stat().st_size - output_weights.stat().st_size
   logging.info(
       "Redirected %d external buffer(s) of %s; weight file %s: %s bytes (%s"
