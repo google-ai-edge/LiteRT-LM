@@ -1450,6 +1450,7 @@ cc_library(
     hdrs = ["vision/vision_executor_utils.h"],
     deps = [
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -1476,12 +1477,18 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
+        "@flatbuffers//:runtime_cc",
+        "@litert//litert/cc:litert_buffer_ref",
+        "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_model",
+        "@litert//litert/test:matchers",
         "//runtime/components:model_resources",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 
