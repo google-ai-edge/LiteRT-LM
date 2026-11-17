@@ -15,6 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_CONVERSATION_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CONVERSATION_CONVERSATION_H_
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -548,6 +549,16 @@ class Conversation {
   static absl::StatusOr<std::unique_ptr<Conversation>> Create(
       Engine& engine, const ConversationConfig& config);
 
+  // Cancels the in-flight asynchronous tasks of this Conversation and waits for
+  // them to finish.
+  //
+  // The Conversation may be destroyed from the end-of-turn callback of
+  // `SendMessageAsync` (see `IsEndOfTurnMessage()`), since the execution
+  // manager supports waiting from inside a terminal callback. It must NOT be
+  // destroyed from a streaming chunk callback: the task cannot finish while its
+  // own callback is blocked in the destructor.
+  ~Conversation();
+
   // Sends a message to the LLM and returns the complete message.
   // Args:
   // - `message`: The message (a JSON object) to be sent to the LLM.
@@ -775,6 +786,11 @@ class Conversation {
       std::optional<int> max_output_tokens = std::nullopt,
       std::optional<ThinkingConfig> thinking_config = std::nullopt,
       std::optional<absl::string_view> open_channel_name = std::nullopt);
+
+  // Removes the messages added after the first `history_size` messages from
+  // the history, e.g. when a turn is cancelled, and restores the appending
+  // state to `prev_is_appending`.
+  void RollBackTurn(size_t history_size, bool prev_is_appending);
 
   // Adds a task controller to the task_controllers_ map if task_group_id is
   // provided.

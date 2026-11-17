@@ -14,6 +14,7 @@
 
 #include "runtime/conversation/conversation.h"
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -21,6 +22,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
@@ -33,7 +35,6 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
-#include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -770,6 +771,31 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
   return conversation;
 }
 
+Conversation::~Conversation() {
+  // Cancel and wait for in-flight tasks while `session_` and the other members
+  // are still alive. Otherwise their callbacks could run while `session_` is
+  // being destroyed, when it is already null.
+  if (session_ != nullptr) {
+    session_->CancelProcess();
+    if (absl::Status status = session_->WaitUntilDone(); !status.ok()) {
+      ABSL_LOG(WARNING)
+          << "Failed to wait for in-flight tasks while destroying "
+             "the Conversation: "
+          << status;
+    }
+  }
+}
+
+void Conversation::RollBackTurn(size_t history_size, bool prev_is_appending) {
+  absl::MutexLock lock(history_mutex_);
+  if (history_.size() > history_size) {
+    history_.resize(history_size);
+  }
+  is_appending_message_ = prev_is_appending;
+  checkpoint_message_index_ = std::nullopt;
+  checkpoint_after_user_prefill_ = false;
+}
+
 void Conversation::AddTaskController(
     const std::optional<std::string>& task_group_id,
     std::unique_ptr<Engine::Session::TaskController> task_controller) {
@@ -781,26 +807,41 @@ void Conversation::AddTaskController(
 
 absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
                                                   OptionalArgs optional_args) {
-  absl::Notification done;
-  absl::Status error_status;
+  struct SyncState {
+    absl::Mutex mutex;
+    absl::Status error_status ABSL_GUARDED_BY(mutex);
+    bool done ABSL_GUARDED_BY(mutex) = false;
+  };
+  // Heap-allocate the state shared with the callback, so that a callback that
+  // runs after `SendMessage` returned (e.g. on a `WaitUntilDone` failure) does
+  // not touch destroyed stack variables.
+  auto sync_state = std::make_shared<SyncState>();
   const bool appending = optional_args.has_pending_message;
+
+  size_t history_size_before_turn = 0;
+  bool prev_is_appending_before_turn = false;
+  {
+    absl::MutexLock lock(history_mutex_);
+    history_size_before_turn = history_.size();
+    prev_is_appending_before_turn = is_appending_message_;
+  }
 
   absl::Status status = SendMessageAsync(
       message,
-      [&](absl::StatusOr<Message> message) {
+      [sync_state](absl::StatusOr<Message> message) {
         if (!message.ok()) {
           // If the message is an error, set the error status and notify done.
-          error_status = message.status();
-          if (!done.HasBeenNotified()) {
-            done.Notify();
+          absl::MutexLock lock(sync_state->mutex);
+          if (!sync_state->done) {
+            sync_state->error_status = message.status();
+            sync_state->done = true;
           }
           return;
         }
 
         if (IsEndOfTurnMessage(*message)) {
-          if (!done.HasBeenNotified()) {
-            done.Notify();
-          }
+          absl::MutexLock lock(sync_state->mutex);
+          sync_state->done = true;
         }
       },
       std::move(optional_args));
@@ -813,8 +854,20 @@ absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
   // executor, which lazily runs tasks only when they're waited on.
   // This should not slow down the threaded execution manager since it will
   // need to wait for all the session's tasks to complete anyway.
-  ABSL_RETURN_IF_ERROR(session_->WaitUntilDone());
-  done.WaitForNotification();
+  if (absl::Status wait_status = session_->WaitUntilDone(); !wait_status.ok()) {
+    // Cancel the incomplete turn, wait for it, and remove it from the history.
+    CancelProcess();
+    session_->WaitUntilDone().IgnoreError();
+    RollBackTurn(history_size_before_turn, prev_is_appending_before_turn);
+    return wait_status;
+  }
+
+  absl::Status error_status;
+  {
+    absl::MutexLock lock(sync_state->mutex);
+    sync_state->mutex.Await(absl::Condition(&sync_state->done));
+    error_status = sync_state->error_status;
+  }
 
   if (!error_status.ok()) {
     return error_status;
@@ -851,10 +904,12 @@ absl::Status Conversation::SendMessageAsync(
   auto open_channel_name =
       GetOpenChannelName(single_turn_text, config_.GetChannels());
 
+  size_t history_size_before_turn = 0;
   bool was_history_empty = false;
   bool is_appending_message = false;
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
+    history_size_before_turn = history_.size();
     was_history_empty = history_.empty();
     history_.push_back(message);
     is_appending_message = is_appending_message_;
@@ -862,14 +917,9 @@ absl::Status Conversation::SendMessageAsync(
 
   // Removes the messages of this turn from the history, e.g. when the turn is
   // cancelled or its input could not be prefilled.
-  auto remove_turn_from_history = [this, prev_is_appending_message]() {
-    absl::MutexLock lock(history_mutex_);
-    if (!history_.empty()) {
-      history_.pop_back();
-    }
-    is_appending_message_ = prev_is_appending_message;
-    checkpoint_message_index_ = std::nullopt;
-    checkpoint_after_user_prefill_ = false;
+  auto remove_turn_from_history = [this, history_size_before_turn,
+                                   prev_is_appending_message]() {
+    RollBackTurn(history_size_before_turn, prev_is_appending_message);
   };
 
   // If the prompt template itself opens a channel at the end of the user
