@@ -421,6 +421,34 @@ TEST(ConversationConfigTest,
   EXPECT_FALSE(config.filter_channel_content_from_kv_cache());
 }
 
+TEST(ConversationConfigTest, NoFilterChannelContentFromKvCacheOnNpu) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(10);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+
+  // An NPU engine can't be created on host, so reuse the CPU engine's settings
+  // with the main backend switched to NPU behind a mock engine.
+  EngineSettings npu_settings = engine->GetEngineSettings();
+  ASSERT_OK(
+      npu_settings.GetMutableMainExecutorSettings().SetBackend(Backend::NPU));
+  testing::NiceMock<MockEngine> npu_engine;
+  ON_CALL(npu_engine, GetEngineSettings())
+      .WillByDefault(testing::ReturnRef(npu_settings));
+  ON_CALL(npu_engine, GetTokenizer())
+      .WillByDefault(testing::ReturnRef(engine->GetTokenizer()));
+
+  ASSERT_OK_AND_ASSIGN(auto config,
+                       ConversationConfig::Builder()
+                           .SetFilterChannelContentFromKvCache(true)
+                           .Build(npu_engine));
+  EXPECT_FALSE(config.filter_channel_content_from_kv_cache());
+}
+
 TEST(ConversationConfigTest, OverwritePromptTemplate) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
