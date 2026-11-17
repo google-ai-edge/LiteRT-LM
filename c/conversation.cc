@@ -37,6 +37,7 @@
 #include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/conversation.h"
+#include "runtime/conversation/end_of_turn.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
@@ -62,7 +63,7 @@ CreateConversationCallback(LiteRtLmStreamCallback callback, void* user_data) {
                       error_str.c_str());
       return;
     }
-    if (message->empty()) {  // End of stream marker
+    if (litert::lm::IsEndOfTurnMessage(*message)) {
       EmitStreamChunk(callback, user_data, /*text=*/nullptr, /*is_final=*/true,
                       /*error_msg=*/nullptr);
     } else {

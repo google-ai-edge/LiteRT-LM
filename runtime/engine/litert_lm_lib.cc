@@ -70,6 +70,7 @@
 #include "runtime/components/constrained_decoding/constraint_provider_factory.h"
 #include "runtime/components/constrained_decoding/llg_constraint_config.h"
 #include "runtime/conversation/conversation.h"
+#include "runtime/conversation/end_of_turn.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/engine/engine.h"
@@ -233,7 +234,7 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreatePrintMessageCallback(
       return;
     }
     absl::MutexLock lock(state->mu);
-    if (message->is_null()) {
+    if (::litert::lm::IsEndOfTurnMessage(*message)) {
       if (!state->active_channel.empty()) {
         std::cout << ColorBlue("[/" + state->active_channel + "]") << std::endl;
       } else {

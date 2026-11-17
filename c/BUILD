@@ -88,6 +88,7 @@ CONVERSATION_DEPS = [
     "//runtime/components/constrained_decoding:llg_constraint_config",
     "//runtime/components/constrained_decoding:tool_choice",
     "//runtime/conversation",
+    "//runtime/conversation:end_of_turn",
     "//runtime/conversation:io_types",
     "//runtime/conversation:thinking_config",
     "//runtime/conversation/model_data_processor:config_registry",

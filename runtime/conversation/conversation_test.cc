@@ -48,6 +48,7 @@
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/components/prompt_template.h"
+#include "runtime/conversation/end_of_turn.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/thinking_config.h"
@@ -231,7 +232,7 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateTestMessageCallback(
       return;
     }
     // If the message is null, the last callback is received.
-    if (message->is_null()) {
+    if (IsEndOfTurnMessage(*message)) {
       ASSERT_TRUE(expected_message["content"][0]["text"].is_string());
       std::string expected_string = expected_message["content"][0]["text"];
       // The expected string should be empty after the last callback.
@@ -261,7 +262,7 @@ CreateTestMultiMessageCallback(const std::vector<Message>& expected_messages,
     ASSERT_OK(message);
 
     // If the message is null, the message stream is complete.
-    if (message->is_null()) {
+    if (IsEndOfTurnMessage(*message)) {
       EXPECT_TRUE(current_index == expected_messages.size())
           << "Expected " << expected_messages.size()
           << " messages but only got " << current_index;
@@ -2981,7 +2982,7 @@ TEST_P(ConversationTest,
           done.Notify();
           return;
         }
-        if (message->is_null()) {
+        if (IsEndOfTurnMessage(*message)) {
           // Turn completion (`onDone`): query final diagnostics.
           record_error(conversation->GetTokenCount().status());
           record_error(conversation->GetBenchmarkInfo().status());
@@ -3375,7 +3376,7 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
       done_1.Notify();
       return;
     }
-    if (message->is_null()) {
+    if (IsEndOfTurnMessage(*message)) {
       done_1.Notify();
     }
   };
@@ -3422,7 +3423,7 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
       done_2.Notify();
       return;
     }
-    if (message->is_null()) {
+    if (IsEndOfTurnMessage(*message)) {
       done_2.Notify();
     }
   };
@@ -3516,7 +3517,7 @@ TEST_P(ConversationTest,
       received_error = message.status();
       return;
     }
-    if (message->is_null()) {
+    if (IsEndOfTurnMessage(*message)) {
       received_null_completion = true;
     }
   };
@@ -4013,7 +4014,7 @@ CreateCancelledMessageCallback(absl::Status& status, absl::Notification& done) {
       done.Notify();
       return;
     }
-    if (message->is_null()) {
+    if (IsEndOfTurnMessage(*message)) {
       status = absl::OkStatus();
       done.Notify();
       return;
@@ -6296,14 +6297,14 @@ TEST(ConversationAsyncLifecycleTest,
   ASSERT_OK_AND_ASSIGN(auto config, ConversationConfig::CreateDefault(*engine));
 
   // Turn 1: Create a single-use Conversation and destroy it inside its
-  // terminal callback (when message->is_null()).
+  // terminal callback (when IsEndOfTurnMessage(*message)).
   ASSERT_OK_AND_ASSIGN(auto conv1, Conversation::Create(*engine, config));
   absl::Notification conv1_done;
   Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
   ASSERT_OK(conv1->SendMessageAsync(
       user_message, [&conv1, &conv1_done](absl::StatusOr<Message> message) {
         EXPECT_OK(message);
-        if (!message.ok() || message->is_null()) {
+        if (!message.ok() || IsEndOfTurnMessage(*message)) {
           conv1.reset();
           if (!conv1_done.HasBeenNotified()) {
             conv1_done.Notify();
@@ -6319,7 +6320,7 @@ TEST(ConversationAsyncLifecycleTest,
   ASSERT_OK(conv2->SendMessageAsync(
       user_message, [&conv2_done](absl::StatusOr<Message> message) {
         EXPECT_OK(message);
-        if (!message.ok() || message->is_null()) {
+        if (!message.ok() || IsEndOfTurnMessage(*message)) {
           if (!conv2_done.HasBeenNotified()) {
             conv2_done.Notify();
           }
@@ -6377,7 +6378,7 @@ TEST(ConversationAsyncLifecycleTest,
   ASSERT_OK(conv1->SendMessageAsync(
       user_message, [&conv1, &conv1_done](absl::StatusOr<Message> message) {
         EXPECT_OK(message);
-        if (!message.ok() || message->is_null()) {
+        if (!message.ok() || IsEndOfTurnMessage(*message)) {
           conv1.reset();
           if (!conv1_done.HasBeenNotified()) {
             conv1_done.Notify();
@@ -6393,7 +6394,7 @@ TEST(ConversationAsyncLifecycleTest,
   ASSERT_OK(conv2->SendMessageAsync(
       user_message, [&conv2_done](absl::StatusOr<Message> message) {
         EXPECT_OK(message);
-        if (!message.ok() || message->is_null()) {
+        if (!message.ok() || IsEndOfTurnMessage(*message)) {
           if (!conv2_done.HasBeenNotified()) {
             conv2_done.Notify();
           }
@@ -6422,9 +6423,9 @@ TEST(ConversationAsyncLifecycleTest,
 
   ASSERT_OK(conv1->SendMessageAsync(
       user_message,
-      [&first_chunk_received, &dependent_turn_queued_and_cancelled](
-          absl::StatusOr<Message> message) {
-        if (message.ok() && !message->is_null() &&
+      [&first_chunk_received,
+       &dependent_turn_queued_and_cancelled](absl::StatusOr<Message> message) {
+        if (message.ok() && !IsEndOfTurnMessage(*message) &&
             !first_chunk_received.HasBeenNotified()) {
           first_chunk_received.Notify();
           dependent_turn_queued_and_cancelled.WaitForNotificationWithTimeout(
@@ -6455,7 +6456,7 @@ TEST(ConversationAsyncLifecycleTest,
   ASSERT_OK(conv2->SendMessageAsync(
       user_message, [&conv2_done](absl::StatusOr<Message> message) {
         EXPECT_OK(message);
-        if (!message.ok() || message->is_null()) {
+        if (!message.ok() || IsEndOfTurnMessage(*message)) {
           if (!conv2_done.HasBeenNotified()) {
             conv2_done.Notify();
           }

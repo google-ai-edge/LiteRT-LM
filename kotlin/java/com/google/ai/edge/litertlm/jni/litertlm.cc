@@ -48,6 +48,7 @@
 #include "runtime/components/model_resources_litert_lm.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/conversation.h"
+#include "runtime/conversation/end_of_turn.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
@@ -1681,8 +1682,7 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
         };
 
         if (message.ok()) {
-          if (message->empty()) {
-            // Null/empty message indicates completion.
+          if (litert::lm::IsEndOfTurnMessage(*message)) {
             env->CallVoidMethod(callback_global, on_complete_mid);
             on_done_fn();
           } else {

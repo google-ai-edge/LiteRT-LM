@@ -47,6 +47,7 @@
 #include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/channel_util.h"
+#include "runtime/conversation/end_of_turn.h"
 #include "runtime/conversation/internal_callback_util.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
@@ -796,8 +797,7 @@ absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
           return;
         }
 
-        if (message->is_null()) {
-          // Message is null when decode is done.
+        if (IsEndOfTurnMessage(*message)) {
           if (!done.HasBeenNotified()) {
             done.Notify();
           }
@@ -992,21 +992,21 @@ absl::Status Conversation::SendMessageAsync(
       std::make_shared<absl::AnyInvocable<void(absl::StatusOr<Message>)>>(
           std::move(user_callback));
   // `SendCompleteMessage` in `internal_callback_util.cc` invokes
-  // `complete_message_callback` synchronously before invoking
-  // `user_callback(Message())` (the null completion sentinel). When channel
-  // content must be stripped from the KV cache, `complete_message_callback`
-  // rewinds to the checkpoint and schedules the refill `RunPrefillAsync` task
-  // asynchronously in the background without blocking
-  // `user_callback(Message())` (unless scheduling the refill fails
-  // synchronously, in which case
-  // `*suppress_completion = true` prevents emitting `Message()` after the
-  // error status).
+  // `complete_message_callback` synchronously before sending the end-of-turn
+  // message (see `IsEndOfTurnMessage()`). When channel content must be
+  // stripped from the KV cache, `complete_message_callback` rewinds to the
+  // checkpoint and schedules the refill `RunPrefillAsync` task asynchronously
+  // in the background without blocking the end-of-turn message (unless
+  // scheduling the refill fails synchronously, in which case
+  // `*suppress_completion = true` prevents sending the end-of-turn message
+  // after the error status).
   auto suppress_completion = std::make_shared<bool>(false);
 
   absl::AnyInvocable<void(absl::StatusOr<Message>)> wrapped_user_callback =
       [shared_user_callback,
        suppress_completion](absl::StatusOr<Message> message) {
-        if (message.ok() && message->is_null() && *suppress_completion) {
+        if (message.ok() && IsEndOfTurnMessage(*message) &&
+            *suppress_completion) {
           return;
         }
         (*shared_user_callback)(std::move(message));

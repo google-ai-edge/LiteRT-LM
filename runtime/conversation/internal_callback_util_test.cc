@@ -27,6 +27,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "runtime/conversation/end_of_turn.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor.h"
@@ -68,7 +69,7 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateUserMessageCallback(
       status = message.status();
       return;
     }
-    if (message->is_null()) {
+    if (IsEndOfTurnMessage(*message)) {
       done = true;
     } else {
       output.push_back(*message);

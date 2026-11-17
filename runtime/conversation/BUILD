@@ -139,6 +139,7 @@ cc_test(
         "//runtime/components/testdata",
     ],
     deps = [
+        ":end_of_turn",
         ":internal_callback_util",
         ":io_types",
         "@com_google_googletest//:gtest_main",
@@ -161,6 +162,7 @@ cc_library(
     hdrs = ["conversation.h"],
     deps = [
         ":channel_util",
+        ":end_of_turn",
         ":internal_callback_util",
         ":io_types",
         ":prompt_utils",
@@ -235,6 +237,7 @@ cc_library(
     hdrs = ["conversation.h"],
     deps = [
         ":channel_util",
+        ":end_of_turn",
         ":internal_callback_util",
         ":io_types",
         ":prompt_utils_lite",
@@ -347,6 +350,7 @@ cc_test(
     tags = ["requires-mac-inputs:hard"],  # Required for running on Forge on Mac.
     deps = [
         ":conversation",
+        ":end_of_turn",
         ":io_types",
         ":thinking_config",
         "@com_google_googletest//:gtest_main",

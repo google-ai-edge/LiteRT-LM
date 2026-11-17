@@ -42,6 +42,7 @@
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "litert/cc/internal/scoped_file.h"  // from @litert
 #include "runtime/conversation/conversation.h"
+#include "runtime/conversation/end_of_turn.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
@@ -77,7 +78,7 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateMessageCallback() {
       std::cout << "Error: " << message.status() << std::endl;
       return;
     }
-    if (message->is_null()) {
+    if (::litert::lm::IsEndOfTurnMessage(*message)) {
       std::cout << std::endl << std::flush;
       return;
     }

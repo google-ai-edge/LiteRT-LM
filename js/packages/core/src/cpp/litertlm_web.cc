@@ -34,6 +34,7 @@
 #include "js/packages/core/src/cpp/readable_stream_data_stream.h"
 #include "js/packages/core/src/cpp/status_to_val.h"
 #include "runtime/conversation/conversation.h"
+#include "runtime/conversation/end_of_turn.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/core/embedding_engine_impl.h"
@@ -877,7 +878,7 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                              std::string(result.status().message()));
                     return;
                   }
-                  if (result->is_null()) {
+                  if (litert::lm::IsEndOfTurnMessage(*result)) {
                     callback(emscripten::val::null(), true,
                              emscripten::val::null());
                   } else {
