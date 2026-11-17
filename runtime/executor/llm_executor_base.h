@@ -296,6 +296,14 @@ class LlmExecutorBase {
   // Resets the accumulated executor statistics if supported by the underlying
   // executor/backend.
   virtual void ResetExecutorStats() {}
+
+  // Gets the executor statistics accumulated since the executor was created,
+  // if supported by the underlying executor/backend. `ResetExecutorStats()`
+  // doesn't clear them, so the difference of two snapshots
+  // (`SubtractExecutorStats()`) is the work done between them.
+  virtual std::optional<ExecutorStats> GetCumulativeExecutorStats() const {
+    return std::nullopt;
+  }
 };
 
 }  // namespace litert::lm

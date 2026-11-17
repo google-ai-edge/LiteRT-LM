@@ -162,6 +162,21 @@ class Responses {
     return token_scores_;
   };
 
+  // Returns the executor statistics of the decode turn (e.g. MTP rounds and
+  // accepted draft tokens), if the executor reports statistics and the turn
+  // ran at least one step. Only the last responses of a decode turn carry
+  // them. Unlike the statistics in `BenchmarkInfo`, they don't need
+  // benchmarking and count this turn's steps only, even if sessions share the
+  // executor.
+  const std::optional<ExecutorStats>& GetExecutorStats() const {
+    return executor_stats_;
+  }
+
+  // Sets the executor statistics of the decode turn.
+  void SetExecutorStats(std::optional<ExecutorStats> executor_stats) {
+    executor_stats_ = std::move(executor_stats);
+  }
+
  private:
   // The state of the task.
   TaskState task_state_;
@@ -181,6 +196,9 @@ class Responses {
 
   // The output vector of token ids for each response text.
   std::vector<std::vector<int>> token_ids_;
+
+  // The executor statistics of the decode turn. Optional.
+  std::optional<ExecutorStats> executor_stats_;
 };
 std::ostream& operator<<(std::ostream& os, const Responses& responses);
 

@@ -248,5 +248,84 @@ TEST(ExecutorStatsTest, AccumulateDraftVerifyLenientAccepted) {
   EXPECT_EQ(stats.mtp_lenient_accepted_tokens(), 0);
 }
 
+TEST(SubtractExecutorStatsTest, ReturnsWhatWasAccumulatedBetweenSnapshots) {
+  ExecutorStats stats{.module_name = std::string(kLlmModuleName)};
+  stats.AccumulatePlainStep(absl::Milliseconds(10));
+  stats.AccumulateMtpRound(/*drafted_tokens=*/3, /*accepted_tokens=*/1,
+                           /*emitted_tokens=*/2, absl::Milliseconds(1),
+                           absl::Milliseconds(2), absl::Milliseconds(3));
+  stats.AccumulateMtpLenientAccepted(1);
+  stats.Accumulate("ratio", 0.25);
+  const ExecutorStats before = stats;
+
+  stats.AccumulatePlainStep(absl::Milliseconds(5));
+  stats.AccumulatePlainStep(absl::Milliseconds(6));
+  stats.AccumulateDraftVerification(/*passes=*/1, /*draft_tokens=*/4,
+                                    /*accepted_tokens=*/3, /*emitted_tokens=*/4,
+                                    absl::Milliseconds(7));
+  stats.Accumulate("ratio", 0.5);
+  stats.Accumulate("new_zero", int64_t{0});
+
+  const ExecutorStats difference = SubtractExecutorStats(stats, before);
+  EXPECT_EQ(difference.module_name, kLlmModuleName);
+  EXPECT_EQ(difference.plain_steps(), 2);
+  EXPECT_EQ(difference.plain_step_time(), absl::Milliseconds(11));
+  EXPECT_EQ(difference.draft_verifications(), 1);
+  EXPECT_EQ(difference.draft_verify_accepted_tokens(), 3);
+  EXPECT_EQ(difference.draft_verify_time(), absl::Milliseconds(7));
+  EXPECT_DOUBLE_EQ(difference.GetMetricAsDouble("ratio"), 0.5);
+  // New entries are kept as recorded, even zero ones.
+  EXPECT_EQ(difference.GetMetric("new_zero"), MetricValue(int64_t{0}));
+  // The MTP round and lenient accept happened before `before`.
+  EXPECT_FALSE(difference.GetMetric(kMtpRoundsMetric).has_value());
+  EXPECT_FALSE(difference.GetLatency(kMtpRoundTimeLatency).has_value());
+  EXPECT_FALSE(
+      difference.GetMetric(kMtpLenientAcceptedTokensMetric).has_value());
+}
+
+TEST(SubtractExecutorStatsTest, ReturnsEmptyStatsForEqualSnapshots) {
+  ExecutorStats stats{.module_name = "Embedding"};
+  stats.AccumulatePlainStep(absl::Milliseconds(10));
+  stats.substats.push_back(ExecutorStats{.module_name = "Vision"});
+  stats.substats.back().Accumulate(kTotalLatency, absl::Milliseconds(4));
+
+  const ExecutorStats difference = SubtractExecutorStats(stats, stats);
+  EXPECT_EQ(difference.module_name, "Embedding");
+  EXPECT_TRUE(difference.latencies.empty());
+  EXPECT_TRUE(difference.metrics.empty());
+  EXPECT_TRUE(difference.substats.empty());
+}
+
+TEST(SubtractExecutorStatsTest, SubtractsSubstatsByModuleName) {
+  ExecutorStats before{.module_name = "Embedding"};
+  before.substats.push_back(ExecutorStats{.module_name = "Vision"});
+  before.substats.back().Accumulate(kTotalLatency, absl::Milliseconds(4));
+  before.substats.push_back(ExecutorStats{.module_name = "Audio"});
+  before.substats.back().Accumulate(kTotalLatency, absl::Milliseconds(2));
+
+  ExecutorStats after = before;
+  // The substats of `after` are in another order, and one is new.
+  std::swap(after.substats[0], after.substats[1]);
+  after.substats[1].Accumulate(kTotalLatency, absl::Milliseconds(3));
+  after.substats.push_back(ExecutorStats{.module_name = "Text"});
+  after.substats.back().Accumulate("tokens", int64_t{5});
+
+  const ExecutorStats difference = SubtractExecutorStats(after, before);
+  ASSERT_EQ(difference.substats.size(), 2);
+  EXPECT_EQ(difference.substats[0].module_name, "Vision");
+  EXPECT_EQ(difference.substats[0].GetTotalLatency(), absl::Milliseconds(3));
+  EXPECT_EQ(difference.substats[1].module_name, "Text");
+  EXPECT_EQ(difference.substats[1].GetMetricAsInt64("tokens"), 5);
+}
+
+TEST(SubtractExecutorStatsTest, LeavesOutNewEmptySubstats) {
+  const ExecutorStats before{.module_name = "Embedding"};
+  ExecutorStats after = before;
+  after.substats.push_back(ExecutorStats{.module_name = "Vision"});
+
+  const ExecutorStats difference = SubtractExecutorStats(after, before);
+  EXPECT_TRUE(difference.empty());
+}
+
 }  // namespace
 }  // namespace litert::lm

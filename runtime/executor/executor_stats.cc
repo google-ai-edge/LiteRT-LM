@@ -14,6 +14,7 @@
 
 #include "runtime/executor/executor_stats.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <ostream>
@@ -34,6 +35,20 @@ namespace {
 double SafePercentage(absl::Duration part, absl::Duration total) {
   if (total <= absl::ZeroDuration()) return 0.0;
   return absl::FDivDuration(part, total) * 100.0;
+}
+
+// Returns `after - before`, or `after` if `before` holds the other type.
+MetricValue SubtractMetric(const MetricValue& after,
+                           const MetricValue& before) {
+  return std::visit(
+      [&before](auto value) -> MetricValue {
+        using T = decltype(value);
+        if (const T* before_value = std::get_if<T>(&before)) {
+          value -= *before_value;
+        }
+        return value;
+      },
+      after);
 }
 
 }  // namespace
@@ -210,6 +225,48 @@ std::ostream& operator<<(std::ostream& os, const ExecutorStats& stats) {
     os << sub;
   }
   return os;
+}
+
+ExecutorStats SubtractExecutorStats(const ExecutorStats& after,
+                                    const ExecutorStats& before) {
+  ExecutorStats difference{.module_name = after.module_name};
+  for (const auto& [name, duration] : after.latencies) {
+    const std::optional<absl::Duration> before_duration =
+        before.GetLatency(name);
+    if (!before_duration.has_value()) {
+      difference.latencies.emplace_back(name, duration);
+    } else if (duration != *before_duration) {
+      difference.latencies.emplace_back(name, duration - *before_duration);
+    }
+  }
+  for (const auto& [name, value] : after.metrics) {
+    const std::optional<MetricValue> before_value = before.GetMetric(name);
+    if (!before_value.has_value()) {
+      difference.metrics.emplace_back(name, value);
+    } else if (value != *before_value) {
+      difference.metrics.emplace_back(name,
+                                      SubtractMetric(value, *before_value));
+    }
+  }
+  for (const ExecutorStats& after_sub : after.substats) {
+    const auto before_sub =
+        std::find_if(before.substats.begin(), before.substats.end(),
+                     [&after_sub](const ExecutorStats& sub) {
+                       return sub.module_name == after_sub.module_name;
+                     });
+    if (before_sub == before.substats.end()) {
+      if (!after_sub.empty()) {
+        difference.substats.push_back(after_sub);
+      }
+      continue;
+    }
+    ExecutorStats sub_difference =
+        SubtractExecutorStats(after_sub, *before_sub);
+    if (!sub_difference.empty()) {
+      difference.substats.push_back(std::move(sub_difference));
+    }
+  }
+  return difference;
 }
 
 }  // namespace litert::lm

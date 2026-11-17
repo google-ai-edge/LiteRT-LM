@@ -269,6 +269,7 @@ absl::StatusOr<Responses> SessionAdvanced::RunDecode(
     // Normalizing the scores by the number of decode tokens if the task is
     // completed.
     if (IsTaskEndState(responses->GetTaskState())) {
+      collected_responses->SetExecutorStats(responses->GetExecutorStats());
       for (int i = 0; i < responses->GetScores().size(); ++i) {
         collected_responses->GetMutableScores()[i] /=
             std::max(1, num_decode_tokens);

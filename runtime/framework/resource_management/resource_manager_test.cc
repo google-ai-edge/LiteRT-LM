@@ -59,6 +59,11 @@ class StatsFakeLlmExecutor : public FakeLlmExecutor {
     return stats_;
   }
   void ResetExecutorStats() override { ++*num_resets_; }
+  std::optional<ExecutorStats> GetCumulativeExecutorStats() const override {
+    ExecutorStats cumulative_stats = stats_;
+    cumulative_stats.AccumulatePlainStep(absl::Milliseconds(10));
+    return cumulative_stats;
+  }
 
  private:
   ExecutorStats stats_{.module_name = std::string(kLlmModuleName)};
@@ -83,6 +88,11 @@ TEST(ResourceManagerTest, AcquiredExecutorForwardsExecutorStats) {
   ASSERT_TRUE(stats.has_value());
   EXPECT_EQ(stats->module_name, kLlmModuleName);
   EXPECT_EQ(stats->plain_steps(), 1);
+
+  std::optional<ExecutorStats> cumulative_stats =
+      executor->GetCumulativeExecutorStats();
+  ASSERT_TRUE(cumulative_stats.has_value());
+  EXPECT_EQ(cumulative_stats->plain_steps(), 2);
 
   executor->ResetExecutorStats();
   EXPECT_EQ(num_resets, 1);

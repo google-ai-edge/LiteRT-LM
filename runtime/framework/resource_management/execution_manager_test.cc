@@ -50,6 +50,7 @@
 #include "runtime/executor/audio/audio_executor.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/fake_llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -2250,6 +2251,351 @@ TEST_P(ExecutionManagerTest,
   EXPECT_THAT(fake_audio_executor_ptr->loaded_lora_ids_, ElementsAre(0));
   EXPECT_THAT(fake_audio_executor_ptr->used_lora_ids_,
               ElementsAre(std::optional<uint32_t>(0)));
+
+  EXPECT_OK(execution_manager_->ReleaseSession(session_id));
+}
+
+class StatsFakeLlmExecutor : public ContextSwitchingFakeLlmExecutor {
+ public:
+  using ContextSwitchingFakeLlmExecutor::ContextSwitchingFakeLlmExecutor;
+
+  absl::StatusOr<std::unique_ptr<LlmContext>> CreateNewContext(
+      std::optional<uint32_t> lora_id,
+      RuntimeConfig runtime_config) const override {
+    return std::make_unique<LlmContext>(
+        std::make_unique<FakeProcessedContext>(),
+        std::make_unique<RuntimeConfig>(std::move(runtime_config)),
+        std::make_unique<RuntimeState>());
+  }
+
+  absl::StatusOr<std::unique_ptr<LlmContext>> CloneContext() const override {
+    return std::make_unique<LlmContext>(
+        std::make_unique<FakeProcessedContext>(),
+        std::make_unique<RuntimeConfig>(),
+        std::make_unique<RuntimeState>(
+            RuntimeState{.current_step = GetCurrentStep().value_or(0)}));
+  }
+
+  absl::StatusOr<RuntimeState> GetRuntimeState() const override {
+    return RuntimeState{.current_step = GetCurrentStep().value_or(0)};
+  }
+
+  absl::Status UpdateRuntimeState(const RuntimeState& runtime_state) override {
+    return SetCurrentStep(runtime_state.current_step);
+  }
+
+  absl::StatusOr<std::vector<std::vector<int>>> Decode(
+      const ExecutorDecodeParams& decode_params) override {
+    if (std::exchange(cancel_next_step_, false)) {
+      return absl::CancelledError("Step cancelled.");
+    }
+    ABSL_ASSIGN_OR_RETURN(
+        auto tokens, ContextSwitchingFakeLlmExecutor::Decode(decode_params));
+    cumulative_stats_.AccumulatePlainStep(absl::Milliseconds(3));
+    if (on_decode_step_ != nullptr) {
+      on_decode_step_(cumulative_stats_.plain_steps());
+    }
+    return tokens;
+  }
+
+  // Like the compiled-model executor, a reset restarts `GetExecutorStats()`
+  // but keeps the cumulative stats.
+  std::optional<ExecutorStats> GetExecutorStats() const override {
+    ExecutorStats stats =
+        SubtractExecutorStats(cumulative_stats_, stats_at_reset_);
+    if (stats.empty()) {
+      return std::nullopt;
+    }
+    return stats;
+  }
+
+  void ResetExecutorStats() override { stats_at_reset_ = cumulative_stats_; }
+
+  std::optional<ExecutorStats> GetCumulativeExecutorStats() const override {
+    return cumulative_stats_;
+  }
+
+  ExecutorStats cumulative_stats_{.module_name = std::string(kLlmModuleName)};
+  ExecutorStats stats_at_reset_{.module_name = std::string(kLlmModuleName)};
+  // Called after each decode step with the number of steps since creation.
+  absl::AnyInvocable<void(int64_t)> on_decode_step_;
+  // Whether the next decode step fails as cancelled before it completes.
+  bool cancel_next_step_ = false;
+};
+
+TEST_P(ExecutionManagerTest, AddDecodeTaskReportsTheExecutorStatsOfItsTurn) {
+  // Base session prefills {1, 2, 3}, then two cloned sessions decode from that
+  // shared prefix: `clone_1` stops at `max_output_tokens = 2` (2 steps), and
+  // `clone_2` decodes {4, 5, 6} until stop token 6 (3 steps).
+  auto executor = std::make_unique<StatsFakeLlmExecutor>(
+      kVocabSize, std::vector<std::vector<int>>{{1, 2, 3}},
+      std::vector<std::vector<int>>{{4}, {5}, {6}});
+  CreateExecutionManager(std::move(executor));
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId base_session,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(const SessionId clone_1,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(const SessionId clone_2,
+                       execution_manager_->RegisterNewSession(session_config));
+
+  std::vector<InputData> inputs;
+  ASSERT_OK_AND_ASSIGN(auto input_text,
+                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+  inputs.push_back(InputText(std::move(input_text)));
+  ASSERT_OK_AND_ASSIGN(const TaskId prefill_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddPrefillTask(
+      base_session, prefill_id, std::move(inputs), {},
+      std::make_shared<std::atomic<bool>>(false), nullptr));
+  ASSERT_OK(execution_manager_->WaitUntilDone(prefill_id, absl::Seconds(3)));
+
+  for (SessionId clone_id : {clone_1, clone_2}) {
+    ASSERT_OK_AND_ASSIGN(const TaskId clone_task_id,
+                         execution_manager_->GetNewTaskId());
+    ASSERT_OK(execution_manager_->AddCloneSessionTask(
+        base_session, clone_task_id, {}, clone_id,
+        std::make_shared<std::atomic<bool>>(false), nullptr));
+    ASSERT_OK(
+        execution_manager_->WaitUntilDone(clone_task_id, absl::Seconds(3)));
+  }
+
+  const auto run_decode =
+      [&](SessionId session_id,
+          int max_output_tokens) -> std::optional<ExecutorStats> {
+    std::optional<ExecutorStats> terminal_stats;
+    absl::StatusOr<TaskId> decode_id = execution_manager_->GetNewTaskId();
+    EXPECT_OK(decode_id);
+    if (!decode_id.ok()) {
+      return std::nullopt;
+    }
+    EXPECT_OK(execution_manager_->AddDecodeTask(
+        session_id, *decode_id, {}, RepetitionPenaltyConfig::Default(),
+        NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
+        /*constraint=*/nullptr, std::make_shared<std::atomic<bool>>(false),
+        [&terminal_stats](absl::StatusOr<Responses> responses) {
+          ASSERT_OK(responses);
+          if (IsTaskEndState(responses->GetTaskState())) {
+            EXPECT_EQ(responses->GetTaskState(), TaskState::kDone);
+            terminal_stats = responses->GetExecutorStats();
+          } else {
+            EXPECT_FALSE(responses->GetExecutorStats().has_value());
+          }
+        },
+        max_output_tokens));
+    EXPECT_OK(execution_manager_->WaitUntilDone(*decode_id, absl::Seconds(3)));
+    return terminal_stats;
+  };
+
+  std::optional<ExecutorStats> stats_1 =
+      run_decode(clone_1, /*max_output_tokens=*/2);
+  std::optional<ExecutorStats> stats_2 =
+      run_decode(clone_2, std::numeric_limits<int>::max());
+
+  ASSERT_TRUE(stats_1.has_value());
+  EXPECT_EQ(stats_1->plain_steps(), 2);
+  EXPECT_EQ(stats_1->plain_step_time(), absl::Milliseconds(6));
+
+  ASSERT_TRUE(stats_2.has_value());
+  EXPECT_EQ(stats_2->plain_steps(), 3);
+  EXPECT_EQ(stats_2->plain_step_time(), absl::Milliseconds(9));
+
+  EXPECT_OK(execution_manager_->ReleaseSession(base_session));
+  EXPECT_OK(execution_manager_->ReleaseSession(clone_1));
+  EXPECT_OK(execution_manager_->ReleaseSession(clone_2));
+}
+
+TEST_P(ExecutionManagerTest,
+       AddDecodeTaskReportsTheExecutorStatsOfCancelledTurns) {
+  auto executor = std::make_unique<StatsFakeLlmExecutor>(
+      kVocabSize, std::vector<std::vector<int>>{{1, 2, 3}},
+      // Case 3 decodes {4}, and case 4 decodes {5} and stop token {6}.
+      std::vector<std::vector<int>>{{4}, {5}, {6}});
+  auto* executor_ptr = executor.get();
+  // Steps before the turns must not count in their stats.
+  for (int i = 0; i < 7; ++i) {
+    executor_ptr->cumulative_stats_.AccumulatePlainStep(absl::Milliseconds(1));
+  }
+  CreateExecutionManager(std::move(executor));
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+
+  std::vector<InputData> inputs;
+  ASSERT_OK_AND_ASSIGN(auto input_text,
+                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+  inputs.push_back(InputText(std::move(input_text)));
+  ASSERT_OK_AND_ASSIGN(const TaskId prefill_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddPrefillTask(
+      session_id, prefill_id, std::move(inputs), {},
+      std::make_shared<std::atomic<bool>>(false), nullptr));
+  ASSERT_OK(execution_manager_->WaitUntilDone(prefill_id, absl::Seconds(3)));
+
+  // Case 1: cancelled before the decode starts, so no stats.
+  {
+    auto cancelled = std::make_shared<std::atomic<bool>>(true);
+    TaskState end_state = TaskState::kCreated;
+    std::optional<ExecutorStats> end_stats = ExecutorStats{};
+    ASSERT_OK_AND_ASSIGN(const TaskId decode_id,
+                         execution_manager_->GetNewTaskId());
+    ASSERT_OK(execution_manager_->AddDecodeTask(
+        session_id, decode_id, {}, RepetitionPenaltyConfig::Default(),
+        NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
+        /*constraint=*/nullptr, cancelled,
+        [&](absl::StatusOr<Responses> responses) {
+          ASSERT_OK(responses);
+          if (IsTaskEndState(responses->GetTaskState())) {
+            end_state = responses->GetTaskState();
+            end_stats = responses->GetExecutorStats();
+          }
+        }));
+    EXPECT_OK(execution_manager_->WaitUntilDone(decode_id, absl::Seconds(3)));
+    EXPECT_EQ(end_state, TaskState::kCancelled);
+    EXPECT_FALSE(end_stats.has_value());
+  }
+
+  // Case 2: the first step is cancelled before it completes, so the turn ran
+  // no step and has no stats, as in case 1.
+  {
+    executor_ptr->cancel_next_step_ = true;
+    TaskState end_state = TaskState::kCreated;
+    std::optional<ExecutorStats> end_stats = ExecutorStats{};
+    ASSERT_OK_AND_ASSIGN(const TaskId decode_id,
+                         execution_manager_->GetNewTaskId());
+    ASSERT_OK(execution_manager_->AddDecodeTask(
+        session_id, decode_id, {}, RepetitionPenaltyConfig::Default(),
+        NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
+        /*constraint=*/nullptr, std::make_shared<std::atomic<bool>>(false),
+        [&](absl::StatusOr<Responses> responses) {
+          ASSERT_OK(responses);
+          if (IsTaskEndState(responses->GetTaskState())) {
+            end_state = responses->GetTaskState();
+            end_stats = responses->GetExecutorStats();
+          }
+        }));
+    EXPECT_OK(execution_manager_->WaitUntilDone(decode_id, absl::Seconds(3)));
+    EXPECT_EQ(end_state, TaskState::kCancelled);
+    EXPECT_FALSE(end_stats.has_value());
+  }
+
+  // Case 3: cancelled during the first step, so `Tasks::Decode` returns
+  // `CancelledError` after 1 step.
+  {
+    auto cancelled = std::make_shared<std::atomic<bool>>(false);
+    executor_ptr->on_decode_step_ = [cancelled](int64_t) {
+      cancelled->store(true, std::memory_order_relaxed);
+    };
+    TaskState end_state = TaskState::kCreated;
+    std::optional<ExecutorStats> end_stats;
+    ASSERT_OK_AND_ASSIGN(const TaskId decode_id,
+                         execution_manager_->GetNewTaskId());
+    ASSERT_OK(execution_manager_->AddDecodeTask(
+        session_id, decode_id, {}, RepetitionPenaltyConfig::Default(),
+        NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
+        /*constraint=*/nullptr, cancelled,
+        [&](absl::StatusOr<Responses> responses) {
+          ASSERT_OK(responses);
+          if (IsTaskEndState(responses->GetTaskState())) {
+            end_state = responses->GetTaskState();
+            end_stats = responses->GetExecutorStats();
+          }
+        }));
+    EXPECT_OK(execution_manager_->WaitUntilDone(decode_id, absl::Seconds(3)));
+    EXPECT_EQ(end_state, TaskState::kCancelled);
+    ASSERT_TRUE(end_stats.has_value());
+    EXPECT_EQ(end_stats->plain_steps(), 1);
+  }
+
+  // Case 4: cancelled during the stop token's step (the 10th since creation),
+  // so `Tasks::Decode` completes the turn after 2 steps and the manager reports
+  // it as cancelled.
+  {
+    auto cancelled = std::make_shared<std::atomic<bool>>(false);
+    executor_ptr->on_decode_step_ = [cancelled](int64_t cumulative_steps) {
+      if (cumulative_steps == 10) {
+        cancelled->store(true, std::memory_order_relaxed);
+      }
+    };
+    TaskState end_state = TaskState::kCreated;
+    std::optional<ExecutorStats> end_stats;
+    ASSERT_OK_AND_ASSIGN(const TaskId decode_id,
+                         execution_manager_->GetNewTaskId());
+    ASSERT_OK(execution_manager_->AddDecodeTask(
+        session_id, decode_id, {}, RepetitionPenaltyConfig::Default(),
+        NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
+        /*constraint=*/nullptr, cancelled,
+        [&](absl::StatusOr<Responses> responses) {
+          ASSERT_OK(responses);
+          if (IsTaskEndState(responses->GetTaskState())) {
+            end_state = responses->GetTaskState();
+            end_stats = responses->GetExecutorStats();
+          }
+        }));
+    EXPECT_OK(execution_manager_->WaitUntilDone(decode_id, absl::Seconds(3)));
+    EXPECT_EQ(end_state, TaskState::kCancelled);
+    ASSERT_TRUE(end_stats.has_value());
+    EXPECT_EQ(end_stats->plain_steps(), 2);
+  }
+
+  EXPECT_OK(execution_manager_->ReleaseSession(session_id));
+}
+
+TEST_P(ExecutionManagerTest,
+       AddDecodeTaskReportsTheExecutorStatsOfAFirstBenchmarkTurn) {
+  auto executor = std::make_unique<StatsFakeLlmExecutor>(
+      kVocabSize, std::vector<std::vector<int>>{{1, 2, 3}},
+      std::vector<std::vector<int>>{{4}, {5}, {6}});
+  auto* executor_ptr = executor.get();
+  // Steps before the turn, which the benchmark reset at its start clears from
+  // `GetExecutorStats()`.
+  for (int i = 0; i < 7; ++i) {
+    executor_ptr->cumulative_stats_.AccumulatePlainStep(absl::Milliseconds(1));
+  }
+  CreateExecutionManager(std::move(executor));
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(
+                           session_config, std::make_optional<BenchmarkInfo>(
+                                               proto::BenchmarkParams())));
+
+  std::vector<InputData> inputs;
+  ASSERT_OK_AND_ASSIGN(auto input_text,
+                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+  inputs.push_back(InputText(std::move(input_text)));
+  ASSERT_OK_AND_ASSIGN(const TaskId prefill_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddPrefillTask(
+      session_id, prefill_id, std::move(inputs), {},
+      std::make_shared<std::atomic<bool>>(false), nullptr));
+  ASSERT_OK(execution_manager_->WaitUntilDone(prefill_id, absl::Seconds(3)));
+
+  std::optional<ExecutorStats> terminal_stats;
+  ASSERT_OK_AND_ASSIGN(const TaskId decode_id,
+                       execution_manager_->GetNewTaskId());
+  ASSERT_OK(execution_manager_->AddDecodeTask(
+      session_id, decode_id, {}, RepetitionPenaltyConfig::Default(),
+      NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
+      /*constraint=*/nullptr, std::make_shared<std::atomic<bool>>(false),
+      [&terminal_stats](absl::StatusOr<Responses> responses) {
+        ASSERT_OK(responses);
+        if (IsTaskEndState(responses->GetTaskState())) {
+          terminal_stats = responses->GetExecutorStats();
+        }
+      }));
+  ASSERT_OK(execution_manager_->WaitUntilDone(decode_id, absl::Seconds(3)));
+
+  ASSERT_TRUE(terminal_stats.has_value());
+  EXPECT_EQ(terminal_stats->plain_steps(), 3);
+  EXPECT_EQ(terminal_stats->plain_step_time(), absl::Milliseconds(9));
+  // The benchmark stats of the first turn are the same.
+  ASSERT_OK_AND_ASSIGN(BenchmarkInfo * benchmark_info,
+                       execution_manager_->GetMutableBenchmarkInfo(session_id));
+  ASSERT_TRUE(benchmark_info->GetExecutorStats().has_value());
+  EXPECT_EQ(benchmark_info->GetExecutorStats()->plain_steps(), 3);
 
   EXPECT_OK(execution_manager_->ReleaseSession(session_id));
 }

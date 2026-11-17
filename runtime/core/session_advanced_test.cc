@@ -54,7 +54,9 @@
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/fake_llm_executor.h"
+#include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/framework/resource_management/execution_manager.h"
 #include "runtime/framework/resource_management/threaded_execution_manager.h"
 #include "runtime/util/convert_tensor_buffer.h"
@@ -2923,6 +2925,86 @@ TEST_F(SessionAdvancedTest, ClonedSessionPreservesEngine) {
   ASSERT_OK_AND_ASSIGN(auto clone, session->CloneAsync([](auto) {}));
   ASSERT_OK_AND_ASSIGN(const auto* env, clone->GetEnvironment());
   EXPECT_EQ(env, &litert_env);
+}
+
+// A fake executor that records a 4 ms plain step for each decode step.
+class StatsFakeLlmExecutor : public FakeLlmExecutor {
+ public:
+  using FakeLlmExecutor::FakeLlmExecutor;
+
+  absl::StatusOr<std::vector<std::vector<int>>> Decode(
+      const ExecutorDecodeParams& decode_params) override {
+    ABSL_ASSIGN_OR_RETURN(auto tokens, FakeLlmExecutor::Decode(decode_params));
+    cumulative_stats_.AccumulatePlainStep(absl::Milliseconds(4));
+    return tokens;
+  }
+
+  std::optional<ExecutorStats> GetCumulativeExecutorStats() const override {
+    return cumulative_stats_;
+  }
+
+ private:
+  ExecutorStats cumulative_stats_{.module_name = std::string(kLlmModuleName)};
+};
+
+TEST_F(SessionAdvancedTest, RunDecodeReportsTheExecutorStatsOfEachTurn) {
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.GetMutableSamplerParams() = sampler_params_;
+  session_config.GetMutableStopTokenIds() = {{2294}};
+  session_config.SetStartTokenId(2);
+  session_config.SetSamplerBackend(Backend::CPU);
+
+  ASSERT_OK_AND_ASSIGN(std::vector<int> turn2_expected_tokens,
+                       tokenizer_->TextToTokenIds("Hello"));
+  auto executor = std::make_unique<StatsFakeLlmExecutor>(
+      tokenizer_->GetVocabSize(),
+      /*prefill_tokens_set=*/
+      std::vector<std::vector<int>>{{2, 90, 547, 58, 735, 210, 466, 2294},
+                                    std::move(turn2_expected_tokens)},
+      /*decode_tokens_set=*/
+      std::vector<std::vector<int>>{{224}, {24}, {2294}, {66}, {2294}});
+  ASSERT_OK_AND_ASSIGN(
+      std::shared_ptr<ExecutionManager> execution_manager,
+      ThreadedExecutionManager::Create(tokenizer_.get(), model_resources_.get(),
+                                       std::move(executor),
+                                       /*vision_executor_settings=*/nullptr,
+                                       /*audio_executor_settings=*/nullptr,
+                                       /*litert_env=*/nullptr));
+  ASSERT_OK_AND_ASSIGN(
+      auto session,
+      SessionAdvanced::Create(execution_manager, tokenizer_.get(),
+                              session_config, /*benchmark_info=*/std::nullopt));
+
+  // Turn 1: `RunDecode` collects the streamed responses.
+  std::vector<InputData> turn1_inputs;
+  turn1_inputs.emplace_back(InputText("Hello World!"));
+  ASSERT_OK(session->RunPrefill(turn1_inputs));
+  ASSERT_OK_AND_ASSIGN(Responses sync_responses, session->RunDecode());
+  ASSERT_TRUE(sync_responses.GetExecutorStats().has_value());
+  EXPECT_EQ(sync_responses.GetExecutorStats()->plain_steps(), 3);
+  EXPECT_EQ(sync_responses.GetExecutorStats()->plain_step_time(),
+            absl::Milliseconds(12));
+
+  // Turn 2: only the terminal response of `RunDecodeAsync` has stats.
+  std::vector<InputData> turn2_inputs;
+  turn2_inputs.emplace_back(InputText("Hello"));
+  ASSERT_OK(session->RunPrefill(turn2_inputs));
+
+  std::optional<ExecutorStats> async_terminal_stats;
+  ASSERT_OK_AND_ASSIGN(
+      auto controller,
+      session->RunDecodeAsync([&](absl::StatusOr<Responses> responses) {
+        ASSERT_OK(responses);
+        if (IsTaskEndState(responses->GetTaskState())) {
+          async_terminal_stats = responses->GetExecutorStats();
+        } else {
+          EXPECT_FALSE(responses->GetExecutorStats().has_value());
+        }
+      }));
+  ASSERT_OK(controller->WaitUntilDone(absl::Seconds(5)));
+  ASSERT_TRUE(async_terminal_stats.has_value());
+  EXPECT_EQ(async_terminal_stats->plain_steps(), 2);
+  EXPECT_EQ(async_terminal_stats->plain_step_time(), absl::Milliseconds(8));
 }
 
 }  // namespace

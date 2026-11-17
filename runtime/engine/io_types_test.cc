@@ -808,5 +808,21 @@ TEST(BenchmarkInfoTest, DraftVerificationBlockOmittedWithoutVerifications) {
   EXPECT_THAT(ss.str(), ::testing::Not(HasSubstr("Draft Verification")));
 }
 
+TEST(ResponsesTest, GetAndSetExecutorStats) {
+  Responses responses(TaskState::kDone, {"hello"});
+  EXPECT_FALSE(responses.GetExecutorStats().has_value());
+
+  ExecutorStats stats{.module_name = std::string(kLlmModuleName)};
+  stats.AccumulatePlainStep(absl::Milliseconds(15));
+  responses.SetExecutorStats(stats);
+  ASSERT_TRUE(responses.GetExecutorStats().has_value());
+  EXPECT_EQ(responses.GetExecutorStats()->plain_steps(), 1);
+  EXPECT_EQ(responses.GetExecutorStats()->plain_step_time(),
+            absl::Milliseconds(15));
+
+  responses.SetExecutorStats(std::nullopt);
+  EXPECT_FALSE(responses.GetExecutorStats().has_value());
+}
+
 }  // namespace
 }  // namespace litert::lm

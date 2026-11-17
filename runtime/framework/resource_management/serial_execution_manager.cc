@@ -57,6 +57,7 @@
 #include "runtime/executor/audio/audio_executor.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/vision/vision_executor.h"
@@ -965,6 +966,10 @@ absl::Status SerialExecutionManager::AddDecodeTask(
       runtime_debugger_->SetActiveDebugSession(session_id);
     }
 
+    // The executor stays acquired until the turn ends, so the difference of
+    // the two snapshots holds this turn's steps only.
+    const std::optional<ExecutorStats> stats_before_decode =
+        llm_executor.value()->GetCumulativeExecutorStats();
     auto responses = Tasks::Decode(
         *llm_executor.value(), *tokenizer_, *session_info->stop_token_detector,
         num_output_candidates, session_info->benchmark_info, optional_sampler,
@@ -982,6 +987,20 @@ absl::Status SerialExecutionManager::AddDecodeTask(
 
     if (cancelled != nullptr && cancelled->load()) {
       responses = Responses(TaskState::kCancelled);
+    }
+
+    if (responses.ok() && stats_before_decode.has_value()) {
+      if (std::optional<ExecutorStats> stats_after_decode =
+              llm_executor.value()->GetCumulativeExecutorStats();
+          stats_after_decode.has_value()) {
+        // A turn cancelled before its first step has no stats, as if it had
+        // been cancelled before it started.
+        ExecutorStats turn_stats =
+            SubtractExecutorStats(*stats_after_decode, *stats_before_decode);
+        if (!turn_stats.empty()) {
+          responses->SetExecutorStats(std::move(turn_stats));
+        }
+      }
     }
 
     llm_executor.value().reset();

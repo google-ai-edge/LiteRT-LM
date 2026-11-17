@@ -183,7 +183,8 @@ class ExecutionManager {
   // - suppress_tokens_config: The suppress tokens config for the decode task.
   // - constraint: The constraint for the decode task.
   // - cancelled: The cancelled flag for the decode task.
-  // - callback: The callback function.
+  // - callback: The callback function. The terminal responses of the turn carry
+  //   its executor stats, if the executor reports them and the turn ran a step.
   // - draft_token_ids: The draft tokens that the decode task verifies first,
   //   if any (see `Tasks::Decode()`).
   virtual absl::Status AddDecodeTask(

@@ -453,6 +453,10 @@ class LockedLlmExecutor : public LlmExecutor {
 
   void ResetExecutorStats() override { llm_executor_->ResetExecutorStats(); }
 
+  std::optional<ExecutorStats> GetCumulativeExecutorStats() const override {
+    return llm_executor_->GetCumulativeExecutorStats();
+  }
+
   absl::Status CheckDraftVerificationSupport() const override {
     return llm_executor_->CheckDraftVerificationSupport();
   }

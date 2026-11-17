@@ -380,6 +380,22 @@ TEST_P(FakeLmExecutorTest, DraftVerificationNeedsASelectedVerifySignature) {
       StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
+TEST_P(FakeLmExecutorTest, ResetExecutorStatsKeepsTheCumulativeStats) {
+  ASSERT_OK(Prefill({3, 1, 4}));
+  ASSERT_NO_FATAL_FAILURE(DecodeAndExpectFakeLmTokens(/*num_steps=*/2));
+  executor_->ResetExecutorStats();
+  EXPECT_FALSE(executor_->GetExecutorStats().has_value());
+  ASSERT_NO_FATAL_FAILURE(DecodeAndExpectFakeLmTokens(/*num_steps=*/1));
+
+  const std::optional<ExecutorStats> stats = executor_->GetExecutorStats();
+  ASSERT_TRUE(stats.has_value());
+  EXPECT_EQ(stats->plain_steps(), 1);
+  const std::optional<ExecutorStats> cumulative_stats =
+      executor_->GetCumulativeExecutorStats();
+  ASSERT_TRUE(cumulative_stats.has_value());
+  EXPECT_EQ(cumulative_stats->plain_steps(), 3);
+}
+
 // Draft verification on a model whose verify signatures can verify drafts.
 class FakeLmDraftVerificationTest : public FakeLmExecutorTest {
  protected:

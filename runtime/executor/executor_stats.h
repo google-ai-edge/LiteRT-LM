@@ -100,6 +100,11 @@ struct ExecutorStats {
   // Submodule stats (e.g., Vision / Audio stats within Embedding).
   std::vector<ExecutorStats> substats;
 
+  // Returns whether no latency, metric or substat is recorded.
+  bool empty() const {
+    return latencies.empty() && metrics.empty() && substats.empty();
+  }
+
   // Accumulates latency or metrics for a stage/operation.
   void Accumulate(absl::string_view name, absl::Duration duration);
   void Accumulate(absl::string_view name, MetricValue value);
@@ -221,6 +226,13 @@ inline void AccumulateStat(std::optional<ExecutorStats>& stats,
 }
 
 std::ostream& operator<<(std::ostream& os, const ExecutorStats& stats);
+
+// Returns the stats accumulated between two snapshots of the same stats: each
+// latency, metric and substat of `after` minus its value in `before`. Entries
+// that didn't change are left out, so the result reads like stats that started
+// empty at `before`. All values must be sums, as `Accumulate()` records them.
+ExecutorStats SubtractExecutorStats(const ExecutorStats& after,
+                                    const ExecutorStats& before);
 
 // RAII timer that accumulates duration into an ExecutorStats (by name)
 // on destruction. When passed an uninitialized optional ExecutorStats, timing

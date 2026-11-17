@@ -30,6 +30,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_factory.h"
@@ -572,6 +573,8 @@ TEST(EngineTest, CreateEngine_StreamedModelLoading) {
   ASSERT_OK(responses);
   EXPECT_EQ(responses->GetTexts().size(), 1);
   EXPECT_FALSE(responses->GetTexts()[0].empty());
+  ASSERT_TRUE(responses->GetExecutorStats().has_value());
+  EXPECT_GE(responses->GetExecutorStats()->plain_steps(), 1);
 }
 
 TEST(EngineTest, CreateEngine_StreamedModelLoading_EnableDebuggerDisabled) {
@@ -737,6 +740,38 @@ TEST(EngineTest, GetEnvironmentReturnsValidEnvironment) {
                        engine->CreateSession(SessionConfig::CreateDefault()));
   ASSERT_OK_AND_ASSIGN(const auto* session_env, session->GetEnvironment());
   EXPECT_EQ(session_env, env);
+}
+
+TEST(EngineTest, RunDecodeReportsExecutorStatsWithoutBenchmark) {
+  auto task_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(task_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+
+  ASSERT_OK_AND_ASSIGN(auto engine, CreateEngine(engine_settings));
+  ASSERT_OK_AND_ASSIGN(auto session,
+                       engine->CreateSession(SessionConfig::CreateDefault()));
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello world!"));
+  ASSERT_OK(session->RunPrefill(inputs));
+  ASSERT_OK_AND_ASSIGN(Responses responses, session->RunDecode());
+
+#if defined(ENGINE_ADVANCED)
+  ASSERT_TRUE(responses.GetExecutorStats().has_value());
+  EXPECT_GE(responses.GetExecutorStats()->plain_steps(), 1);
+  EXPECT_GT(responses.GetExecutorStats()->plain_step_time(),
+            absl::ZeroDuration());
+  EXPECT_EQ(responses.GetExecutorStats()->mtp_rounds(), 0);
+#else
+  // The legacy CPU executor doesn't report executor stats.
+  EXPECT_FALSE(responses.GetExecutorStats().has_value());
+#endif
 }
 
 }  // namespace

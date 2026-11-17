@@ -191,18 +191,24 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   absl::StatusOr<std::string> GetProfileSummary() override;
 
   // Returns the accumulated executor statistics (e.g. MTP and plain decode
-  // metrics and latencies).
+  // metrics and latencies) since creation or the last `ResetExecutorStats()`.
   std::optional<ExecutorStats> GetExecutorStats() const override {
-    if (executor_stats_.latencies.empty() && executor_stats_.metrics.empty() &&
-        executor_stats_.substats.empty()) {
+    ExecutorStats stats =
+        SubtractExecutorStats(executor_stats_, executor_stats_at_reset_);
+    if (stats.empty()) {
       return std::nullopt;
     }
-    return executor_stats_;
+    return stats;
   }
 
-  // Resets accumulated executor statistics.
+  // Restarts `GetExecutorStats()` from empty statistics. Doesn't clear
+  // `GetCumulativeExecutorStats()`.
   void ResetExecutorStats() override {
-    executor_stats_ = ExecutorStats{.module_name = std::string(kLlmModuleName)};
+    executor_stats_at_reset_ = executor_stats_;
+  }
+
+  std::optional<ExecutorStats> GetCumulativeExecutorStats() const override {
+    return executor_stats_;
   }
 
   using LogitsDataType = ActivationDataType;
@@ -627,8 +633,12 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // drafter).
   ModelResources* resources_ = nullptr;
 
-  // Accumulated executor statistics across decode steps.
+  // Accumulated executor statistics across decode steps, since creation.
   ExecutorStats executor_stats_{.module_name = std::string(kLlmModuleName)};
+
+  // `executor_stats_` at the last `ResetExecutorStats()`.
+  ExecutorStats executor_stats_at_reset_{.module_name =
+                                             std::string(kLlmModuleName)};
 
   // Whether the MTP drafter's internal state (the verifier activations of the
   // last verified token) is valid for the next speculative round. It is only
