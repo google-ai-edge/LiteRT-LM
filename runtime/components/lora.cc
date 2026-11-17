@@ -38,7 +38,6 @@
 // sourcing LoRA.
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
-#include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/util/lora_data.h"
 #include "runtime/util/lora_util.h"
