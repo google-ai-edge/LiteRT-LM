@@ -109,8 +109,8 @@ absl::StatusOr<DataProcessorConfig> CreateGemma4DataProcessorConfig(
         "Gemma4 LlmModelType is required to create "
         "Gemma4DataProcessorConfig.");
   }
+  const proto::Gemma4& gemma4 = model_type.gemma4();
   Gemma4DataProcessorConfig config;
-  proto::Gemma4 gemma4 = model_type.gemma4();
   if (gemma4.has_start_of_image_token()) {
     ABSL_ASSIGN_OR_RETURN(config.boi_token,
                           GetTokenString(gemma4.start_of_image_token()));
