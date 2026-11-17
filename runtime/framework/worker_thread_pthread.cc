@@ -13,7 +13,9 @@
 // limitations under the License.
 
 #include <errno.h>
+#include <limits.h>
 #include <pthread.h>
+#include <stddef.h>
 #include <string.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -74,7 +76,35 @@ WorkerThreadPthread::WorkerThreadPthread(ThreadPool* absl_nonnull pool,
     : WorkerThread(pool, name_prefix) {}
 
 absl::Status WorkerThreadPthread::Start() {
-  int res = pthread_create(&thread_, nullptr, ThreadBody, this);
+  pthread_attr_t attr;
+  int attr_res = pthread_attr_init(&attr);
+  if (attr_res != 0) {
+    return absl::ErrnoToStatus(
+        attr_res, absl::StrCat("pthread_attr_init failed for pool ",
+                               name_prefix_, ": ", strerror(attr_res)));
+  }
+
+  // Honor ThreadOptions::stack_size(). Without explicit attributes,
+  // pthread_create() uses the platform default stack, which can be too small
+  // for some workloads (e.g. WebGPU shader compilation on desktop Linux).
+  // A stack_size of 0 keeps the platform default. Sizes below
+  // PTHREAD_STACK_MIN are raised to it, since pthread_attr_setstacksize()
+  // rejects them.
+  const size_t stack_size = pool_.thread_options().stack_size();
+  if (stack_size > 0) {
+    const size_t clamped_stack_size =
+        std::max<size_t>(stack_size, PTHREAD_STACK_MIN);
+    int stack_res = pthread_attr_setstacksize(&attr, clamped_stack_size);
+    if (stack_res != 0) {
+      pthread_attr_destroy(&attr);
+      return absl::ErrnoToStatus(
+          stack_res, absl::StrCat("pthread_attr_setstacksize failed for pool ",
+                                  name_prefix_, ": ", strerror(stack_res)));
+    }
+  }
+
+  int res = pthread_create(&thread_, &attr, ThreadBody, this);
+  pthread_attr_destroy(&attr);
   if (res == 0) {
     return absl::OkStatus();
   }

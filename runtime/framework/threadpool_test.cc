@@ -14,12 +14,19 @@
 
 #include "runtime/framework/threadpool.h"
 
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <pthread.h>
+#endif
+
 #include <atomic>
+#include <cstddef>
+#include <limits>
 #include <set>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
 #include "absl/synchronization/notification.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
@@ -118,6 +125,39 @@ TEST(ThreadPoolTest, CreateWithCPUAffinity) {
   EXPECT_EQ(thread_pool.num_threads(), 0);
   EXPECT_EQ(thread_pool.thread_options().cpu_set().size(), 1);
 }
+
+#if defined(__linux__) && !defined(__ANDROID__)
+TEST(ThreadPoolTest, AppliesConfiguredStackSizeToWorkerThreads) {
+  constexpr size_t kStackSize = 2 * 1024 * 1024;  // 2 MiB
+  ThreadPool thread_pool("testpool", 1,
+                         ThreadOptions().set_stack_size(kStackSize));
+  absl::Notification done;
+  size_t worker_stack_size = 0;
+  EXPECT_OK(thread_pool.Schedule([&]() {
+    pthread_attr_t attr;
+    if (pthread_getattr_np(pthread_self(), &attr) == 0) {
+      pthread_attr_getstacksize(&attr, &worker_stack_size);
+      pthread_attr_destroy(&attr);
+    }
+    done.Notify();
+  }));
+  ASSERT_TRUE(done.WaitForNotificationWithTimeout(absl::Seconds(5)));
+  EXPECT_GE(worker_stack_size, kStackSize);
+}
+
+TEST(ThreadPoolTest, ScheduleFailsWhenFirstWorkerCannotStart) {
+  // A (page-aligned) stack size near SIZE_MAX exceeds the user address space on
+  // both 32-bit and 64-bit targets, so pthread_create fails.
+  ThreadPool thread_pool(
+      "testpool", 1,
+      ThreadOptions().set_stack_size(std::numeric_limits<size_t>::max() &
+                                     ~size_t{0xFFFF}));
+  bool ran = false;
+  EXPECT_FALSE(thread_pool.Schedule([&ran]() { ran = true; }).ok());
+  EXPECT_EQ(thread_pool.num_threads(), 0);
+  EXPECT_FALSE(ran);
+}
+#endif  // defined(__linux__) && !defined(__ANDROID__)
 
 TEST(ThreadPoolTest, WaitUntilIdle) {
   ThreadPool thread_pool("testpool", 1);
