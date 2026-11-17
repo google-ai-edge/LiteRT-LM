@@ -1080,6 +1080,87 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
 }
 
 TEST(VisionLiteRtCompiledModelExecutorTest,
+     EncodeInputMapsSkipsInputsNotInEncoderSignature) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      Environment env, Environment::Create(std::vector<Environment::Option>()));
+  RankedTensorType images_type(ElementType::Float32,
+                               Layout(litert::Dimensions{1, 10, 8}));
+  RankedTensorType positions_type(ElementType::Int32,
+                                  Layout(litert::Dimensions{1, 10, 2}));
+  std::vector<float> images_data(10 * 8, 1.0f);
+  std::vector<int32_t> positions_data(10 * 2, -1);
+  std::vector<float> extra_data(10 * 8, 100.0f);
+
+  for (const bool with_adapter : {true, false}) {
+    SCOPED_TRACE(with_adapter);
+    const absl::string_view relative_path =
+        with_adapter ? kTestVisionModelWithAdapterPath
+                     : kTestVisionModelWithoutAdapterPath;
+    const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                    std::string(relative_path))
+                                       .string();
+    ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                         ModelAssets::Create(model_path));
+    ASSERT_OK_AND_ASSIGN(VisionExecutorSettings settings,
+                         VisionExecutorSettings::CreateDefault(
+                             model_assets,
+                             /*encoder_backend=*/Backend::CPU,
+                             /*adapter_backend=*/Backend::CPU));
+    ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<VisionLiteRtCompiledModelExecutor> vision_executor,
+        VisionLiteRtCompiledModelExecutor::Create(settings, env));
+
+    ASSERT_OK_AND_ASSIGN(
+        TensorBuffer images_buffer,
+        CreateTensorBuffer<float>(absl::MakeSpan(images_data), images_type));
+    absl::flat_hash_map<std::string, TensorBuffer> images_only;
+    images_only.insert_or_assign("images", std::move(images_buffer));
+    ASSERT_OK_AND_ASSIGN(ExecutorVisionData expected_output,
+                         vision_executor->Encode(images_only));
+    ASSERT_OK_AND_ASSIGN(TensorBuffer * expected_embeddings,
+                         expected_output.GetMutableEmbeddingsPtr());
+    ASSERT_OK_AND_ASSIGN(std::vector<float> expected_vector,
+                         ReadTensorBuffer<float>(*expected_embeddings));
+
+    // The dummy encoder takes a single, unnamed (`src_inputs`) images input,
+    // so it does not consume any other tensor of the input maps. Such tensors
+    // must be skipped rather than written into input 0. The input maps are
+    // iterated in a hash-dependent order, so try several extra keys to also
+    // cover the ones visited after `images`.
+    for (const absl::string_view extra_key :
+         {"positions_xy", "extra_0", "extra_1", "extra_2", "extra_3", "extra_4",
+          "extra_5", "extra_6"}) {
+      SCOPED_TRACE(extra_key);
+      ASSERT_OK_AND_ASSIGN(
+          TensorBuffer buffer,
+          CreateTensorBuffer<float>(absl::MakeSpan(images_data), images_type));
+      absl::flat_hash_map<std::string, TensorBuffer> input_maps;
+      input_maps.insert_or_assign("images", std::move(buffer));
+      if (extra_key == "positions_xy") {
+        ASSERT_OK_AND_ASSIGN(
+            TensorBuffer positions_buffer,
+            CreateTensorBuffer<int32_t>(absl::MakeSpan(positions_data),
+                                        positions_type));
+        input_maps.insert_or_assign(std::string(extra_key),
+                                    std::move(positions_buffer));
+      } else {
+        ASSERT_OK_AND_ASSIGN(
+            TensorBuffer extra_buffer,
+            CreateTensorBuffer<float>(absl::MakeSpan(extra_data), images_type));
+        input_maps.insert_or_assign(std::string(extra_key),
+                                    std::move(extra_buffer));
+      }
+      ASSERT_OK_AND_ASSIGN(ExecutorVisionData output,
+                           vision_executor->Encode(input_maps));
+      ASSERT_OK_AND_ASSIGN(TensorBuffer * embeddings,
+                           output.GetMutableEmbeddingsPtr());
+      EXPECT_THAT(ReadTensorBuffer<float>(*embeddings),
+                  IsOkAndHolds(expected_vector));
+    }
+  }
+}
+
+TEST(VisionLiteRtCompiledModelExecutorTest,
      ProfilingCollectsVisionStatsWithAndWithoutAdapter) {
   LITERT_ASSERT_OK_AND_ASSIGN(
       Environment env, Environment::Create(std::vector<Environment::Option>()));

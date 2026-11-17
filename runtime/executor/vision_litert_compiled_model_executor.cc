@@ -729,10 +729,21 @@ VisionLiteRtCompiledModelExecutor::EncodeInputMaps(
         encoder_signature_index, key);
     if (input_index_or.HasValue()) {
       input_index = *input_index_or;
+    } else if (key != kImages) {
+      // The input maps may carry tensors that this encoder signature does not
+      // consume, e.g. `positions_xy`, which is also used to count the image
+      // tokens of a patchified image. Skip them: falling back to input 0 would
+      // overwrite the images.
+      ABSL_VLOG(1) << "Skipping input " << key
+                   << ", which is not an input of encoder signature "
+                   << encoder_signature.Key();
+      continue;
     } else if (vision_encoder_->GetModel().GetNumSignatures() > 1) {
       return absl::InvalidArgumentError(
           absl::StrCat("FindInputIndex failed for signature: ", key));
     }
+    // Otherwise the images input of a single-signature model may be unnamed,
+    // in which case input 0 is used.
     encoder_input_buffers[input_index].Clear();
     if (tensor_type.ElementType() == ElementType::Float32) {
       LITERT_ASSIGN_OR_RETURN(auto input_data,
