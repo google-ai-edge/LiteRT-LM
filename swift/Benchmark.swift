@@ -44,6 +44,82 @@ public struct BenchmarkInfo {
   public let maxNumTokens: Int
 }
 
+extension BenchmarkInfo {
+  /// Reads the benchmark info out of the native benchmark info `cBenchmarkInfo`, which is not
+  /// consumed.
+  ///
+  /// - Parameters:
+  ///   - cBenchmarkInfo: The native benchmark info.
+  ///   - makeError: Builds the error to throw from a description of a failed native call.
+  /// - Throws: The error built by `makeError` if a native accessor fails.
+  init(cBenchmarkInfo: OpaquePointer, makeError: (String) -> LiteRTLMError) throws {
+    let numPrefillTurns = try LiteRTLMError.get(
+      0, "litert_lm_benchmark_info_get_num_prefill_turns", makeError
+    ) { litert_lm_benchmark_info_get_num_prefill_turns(cBenchmarkInfo, $0) }
+    let numDecodeTurns = try LiteRTLMError.get(
+      0, "litert_lm_benchmark_info_get_num_decode_turns", makeError
+    ) { litert_lm_benchmark_info_get_num_decode_turns(cBenchmarkInfo, $0) }
+
+    let initTimeInSecond = try LiteRTLMError.get(
+      0.0, "litert_lm_benchmark_info_get_total_init_time_in_second", makeError
+    ) { litert_lm_benchmark_info_get_total_init_time_in_second(cBenchmarkInfo, $0) }
+    let timeToFirstTokenInSecond = try LiteRTLMError.get(
+      0.0, "litert_lm_benchmark_info_get_time_to_first_token", makeError
+    ) { litert_lm_benchmark_info_get_time_to_first_token(cBenchmarkInfo, $0) }
+
+    var lastPrefillTokenCount = 0
+    var lastPrefillTokensPerSec = 0.0
+    if numPrefillTurns > 0 {
+      lastPrefillTokenCount = try Int(
+        LiteRTLMError.get(
+          0, "litert_lm_benchmark_info_get_prefill_token_count_at", makeError
+        ) {
+          litert_lm_benchmark_info_get_prefill_token_count_at(
+            cBenchmarkInfo, numPrefillTurns - 1, $0)
+        })
+      lastPrefillTokensPerSec = try LiteRTLMError.get(
+        0.0, "litert_lm_benchmark_info_get_prefill_tokens_per_sec_at", makeError
+      ) {
+        litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
+          cBenchmarkInfo, numPrefillTurns - 1, $0)
+      }
+    }
+
+    var lastDecodeTokenCount = 0
+    var lastDecodeTokensPerSec = 0.0
+    if numDecodeTurns > 0 {
+      lastDecodeTokenCount = try Int(
+        LiteRTLMError.get(
+          0, "litert_lm_benchmark_info_get_decode_token_count_at", makeError
+        ) {
+          litert_lm_benchmark_info_get_decode_token_count_at(
+            cBenchmarkInfo, numDecodeTurns - 1, $0)
+        })
+      lastDecodeTokensPerSec = try LiteRTLMError.get(
+        0.0, "litert_lm_benchmark_info_get_decode_tokens_per_sec_at", makeError
+      ) {
+        litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
+          cBenchmarkInfo, numDecodeTurns - 1, $0)
+      }
+    }
+
+    let maxNumTokens = try Int(
+      LiteRTLMError.get(
+        Int32(0), "litert_lm_benchmark_info_get_max_num_tokens", makeError
+      ) { litert_lm_benchmark_info_get_max_num_tokens(cBenchmarkInfo, $0) })
+
+    self.init(
+      initTimeInSecond: initTimeInSecond,
+      timeToFirstTokenInSecond: timeToFirstTokenInSecond,
+      lastPrefillTokenCount: lastPrefillTokenCount,
+      lastDecodeTokenCount: lastDecodeTokenCount,
+      lastPrefillTokensPerSecond: lastPrefillTokensPerSec,
+      lastDecodeTokensPerSecond: lastDecodeTokensPerSec,
+      maxNumTokens: maxNumTokens
+    )
+  }
+}
+
 /// Runs a benchmark on the LiteRT-LM engine.
 ///
 /// **Note:** This function can take a significant amount of time depending on the model size,

@@ -680,70 +680,7 @@ public final class Conversation: Sendable {
     }
     defer { litert_lm_benchmark_info_delete(benchmarkInfoPtr) }
 
-    let numPrefillTurns = try LiteRTLMError.get(
-      0, "litert_lm_benchmark_info_get_num_prefill_turns", makeError
-    ) { litert_lm_benchmark_info_get_num_prefill_turns(benchmarkInfoPtr, $0) }
-    let numDecodeTurns = try LiteRTLMError.get(
-      0, "litert_lm_benchmark_info_get_num_decode_turns", makeError
-    ) { litert_lm_benchmark_info_get_num_decode_turns(benchmarkInfoPtr, $0) }
-
-    let initTimeInSecond = try LiteRTLMError.get(
-      0.0, "litert_lm_benchmark_info_get_total_init_time_in_second", makeError
-    ) { litert_lm_benchmark_info_get_total_init_time_in_second(benchmarkInfoPtr, $0) }
-    let timeToFirstTokenInSecond = try LiteRTLMError.get(
-      0.0, "litert_lm_benchmark_info_get_time_to_first_token", makeError
-    ) { litert_lm_benchmark_info_get_time_to_first_token(benchmarkInfoPtr, $0) }
-
-    var lastPrefillTokenCount = 0
-    var lastPrefillTokensPerSec = 0.0
-    if numPrefillTurns > 0 {
-      lastPrefillTokenCount = try Int(
-        LiteRTLMError.get(
-          0, "litert_lm_benchmark_info_get_prefill_token_count_at", makeError
-        ) {
-          litert_lm_benchmark_info_get_prefill_token_count_at(
-            benchmarkInfoPtr, numPrefillTurns - 1, $0)
-        })
-      lastPrefillTokensPerSec = try LiteRTLMError.get(
-        0.0, "litert_lm_benchmark_info_get_prefill_tokens_per_sec_at", makeError
-      ) {
-        litert_lm_benchmark_info_get_prefill_tokens_per_sec_at(
-          benchmarkInfoPtr, numPrefillTurns - 1, $0)
-      }
-    }
-
-    var lastDecodeTokenCount = 0
-    var lastDecodeTokensPerSec = 0.0
-    if numDecodeTurns > 0 {
-      lastDecodeTokenCount = try Int(
-        LiteRTLMError.get(
-          0, "litert_lm_benchmark_info_get_decode_token_count_at", makeError
-        ) {
-          litert_lm_benchmark_info_get_decode_token_count_at(
-            benchmarkInfoPtr, numDecodeTurns - 1, $0)
-        })
-      lastDecodeTokensPerSec = try LiteRTLMError.get(
-        0.0, "litert_lm_benchmark_info_get_decode_tokens_per_sec_at", makeError
-      ) {
-        litert_lm_benchmark_info_get_decode_tokens_per_sec_at(
-          benchmarkInfoPtr, numDecodeTurns - 1, $0)
-      }
-    }
-
-    let maxNumTokens = try Int(
-      LiteRTLMError.get(
-        Int32(0), "litert_lm_benchmark_info_get_max_num_tokens", makeError
-      ) { litert_lm_benchmark_info_get_max_num_tokens(benchmarkInfoPtr, $0) })
-
-    return BenchmarkInfo(
-      initTimeInSecond: initTimeInSecond,
-      timeToFirstTokenInSecond: timeToFirstTokenInSecond,
-      lastPrefillTokenCount: lastPrefillTokenCount,
-      lastDecodeTokenCount: lastDecodeTokenCount,
-      lastPrefillTokensPerSecond: lastPrefillTokensPerSec,
-      lastDecodeTokensPerSecond: lastDecodeTokensPerSec,
-      maxNumTokens: maxNumTokens
-    )
+    return try BenchmarkInfo(cBenchmarkInfo: benchmarkInfoPtr, makeError: makeError)
   }
 
   /// Internal Helper Function to convert a JSON string to a `Message`.

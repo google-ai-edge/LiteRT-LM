@@ -243,68 +243,12 @@ public actor Engine {
       messagesJsonStr = ""
     }
 
-    let sessionConfigError: (String) -> LiteRTLMError = {
-      .engine(.failedToCreateSessionConfig($0))
-    }
-
-    let cSessionConfig = try LiteRTLMError.create(
-      "litert_lm_session_config_create", sessionConfigError
-    ) { out in
-      litert_lm_session_config_create(out)
-    }
+    let cSessionConfig = try makeCSessionConfig(
+      samplerConfig: conversationConfig.samplerConfig,
+      loraPath: conversationConfig.loraPath,
+      audioLoraPath: conversationConfig.audioLoraPath,
+      speculativeDecodingConfig: conversationConfig.speculativeDecodingConfig)
     defer { litert_lm_session_config_delete(cSessionConfig) }
-
-    if let samplerParams = conversationConfig.samplerConfig {
-      let cSamplerParams = try LiteRTLMError.create(
-        "litert_lm_sampler_params_create", sessionConfigError
-      ) { out in
-        litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopP, out)
-      }
-      defer { litert_lm_sampler_params_delete(cSamplerParams) }
-
-      try LiteRTLMError.check(
-        litert_lm_sampler_params_set_top_k(cSamplerParams, Int32(samplerParams.topK)),
-        "litert_lm_sampler_params_set_top_k", sessionConfigError)
-      try LiteRTLMError.check(
-        litert_lm_sampler_params_set_top_p(cSamplerParams, samplerParams.topP),
-        "litert_lm_sampler_params_set_top_p", sessionConfigError)
-      try LiteRTLMError.check(
-        litert_lm_sampler_params_set_temperature(cSamplerParams, samplerParams.temperature),
-        "litert_lm_sampler_params_set_temperature", sessionConfigError)
-      try LiteRTLMError.check(
-        litert_lm_sampler_params_set_seed(cSamplerParams, Int32(samplerParams.seed)),
-        "litert_lm_sampler_params_set_seed", sessionConfigError)
-
-      try LiteRTLMError.check(
-        litert_lm_session_config_set_sampler_params(cSessionConfig, cSamplerParams),
-        "litert_lm_session_config_set_sampler_params", sessionConfigError)
-    }
-
-    if let loraPath = conversationConfig.loraPath {
-      let status = litert_lm_session_config_set_lora_path(cSessionConfig, loraPath)
-      guard status == kLiteRtLmStatusOk else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.engine(.failedToSetLoraPath(errorMsg))
-      }
-    }
-
-    if let audioLoraPath = conversationConfig.audioLoraPath {
-      let status = litert_lm_session_config_set_audio_lora_path(cSessionConfig, audioLoraPath)
-      guard status == kLiteRtLmStatusOk else {
-        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
-        throw LiteRTLMError.engine(.failedToSetAudioLoraPath(errorMsg))
-      }
-    }
-
-    if let speculativeDecodingConfig = conversationConfig.speculativeDecodingConfig {
-      let cSpeculativeDecodingConfig = try makeCSpeculativeDecodingConfig(
-        speculativeDecodingConfig, sessionConfigError)
-      defer { litert_lm_speculative_decoding_config_delete(cSpeculativeDecodingConfig) }
-      try LiteRTLMError.check(
-        litert_lm_session_config_set_speculative_decoding_config(
-          cSessionConfig, cSpeculativeDecodingConfig),
-        "litert_lm_session_config_set_speculative_decoding_config", sessionConfigError)
-    }
 
     let conversationConfigError: (String) -> LiteRTLMError = {
       .engine(.failedToCreateConversationConfig($0))
@@ -438,6 +382,82 @@ public actor Engine {
       litert_lm_engine_delete(handle)
     }
   }
+}
+
+/// Creates a C session config holding the given fields, which are left unset when `nil`. The
+/// caller owns the returned config and must release it with `litert_lm_session_config_delete`.
+private func makeCSessionConfig(
+  samplerConfig: SamplerConfig?,
+  loraPath: String?,
+  audioLoraPath: String?,
+  speculativeDecodingConfig: SpeculativeDecodingConfig?
+) throws -> OpaquePointer {
+  let sessionConfigError: (String) -> LiteRTLMError = {
+    .engine(.failedToCreateSessionConfig($0))
+  }
+
+  let cSessionConfig = try LiteRTLMError.create(
+    "litert_lm_session_config_create", sessionConfigError
+  ) { out in
+    litert_lm_session_config_create(out)
+  }
+  do {
+    if let samplerConfig = samplerConfig {
+      let cSamplerParams = try LiteRTLMError.create(
+        "litert_lm_sampler_params_create", sessionConfigError
+      ) { out in
+        litert_lm_sampler_params_create(kLiteRtLmSamplerTypeTopP, out)
+      }
+      defer { litert_lm_sampler_params_delete(cSamplerParams) }
+
+      try LiteRTLMError.check(
+        litert_lm_sampler_params_set_top_k(cSamplerParams, Int32(samplerConfig.topK)),
+        "litert_lm_sampler_params_set_top_k", sessionConfigError)
+      try LiteRTLMError.check(
+        litert_lm_sampler_params_set_top_p(cSamplerParams, samplerConfig.topP),
+        "litert_lm_sampler_params_set_top_p", sessionConfigError)
+      try LiteRTLMError.check(
+        litert_lm_sampler_params_set_temperature(cSamplerParams, samplerConfig.temperature),
+        "litert_lm_sampler_params_set_temperature", sessionConfigError)
+      try LiteRTLMError.check(
+        litert_lm_sampler_params_set_seed(cSamplerParams, Int32(samplerConfig.seed)),
+        "litert_lm_sampler_params_set_seed", sessionConfigError)
+
+      try LiteRTLMError.check(
+        litert_lm_session_config_set_sampler_params(cSessionConfig, cSamplerParams),
+        "litert_lm_session_config_set_sampler_params", sessionConfigError)
+    }
+
+    if let loraPath = loraPath {
+      let status = litert_lm_session_config_set_lora_path(cSessionConfig, loraPath)
+      guard status == kLiteRtLmStatusOk else {
+        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
+        throw LiteRTLMError.engine(.failedToSetLoraPath(errorMsg))
+      }
+    }
+
+    if let audioLoraPath = audioLoraPath {
+      let status = litert_lm_session_config_set_audio_lora_path(cSessionConfig, audioLoraPath)
+      guard status == kLiteRtLmStatusOk else {
+        let errorMsg = LiteRTLMError.consumeLastError() ?? ""
+        throw LiteRTLMError.engine(.failedToSetAudioLoraPath(errorMsg))
+      }
+    }
+
+    if let speculativeDecodingConfig = speculativeDecodingConfig {
+      let cSpeculativeDecodingConfig = try makeCSpeculativeDecodingConfig(
+        speculativeDecodingConfig, sessionConfigError)
+      defer { litert_lm_speculative_decoding_config_delete(cSpeculativeDecodingConfig) }
+      try LiteRTLMError.check(
+        litert_lm_session_config_set_speculative_decoding_config(
+          cSessionConfig, cSpeculativeDecodingConfig),
+        "litert_lm_session_config_set_speculative_decoding_config", sessionConfigError)
+    }
+  } catch {
+    litert_lm_session_config_delete(cSessionConfig)
+    throw error
+  }
+  return cSessionConfig
 }
 
 /// Creates a C speculative decoding config holding the fields of `config`. The caller owns the
