@@ -21,6 +21,49 @@ package(default_visibility = ["//visibility:public"])
 licenses(["notice"])
 
 cc_library(
+    name = "any2any_input_fan_out_stage",
+    srcs = ["any2any_input_fan_out_stage.cc"],
+    hdrs = ["any2any_input_fan_out_stage.h"],
+    deps = [
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/status",
+        "//omni:omni_session",
+        "//omni/base:fan_out_stage",
+        "//omni/base:io_types",
+        "//omni/base:stage",
+    ],
+)
+
+cc_library(
+    name = "any2any_test_utils",
+    testonly = True,
+    srcs = ["any2any_test_utils.cc"],
+    hdrs = ["any2any_test_utils.h"],
+    deps = [
+        "@com_google_absl//absl/log:absl_check",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@flatbuffers",
+        "@litert//tflite/schema:schema_fbs",
+    ],
+)
+
+cc_test(
+    name = "any2any_input_fan_out_stage_test",
+    srcs = ["any2any_input_fan_out_stage_test.cc"],
+    deps = [
+        ":any2any_input_fan_out_stage",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "//omni:omni_session",
+        "//omni/base:io_types",
+        "//omni/base:sequenced",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
     name = "any2any_session",
     srcs = ["any2any_session.cc"],
     hdrs = ["any2any_session.h"],
@@ -83,6 +126,7 @@ cc_test(
     ],
     deps = [
         ":any2any_session",
+        ":any2any_test_utils",
         ":minicpm_o",  # build_cleaner: keep
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/base:nullability",
@@ -93,7 +137,6 @@ cc_test(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/types:span",
         "@flatbuffers",
         "//omni:multi_staged_session",
         "//omni:omni_engine_header",

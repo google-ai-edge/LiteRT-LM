@@ -33,20 +33,6 @@ cc_library(
 )
 
 cc_library(
-    name = "minicpm_o_fan_out_stage",
-    srcs = ["minicpm_o_fan_out_stage.cc"],
-    hdrs = ["minicpm_o_fan_out_stage.h"],
-    deps = [
-        "@com_google_absl//absl/base:nullability",
-        "@com_google_absl//absl/status",
-        "//omni:omni_session",
-        "//omni/base:fan_out_stage",
-        "//omni/base:io_types",
-        "//omni/base:stage",
-    ],
-)
-
-cc_library(
     name = "minicpm_o_text_stage",
     srcs = ["minicpm_o_text_stage.cc"],
     hdrs = ["minicpm_o_text_stage.h"],
@@ -239,7 +225,6 @@ cc_library(
     hdrs = ["minicpm_o_factory.h"],
     deps = [
         ":minicpm_o_audio_stage",
-        ":minicpm_o_fan_out_stage",
         ":minicpm_o_frontend_stage",
         ":minicpm_o_image_stage",
         ":minicpm_o_llm_stage",
@@ -260,6 +245,7 @@ cc_library(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_model",
         "//omni:omni_session",
+        "//omni/any2any:any2any_input_fan_out_stage",
         "//omni/base:io_types",
         "//omni/base:litert_lm_runner",
         "//omni/base:litert_runner",
@@ -349,6 +335,7 @@ cc_test(
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni:multi_staged_session",
         "//omni:omni_session",
+        "//omni/any2any:any2any_test_utils",
         "//omni/base:io_types",
         "//omni/base:litert_lm_runner",
         "//omni/base:mock_litert_lm_runner",
@@ -407,7 +394,6 @@ cc_test(
     srcs = ["minicpm_o_frontend_test.cc"],
     deps = [
         ":minicpm_o_audio_stage",
-        ":minicpm_o_fan_out_stage",
         ":minicpm_o_frontend_stage",
         ":minicpm_o_image_stage",
         ":minicpm_o_io_types",
@@ -423,6 +409,7 @@ cc_test(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni:omni_session",
+        "//omni/any2any:any2any_input_fan_out_stage",
         "//omni/base:fan_out_stage",
         "//omni/base:io_types",
         "//omni/base:mock_litert_runner",

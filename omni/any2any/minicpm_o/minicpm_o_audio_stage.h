@@ -37,7 +37,7 @@ namespace litert::omni::any2any {
 
 // Audio input processing stage for MiniCPM-o:
 // - Consumes `Sequenced<AudioInput>` and `Sequenced<AudioInputMetadata>` from
-//   `MiniCpmOInputFanOutStage` in ascending `seqnum` order.
+//   `Any2AnyInputFanOutStage` in ascending `seqnum` order.
 // - Updates the input sample rate and resets the resampler when
 //   `AudioInputMetadata` is received.
 // - Resamples mono PCM audio to 16 kHz via `AudioResampler`.
@@ -57,10 +57,10 @@ class MiniCpmOAudioStage
   // `Sequenced<MiniCpmOEmbeddingSegment>`.
   //
   // Args:
-  //   audio_queue: Non-null output queue from `MiniCpmOInputFanOutStage`
+  //   audio_queue: Non-null output queue from `Any2AnyInputFanOutStage`
   //     providing `Sequenced<AudioInput>` items.
   //   audio_input_metadata_queue: Non-null output queue from
-  //     `MiniCpmOInputFanOutStage` providing `Sequenced<AudioInputMetadata>`
+  //     `Any2AnyInputFanOutStage` providing `Sequenced<AudioInputMetadata>`
   //     items.
   //   audio_encoder_runner: Non-null runner executing the Whisper audio
   //     encoder and projector model. Owned exclusively by this stage and

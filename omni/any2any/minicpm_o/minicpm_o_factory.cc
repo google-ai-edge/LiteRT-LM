@@ -35,8 +35,8 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "omni/any2any/any2any_input_fan_out_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_audio_stage.h"
-#include "omni/any2any/minicpm_o/minicpm_o_fan_out_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_frontend_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_image_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_llm_stage.h"
@@ -373,7 +373,7 @@ absl::StatusOr<Stage<Output>* absl_nonnull> CreateMiniCpmOComponents(
                         resources->GetLmModelResources()->GetTokenizer());
   std::shared_ptr<support::Tokenizer> tokenizer = std::move(lm_tokenizer);
 
-  auto fan_out = std::make_unique<MiniCpmOInputFanOutStage>(
+  auto fan_out = std::make_unique<Any2AnyInputFanOutStage>(
       input_source.get(), resources->HasCompiledModel("audio_encoder"),
       resources->HasCompiledModel("vision_encoder"));
   ABSL_ASSIGN_OR_RETURN(

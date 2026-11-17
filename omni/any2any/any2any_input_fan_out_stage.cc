@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "omni/any2any/minicpm_o/minicpm_o_fan_out_stage.h"
+#include "omni/any2any/any2any_input_fan_out_stage.h"
 
 #include <memory>
 #include <utility>
@@ -27,7 +27,7 @@
 
 namespace litert::omni::any2any {
 
-MiniCpmOInputFanOutStage::MiniCpmOInputFanOutStage(
+Any2AnyInputFanOutStage::Any2AnyInputFanOutStage(
     Stage<OmniSession::Input>* absl_nonnull upstream, bool has_audio_encoder,
     bool has_vision_encoder)
     : FanOutStage<OmniSession::Input>(upstream),
@@ -53,40 +53,40 @@ MiniCpmOInputFanOutStage::MiniCpmOInputFanOutStage(
       has_vision_encoder_(has_vision_encoder) {}
 
 SequencedVariantQueue<OmniSession::Input, TextInput>&
-MiniCpmOInputFanOutStage::TextQueue() {
+Any2AnyInputFanOutStage::TextQueue() {
   return *text_queue_;
 }
 
 SequencedVariantQueue<OmniSession::Input, AudioInput>&
-MiniCpmOInputFanOutStage::AudioQueue() {
+Any2AnyInputFanOutStage::AudioQueue() {
   return *audio_queue_;
 }
 
 SequencedVariantQueue<OmniSession::Input, AudioInputMetadata>&
-MiniCpmOInputFanOutStage::AudioInputMetadataQueue() {
+Any2AnyInputFanOutStage::AudioInputMetadataQueue() {
   return *audio_input_metadata_queue_;
 }
 
 SequencedVariantQueue<OmniSession::Input, ImageInput>&
-MiniCpmOInputFanOutStage::ImageQueue() {
+Any2AnyInputFanOutStage::ImageQueue() {
   return *image_queue_;
 }
 
 SequencedVariantQueue<OmniSession::Input, EndOfInputTurn>&
-MiniCpmOInputFanOutStage::EndOfTurnQueue() {
+Any2AnyInputFanOutStage::EndOfTurnQueue() {
   return *end_of_turn_queue_;
 }
 
 SequencedVariantQueue<OmniSession::Input, EndOfInput>&
-MiniCpmOInputFanOutStage::EndOfInputQueue() {
+Any2AnyInputFanOutStage::EndOfInputQueue() {
   return *end_of_input_queue_;
 }
 
-absl::Status MiniCpmOInputFanOutStage::RouteInput(OmniSession::Input input) {
+absl::Status Any2AnyInputFanOutStage::RouteInput(OmniSession::Input input) {
   if (std::holds_alternative<ImageGenInputMetadata>(input)) {
     return absl::UnimplementedError(
         "ImageGenInputMetadata is not yet supported in "
-        "MiniCpmOInputFanOutStage.");
+        "Any2AnyInputFanOutStage.");
   }
   if (!has_audio_encoder_ &&
       (std::holds_alternative<AudioInput>(input) ||

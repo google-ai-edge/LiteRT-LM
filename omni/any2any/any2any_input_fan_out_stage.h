@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_MINICPM_O_MINICPM_O_FAN_OUT_STAGE_H_
-#define THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_MINICPM_O_MINICPM_O_FAN_OUT_STAGE_H_
+#ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_ANY2ANY_INPUT_FAN_OUT_STAGE_H_
+#define THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_ANY2ANY_INPUT_FAN_OUT_STAGE_H_
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
@@ -24,10 +24,13 @@
 
 namespace litert::omni::any2any {
 
-// Fan-out stage that routes `OmniSession::Input` items to modality queues.
-class MiniCpmOInputFanOutStage : public FanOutStage<OmniSession::Input> {
+// Shared input fan-out stage for Any-to-Any multimodal sessions: routes
+// sequenced `OmniSession::Input` items into per-type output queues
+// (`TextInput`, `AudioInput`, `AudioInputMetadata`, `ImageInput`,
+// `EndOfInputTurn`, and `EndOfInput`).
+class Any2AnyInputFanOutStage : public FanOutStage<OmniSession::Input> {
  public:
-  // Constructs a `MiniCpmOInputFanOutStage` pulling inputs from `upstream` and
+  // Constructs an `Any2AnyInputFanOutStage` pulling inputs from `upstream` and
   // registering output queues for `TextInput`, `AudioInput`,
   // `AudioInputMetadata`, `ImageInput`, `EndOfInputTurn`, and `EndOfInput`.
   //
@@ -39,10 +42,10 @@ class MiniCpmOInputFanOutStage : public FanOutStage<OmniSession::Input> {
   //   has_vision_encoder: Whether the vision encoder model is loaded; when
   //     false, `ImageInput` is rejected with `FailedPreconditionError` before
   //     assigning a sequence number.
-  explicit MiniCpmOInputFanOutStage(
+  explicit Any2AnyInputFanOutStage(
       Stage<OmniSession::Input>* absl_nonnull upstream,
       bool has_audio_encoder = true, bool has_vision_encoder = true);
-  ~MiniCpmOInputFanOutStage() override = default;
+  ~Any2AnyInputFanOutStage() override = default;
 
   // Returns the output queue for `TextInput` items.
   //
@@ -100,4 +103,4 @@ class MiniCpmOInputFanOutStage : public FanOutStage<OmniSession::Input> {
 
 }  // namespace litert::omni::any2any
 
-#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_MINICPM_O_MINICPM_O_FAN_OUT_STAGE_H_
+#endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_ANY2ANY_INPUT_FAN_OUT_STAGE_H_

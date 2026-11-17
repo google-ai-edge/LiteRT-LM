@@ -37,7 +37,7 @@
 namespace litert::omni::any2any {
 
 // Image input processing stage for MiniCPM-o:
-// - Consumes `Sequenced<ImageInput>` from `MiniCpmOInputFanOutStage`.
+// - Consumes `Sequenced<ImageInput>` from `Any2AnyInputFanOutStage`.
 // - Slices images using MiniCPM-V dynamic high-resolution grid slicing.
 // - Runs the vision encoder model on each slice.
 // - Outputs `Sequenced<MiniCpmOEmbeddingSegment>` containing the continuous
@@ -67,7 +67,7 @@ class MiniCpmOImageStage
   // `Sequenced<MiniCpmOEmbeddingSegment>`.
   //
   // Args:
-  //   image_queue: Non-null output queue from `MiniCpmOInputFanOutStage`
+  //   image_queue: Non-null output queue from `Any2AnyInputFanOutStage`
   //     providing `Sequenced<ImageInput>` items.
   //   vision_encoder_runner: Non-null runner executing the SigLIP2 vision
   //     encoder + resampler model. Owned exclusively by this stage and invoked

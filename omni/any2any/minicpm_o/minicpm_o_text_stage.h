@@ -37,7 +37,7 @@ namespace litert::omni::any2any {
 
 // Text and turn-control embedding stage for MiniCPM-o:
 // - Consumes `Sequenced<TextInput>`, `Sequenced<EndOfInputTurn>`, and
-//   `Sequenced<EndOfInput>` from `MiniCpmOInputFanOutStage` in ascending
+//   `Sequenced<EndOfInput>` from `Any2AnyInputFanOutStage` in ascending
 //   `seqnum` order among its input queues.
 // - Tokenizes user prompt text via `Tokenizer::TextToTokenIds()` (without
 //   parsing special control tokens in untrusted user text) and embeds token IDs
@@ -51,15 +51,15 @@ class MiniCpmOTextStage
     : public SingleThreadedStageWithDeque<Sequenced<MiniCpmOEmbeddingSegment>> {
  public:
   // Creates a `MiniCpmOTextStage` that consumes sequenced text, end-of-turn,
-  // and end-of-input items from `MiniCpmOInputFanOutStage` and embeds tokens
+  // and end-of-input items from `Any2AnyInputFanOutStage` and embeds tokens
   // using `text_embedder_runner`.
   //
   // Args:
-  //   text_queue: Non-null output queue from `MiniCpmOInputFanOutStage`
+  //   text_queue: Non-null output queue from `Any2AnyInputFanOutStage`
   //     providing `Sequenced<TextInput>` items.
-  //   end_of_turn_queue: Non-null output queue from `MiniCpmOInputFanOutStage`
+  //   end_of_turn_queue: Non-null output queue from `Any2AnyInputFanOutStage`
   //     providing `Sequenced<EndOfInputTurn>` items.
-  //   end_of_input_queue: Non-null output queue from `MiniCpmOInputFanOutStage`
+  //   end_of_input_queue: Non-null output queue from `Any2AnyInputFanOutStage`
   //     providing `Sequenced<EndOfInput>` end-of-stream items.
   //   tokenizer: Non-null tokenizer used to convert prompt text and control
   //     tokens into token IDs.

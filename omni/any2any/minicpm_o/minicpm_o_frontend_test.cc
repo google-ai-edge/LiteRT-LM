@@ -30,8 +30,8 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/any2any/any2any_input_fan_out_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_audio_stage.h"
-#include "omni/any2any/minicpm_o/minicpm_o_fan_out_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_frontend_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_image_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_io_types.h"
@@ -520,99 +520,6 @@ std::unique_ptr<NiceMock<MockLiteRtRunner>> MakeMockVisionEncoderRunner(
   return runner;
 }
 
-TEST(MiniCpmOFrontendTest, FanOutRoutesTextEndOfTurnAndEndOfInputToQueues) {
-  PushInputSource input_source;
-  MiniCpmOInputFanOutStage fan_out(&input_source);
-  ASSERT_OK(input_source.PushInput(TextInput{.text = "Hello world"}));
-  ASSERT_OK(input_source.PushInput(EndOfInputTurn{}));
-  input_source.Finish();
-
-  ASSERT_OK(fan_out.Schedule());
-
-  EXPECT_FALSE(fan_out.TextQueue().Empty());
-  ASSERT_OK_AND_ASSIGN(auto item, fan_out.TextQueue().PopFront());
-  EXPECT_EQ(item.seqnum, 0);
-  EXPECT_EQ(item.item.text, "Hello world");
-
-  EXPECT_FALSE(fan_out.EndOfTurnQueue().Empty());
-  ASSERT_OK_AND_ASSIGN(auto eot, fan_out.EndOfTurnQueue().PopFront());
-  EXPECT_EQ(eot.seqnum, 1);
-
-  EXPECT_FALSE(fan_out.EndOfInputQueue().Empty());
-  ASSERT_OK_AND_ASSIGN(auto eoi, fan_out.EndOfInputQueue().PopFront());
-  EXPECT_EQ(eoi.seqnum, 2);
-}
-
-TEST(MiniCpmOFrontendTest,
-     FanOutRoutesAudioMetadataAndImageAndRejectsImageGenMetadata) {
-  // Arrange
-  PushInputSource input_source;
-  MiniCpmOInputFanOutStage fan_out(&input_source);
-
-  // Act & Assert: AudioInput, AudioInputMetadata, and ImageInput are routed to
-  // their respective queues.
-  ASSERT_OK(input_source.PushInput(AudioInput{.pcm_samples = {0.1f, 0.2f}}));
-  ASSERT_OK(input_source.PushInput(
-      AudioInputMetadata{.sample_rate_hz = 24000, .num_channels = 1}));
-  ASSERT_OK(input_source.PushInput(
-      ImageInput{.image_bytes = {1, 2, 3}, .width = 1, .height = 1}));
-  ASSERT_OK(fan_out.Schedule());
-  EXPECT_FALSE(fan_out.AudioQueue().Empty());
-  ASSERT_OK_AND_ASSIGN(auto audio_item, fan_out.AudioQueue().PopFront());
-  EXPECT_EQ(audio_item.seqnum, 0);
-  EXPECT_EQ(audio_item.item.pcm_samples, (std::vector<float>{0.1f, 0.2f}));
-
-  EXPECT_FALSE(fan_out.AudioInputMetadataQueue().Empty());
-  ASSERT_OK_AND_ASSIGN(auto metadata_item,
-                       fan_out.AudioInputMetadataQueue().PopFront());
-  EXPECT_EQ(metadata_item.seqnum, 1);
-  EXPECT_EQ(metadata_item.item.sample_rate_hz, 24000);
-  EXPECT_EQ(metadata_item.item.num_channels, 1);
-
-  EXPECT_FALSE(fan_out.ImageQueue().Empty());
-  ASSERT_OK_AND_ASSIGN(auto image_item, fan_out.ImageQueue().PopFront());
-  EXPECT_EQ(image_item.seqnum, 2);
-  EXPECT_EQ(image_item.item.image_bytes, (std::vector<uint8_t>{1, 2, 3}));
-
-  // Act & Assert: ImageGenInputMetadata returns UnimplementedError.
-  ASSERT_OK(input_source.PushInput(ImageGenInputMetadata{.width = 256}));
-  EXPECT_THAT(fan_out.Schedule(), StatusIs(absl::StatusCode::kUnimplemented));
-}
-
-TEST(MiniCpmOFrontendTest,
-     FanOutRejectsDisabledAudioAndVisionWithoutAdvancingSeqnum) {
-  // Arrange
-  PushInputSource input_source;
-  MiniCpmOInputFanOutStage fan_out(&input_source, /*has_audio_encoder=*/false,
-                                   /*has_vision_encoder=*/false);
-
-  // Act & Assert: AudioInput, AudioInputMetadata, and ImageInput fail with
-  // FailedPreconditionError before assigning sequence numbers.
-  ASSERT_OK(input_source.PushInput(AudioInput{.pcm_samples = {0.1f}}));
-  EXPECT_THAT(fan_out.Schedule(),
-              StatusIs(absl::StatusCode::kFailedPrecondition));
-  EXPECT_TRUE(fan_out.AudioQueue().Empty());
-
-  ASSERT_OK(input_source.PushInput(
-      AudioInputMetadata{.sample_rate_hz = 16000, .num_channels = 1}));
-  EXPECT_THAT(fan_out.Schedule(),
-              StatusIs(absl::StatusCode::kFailedPrecondition));
-  EXPECT_TRUE(fan_out.AudioInputMetadataQueue().Empty());
-
-  ASSERT_OK(input_source.PushInput(
-      ImageInput{.image_bytes = {1, 2, 3}, .width = 1, .height = 1}));
-  EXPECT_THAT(fan_out.Schedule(),
-              StatusIs(absl::StatusCode::kFailedPrecondition));
-  EXPECT_TRUE(fan_out.ImageQueue().Empty());
-
-  // Subsequent TextInput still receives seqnum 0.
-  ASSERT_OK(input_source.PushInput(TextInput{.text = "Still seqnum 0"}));
-  ASSERT_OK(fan_out.Schedule());
-  ASSERT_OK_AND_ASSIGN(auto text_item, fan_out.TextQueue().PopFront());
-  EXPECT_EQ(text_item.seqnum, 0);
-  EXPECT_EQ(text_item.item.text, "Still seqnum 0");
-}
-
 TEST(MiniCpmOFrontendTest, TextStageProcessesPrompt) {
   SequencedVariantQueue<OmniSession::Input, TextInput> text_queue;
   SequencedVariantQueue<OmniSession::Input, EndOfInputTurn> end_of_turn_queue;
@@ -644,7 +551,7 @@ TEST(MiniCpmOFrontendTest, TextStageProcessesPrompt) {
 
 TEST(MiniCpmOFrontendTest, EndToEndFanOutTextFanIn) {
   PushInputSource input_source;
-  MiniCpmOInputFanOutStage fan_out(&input_source);
+  Any2AnyInputFanOutStage fan_out(&input_source);
   MiniCpmOModelConfig config;
   config.llm_hidden_size = 4;
   ASSERT_OK_AND_ASSIGN(
@@ -681,7 +588,7 @@ TEST(MiniCpmOFrontendTest, EndToEndFanOutTextFanIn) {
 
 TEST(MiniCpmOFrontendTest, MultipleTurnsSequence) {
   PushInputSource input_source;
-  MiniCpmOInputFanOutStage fan_out(&input_source);
+  Any2AnyInputFanOutStage fan_out(&input_source);
   MiniCpmOModelConfig config;
   config.llm_hidden_size = 4;
   ASSERT_OK_AND_ASSIGN(
@@ -732,7 +639,7 @@ TEST(MiniCpmOFrontendTest, MultipleTurnsSequence) {
 
 TEST(MiniCpmOFrontendTest, MultiChunkTurnFramesSingleUserBlock) {
   PushInputSource input_source;
-  MiniCpmOInputFanOutStage fan_out(&input_source);
+  Any2AnyInputFanOutStage fan_out(&input_source);
   MiniCpmOModelConfig config;
   config.llm_hidden_size = 4;
   ASSERT_OK_AND_ASSIGN(
@@ -806,7 +713,7 @@ TEST(MiniCpmOFrontendTest, UntrustedUserTextDoesNotInjectSpecialControlTokens) {
 
 TEST(MiniCpmOFrontendTest, TextStageMergesQueuedTurnsInSeqnumOrder) {
   PushInputSource input_source;
-  MiniCpmOInputFanOutStage fan_out(&input_source);
+  Any2AnyInputFanOutStage fan_out(&input_source);
   MiniCpmOModelConfig config;
   config.llm_hidden_size = 4;
   ASSERT_OK_AND_ASSIGN(
@@ -1698,7 +1605,7 @@ TEST(MiniCpmOFrontendTest, FrontendHandlesEndOfInputAndResetsUpstreamStages) {
 TEST(MiniCpmOFrontendTest, MultimodalTextFirstAndAudioFirstTurns) {
   // Arrange
   PushInputSource input_source;
-  MiniCpmOInputFanOutStage fan_out(&input_source);
+  Any2AnyInputFanOutStage fan_out(&input_source);
   MiniCpmOModelConfig config;
   config.llm_hidden_size = 4;
   auto tokenizer = std::make_shared<FakeTokenizer>();
@@ -1824,7 +1731,7 @@ TEST(MiniCpmOFrontendTest, MultimodalTextFirstAndAudioFirstTurns) {
 TEST(MiniCpmOFrontendTest, AudioOnlyTurnFramedByFrontendStage) {
   // Arrange
   PushInputSource input_source;
-  MiniCpmOInputFanOutStage fan_out(&input_source);
+  Any2AnyInputFanOutStage fan_out(&input_source);
   MiniCpmOModelConfig config;
   config.llm_hidden_size = 4;
 
@@ -2567,7 +2474,7 @@ TEST(MiniCpmOFrontendTest, ImageStageAndFrontendImageFramingPropagateErrors) {
 TEST(MiniCpmOFrontendTest, ImageOnlyTurnFramedByFrontendStage) {
   // Arrange
   PushInputSource input_source;
-  MiniCpmOInputFanOutStage fan_out(&input_source);
+  Any2AnyInputFanOutStage fan_out(&input_source);
   MiniCpmOModelConfig config;
   config.llm_hidden_size = 4;
   constexpr int kNumQueries = 4;
@@ -2638,7 +2545,7 @@ TEST(MiniCpmOFrontendTest,
      MultimodalFanOutTextAudioImageFanInAndOutOfOrderScheduling) {
   // Arrange
   PushInputSource input_source;
-  MiniCpmOInputFanOutStage fan_out(&input_source);
+  Any2AnyInputFanOutStage fan_out(&input_source);
   MiniCpmOModelConfig config;
   config.llm_hidden_size = 4;
   constexpr int kNumQueries = 4;

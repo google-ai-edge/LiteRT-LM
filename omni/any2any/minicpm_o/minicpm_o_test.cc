@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <fstream>
@@ -40,6 +39,7 @@
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/any2any/any2any_test_utils.h"
 #include "omni/any2any/minicpm_o/minicpm_o_factory.h"
 #include "omni/any2any/minicpm_o/minicpm_o_io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_llm_stage.h"
@@ -111,96 +111,6 @@ constexpr absl::string_view kMinimalTokenizerJson = R"json({
 
 constexpr absl::string_view kTestdataDir =
     "litert_lm/runtime/testdata";
-
-struct TensorSpec {
-  std::string name;
-  std::vector<int32_t> dims;
-  tflite::TensorType type;
-};
-
-std::string BuildMinimalTfliteModelBuffer(
-    absl::Span<const TensorSpec> inputs, absl::Span<const TensorSpec> outputs) {
-  flatbuffers::FlatBufferBuilder builder;
-
-  auto opcode =
-      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ADD);
-  auto opcodes_vec = builder.CreateVector({opcode});
-
-  std::vector<flatbuffers::Offset<tflite::Buffer>> buffers;
-  buffers.push_back(tflite::CreateBuffer(builder));
-
-  std::vector<flatbuffers::Offset<tflite::Tensor>> tensors;
-  std::vector<int32_t> sg_inputs;
-  std::vector<int32_t> sg_outputs;
-  std::vector<flatbuffers::Offset<tflite::TensorMap>> inputs_map;
-  std::vector<flatbuffers::Offset<tflite::TensorMap>> outputs_map;
-  std::vector<flatbuffers::Offset<tflite::Operator>> ops;
-
-  for (const auto& in : inputs) {
-    int32_t idx = static_cast<int32_t>(tensors.size());
-    tensors.push_back(
-        tflite::CreateTensor(builder, builder.CreateVector(in.dims), in.type,
-                             /*buffer=*/0, builder.CreateString(in.name)));
-    sg_inputs.push_back(idx);
-    inputs_map.push_back(
-        tflite::CreateTensorMap(builder, builder.CreateString(in.name), idx));
-  }
-
-  for (size_t j = 0; j < outputs.size(); ++j) {
-    const auto& out = outputs[j];
-    size_t num_elems = 1;
-    for (int32_t d : out.dims) {
-      num_elems *= static_cast<size_t>(d);
-    }
-    std::vector<uint8_t> zero_bytes(num_elems * sizeof(float), 0);
-    uint32_t buf_a_idx = static_cast<uint32_t>(buffers.size());
-    buffers.push_back(
-        tflite::CreateBuffer(builder, builder.CreateVector(zero_bytes)));
-    uint32_t buf_b_idx = static_cast<uint32_t>(buffers.size());
-    buffers.push_back(
-        tflite::CreateBuffer(builder, builder.CreateVector(zero_bytes)));
-
-    int32_t const_a_idx = static_cast<int32_t>(tensors.size());
-    tensors.push_back(tflite::CreateTensor(
-        builder, builder.CreateVector(out.dims), out.type, buf_a_idx,
-        builder.CreateString(absl::StrCat("const_a_", j))));
-    int32_t const_b_idx = static_cast<int32_t>(tensors.size());
-    tensors.push_back(tflite::CreateTensor(
-        builder, builder.CreateVector(out.dims), out.type, buf_b_idx,
-        builder.CreateString(absl::StrCat("const_b_", j))));
-    int32_t out_idx = static_cast<int32_t>(tensors.size());
-    tensors.push_back(
-        tflite::CreateTensor(builder, builder.CreateVector(out.dims), out.type,
-                             /*buffer=*/0, builder.CreateString(out.name)));
-    sg_outputs.push_back(out_idx);
-    outputs_map.push_back(tflite::CreateTensorMap(
-        builder, builder.CreateString(out.name), out_idx));
-
-    std::vector<int32_t> op_inputs = {const_a_idx, const_b_idx};
-    std::vector<int32_t> op_outputs = {out_idx};
-    ops.push_back(tflite::CreateOperator(builder, /*opcode_index=*/0,
-                                         builder.CreateVector(op_inputs),
-                                         builder.CreateVector(op_outputs)));
-  }
-
-  auto subgraph = tflite::CreateSubGraph(
-      builder, builder.CreateVector(tensors), builder.CreateVector(sg_inputs),
-      builder.CreateVector(sg_outputs), builder.CreateVector(ops),
-      builder.CreateString("main"));
-  auto sig_def =
-      tflite::CreateSignatureDef(builder, builder.CreateVector(inputs_map),
-                                 builder.CreateVector(outputs_map),
-                                 builder.CreateString("serving_default"),
-                                 /*subgraph_index=*/0);
-  auto model = tflite::CreateModel(
-      builder, /*version=*/3, opcodes_vec, builder.CreateVector({subgraph}),
-      builder.CreateString("test_model"), builder.CreateVector(buffers),
-      /*metadata_buffer=*/0, /*metadata=*/0, builder.CreateVector({sig_def}));
-  tflite::FinishModelBuffer(builder, model);
-
-  return std::string(reinterpret_cast<const char*>(builder.GetBufferPointer()),
-                     builder.GetSize());
-}
 
 absl::StatusOr<std::string> ReadFileBytes(const std::filesystem::path& path) {
   std::ifstream in(path, std::ios::binary);
