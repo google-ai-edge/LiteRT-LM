@@ -19,7 +19,6 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <random>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -48,6 +47,7 @@
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler.h"
 #include "runtime/components/sampler_factory.h"
 #include "runtime/components/stop_token_detector.h"
@@ -221,7 +221,7 @@ absl::StatusOr<SessionId> SerialExecutionManager::RegisterNewSession(
       .session_config = std::move(session_config),
       .context_handler = std::move(context_handler),
       .sampler = std::move(sampler),
-      .sampler_rng = std::default_random_engine(sampler_seed),
+      .random_state = RandomState::FromSeed(sampler_seed),
       .stop_token_detector = std::move(stop_token_detector),
       .benchmark_info = std::move(benchmark_info),
   });
@@ -851,7 +851,8 @@ absl::Status SerialExecutionManager::AddPrefillTask(
     auto responses =
         Tasks::Prefill(*llm_executor.value(), *executor_inputs,
                        /*wait_for_completion=*/true,
-                       /*benchmark_info=*/session_info->benchmark_info);
+                       /*benchmark_info=*/session_info->benchmark_info,
+                       session_info->random_state);
     if (!responses.ok()) {
       FinishTaskAndLogErrors(task_id, responses.status(), std::move(callback));
       return;
@@ -942,12 +943,10 @@ absl::Status SerialExecutionManager::AddDecodeTask(
     auto num_output_candidates =
         session_info->session_config.GetNumOutputCandidates();
     session_info->stop_token_detector->ResetBatch(num_output_candidates);
-    std::optional<Tasks::ExternalSampler> optional_sampler = std::nullopt;
+    Sampler* external_sampler = nullptr;
     std::optional<litert::TensorBuffer> decoded_ids_buffer = std::nullopt;
       if (session_info->sampler != nullptr) {
-        optional_sampler =
-            Tasks::ExternalSampler{.sampler = session_info->sampler.get(),
-                                   .rng = &session_info->sampler_rng};
+        external_sampler = session_info->sampler.get();
         std::vector<int> decoded_ids(num_output_candidates,
                                      session_info->last_prefill_token_id);
         auto decoded_ids_buffer_or =
@@ -972,10 +971,10 @@ absl::Status SerialExecutionManager::AddDecodeTask(
         llm_executor.value()->GetCumulativeExecutorStats();
     auto responses = Tasks::Decode(
         *llm_executor.value(), *tokenizer_, *session_info->stop_token_detector,
-        num_output_candidates, session_info->benchmark_info, optional_sampler,
-        std::move(repetition_penalty_config), std::move(no_repeat_ngram_config),
-        std::move(suppress_tokens_config), constraint,
-        std::move(decoded_ids_buffer), callback, cancelled.get(),
+        num_output_candidates, session_info->benchmark_info, external_sampler,
+        session_info->random_state, std::move(repetition_penalty_config),
+        std::move(no_repeat_ngram_config), std::move(suppress_tokens_config),
+        constraint, std::move(decoded_ids_buffer), callback, cancelled.get(),
         max_output_tokens, thinking_token_budget, thinking_end_token_ids,
         thinking_start_token_ids,
         session_info->session_config.GetSpeculativeDecodingConfig(),
@@ -1082,10 +1081,9 @@ absl::Status SerialExecutionManager::AddCloneSessionTask(
                   std::move(cloned_context_handler_or.value());
               session_lookup_.at(cloned_session_id)->sampler =
                   std::move(cloned_sampler);
-              session_lookup_.at(cloned_session_id)
-                  ->sampler_rng.seed(
-                      original_session_info->session_config.GetSamplerParams()
-                          .seed());
+              // The clone continues from the original's random state.
+              session_lookup_.at(cloned_session_id)->random_state =
+                  original_session_info->random_state;
               session_lookup_.at(cloned_session_id)->last_prefill_token_id =
                   original_session_info->last_prefill_token_id;
               session_lookup_.at(cloned_session_id)->stop_token_detector =

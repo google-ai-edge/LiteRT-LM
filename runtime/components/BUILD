@@ -131,6 +131,21 @@ cc_test(
 )
 
 cc_library(
+    name = "random_state",
+    srcs = ["random_state.cc"],
+    hdrs = ["random_state.h"],
+)
+
+cc_test(
+    name = "random_state_test",
+    srcs = ["random_state_test.cc"],
+    deps = [
+        ":random_state",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "sampling_uniforms",
     srcs = ["sampling_uniforms.cc"],
     hdrs = ["sampling_uniforms.h"],

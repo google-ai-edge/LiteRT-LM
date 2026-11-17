@@ -45,6 +45,7 @@
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/components/random_state.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor.h"
@@ -72,7 +73,10 @@ using TokenizerType = ::litert::support::TokenizerType;
 
 namespace {
 
+using ::testing::Each;
 using ::testing::ElementsAre;
+using ::testing::IsEmpty;
+using ::testing::Not;
 using ::testing::Return;
 
 constexpr int kVocabSize = 10;
@@ -253,6 +257,60 @@ class ContextSwitchingFakeLlmExecutor : public FakeLlmExecutor {
     return absl::OkStatus();
   }
 };
+
+// A fake LLM executor that records the random state of each prefill, decode,
+// and draft verification call.
+class RandomStateRecordingFakeLlmExecutor : public FakeLlmExecutor {
+ public:
+  using FakeLlmExecutor::FakeLlmExecutor;
+
+  absl::Status Prefill(const ExecutorInputs& inputs,
+                       const ExecutorPrefillParams& prefill_params) override {
+    prefill_random_states_.push_back(prefill_params.GetRandomState());
+    return FakeLlmExecutor::Prefill(inputs, prefill_params);
+  }
+
+  absl::StatusOr<std::vector<std::vector<int>>> Decode(
+      const ExecutorDecodeParams& decode_params) override {
+    decode_random_states_.push_back(decode_params.GetRandomState());
+    return FakeLlmExecutor::Decode(decode_params);
+  }
+
+  absl::StatusOr<DraftVerificationResult> VerifyDraft(
+      absl::Span<const int> draft_token_ids,
+      const ExecutorDecodeParams& decode_params) override {
+    verify_draft_random_states_.push_back(decode_params.GetRandomState());
+    return FakeLlmExecutor::VerifyDraft(draft_token_ids, decode_params);
+  }
+
+  const std::vector<RandomState*>& prefill_random_states() const {
+    return prefill_random_states_;
+  }
+  const std::vector<RandomState*>& decode_random_states() const {
+    return decode_random_states_;
+  }
+  const std::vector<RandomState*>& verify_draft_random_states() const {
+    return verify_draft_random_states_;
+  }
+
+ private:
+  std::vector<RandomState*> prefill_random_states_;
+  std::vector<RandomState*> decode_random_states_;
+  std::vector<RandomState*> verify_draft_random_states_;
+};
+
+// Returns a callback that records the terminal status of a task.
+absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+CaptureTerminalStatusCallback(absl::Status* status) {
+  *status = absl::InternalError("Task did not finish.");
+  return [status](absl::StatusOr<Responses> responses) {
+    if (!responses.ok()) {
+      *status = responses.status();
+    } else if (responses->GetTaskState() == TaskState::kDone) {
+      *status = absl::OkStatus();
+    }
+  };
+}
 
 class NonStreamingFakeAudioExecutor : public AudioExecutor {
  public:
@@ -1047,14 +1105,15 @@ TEST_P(ExecutionManagerTest, AddDecodeTaskWithExternalSampler) {
   EXPECT_THAT(responses_texts, ElementsAre("4", "5"));
 }
 
-TEST_P(ExecutionManagerTest, ExternalSamplerGeneratorFollowsTheSessionSeed) {
+TEST_P(ExecutionManagerTest, ExternalSamplerDrawsFromTheSessionRandomState) {
   constexpr int kSeed = 42;
   CreateExecutionManager(std::make_unique<ContextSwitchingFakeLlmExecutor>(
       kVocabSize,
       /*prefill_tokens=*/std::vector<std::vector<int>>{{1, 2, 3}},
       /*decode_tokens=*/std::vector<std::vector<int>>{{4}, {5}, {6}}));
 
-  // k > 1 makes every decode step draw uniforms from the session's generator.
+  // k > 1 makes every decode step draw uniforms from the session's random
+  // state.
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig(
                                                 /*use_external_sampler=*/true));
   session_config.GetMutableSamplerParams().set_type(
@@ -1066,7 +1125,8 @@ TEST_P(ExecutionManagerTest, ExternalSamplerGeneratorFollowsTheSessionSeed) {
                        execution_manager_->RegisterNewSession(session_config));
   ASSERT_OK_AND_ASSIGN(auto session_info,
                        execution_manager_->GetSessionInfo(session_id));
-  EXPECT_EQ(session_info->sampler_rng, std::default_random_engine(kSeed));
+  EXPECT_EQ(session_info->random_state.sampling,
+            std::default_random_engine(kSeed));
 
   std::vector<InputData> inputs;
   ASSERT_OK_AND_ASSIGN(auto input_text,
@@ -1074,26 +1134,31 @@ TEST_P(ExecutionManagerTest, ExternalSamplerGeneratorFollowsTheSessionSeed) {
   inputs.push_back(InputText(std::move(input_text)));
   ASSERT_OK_AND_ASSIGN(const TaskId prefill_task_id,
                        execution_manager_->GetNewTaskId());
+  absl::Status prefill_status;
   ASSERT_OK(execution_manager_->AddPrefillTask(
       session_id, prefill_task_id, std::move(inputs),
       /*dependency_task_ids=*/{},
       /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
-      /*callback=*/nullptr));
+      CaptureTerminalStatusCallback(&prefill_status)));
   ASSERT_OK_AND_ASSIGN(const TaskId decode_task_id,
                        execution_manager_->GetNewTaskId());
+  absl::Status decode_status;
   ASSERT_OK(execution_manager_->AddDecodeTask(
       session_id, decode_task_id,
       /*dependency_task_ids=*/{prefill_task_id},
       RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
       SuppressTokensConfig::Default(), /*constraint=*/nullptr,
       /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
-      /*callback=*/nullptr));
+      CaptureTerminalStatusCallback(&decode_status)));
   ASSERT_OK(
       execution_manager_->WaitUntilDone(decode_task_id, absl::Seconds(3)));
-  EXPECT_NE(session_info->sampler_rng, std::default_random_engine(kSeed));
+  ASSERT_OK(prefill_status);
+  ASSERT_OK(decode_status);
+  EXPECT_NE(session_info->random_state.sampling,
+            std::default_random_engine(kSeed));
 
-  // A clone restarts the generator from the original session's seed, not from
-  // its own registration seed or the original's advanced state.
+  // A clone continues from the original session's random state, not from its
+  // own registration seed or the original's seed.
   session_config.GetMutableSamplerParams().set_seed(kSeed + 1);
   ASSERT_OK_AND_ASSIGN(const SessionId cloned_session_id,
                        execution_manager_->RegisterNewSession(session_config));
@@ -1110,8 +1175,65 @@ TEST_P(ExecutionManagerTest, ExternalSamplerGeneratorFollowsTheSessionSeed) {
   ASSERT_OK(clone_status);
   ASSERT_OK_AND_ASSIGN(auto cloned_session_info,
                        execution_manager_->GetSessionInfo(cloned_session_id));
-  EXPECT_EQ(cloned_session_info->sampler_rng,
-            std::default_random_engine(kSeed));
+  EXPECT_EQ(cloned_session_info->random_state.sampling,
+            session_info->random_state.sampling);
+}
+
+TEST_P(ExecutionManagerTest, TasksLendTheSessionRandomStateToTheExecutor) {
+  auto executor = std::make_unique<RandomStateRecordingFakeLlmExecutor>(
+      kVocabSize,
+      /*prefill_tokens=*/std::vector<std::vector<int>>{{1, 2, 3}},
+      /*decode_tokens=*/std::vector<std::vector<int>>{{4}, {5}, {6}});
+  executor->SetDraftVerificationSupport(absl::OkStatus());
+  RandomStateRecordingFakeLlmExecutor* executor_ptr = executor.get();
+  CreateExecutionManager(std::move(executor));
+
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(auto session_info,
+                       execution_manager_->GetSessionInfo(session_id));
+
+  std::vector<InputData> inputs;
+  ASSERT_OK_AND_ASSIGN(auto input_text,
+                       tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+  inputs.push_back(InputText(std::move(input_text)));
+  ASSERT_OK_AND_ASSIGN(const TaskId prefill_task_id,
+                       execution_manager_->GetNewTaskId());
+  absl::Status prefill_status;
+  ASSERT_OK(execution_manager_->AddPrefillTask(
+      session_id, prefill_task_id, std::move(inputs),
+      /*dependency_task_ids=*/{},
+      /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
+      CaptureTerminalStatusCallback(&prefill_status)));
+  ASSERT_OK_AND_ASSIGN(const TaskId decode_task_id,
+                       execution_manager_->GetNewTaskId());
+  absl::Status decode_status;
+  ASSERT_OK(execution_manager_->AddDecodeTask(
+      session_id, decode_task_id,
+      /*dependency_task_ids=*/{prefill_task_id},
+      RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
+      SuppressTokensConfig::Default(), /*constraint=*/nullptr,
+      /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
+      CaptureTerminalStatusCallback(&decode_status),
+      /*max_output_tokens=*/std::numeric_limits<int>::max(),
+      /*thinking_token_budget=*/std::nullopt,
+      /*thinking_start_token_ids=*/{}, /*thinking_end_token_ids=*/{},
+      /*draft_token_ids=*/{4}));
+  ASSERT_OK(
+      execution_manager_->WaitUntilDone(decode_task_id, absl::Seconds(3)));
+  ASSERT_OK(prefill_status);
+  ASSERT_OK(decode_status);
+
+  EXPECT_THAT(executor_ptr->prefill_random_states(),
+              Each(&session_info->random_state));
+  EXPECT_THAT(executor_ptr->prefill_random_states(), Not(IsEmpty()));
+  EXPECT_THAT(executor_ptr->verify_draft_random_states(),
+              Each(&session_info->random_state));
+  EXPECT_THAT(executor_ptr->verify_draft_random_states(), Not(IsEmpty()));
+  EXPECT_THAT(executor_ptr->decode_random_states(),
+              Each(&session_info->random_state));
+  EXPECT_THAT(executor_ptr->decode_random_states(), Not(IsEmpty()));
 }
 
 TEST_P(ExecutionManagerTest, CreateAndRunDependentTasks) {

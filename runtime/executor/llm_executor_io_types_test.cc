@@ -35,6 +35,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/constrained_decoding/fake_constraint.h"
+#include "runtime/components/random_state.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -822,6 +823,24 @@ TEST(LlmExecutorIoTypesTest, ExecutorPrefillParamsGetSet) {
   auto max_prefill_sequence_length_or = params.GetMaxPrefillSequenceLength();
   ASSERT_TRUE(max_prefill_sequence_length_or.ok());
   EXPECT_EQ(max_prefill_sequence_length_or.value(), 100);
+}
+
+TEST(LlmExecutorIoTypesTest, ExecutorPrefillParamsGetSetRandomState) {
+  ExecutorPrefillParams params;
+  EXPECT_EQ(params.GetRandomState(), nullptr);
+
+  RandomState random_state = RandomState::FromSeed(1);
+  params.SetRandomState(&random_state);
+  EXPECT_EQ(params.GetRandomState(), &random_state);
+}
+
+TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsGetSetRandomState) {
+  ExecutorDecodeParams params;
+  EXPECT_EQ(params.GetRandomState(), nullptr);
+
+  RandomState random_state = RandomState::FromSeed(1);
+  params.SetRandomState(&random_state);
+  EXPECT_EQ(params.GetRandomState(), &random_state);
 }
 
 TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsGetSetConstrainedDecoder) {

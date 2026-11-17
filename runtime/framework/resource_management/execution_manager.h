@@ -19,7 +19,6 @@
 #include <limits>
 #include <memory>
 #include <optional>
-#include <random>
 #include <utility>
 #include <vector>
 
@@ -35,6 +34,7 @@
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler.h"
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/engine/engine_settings.h"
@@ -51,7 +51,8 @@ using TaskId = int;
 // - session_config: The config of the session.
 // - context_handler: The context handler of the session.
 // - sampler: The sampler of the session.
-// - sampler_rng: The random number generator of the sampler.
+// - random_state: The random state of the session, which every task that can
+//   sample draws from. A cloned session starts from a copy of it.
 // - last_prefill_token_id: The last prefill token ID of the session.
 // - stop_token_detector: The stop token detector of the session.
 // - benchmark_info: The benchmark info of the session.
@@ -60,7 +61,7 @@ struct SessionInfo {
   SessionConfig session_config;
   std::shared_ptr<ContextHandler> context_handler;
   std::unique_ptr<Sampler> sampler;
-  std::default_random_engine sampler_rng;
+  RandomState random_state;
   int last_prefill_token_id = 0;
   std::unique_ptr<StopTokenDetector> stop_token_detector;
   std::optional<BenchmarkInfo> benchmark_info = std::nullopt;

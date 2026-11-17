@@ -18,7 +18,6 @@
 #include <atomic>
 #include <limits>
 #include <optional>
-#include <random>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -31,6 +30,7 @@
 #include "runtime/components/constrained_decoding/no_repeat_ngram_config.h"
 #include "runtime/components/constrained_decoding/repetition_penalty_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler.h"
 #include "runtime/components/stop_token_detector.h"
 #include "runtime/engine/io_types.h"
@@ -43,24 +43,20 @@ namespace litert::lm::Tasks {
 
 using ::litert::support::Tokenizer;
 
-// A sampler that the caller runs on the logits returned by the executor
-// (external sampling), with the random number generator that supplies the
-// uniform values of its sampling calls. The caller owns both, so that the
-// random sequence continues across calls.
-struct ExternalSampler {
-  Sampler* absl_nonnull sampler;
-  std::default_random_engine* absl_nonnull rng;
-};
+// Every task that can sample takes the session's `random_state` and lends it to
+// the executor (or draws the external sampler's uniforms from it), so that the
+// session's random sequence continues across calls.
 
 absl::StatusOr<Responses> Prefill(LlmExecutor& executor, ExecutorInputs& inputs,
                                   bool wait_for_completion,
-                                  std::optional<BenchmarkInfo>& benchmark_info);
+                                  std::optional<BenchmarkInfo>& benchmark_info,
+                                  RandomState& random_state);
 
 absl::StatusOr<Responses> Decode(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
     std::optional<BenchmarkInfo>& benchmark_info,
-    std::optional<ExternalSampler> sampler,
+    Sampler* absl_nullable sampler, RandomState& random_state,
     RepetitionPenaltyConfig repetition_penalty_config,
     NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,

@@ -26,6 +26,7 @@
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
+#include "runtime/components/random_state.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/speculative_decoding_mode.h"
@@ -391,9 +392,11 @@ class ExecutorPrefillParams {
   // - current_step: -1
   // - wait_for_completion: false
   // - cancel: nullptr
+  // - max_prefill_sequence_length: std::nullopt
+  // - random_state: nullptr
   ExecutorPrefillParams() = default;
 
-  // Parameterized constructor for all values
+  // Parameterized constructor; leaves `random_state` null.
   ExecutorPrefillParams(
       int current_step, bool wait_for_completion,
       const std::atomic_bool* cancel,
@@ -411,6 +414,11 @@ class ExecutorPrefillParams {
   absl::StatusOr<int> GetMaxPrefillSequenceLength() const;
   void SetMaxPrefillSequenceLength(
       std::optional<int> max_prefill_sequence_length);
+
+  // The session's random state, for executors that sample the first output
+  // token at the end of prefill. See `ExecutorDecodeParams::SetRandomState()`.
+  RandomState* GetRandomState() const;
+  void SetRandomState(RandomState* random_state);
 
  private:
   // The current step to prefill.
@@ -431,6 +439,8 @@ class ExecutorPrefillParams {
   // need to limit the maximum sequence length used for prefill. If not set, all
   // prefill signatures are considered during prefill.
   std::optional<int> max_prefill_sequence_length_;
+
+  RandomState* random_state_ = nullptr;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorPrefillParams& params);
 
@@ -484,11 +494,23 @@ class ExecutorDecodeParams {
     return max_num_tokens_to_emit_;
   }
 
+  // Lends the session's random state to this step. An executor that samples
+  // draws from it and advances it, so the session's stream continues across
+  // steps and executors keep no random state of their own. The caller retains
+  // ownership and must keep it alive for the step.
+  void SetRandomState(RandomState* random_state) {
+    random_state_ = random_state;
+  }
+
+  // Returns the session's random state, or nullptr if the caller lent none.
+  RandomState* GetRandomState() const { return random_state_; }
+
  private:
   ConstrainedDecoder* constrained_decoder_ = nullptr;
   const std::atomic<bool>* cancelled_ = nullptr;
   SpeculativeDecodingConfig speculative_decoding_config_;
   std::optional<int> max_num_tokens_to_emit_;
+  RandomState* random_state_ = nullptr;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorDecodeParams& params);
 

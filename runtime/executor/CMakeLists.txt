@@ -263,6 +263,7 @@ target_include_directories(runtime_executor_llm_executor_io_types
 target_link_libraries(runtime_executor_llm_executor_io_types
   PUBLIC
     LiteRTLM::Runtime::Components::ConstrainedDecoding::Decoder
+    LiteRTLM::Runtime::Components::RandomState
     LiteRTLM::Runtime::Executor::SpeculativeDecodingMode
     LiteRTLM::Runtime::Util::LoggingTensorBuffer
     LITERTLM_DEPS

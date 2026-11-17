@@ -47,6 +47,7 @@
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_constraint.h"
 #include "runtime/components/constrained_decoding/thinking_budget_constraint.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler.h"
 #include "runtime/components/sampling_uniforms.h"
 #include "runtime/components/scoring_cpu_util.h"
@@ -251,7 +252,8 @@ class DecodeOneStep {
                 Tokenizer* absl_nonnull tokenizer, int num_output_candidates,
                 const StopTokenDetector& stop_token_detector,
                 std::optional<BenchmarkInfo>& benchmark_info,
-                std::optional<ExternalSampler> sampler,
+                Sampler* absl_nullable sampler,
+                RandomState* absl_nullable random_state,
                 std::unique_ptr<CompositeConstraint> composite_constraint,
                 std::unique_ptr<ConstrainedDecoder> constrained_decoder,
                 std::optional<litert::TensorBuffer> scores_tensor,
@@ -263,6 +265,7 @@ class DecodeOneStep {
         detokenizer_(&tokenizer_, num_output_candidates),
         num_output_candidates_(num_output_candidates),
         sampler_(sampler),
+        random_state_(random_state),
         composite_constraint_(std::move(composite_constraint)),
         constrained_decoder_(std::move(constrained_decoder)),
         benchmark_info_(benchmark_info),
@@ -283,7 +286,7 @@ class DecodeOneStep {
       LlmExecutor* absl_nonnull executor, Tokenizer* absl_nonnull tokenizer,
       int num_output_candidates, const StopTokenDetector& stop_token_detector,
       std::optional<BenchmarkInfo>& benchmark_info,
-      std::optional<ExternalSampler> sampler,
+      Sampler* absl_nullable sampler, RandomState* absl_nullable random_state,
       RepetitionPenaltyConfig repetition_penalty_config,
       NoRepeatNgramConfig no_repeat_ngram_config,
       SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
@@ -292,6 +295,8 @@ class DecodeOneStep {
                     // for diffusion-llm)
       const SpeculativeDecodingConfig& speculative_decoding_config = {},
       std::vector<int> draft_token_ids = {}) {
+    RET_CHECK(sampler == nullptr || random_state != nullptr)
+        << "External sampling needs a random state.";
     ABSL_ASSIGN_OR_RETURN(auto composite_constraint,
                           CompositeConstraint::Create());
     if (repetition_penalty_config.enabled()) {
@@ -334,13 +339,13 @@ class DecodeOneStep {
       }
     }
     std::optional<litert::TensorBuffer> scores_tensor;
-    if (sampler.has_value()) {  // External sampling setup
+    if (sampler != nullptr) {  // External sampling setup
       LITERT_ASSIGN_OR_RETURN(
           scores_tensor, CreateTensorBuffer<float>({num_output_candidates}));
     }
     return std::unique_ptr<DecodeOneStep>(new DecodeOneStep(
         executor, tokenizer, num_output_candidates, stop_token_detector,
-        benchmark_info, sampler, std::move(composite_constraint),
+        benchmark_info, sampler, random_state, std::move(composite_constraint),
         std::move(constrained_decoder), std::move(scores_tensor), cancelled,
         speculative_decoding_config, std::move(draft_token_ids)));
   }
@@ -410,7 +415,7 @@ class DecodeOneStep {
         }
       }
 
-      if (sampler_.has_value()) {
+      if (sampler_ != nullptr) {
         LITERT_ASSIGN_OR_RETURN(scores_span_,
                                 ReferTensorBufferAsSpan<float>(scores_tensor_));
       }
@@ -500,7 +505,7 @@ class DecodeOneStep {
   absl::StatusOr<std::vector<std::vector<int>>> DecodeAndSample(
       std::optional<litert::TensorBuffer> decoded_ids,
       int max_num_tokens_to_emit) {
-    if (sampler_) {  // External sampling path
+    if (sampler_ != nullptr) {  // External sampling path
       if (!decoded_ids) {
         return absl::InternalError(
             "decoded_ids must be provided for external sampling.");
@@ -535,11 +540,12 @@ class DecodeOneStep {
       if (benchmark_info_.has_value()) {
         ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("sampling"));
       }
+      RET_CHECK(random_state_ != nullptr);
       // One uniform per output candidate. Drawn even for greedy sampling,
-      // which ignores them; the generator is only used by this sampler.
+      // which ignores them.
       uniforms_.resize(num_output_candidates_);
-      DrawUniforms(*sampler_->rng, absl::MakeSpan(uniforms_));
-      ABSL_RETURN_IF_ERROR(sampler_->sampler->SampleToIdAndScoreBuffer(
+      DrawUniforms(random_state_->sampling, absl::MakeSpan(uniforms_));
+      ABSL_RETURN_IF_ERROR(sampler_->SampleToIdAndScoreBuffer(
           output_logits, decoded_ids.value(), &scores_tensor_, uniforms_));
       if (benchmark_info_.has_value()) {
         ABSL_RETURN_IF_ERROR(benchmark_info_->TimeMarkDelta("sampling"));
@@ -559,6 +565,7 @@ class DecodeOneStep {
       // Convey the cancellation token for the decode process.
       decode_params.SetCancelled(cancelled_);
       decode_params.SetSpeculativeDecodingConfig(speculative_decoding_config_);
+      decode_params.SetRandomState(random_state_);
       if (max_num_tokens_to_emit < std::numeric_limits<int>::max()) {
         decode_params.SetMaxNumTokensToEmit(max_num_tokens_to_emit);
       }
@@ -587,7 +594,8 @@ class DecodeOneStep {
   Tokenizer& tokenizer_;
   litert::support::BufferedStreamingDetokenizer detokenizer_;
   const int num_output_candidates_;
-  std::optional<ExternalSampler> sampler_;
+  Sampler* absl_nullable sampler_;
+  RandomState* absl_nullable random_state_;
   // The uniforms of the current external sampling call.
   std::vector<float> uniforms_;
   std::unique_ptr<CompositeConstraint> composite_constraint_;
@@ -620,7 +628,8 @@ class DecodeOneStep {
 // the context window, so unlike `Prefill()`, it does not leave room for a
 // following decode step.
 absl::Status PrefillLastSampledTokens(LlmExecutor& executor,
-                                      const litert::TensorBuffer& decoded_ids) {
+                                      const litert::TensorBuffer& decoded_ids,
+                                      RandomState& random_state) {
   LITERT_ASSIGN_OR_RETURN(auto duplicated_decoded_ids, decoded_ids.Duplicate());
   ExecutorInputs inputs;
   inputs.SetTextData(ExecutorTextData(std::move(duplicated_decoded_ids)));
@@ -628,6 +637,7 @@ absl::Status PrefillLastSampledTokens(LlmExecutor& executor,
   ABSL_RETURN_IF_ERROR(executor.SetCurrentStep(current_step - 1));
   ExecutorPrefillParams params;
   params.SetWaitForCompletion(true);
+  params.SetRandomState(&random_state);
   return executor.Prefill(inputs, params);
 }
 
@@ -671,9 +681,10 @@ absl::StatusOr<Responses> ScoreSingleTokenTargets(
 
 }  // namespace
 
-absl::StatusOr<Responses> Prefill(
-    LlmExecutor& executor, ExecutorInputs& inputs, bool wait_for_completion,
-    std::optional<BenchmarkInfo>& benchmark_info) {
+absl::StatusOr<Responses> Prefill(LlmExecutor& executor, ExecutorInputs& inputs,
+                                  bool wait_for_completion,
+                                  std::optional<BenchmarkInfo>& benchmark_info,
+                                  RandomState& random_state) {
   const int max_num_tokens = TryGetMaxNumTokens(executor);
   ABSL_ASSIGN_OR_RETURN(auto text_data, inputs.GetTextDataPtr());
   RET_CHECK(text_data != nullptr) << "text_data must not be null.";
@@ -711,6 +722,7 @@ absl::StatusOr<Responses> Prefill(
   ExecutorPrefillParams params;
   // Wait for prefill to complete if benchmark mode is enabled.
   params.SetWaitForCompletion(wait_for_completion | benchmark_info.has_value());
+  params.SetRandomState(&random_state);
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(benchmark_info->TimePrefillTurnStart());
   }
@@ -744,7 +756,7 @@ absl::StatusOr<Responses> Decode(
     LlmExecutor& executor, Tokenizer& tokenizer,
     const StopTokenDetector& stop_token_detector, int num_output_candidates,
     std::optional<BenchmarkInfo>& benchmark_info,
-    std::optional<ExternalSampler> sampler,
+    Sampler* absl_nullable sampler, RandomState& random_state,
     RepetitionPenaltyConfig repetition_penalty_config,
     NoRepeatNgramConfig no_repeat_ngram_config,
     SuppressTokensConfig suppress_tokens_config, Constraint* constraint,
@@ -757,7 +769,7 @@ absl::StatusOr<Responses> Decode(
     const SpeculativeDecodingConfig& speculative_decoding_config,
     absl::Span<const int> draft_token_ids) {
   const bool is_streaming = callback != nullptr;
-  const bool is_custom_sampling = sampler.has_value();
+  const bool is_custom_sampling = sampler != nullptr;
   if (!draft_token_ids.empty()) {
     // The budgets may cut the draft, even to nothing, before `VerifyDraft()`
     // sees it. Checks the whole draft here, so that the turn fails the same way
@@ -853,7 +865,8 @@ absl::StatusOr<Responses> Decode(
       auto run_one_step,
       DecodeOneStep::Create(
           &executor, &tokenizer, num_output_candidates, stop_token_detector,
-          benchmark_info, sampler, std::move(repetition_penalty_config),
+          benchmark_info, sampler, &random_state,
+          std::move(repetition_penalty_config),
           std::move(no_repeat_ngram_config), std::move(suppress_tokens_config),
           constraint, cancelled, speculative_decoding_config,
           std::vector<int>(draft_token_ids.begin(), draft_token_ids.end())));
@@ -871,7 +884,8 @@ absl::StatusOr<Responses> Decode(
         // For external sampling, the sampled tokens are provided by the
         // sampler. We must run one prefill to add the last token as pending
         // token in the LLM Executor when cancellation happens.
-        ABSL_RETURN_IF_ERROR(PrefillLastSampledTokens(executor, *decoded_ids));
+        ABSL_RETURN_IF_ERROR(
+            PrefillLastSampledTokens(executor, *decoded_ids, random_state));
       }
       return absl::CancelledError("Process cancelled.");
     }
@@ -994,7 +1008,8 @@ absl::StatusOr<Responses> Decode(
     // For external sampling, the sampled tokens are provided by the sampler. We
     // must run one prefill to add the stop token as pending token in the LLM
     // Executor when stop condition is met.
-    ABSL_RETURN_IF_ERROR(PrefillLastSampledTokens(executor, *decoded_ids));
+    ABSL_RETURN_IF_ERROR(
+        PrefillLastSampledTokens(executor, *decoded_ids, random_state));
   }
 
   if (is_streaming) {
@@ -1064,13 +1079,14 @@ absl::StatusOr<Responses> Score(
   StopTokenDetector dummy_stop_token_detector(num_output_candidates);
   ABSL_ASSIGN_OR_RETURN(
       auto run_one_step,
-      DecodeOneStep::Create(
-          &executor, &tokenizer,
-          /*num_output_candidates=*/num_output_candidates,
-          dummy_stop_token_detector, benchmark_info,
-          /*sampler=*/std::nullopt, RepetitionPenaltyConfig::Default(),
-          NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
-          /*constraint=*/nullptr));
+      DecodeOneStep::Create(&executor, &tokenizer,
+                            /*num_output_candidates=*/num_output_candidates,
+                            dummy_stop_token_detector, benchmark_info,
+                            /*sampler=*/nullptr, /*random_state=*/nullptr,
+                            RepetitionPenaltyConfig::Default(),
+                            NoRepeatNgramConfig::Default(),
+                            SuppressTokensConfig::Default(),
+                            /*constraint=*/nullptr));
 
   // The scores for each candidate. The scores are accumulated over the course
   // of the decoding process.

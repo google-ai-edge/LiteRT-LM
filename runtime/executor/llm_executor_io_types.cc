@@ -26,6 +26,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/random_state.h"
 #include "runtime/util/logging_tensor_buffer.h"
 
 namespace litert::lm {
@@ -615,6 +616,14 @@ absl::StatusOr<int> ExecutorPrefillParams::GetMaxPrefillSequenceLength() const {
 void ExecutorPrefillParams::SetMaxPrefillSequenceLength(
     std::optional<int> max_prefill_sequence_length) {
   max_prefill_sequence_length_ = max_prefill_sequence_length;
+}
+
+RandomState* ExecutorPrefillParams::GetRandomState() const {
+  return random_state_;
+}
+
+void ExecutorPrefillParams::SetRandomState(RandomState* random_state) {
+  random_state_ = random_state;
 }
 
 std::ostream& operator<<(std::ostream& os,

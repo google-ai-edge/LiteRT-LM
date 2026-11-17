@@ -52,6 +52,7 @@ target_include_directories(runtime_framework_resource_manager_serial_execution_m
 target_link_libraries(runtime_framework_resource_manager_serial_execution_manager
   PUBLIC
     LiteRTLM::Runtime::Executor::ExecutorStats
+    LiteRTLM::Runtime::Components::RandomState
     LiteRTLM::Runtime::Framework::ThreadOptions
     LiteRTLM::Runtime::Util::RuntimeDebugger
     LITERTLM_DEPS
@@ -73,7 +74,6 @@ target_include_directories(runtime_framework_resource_manager_threaded_execution
 
 target_link_libraries(runtime_framework_resource_manager_threaded_execution_manager
   PUBLIC
-    LiteRTLM::Runtime::Executor::ExecutorStats
     LiteRTLM::Runtime::Framework::ThreadOptions
     LiteRTLM::Runtime::Util::RuntimeDebugger
     LITERTLM_DEPS

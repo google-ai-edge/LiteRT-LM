@@ -299,6 +299,27 @@ target_link_libraries(runtime_components_sampler_params_util
 )
 
 # ==============================================================================
+# Random State
+# ==============================================================================
+add_litertlm_library(runtime_components_random_state STATIC
+  random_state.cc
+)
+add_library(LiteRTLM::Runtime::Components::RandomState
+  ALIAS runtime_components_random_state)
+
+target_include_directories(runtime_components_random_state
+  PUBLIC
+    ${LITERTLM_INCLUDE_PATHS}
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${CMAKE_BINARY_DIR}
+)
+
+target_link_libraries(runtime_components_random_state
+  PUBLIC
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # Sampling Uniforms
 # ==============================================================================
 add_litertlm_library(runtime_components_sampling_uniforms STATIC
@@ -456,6 +477,7 @@ target_link_libraries(runtime_components_libs INTERFACE
   LiteRTLM::Runtime::Components::ModelResourcesStreaming
   LiteRTLM::Runtime::Components::ModelResourcesTask
   LiteRTLM::Runtime::Components::PromptTemplate
+  LiteRTLM::Runtime::Components::RandomState
   LiteRTLM::Runtime::Components::SamplerFactory
   LiteRTLM::Runtime::Components::SamplerParamsUtil
   LiteRTLM::Runtime::Components::SamplingCpuUtil
