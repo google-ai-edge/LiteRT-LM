@@ -14,6 +14,9 @@
 
 """LiteRT LM is a library for running GenAI models on devices."""
 
+import sys as _sys
+import warnings as _warnings
+
 # pylint: disable=g-importing-member
 
 from ._ffi import ActivationDataType
@@ -64,6 +67,20 @@ from .session import Session
 from .tools import tool_from_function
 
 ModelType = LiteRtLmModelType
+
+# Python 3.10 reached upstream end-of-life on 2026-10-01 (PEP 619). Support
+# for it is deprecated and will be removed in the next release. FutureWarning
+# (rather than DeprecationWarning) so end users see it even when this package
+# is imported transitively (PEP 565 hides DeprecationWarning outside __main__).
+if _sys.version_info < (3, 11):
+  _warnings.warn(
+      "litert-lm support for Python 3.10 is deprecated and will be removed in"
+      " the next release, following Python 3.10's upstream end-of-life"
+      " (https://peps.python.org/pep-0619/). Please upgrade to Python 3.11 or"
+      " newer.",
+      FutureWarning,
+      stacklevel=2,
+  )
 
 __all__ = (
     "AbstractBenchmark",
