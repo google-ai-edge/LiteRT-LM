@@ -412,6 +412,7 @@ class LiteRTLMBuilderCLITest(absltest.TestCase):
     stdout = output.stdout.decode("utf-8")
     self.assertIn("--weights-in-model-graph", stdout)
     self.assertIn("--dedupe-shared-weights", stdout)
+    self.assertIn("--moe-weights-in-model-graph", stdout)
 
   def _unpack_test_model(self) -> str:
     """Unpacks a checked-in LiteRT-LM model and returns its TOML path."""

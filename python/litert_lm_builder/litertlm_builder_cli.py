@@ -465,6 +465,22 @@ def _add_output_path_parser(subparsers) -> None:
       ),
   )
   output_path_parser.add_argument(
+      "--moe-weights-in-model-graph",
+      nargs="?",
+      const=True,
+      default=True,
+      type=_parse_bool,
+      metavar="{true,false}",
+      help=(
+          "Whether to keep the quantized expert weights and block scales of"
+          ' CUSTOM "moe" ops inside each model\'s FlatBuffer. If false, they'
+          " are moved into TFLiteWeights sections when weights are not in the"
+          " model graph. Only the CPU (XNNPACK) backend can run such models"
+          ' for now; the GPU backend rejects externalized "moe" inputs.'
+          " Defaults to true."
+      ),
+  )
+  output_path_parser.add_argument(
       "--validate-metadata",
       action="store_true",
       help="Validate mandatory LLM and Vision metadata fields.",
@@ -745,6 +761,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
     return
   weights_in_model_graph = None
   dedupe_shared_weights = None
+  moe_weights_in_model_graph = True
   validate_metadata = False
   if "toml" in [pa.command for pa in parsed_args]:
     toml_path = None
@@ -755,6 +772,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           output_path = parsed_arg.path
           weights_in_model_graph = parsed_arg.weights_in_model_graph
           dedupe_shared_weights = parsed_arg.dedupe_shared_weights
+          moe_weights_in_model_graph = parsed_arg.moe_weights_in_model_graph
           validate_metadata = parsed_arg.validate_metadata
         case "toml":
           toml_path = parsed_arg.path
@@ -773,6 +791,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           cast(BinaryIO, f),
           weights_in_model_graph=weights_in_model_graph,
           dedupe_shared_weights=dedupe_shared_weights,
+          moe_weights_in_model_graph=moe_weights_in_model_graph,
           validate_metadata=validate_metadata,
       )
   else:
@@ -808,6 +827,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           output_path = parsed_arg.path
           weights_in_model_graph = parsed_arg.weights_in_model_graph
           dedupe_shared_weights = parsed_arg.dedupe_shared_weights
+          moe_weights_in_model_graph = parsed_arg.moe_weights_in_model_graph
           validate_metadata = parsed_arg.validate_metadata
         case _:
           raise ValueError(f"Unknown subcommand: {parsed_arg.command}")
@@ -820,6 +840,7 @@ def _build_litertlm_file(parsed_args: list[argparse.Namespace]) -> None:
           cast(BinaryIO, f),
           weights_in_model_graph=weights_in_model_graph,
           dedupe_shared_weights=dedupe_shared_weights,
+          moe_weights_in_model_graph=moe_weights_in_model_graph,
           validate_metadata=validate_metadata,
       )
 

@@ -1806,6 +1806,7 @@ class LitertLmFileBuilder:
       num_elements_threshold: int,
       weight_group_name: str,
       dedupe_shared_weights: bool = False,
+      moe_weights_in_model_graph: bool = True,
   ) -> tuple[list[_SectionObject], ExternalizationSummary]:
     """Externalizes TFLite sections and returns their final file order.
 
@@ -1820,6 +1821,9 @@ class LitertLmFileBuilder:
         `TFLiteWeights` section (a token embedder first), and the other models
         reference it through the external buffer group
         `<weight_group_name>:<owner model_type>`.
+      moe_weights_in_model_graph: Whether to keep the quantized expert weights
+        and block scales of CUSTOM "moe" ops inside the model graph instead of
+        externalizing them. See `externalize_tflite_flatbuffer.externalize`.
 
     Returns:
       The sections to write (models first, then per-model weights) and a
@@ -1899,6 +1903,7 @@ class LitertLmFileBuilder:
             group_name=weight_group_name,
             num_elements_threshold=num_elements_threshold,
             existing_weights=existing_weights,
+            externalize_moe_weights=not moe_weights_in_model_graph,
         )
         processed_model = output_dir / "model.tflite"
         processed_weights = output_dir / weight_group_name
@@ -2111,6 +2116,7 @@ class LitertLmFileBuilder:
       num_elements_threshold: int = 256,
       weight_group_name: str = "tflite_weights",
       dedupe_shared_weights: bool | None = None,
+      moe_weights_in_model_graph: bool = True,
   ) -> ExternalizationSummary | None:
     """Builds the litertlm into the given stream.
 
@@ -2134,6 +2140,12 @@ class LitertLmFileBuilder:
       dedupe_shared_weights: Whether to store weight payloads that are
         byte-identical across models only once. Defaults to
         `DEFAULT_DEDUPE_SHARED_WEIGHTS` when weights are not in the model graph.
+      moe_weights_in_model_graph: Whether to keep the quantized expert weights
+        and block scales of CUSTOM "moe" ops inside the model graph. If False
+        (and weights are not in the model graph), they are moved into
+        TFLiteWeights sections. Only the CPU (XNNPACK) backend can run such
+        models for now; the GPU backend rejects externalized "moe" inputs.
+        Ignored if weights stay in the model graph.
 
     Returns:
       An `ExternalizationSummary` when weights are moved out of the model graph,
@@ -2163,6 +2175,7 @@ class LitertLmFileBuilder:
             num_elements_threshold,
             weight_group_name,
             dedupe_shared_weights=dedupe_shared_weights,
+            moe_weights_in_model_graph=moe_weights_in_model_graph,
         )
         self._build_sections(stream, sections)
         return summary
@@ -2486,6 +2499,7 @@ def pack_with_summary(
     num_elements_threshold: int = 256,
     weight_group_name: str = "tflite_weights",
     dedupe_shared_weights: bool | None = None,
+    moe_weights_in_model_graph: bool = True,
 ) -> tuple[str, ExternalizationSummary | None]:
   """Packs TOML and returns the output path and externalization summary."""
   # Check the weight placement options before reading any input.
@@ -2504,6 +2518,7 @@ def pack_with_summary(
         num_elements_threshold=num_elements_threshold,
         weight_group_name=weight_group_name,
         dedupe_shared_weights=dedupe_shared_weights,
+        moe_weights_in_model_graph=moe_weights_in_model_graph,
     )
   return output_path, summary
 
@@ -2518,6 +2533,7 @@ def pack(
     num_elements_threshold: int = 256,
     weight_group_name: str = "tflite_weights",
     dedupe_shared_weights: bool | None = None,
+    moe_weights_in_model_graph: bool = True,
 ) -> str:
   """Packs a TOML configuration and its referenced files into a LiteRT-LM file.
 
@@ -2535,6 +2551,9 @@ def pack(
     dedupe_shared_weights: Whether to store weight payloads that are
       byte-identical across TFLite models only once; the other models reference
       the owner model's TFLiteWeights section. See `LitertLmFileBuilder.build`.
+    moe_weights_in_model_graph: Whether to keep the quantized expert weights and
+      block scales of CUSTOM "moe" ops inside the model graph (CPU backend only
+      when False for now). See `LitertLmFileBuilder.build`.
 
   Returns:
     The path to the generated LiteRT-LM file.
@@ -2548,6 +2567,7 @@ def pack(
       num_elements_threshold=num_elements_threshold,
       weight_group_name=weight_group_name,
       dedupe_shared_weights=dedupe_shared_weights,
+      moe_weights_in_model_graph=moe_weights_in_model_graph,
   )
   return packed_path
 

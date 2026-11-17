@@ -2685,6 +2685,67 @@ class ResolveWeightExternalizationTest(parameterized.TestCase):
     self.assertIsNone(result)
     externalize_mock.assert_not_called()
 
+  @parameterized.parameters(True, False)
+  def test_build_forwards_moe_weights_in_model_graph_to_externalizer(
+      self, moe_weights_in_model_graph
+  ):
+    builder = litertlm_builder.LitertLmFileBuilder()
+    tflite_path = self.create_tempfile(
+        "model.tflite", content=b"dummy content"
+    ).full_path
+    builder.add_tflite_model(tflite_path, "prefill_decode")
+
+    def fake_externalize(*, input_model, output_dir, group_name, **_):
+      output_dir.mkdir(parents=True, exist_ok=True)
+      (output_dir / "model.tflite").write_bytes(input_model.read_bytes())
+      (output_dir / group_name).write_bytes(b"")
+
+    with mock.patch.object(
+        litertlm_builder.externalize_tflite_flatbuffer,
+        "externalize",
+        autospec=True,
+        side_effect=fake_externalize,
+    ) as externalize_mock:
+      builder.build(
+          io.BytesIO(),
+          weights_in_model_graph=False,
+          dedupe_shared_weights=False,
+          moe_weights_in_model_graph=moe_weights_in_model_graph,
+      )
+
+    externalize_mock.assert_called_once()
+    _, call_kwargs = externalize_mock.call_args
+    self.assertIs(
+        call_kwargs["externalize_moe_weights"],
+        not moe_weights_in_model_graph,
+    )
+
+  def test_pack_forwards_moe_weights_in_model_graph(self):
+    temp_dir = self.create_tempdir().full_path
+    toml_path = os.path.join(temp_dir, "model.toml")
+    with open(toml_path, "w") as f:
+      f.write("")
+    summary = litertlm_builder.ExternalizationSummary(
+        models_inspected=0,
+        models_with_external_weights=0,
+        newly_externalized_bytes=0,
+    )
+    with mock.patch.object(
+        litertlm_builder.LitertLmFileBuilder,
+        "_externalize_sections",
+        autospec=True,
+        return_value=([], summary),
+    ) as externalize_mock:
+      litertlm_builder.pack(
+          toml_path,
+          os.path.join(temp_dir, "out.litertlm"),
+          weights_in_model_graph=False,
+          moe_weights_in_model_graph=False,
+      )
+
+    _, call_kwargs = externalize_mock.call_args
+    self.assertFalse(call_kwargs["moe_weights_in_model_graph"])
+
   def test_pack_checks_weight_placement_before_reading_toml(self):
     output_path = os.path.join(self.create_tempdir().full_path, "out.litertlm")
 
