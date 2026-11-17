@@ -455,6 +455,32 @@ with the history up to the previous turn, and once including the current
 message. By comparing these two rendered prompts, it extracts the new portion to
 be sent to the [Session][Session].
 
+The first render sets `add_generation_prompt` to false and the second sets it to
+true. The new portion is the second render with the first render removed from
+its start, so the second render must start with the first. If it does not, the
+message fails with this error, which also contains both renders:
+
+```
+The new rendered template string does not start with the previous rendered template string.
+```
+
+Two prompt template patterns break this:
+
+-   Rendering a message differently once a newer message follows it. For
+    example, the Hugging Face chat templates of Qwen3 and Qwen3.5 render the
+    thinking block only in assistant turns after the last user message, so the
+    latest assistant turn loses its thinking block when the next user message
+    is appended.
+-   Adding text after the last message when `add_generation_prompt` is false,
+    for example in the `{% else %}` branch of `{% if add_generation_prompt %}`.
+
+For a reasoning model, render the thinking block in every assistant turn or in
+none. The
+[Qwen3](https://github.com/google-ai-edge/LiteRT-LM/blob/main/models/qwen3/chat_template.jinja)
+and
+[Qwen3.5](https://github.com/google-ai-edge/LiteRT-LM/blob/main/models/qwen3_5/chat_template.jinja)
+templates in `models/` leave it out of every assistant turn.
+
 ### ConversationConfig
 
 [`ConversationConfig`][ConversationConfig] is used to initialize a
