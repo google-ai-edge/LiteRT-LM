@@ -53,6 +53,23 @@ _import_module = importlib.import_module(
 @click.version_option(version=version.VERSION)
 def cli():
   """CLI tool for LiteRT-LM models."""
+  _warn_if_deprecated_python()
+
+
+def _warn_if_deprecated_python() -> None:
+  """Prints a deprecation banner when running on an end-of-life Python."""
+  # Python 3.10 reached upstream end-of-life on 2026-10-01 (PEP 619). Support
+  # for it, and for any older Python, is deprecated and will be removed in the
+  # next release.
+  if sys.version_info < (3, 11):
+    click.secho(
+        "WARNING: litert-lm-cli support for Python 3.10 and older is"
+        " deprecated and will be removed in the next release, following Python"
+        " 3.10's upstream end-of-life (https://peps.python.org/pep-0619/)."
+        " Please upgrade to Python 3.11 or newer.",
+        fg="yellow",
+        err=True,
+    )
 
 
 _serve_module.register(cli)

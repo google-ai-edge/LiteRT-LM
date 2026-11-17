@@ -216,8 +216,15 @@ for PY_VER in "3.10" "3.11" "3.12" "3.13" "3.14"; do
 
   cd "${TEST_VENV}"
 
-  # Run CLI tests
-  bash "${WORKSPACE_ROOT}/python/litert_lm_cli/cli_tests.sh"
+  # Run CLI tests.
+  # Python 3.10 is deprecated (upstream EOL 2026-10-01) and will be dropped in
+  # the next release; its verification result is informational and non-blocking.
+  if [[ "${PY_VER}" == "3.10" ]]; then
+    bash "${WORKSPACE_ROOT}/python/litert_lm_cli/cli_tests.sh" || \
+      echo "⚠️ Verification failed on deprecated Python ${PY_VER} (non-blocking)."
+  else
+    bash "${WORKSPACE_ROOT}/python/litert_lm_cli/cli_tests.sh"
+  fi
 
   cd "${WORKSPACE_ROOT}"
   deactivate

@@ -14,6 +14,8 @@
 
 """Unit tests for the main litert-lm CLI."""
 
+import contextlib
+import io
 import os
 import unittest.mock
 
@@ -60,6 +62,27 @@ class MainTest(absltest.TestCase):
     self.assertEqual(result_help.exit_code, 0)
     self.assertEqual(result_h.exit_code, 0)
     self.assertEqual(result_help.output, result_h.output)
+
+  @unittest.mock.patch.object(main.sys, "version_info", (3, 10, 0, "final", 0))
+  def test_deprecated_python_banner_on_3_10(self):
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+      main._warn_if_deprecated_python()
+    self.assertIn("Python 3.10 and older is deprecated", stderr.getvalue())
+
+  @unittest.mock.patch.object(main.sys, "version_info", (3, 9, 0, "final", 0))
+  def test_deprecated_python_banner_on_3_9(self):
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+      main._warn_if_deprecated_python()
+    self.assertIn("Python 3.10 and older is deprecated", stderr.getvalue())
+
+  @unittest.mock.patch.object(main.sys, "version_info", (3, 11, 0, "final", 0))
+  def test_no_deprecated_python_banner_on_3_11(self):
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+      main._warn_if_deprecated_python()
+    self.assertEqual(stderr.getvalue(), "")
 
   @unittest.mock.patch(
       "litert_lm_cli.model.Model.from_model_reference"
