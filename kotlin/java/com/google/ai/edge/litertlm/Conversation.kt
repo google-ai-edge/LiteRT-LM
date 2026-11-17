@@ -166,7 +166,7 @@ class Conversation(
         if (!automaticToolCalling) {
           return jsonToMessage(responseJsonObject)
         }
-        currentMessageJson = handleToolCalls(responseJsonObject)
+        currentMessageJson = handleToolCalls(responseJsonObject.getAsJsonArray("tool_calls"))
         // Loop back to send the tool response
       } else if (responseJsonObject.has("content")) {
         return jsonToMessage(responseJsonObject)
@@ -612,8 +612,7 @@ class Conversation(
       toolChoice,
     )
 
-  private fun handleToolCalls(toolCallsJsonObject: JsonObject): JsonObject {
-    val toolCallsJSONArray = toolCallsJsonObject.getAsJsonArray("tool_calls")
+  private fun handleToolCalls(toolCallsJSONArray: JsonArray): JsonObject {
     val toolResponsesJSONArray = JsonArray()
 
     for (toolCallElement in toolCallsJSONArray) {
@@ -640,7 +639,8 @@ class Conversation(
     }
   }
 
-  private inner class JniMessageCallbackImpl(
+  // Internal for testing.
+  internal inner class JniMessageCallbackImpl(
     private val callback: MessageCallback,
     private val repetitionPenaltyConfig: RepetitionPenaltyConfig? = null,
     private val noRepeatNgramConfig: NoRepeatNgramConfig? = null,
@@ -653,8 +653,8 @@ class Conversation(
     private val thinkingConfig: ThinkingConfig? = null,
   ) : LiteRtLmJni.JniMessageCallback {
 
-    /** The tool response to be returned back */
-    private var pendingToolResponseJSONMessage: JsonObject? = null
+    /** The tool calls accumulated across all streamed chunks of the current model turn. */
+    private var pendingToolCalls = JsonArray()
     private var toolCallCount = 0
 
     override fun onMessage(messageJsonString: String) {
@@ -665,6 +665,25 @@ class Conversation(
           callback.onMessage(jsonToMessage(messageJsonObject))
           return
         }
+        pendingToolCalls.addAll(messageJsonObject.getAsJsonArray("tool_calls"))
+      } else if (messageJsonObject.has("content") or messageJsonObject.has("channels")) {
+        callback.onMessage(jsonToMessage(messageJsonObject))
+      }
+    }
+
+    /**
+     * Executes and clears the pending tool calls, returning the tool response message, or null if
+     * there is none. Internal for testing.
+     */
+    internal fun takePendingToolResponse(): JsonObject? {
+      if (pendingToolCalls.isEmpty) return null
+      val toolCalls = pendingToolCalls
+      pendingToolCalls = JsonArray()
+      return handleToolCalls(toolCalls)
+    }
+
+    override fun onDone() {
+      if (!pendingToolCalls.isEmpty) {
         if (toolCallCount >= RECURRING_TOOL_CALL_LIMIT) {
           callback.onError(
             IllegalStateException(
@@ -674,19 +693,10 @@ class Conversation(
           return
         }
         toolCallCount++
-        pendingToolResponseJSONMessage = handleToolCalls(messageJsonObject)
-      } else if (messageJsonObject.has("content") or messageJsonObject.has("channels")) {
-        callback.onMessage(jsonToMessage(messageJsonObject))
-      }
-    }
-
-    override fun onDone() {
-      val localToolResponse = pendingToolResponseJSONMessage
-      if (localToolResponse != null) {
-        pendingToolResponseJSONMessage = null // Clear before sending
         // This runs on the native callback thread, so an exception thrown here would crash the
         // app. Report it to the caller instead.
         try {
+          val localToolResponse = checkNotNull(takePendingToolResponse())
           val activeResponseFormat = resolveResponseFormat(localToolResponse, responseFormat)
           // If there is pending tool response message, send the message.
           LiteRtLmJni.nativeSendMessageAsync(
