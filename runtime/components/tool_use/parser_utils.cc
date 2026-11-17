@@ -27,6 +27,7 @@
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/str_join.h"  // from @com_google_absl
+#include "absl/strings/str_replace.h"  // from @com_google_absl
 #include "absl/strings/str_split.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
@@ -38,6 +39,10 @@
 namespace litert::lm {
 
 namespace {
+
+// The escape token recognized by the FC grammar. `ParserOptions.fc_escape_tag`
+// is rewritten to this token before FC parsing.
+constexpr absl::string_view kFcCanonicalEscape = "<escape>";
 
 RE2 TextAndToolCodeRegex(absl::string_view code_fence_start,
                          absl::string_view code_fence_end,
@@ -250,7 +255,27 @@ absl::StatusOr<nlohmann::ordered_json> ParseTextAndToolCalls(
       } else if (syntax_type == SyntaxType::kJson) {
         tool_calls = ParseJsonExpression(code_block);
       } else if (syntax_type == SyntaxType::kFc) {
-        tool_calls = ParseFcExpression(code_block);
+        // The FC grammar (antlr/AntlrFcLexer.g4) is compiled with a fixed set
+        // of escape tokens and cannot take the model's token at runtime. So
+        // the model's escape tag is rewritten to the grammar's canonical
+        // `<escape>` inside the fenced block, e.g. with `fc_escape_tag` set to
+        // "<|\"|>":
+        //
+        //   call:f{x:<|"|>a b<|"|>}  ->  call:f{x:<escape>a b<escape>}
+        //
+        // Text outside the fences is not touched.
+        //
+        // AntlrFcLexer.g4 (and the escape stripping in rust/fc_parser.rs)
+        // still accepts its other escape tokens directly. They are kept for
+        // backward compatibility with earlier Gemma models that do not set
+        // `fc_escape_tag`, so ESCAPE cannot be reduced to only `<escape>`.
+        // Parse a rewritten copy, so `code_block` keeps the model's original
+        // text for the parse-failure paths below.
+        tool_calls = options.fc_escape_tag.empty()
+                         ? ParseFcExpression(code_block)
+                         : ParseFcExpression(absl::StrReplaceAll(
+                               code_block,
+                               {{options.fc_escape_tag, kFcCanonicalEscape}}));
       } else if (syntax_type == SyntaxType::kRegex) {
         tool_calls = ParseRegexExpression(code_block, options.regex_options);
       } else {

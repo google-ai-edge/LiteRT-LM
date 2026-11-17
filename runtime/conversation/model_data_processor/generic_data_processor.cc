@@ -83,6 +83,12 @@ absl::Status ValidateAndCompileToolCallConfig(
       }
       return absl::OkStatus();
     }
+    case proto::ToolCallConfig::kFcSyntax:
+      if (tool_call_config.fc_syntax().escape_tag().empty()) {
+        return absl::InvalidArgumentError(
+            "escape_tag must not be empty for FcSyntax.");
+      }
+      return absl::OkStatus();
     case proto::ToolCallConfig::SYNTAX_CONFIG_NOT_SET:
       return absl::InvalidArgumentError(
           "ToolCallConfig must specify a syntax_config.");
@@ -173,6 +179,10 @@ absl::StatusOr<Message> GenericDataProcessor::ToMessageImpl(
           .tool_call_regex = tool_call_re_.get(),
           .argument_regex = argument_re_.get(),
       };
+      break;
+    case proto::ToolCallConfig::kFcSyntax:
+      syntax_type = SyntaxType::kFc;
+      options.fc_escape_tag = tool_call_config.fc_syntax().escape_tag();
       break;
     case proto::ToolCallConfig::SYNTAX_CONFIG_NOT_SET:
       break;

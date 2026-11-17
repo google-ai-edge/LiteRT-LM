@@ -71,6 +71,12 @@ struct ParserOptions {
 
   // Options for `SyntaxType::kRegex`. Ignored for other syntax types.
   std::optional<RegexParserOptions> regex_options = std::nullopt;
+
+  // For `SyntaxType::kFc`: the token that wraps string values in the model
+  // output (e.g. "<|\"|>"). If set, it is rewritten to the grammar's canonical
+  // "<escape>" inside each fenced block before parsing. Ignored for other
+  // syntax types.
+  std::string fc_escape_tag = "";
 };
 
 // Parses a string into text and tool calls.

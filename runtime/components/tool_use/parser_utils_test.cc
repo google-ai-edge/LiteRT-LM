@@ -318,6 +318,52 @@ TEST(ParserUtilsTest, ParseFcToolCall) {
               })json")));
 }
 
+TEST(ParserUtilsTest, ParseFcToolCallWithCustomEscapeTag) {
+  EXPECT_THAT(
+      ParseTextAndToolCalls(
+          "Text keeps <quote>."
+          "<start_function_call>call:tool_name{x:<quote>a b<quote>}"
+          "<end_function_call>",
+          /*code_fence_start=*/"<start_function_call>",
+          /*code_fence_end=*/"<end_function_call>",
+          /*syntax_type=*/SyntaxType::kFc, {.fc_escape_tag = "<quote>"}),
+      IsOkAndHolds(nlohmann::ordered_json::parse(R"json({
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Text keeps <quote>."
+                  }
+                ],
+                "tool_calls": [
+                  {
+                    "type": "function",
+                    "function": {
+                      "name": "tool_name",
+                      "arguments": {
+                        "x": "a b"
+                      }
+                    }
+                  }
+                ]
+              })json")));
+}
+
+TEST(ParserUtilsTest, ParseFcToolCallWithCustomEscapeTagKeepsTextOnFailure) {
+  // Malformed call (missing closing brace) in soft-error mode.
+  ASSERT_OK_AND_ASSIGN(
+      const nlohmann::ordered_json result,
+      ParseTextAndToolCalls(
+          "<start_function_call>call:f{x:<quote>a<quote><end_function_call>",
+          /*code_fence_start=*/"<start_function_call>",
+          /*code_fence_end=*/"<end_function_call>",
+          /*syntax_type=*/SyntaxType::kFc,
+          {.return_error_on_parse_failure = false,
+           .fc_escape_tag = "<quote>"}));
+  // The text keeps the model's escape tag, not the internal "<escape>".
+  EXPECT_EQ(result["content"][0]["text"], "call:f{x:<quote>a<quote>");
+  EXPECT_TRUE(result["content"][0].contains("error"));
+}
+
 TEST(ParserUtilsTest, ParseFcParallelToolCalls) {
   EXPECT_THAT(ParseTextAndToolCalls(
                   "<start_function_call>call:tool_1{x:1}<end_function_call>"

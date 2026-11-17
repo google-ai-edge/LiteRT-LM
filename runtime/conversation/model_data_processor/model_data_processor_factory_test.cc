@@ -88,6 +88,24 @@ TEST_F(ModelDataProcessorFactoryTest, CreateGenericModelDataProcessor) {
 }
 
 TEST_F(ModelDataProcessorFactoryTest,
+       CreateGenericModelDataProcessorWithFcToolCallConfig) {
+  proto::LlmModelType llm_model_type;
+  llm_model_type.mutable_generic_model();
+  proto::ToolCallConfig tool_call_config;
+  tool_call_config.set_fence_start("<|tool_call>");
+  tool_call_config.set_fence_end("<tool_call|>");
+  tool_call_config.mutable_fc_syntax()->set_escape_tag("<|\"|>");
+
+  ASSERT_OK_AND_ASSIGN(auto config, CreateDataProcessorConfigFromLlmModelType(
+                                        llm_model_type, tool_call_config));
+  ASSERT_TRUE(std::holds_alternative<GenericDataProcessorConfig>(config));
+  const auto& generic_config = std::get<GenericDataProcessorConfig>(config);
+  ASSERT_TRUE(generic_config.tool_call_config.has_value());
+  EXPECT_EQ(generic_config.tool_call_config->fc_syntax().escape_tag(),
+            "<|\"|>");
+}
+
+TEST_F(ModelDataProcessorFactoryTest,
        CreateGenericModelDataProcessorWithToolCallConfig) {
   proto::LlmModelType llm_model_type;
   llm_model_type.mutable_generic_model();

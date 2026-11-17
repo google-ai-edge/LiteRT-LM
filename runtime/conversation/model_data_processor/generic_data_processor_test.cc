@@ -432,6 +432,62 @@ TEST(GenericDataProcessorTest, InvalidToolCallConfigReturnsError) {
         GenericDataProcessor::Create({.tool_call_config = tool_call_config})
             .ok());
   }
+
+  // Empty FcSyntax escape_tag.
+  {
+    proto::ToolCallConfig tool_call_config;
+    tool_call_config.set_fence_start("<tool_call>");
+    tool_call_config.set_fence_end("</tool_call>");
+    tool_call_config.mutable_fc_syntax();
+    EXPECT_FALSE(
+        GenericDataProcessor::Create({.tool_call_config = tool_call_config})
+            .ok());
+  }
+}
+
+TEST(GenericDataProcessorTest, ToMessageWithFcToolCall) {
+  proto::ToolCallConfig tool_call_config;
+  tool_call_config.set_fence_start("<|tool_call>");
+  tool_call_config.set_fence_end("<tool_call|>");
+  tool_call_config.mutable_fc_syntax()->set_escape_tag("<|\"|>");
+  Preface preface = JsonPreface{.tools = json::parse(R"json([
+    {"type": "function", "function": {"name": "get_weather"}}
+  ])json")};
+  ASSERT_OK_AND_ASSIGN(auto processor,
+                       GenericDataProcessor::Create(
+                           {.tool_call_config = tool_call_config}, preface));
+  EXPECT_EQ(processor->CodeFenceStart(), "<|tool_call>");
+  EXPECT_EQ(processor->CodeFenceEnd(), "<tool_call|>");
+
+  ASSERT_OK_AND_ASSIGN(
+      const Message message,
+      processor->ToMessage(
+          Responses(TaskState::kProcessing,
+                    {"Sure.<|tool_call>call:get_weather{location:<|\"|>Paris"
+                     "<|\"|>,days:3}<tool_call|>"}),
+          std::monostate{}));
+
+  EXPECT_EQ(message, json::parse(R"json({
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Sure."
+                }
+              ],
+              "tool_calls": [
+                {
+                  "type": "function",
+                  "function": {
+                    "name": "get_weather",
+                    "arguments": {
+                      "location": "Paris",
+                      "days": 3
+                    }
+                  }
+                }
+              ]
+            })json"));
 }
 
 }  // namespace

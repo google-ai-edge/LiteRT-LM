@@ -409,7 +409,7 @@ cc_test(
         "//runtime/components/preprocessor:audio_preprocessor",
         "//runtime/components/preprocessor:audio_preprocessor_miniaudio",
         "//runtime/components/preprocessor:image_preprocessor",
-        "//runtime/components/tool_use:parser_utils_lite",  # buildcleaner: keep
+        "//runtime/components/tool_use:parser_utils",  # buildcleaner: keep
         "//runtime/conversation:io_types",
         "//runtime/conversation:prompt_utils",
         "//runtime/engine:io_types",

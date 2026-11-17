@@ -93,7 +93,7 @@ message PromptTemplates {
 //
 // 2. **Inner syntax parsing (`syntax_config`)**:
 //    The content inside each fenced block is parsed according to
-//    `syntax_config` (e.g., `regex_syntax`).
+//    `syntax_config` (e.g., `regex_syntax` or `fc_syntax`).
 //
 //    - **Multiple tool calls inside a single fence**: A single fenced block may
 //      contain multiple tool calls back-to-back:
@@ -187,10 +187,27 @@ message ToolCallConfig {
     optional string argument_regex = 2;
   }
 
+  // FC syntax used by Gemma models. For example, the content inside a fenced
+  // block:
+  //
+  // ```
+  // call:get_weather{location:<|"|>Paris<|"|>}
+  // ```
+  //
+  // String values are wrapped in `escape_tag`.
+  message FcSyntax {
+    // The token that opens and closes string values. Required. For example:
+    //   - "<|\"|>" for Gemma 4.
+    //   - "<escape>" for FunctionGemma.
+    optional string escape_tag = 1;
+  }
+
   // The syntax configuration used to parse tool calls inside a fenced block.
   oneof syntax_config {
     // Regex-based extraction for XML/tag tool call formats.
     RegexSyntax regex_syntax = 3;
+    // FC syntax used by Gemma models.
+    FcSyntax fc_syntax = 4;
   }
 }
 
