@@ -288,6 +288,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
 
  private:
   friend class LlmLiteRtNpuCloneContextTest;
+  friend class LlmLiteRtNpuRunDrafterLoopTest;
   friend class LlmLiteRtNpuWarmupTest;
 
   const NpuContextGroup& ActiveContextGroup() const {
@@ -386,7 +387,9 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // e.g. the end-of-turn token of the previous turn.
   void DiscardSpeculativeState();
 
-  // Run the drafter loop for MTP, returning the draft tokens.
+  // Run the drafter loop for MTP, returning the draft tokens. `start_step` is
+  // the position of `current_token_id` after the `[0, start_step - 1]` KV cache
+  // prefix; the drafter queries at `start_step - 1`.
   absl::StatusOr<std::vector<int>> RunDrafterLoop(int start_step,
                                                   int current_token_id);
   // Run the verifier batch for MTP.

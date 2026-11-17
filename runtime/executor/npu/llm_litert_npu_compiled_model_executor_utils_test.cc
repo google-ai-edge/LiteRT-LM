@@ -49,6 +49,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
+#include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
@@ -59,6 +60,7 @@
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
 #include "runtime/executor/npu/llm_litert_npu_rope.h"
 #include "runtime/proto/executor_metadata.pb.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "tflite/schema/schema_generated.h"  // from @litert
 
@@ -75,6 +77,7 @@ using ::testing::Each;
 using ::testing::ElementsAre;
 using ::testing::ElementsAreArray;
 using ::testing::HasSubstr;
+using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
 template <typename T>
@@ -2074,6 +2077,493 @@ TEST_F(LlmLiteRtNpuCloneContextTest,
   for (int i = kNumElems; i < kNumElems * 2; ++i) {
     EXPECT_EQ(read_lock->second[i], kGuardCanary) << "Guard clobbered at " << i;
   }
+}
+
+// Builds a synthetic MTP drafter model with a separate `rope_cos` [1, 1, 8]
+// input (so `RunDrafterLoop` writing `[embedding, activations]` into
+// `activations` [1, 1, 8] does not overwrite the RoPE output) and a
+// `projected_activations` [1, 1, 4] output for multi-step drafting.
+// `logits` [1, 1, 8] is computed as ABS(activations) and
+// `projected_activations` [1, 1, 4] outputs constant [0, 0, 0, 100].
+std::vector<uint8_t> BuildRunDrafterLoopModelBuffer(
+    int32_t context_size, int32_t mask_size = -1) {
+  if (mask_size < 0) {
+    mask_size = context_size;
+  }
+  flatbuffers::FlatBufferBuilder builder;
+  auto abs_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ABS);
+  auto opcodes_vec = builder.CreateVector({abs_opcode});
+
+  std::vector<flatbuffers::Offset<tflite::Buffer>> buffers;
+  buffers.push_back(tflite::CreateBuffer(builder));  // Buffer 0: dynamic.
+  static constexpr float kProjVals[] = {0.0f, 0.0f, 0.0f, -100.0f};
+  buffers.push_back(tflite::CreateBuffer(
+      builder,
+      builder.CreateVector(reinterpret_cast<const uint8_t*>(kProjVals),
+                           sizeof(kProjVals))));
+
+  auto create_tensor = [&](absl::Span<const int32_t> dims,
+                           tflite::TensorType type, uint32_t buffer_idx,
+                           absl::string_view name) {
+    return tflite::CreateTensor(
+        builder, builder.CreateVector(dims.data(), dims.size()), type,
+        buffer_idx, builder.CreateString(name.data(), name.size()));
+  };
+  auto tensors_vec = builder.CreateVector(
+      {create_tensor({1, 1, 8}, tflite::TensorType_FLOAT32, 0, "activations"),
+       create_tensor({1}, tflite::TensorType_INT32, 0, "input_pos"),
+       create_tensor({1, 1, 8}, tflite::TensorType_FLOAT32, 0, "rope_cos"),
+       create_tensor({1, 1, 1, mask_size}, tflite::TensorType_FLOAT32, 0,
+                     "mask_local"),
+       create_tensor({1, 1, context_size, 4}, tflite::TensorType_FLOAT32, 0,
+                     "kv_cache_k_0"),
+       create_tensor({1, 1, 4, context_size}, tflite::TensorType_FLOAT32, 0,
+                     "kv_cache_v_0"),
+       create_tensor({1, 1, 4}, tflite::TensorType_FLOAT32, 1, "proj_const"),
+       create_tensor({1, 1, 8}, tflite::TensorType_FLOAT32, 0, "logits"),
+       create_tensor({1, 1, 4}, tflite::TensorType_FLOAT32, 0,
+                     "projected_activations")});
+
+  auto logits_op = tflite::CreateOperator(builder, /*opcode_index=*/0,
+                                          builder.CreateVector<int32_t>({0}),
+                                          builder.CreateVector<int32_t>({7}));
+  auto proj_op = tflite::CreateOperator(builder, /*opcode_index=*/0,
+                                        builder.CreateVector<int32_t>({6}),
+                                        builder.CreateVector<int32_t>({8}));
+  auto subgraph = tflite::CreateSubGraph(
+      builder, tensors_vec,
+      builder.CreateVector<int32_t>({0, 1, 2, 3, 4, 5}),
+      builder.CreateVector<int32_t>({7, 8}),
+      builder.CreateVector({logits_op, proj_op}),
+      builder.CreateString("mtp_drafter"));
+
+  auto create_map = [&](absl::string_view name, uint32_t tensor_index) {
+    return tflite::CreateTensorMap(
+        builder, builder.CreateString(name.data(), name.size()), tensor_index);
+  };
+  auto sig_def = tflite::CreateSignatureDef(
+      builder,
+      builder.CreateVector({create_map("activations", 0),
+                            create_map("input_pos", 1),
+                            create_map("rope_cos", 2),
+                            create_map("mask_local", 3),
+                            create_map("kv_cache_k_0", 4),
+                            create_map("kv_cache_v_0", 5)}),
+      builder.CreateVector({create_map("logits", 7),
+                            create_map("projected_activations", 8)}),
+      builder.CreateString("mtp_drafter"), /*subgraph_index=*/0);
+
+  auto model = tflite::CreateModel(
+      builder, /*version=*/3, opcodes_vec, builder.CreateVector({subgraph}),
+      builder.CreateString("mtp_drafter_model"), builder.CreateVector(buffers),
+      /*metadata_buffer=*/0, /*metadata=*/0, builder.CreateVector({sig_def}));
+  tflite::FinishModelBuffer(builder, model);
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+// Builds a synthetic embedder model with `prefill_embedder_4` and
+// `decode_embedder` signatures where `decode_embedder` maps scalar int32
+// `token_ids` [1, 1, 1] to `embeddings` [1, 1, 4] filled with float(token_id).
+std::vector<uint8_t> BuildLookupEmbedderModelBuffer() {
+  flatbuffers::FlatBufferBuilder builder;
+  auto cast_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_CAST);
+  auto add_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ADD);
+  auto abs_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ABS);
+  auto opcodes_vec =
+      builder.CreateVector({cast_opcode, add_opcode, abs_opcode});
+
+  std::vector<flatbuffers::Offset<tflite::Buffer>> buffers;
+  buffers.push_back(tflite::CreateBuffer(builder));  // Buffer 0: dynamic.
+  auto add_zeros_buffer = [&](size_t num_floats) -> uint32_t {
+    const std::vector<uint8_t> zero_bytes(num_floats * sizeof(float), 0);
+    buffers.push_back(
+        tflite::CreateBuffer(builder, builder.CreateVector(zero_bytes)));
+    return buffers.size() - 1;
+  };
+  auto create_tensor = [&](absl::Span<const int32_t> dims,
+                           tflite::TensorType type, uint32_t buffer_idx,
+                           absl::string_view name) {
+    return tflite::CreateTensor(
+        builder, builder.CreateVector(dims.data(), dims.size()), type,
+        buffer_idx, builder.CreateString(name.data(), name.size()));
+  };
+  auto create_map = [&](absl::string_view name, uint32_t tensor_index) {
+    return tflite::CreateTensorMap(
+        builder, builder.CreateString(name.data(), name.size()), tensor_index);
+  };
+
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> sig_defs;
+
+  // Subgraph 0: "prefill_embedder_4".
+  {
+    const uint32_t zeros_buf = add_zeros_buffer(16);
+    auto tensors_vec = builder.CreateVector(
+        {create_tensor({1, 4}, tflite::TensorType_INT32, 0, "token_ids"),
+         create_tensor({1, 4, 4}, tflite::TensorType_FLOAT32, zeros_buf,
+                       "prefill_zeros"),
+         create_tensor({1, 4, 4}, tflite::TensorType_FLOAT32, 0,
+                       "embeddings")});
+    auto abs_op = tflite::CreateOperator(builder, /*opcode_index=*/2,
+                                         builder.CreateVector<int32_t>({1}),
+                                         builder.CreateVector<int32_t>({2}));
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, tensors_vec, builder.CreateVector<int32_t>({0}),
+        builder.CreateVector<int32_t>({2}), builder.CreateVector({abs_op}),
+        builder.CreateString("prefill_embedder_4")));
+    sig_defs.push_back(tflite::CreateSignatureDef(
+        builder, builder.CreateVector({create_map("token_ids", 0)}),
+        builder.CreateVector({create_map("embeddings", 2)}),
+        builder.CreateString("prefill_embedder_4"), /*subgraph_index=*/0));
+  }
+
+  // Subgraph 1: "decode_embedder".
+  {
+    const uint32_t zeros_buf = add_zeros_buffer(4);
+    auto tensors_vec = builder.CreateVector(
+        {create_tensor({1, 1, 1}, tflite::TensorType_INT32, 0, "token_ids"),
+         create_tensor({1, 1, 1}, tflite::TensorType_FLOAT32, 0, "tok_f32"),
+         create_tensor({1, 1, 4}, tflite::TensorType_FLOAT32, zeros_buf,
+                       "decode_zeros"),
+         create_tensor({1, 1, 4}, tflite::TensorType_FLOAT32, 0,
+                       "embeddings")});
+    auto cast_op = tflite::CreateOperator(builder, /*opcode_index=*/0,
+                                          builder.CreateVector<int32_t>({0}),
+                                          builder.CreateVector<int32_t>({1}));
+    auto add_op = tflite::CreateOperator(builder, /*opcode_index=*/1,
+                                         builder.CreateVector<int32_t>({1, 2}),
+                                         builder.CreateVector<int32_t>({3}));
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, tensors_vec, builder.CreateVector<int32_t>({0}),
+        builder.CreateVector<int32_t>({3}),
+        builder.CreateVector({cast_op, add_op}),
+        builder.CreateString("decode_embedder")));
+    sig_defs.push_back(tflite::CreateSignatureDef(
+        builder, builder.CreateVector({create_map("token_ids", 0)}),
+        builder.CreateVector({create_map("embeddings", 3)}),
+        builder.CreateString("decode_embedder"), /*subgraph_index=*/1));
+  }
+
+  auto model = tflite::CreateModel(
+      builder, /*version=*/3, opcodes_vec, builder.CreateVector(subgraphs),
+      builder.CreateString("embedder_model"), builder.CreateVector(buffers),
+      /*metadata_buffer=*/0, /*metadata=*/0, builder.CreateVector(sig_defs));
+  tflite::FinishModelBuffer(builder, model);
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+// Minimal local fake for `ModelResources` (no shared `ModelResources` test fake
+// exists in `runtime/components/` or `runtime/util/`) supplying the embedder
+// model and `TF_LITE_VISION_ENCODER` presence required by `NpuEmbedder::Create`
+// to initialize `EmbeddingLookupManager` without a per-layer embedder model.
+class EmbedderOnlyModelResources : public ModelResources {
+ public:
+  explicit EmbedderOnlyModelResources(const ::litert::Model& embedder_model)
+      : embedder_model_(embedder_model) {}
+
+  using ModelResources::GetTFLiteModel;
+
+  absl::StatusOr<const ::litert::Model*> GetTFLiteModel(
+      proto::LlmMetadata::TfLiteModelType type) override {
+    // Expose TF_LITE_VISION_ENCODER as present so NpuEmbedder::Create
+    // initializes EmbeddingLookupManager for LookupDecode without requiring a
+    // per-layer embedder model.
+    if (type == proto::LlmMetadata::TF_LITE_EMBEDDER ||
+        type == proto::LlmMetadata::TF_LITE_VISION_ENCODER) {
+      return &embedder_model_;
+    }
+    return absl::NotFoundError("Missing model.");
+  }
+
+  absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override {
+    return absl::UnimplementedError("Unimplemented");
+  }
+
+  absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override {
+    return &metadata_;
+  }
+
+ private:
+  const ::litert::Model& embedder_model_;
+  proto::LlmMetadata metadata_;
+};
+
+}  // namespace
+
+// Exercises LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop directly to
+// verify MTP step indexing across both model-based (`mtp_aux`) and hardware
+// (`HWMaskUpdate`) drafter masks.
+class LlmLiteRtNpuRunDrafterLoopTest : public DrafterContextTest {
+ protected:
+  static constexpr int kContextSize = 8;
+
+  const ::litert::Model& KeepModel(std::vector<uint8_t> buffer) {
+    loaded_models_.push_back(
+        std::make_unique<::litert::Model>(LoadModel(std::move(buffer))));
+    return *loaded_models_.back();
+  }
+
+  std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> MakeMtpExecutor(
+      MaskUpdateMethod mask_method, bool with_drafter_contexts = true,
+      bool uses_ringbuffer = false, int local_cache_length = kContextSize,
+      std::optional<int> sliding_window_size = std::nullopt) {
+    absl::StatusOr<ModelAssets> model_assets =
+        ModelAssets::Create("dummy_model");
+    ABSL_CHECK_OK(model_assets);
+    absl::StatusOr<LlmExecutorSettings> settings =
+        LlmExecutorSettings::CreateDefault(*std::move(model_assets),
+                                           Backend::NPU);
+    ABSL_CHECK_OK(settings);
+
+    NpuContextGroup group = MakeContextGroup(kContextSize);
+    group.layout.uses_ringbuffer = uses_ringbuffer;
+    group.layout.local_cache_length = local_cache_length;
+    if (sliding_window_size.has_value()) {
+      group.layout.sliding_window_size = *sliding_window_size;
+    }
+    InferenceContext& decoder_ctx = group.text_decoder_inference_context;
+    decoder_ctx.prefill_input_buffers.emplace(
+        TextDecoderSignatures::kInputEmbeddings,
+        CreateTensorBufferWithDims(std::vector<float>(16, 0.0f),
+                                   ElementType::Float32, {1, 4, 4}));
+    decoder_ctx.decode_input_buffers.emplace(
+        TextDecoderSignatures::kInputEmbeddings,
+        CreateTensorBufferWithDims(std::vector<float>(4, 0.0f),
+                                   ElementType::Float32, {1, 1, 4}));
+    // Cold-start activations have peak magnitude at index 1 -> argmax index 5
+    // in `activations` [embedding(4), current_activations(4)].
+    decoder_ctx.decode_output_buffers.emplace(
+        TextDecoderSignatures::kLastLayerActivationsOutput,
+        CreateTensorBufferWithDims(std::vector<float>{0.0f, 50.0f, 0.0f, 0.0f},
+                                   ElementType::Float32, {1, 1, 4}));
+    // Verify activations shape [1, 3, 4] sets drafter_sequence_length = 2.
+    decoder_ctx.verify_output_buffers.emplace(
+        MtpSignatures::kInputActivations,
+        CreateTensorBufferWithDims(std::vector<float>(12, 0.0f),
+                                   ElementType::Float32, {1, 3, 4}));
+
+    const ::litert::Model& embedder_model =
+        KeepModel(BuildLookupEmbedderModelBuffer());
+    EmbedderOnlyModelResources resources(embedder_model);
+    ResolvedPrefillSignatures prefill_sigs{.size = 4,
+                                           .embedder = "prefill_embedder_4"};
+    absl::StatusOr<NpuEmbedder> embedder = NpuEmbedder::Create(
+        *env_, resources, *settings, prefill_sigs,
+        decoder_ctx.prefill_input_buffers, decoder_ctx.decode_input_buffers,
+        decoder_ctx.verify_input_buffers, /*has_per_layer_embeddings=*/false);
+    ABSL_CHECK_OK(embedder);
+
+    std::vector<NpuContextGroup> groups;
+    groups.push_back(std::move(group));
+
+    std::optional<DrafterContext> drafter_ctx;
+    std::optional<DrafterAuxContext> drafter_aux_ctx;
+    if (with_drafter_contexts) {
+      const ::litert::Model& drafter_model = KeepModel(
+          BuildRunDrafterLoopModelBuffer(kContextSize, local_cache_length));
+      const ::litert::Model& aux_model = KeepModel(BuildMtpAuxModelBuffer(
+          {{"mask", local_cache_length}}, /*with_input_tokens=*/true,
+          /*rope_output_name=*/"rope_cos", /*mask_output_name=*/"mask_local"));
+      absl::StatusOr<DrafterContext> created_drafter =
+          DrafterContext::Create(*env_, drafter_model, groups);
+      ABSL_CHECK_OK(created_drafter);
+      absl::StatusOr<DrafterAuxContext> created_aux = DrafterAuxContext::Create(
+          *env_, aux_model, *created_drafter, groups, mask_method);
+      ABSL_CHECK_OK(created_aux);
+      drafter_ctx.emplace(*std::move(created_drafter));
+      drafter_aux_ctx.emplace(*std::move(created_aux));
+    }
+
+    model_buffers_.push_back(BuildMtpAuxModelBuffer({}));
+    const std::vector<uint8_t>& dummy_buf = model_buffers_.back();
+    ::litert::Expected<::litert::CompiledModel> decoder =
+        ::litert::CompiledModel::Create(
+            *env_, ::litert::BufferRef<uint8_t>(dummy_buf.data(),
+                                                dummy_buf.size()),
+            ::litert::HwAccelerators::kCpu);
+    ABSL_CHECK(decoder.HasValue());
+    ::litert::Expected<::litert::CompiledModel> main_aux =
+        ::litert::CompiledModel::Create(
+            *env_, ::litert::BufferRef<uint8_t>(dummy_buf.data(),
+                                                dummy_buf.size()),
+            ::litert::HwAccelerators::kCpu);
+    ABSL_CHECK(main_aux.HasValue());
+
+    NpuGraphLayout initial_layout = groups[0].layout;
+    return absl::WrapUnique(new LlmLiteRtNpuCompiledModelExecutor(
+        std::move(*settings), *env_, NpuAuxiliaryContext(std::move(*main_aux)),
+        std::move(*decoder), std::move(groups), {kContextSize},
+        /*prefill_signature_map=*/{}, prefill_sigs,
+        LlmLiteRtNpuCompiledModelExecutor::LogitsQuantizationParams{
+            .scale = 1.0f, .zero_point = 0},
+        /*kv_cache_init_value=*/0,
+        LlmLiteRtNpuCompiledModelExecutor::SpeculativeDecodingType::kMTP,
+        std::move(drafter_ctx), std::move(drafter_aux_ctx),
+        std::move(*embedder), NpuRope(), NpuMask(), NpuKVCache(),
+        /*text_decoder_model=*/nullptr, /*llm_metadata=*/nullptr,
+        /*executor_metadata=*/nullptr, /*is_dynamic_model=*/false,
+        /*dynamic_kv_cache_capacity=*/0, std::move(initial_layout)));
+  }
+
+  static absl::StatusOr<std::vector<int>> CallRunDrafterLoop(
+      LlmLiteRtNpuCompiledModelExecutor& executor, int start_step,
+      int current_token_id) {
+    return executor.RunDrafterLoop(start_step, current_token_id);
+  }
+
+  static absl::Status CallWarmupDrafterInference(
+      LlmLiteRtNpuCompiledModelExecutor& executor) {
+    return LlmLiteRtNpuCompiledModelExecutor::WarmupDrafterInference(
+        *executor.drafter_context_, *executor.drafter_aux_context_,
+        executor.context_groups_);
+  }
+
+  static void SetWarmVerifyActivations(
+      LlmLiteRtNpuCompiledModelExecutor& executor,
+      const std::vector<float>& activations) {
+    const auto* bytes = reinterpret_cast<const uint8_t*>(activations.data());
+    executor.last_verify_activations_.assign(
+        bytes, bytes + activations.size() * sizeof(float));
+    executor.has_valid_verify_activations_ = true;
+  }
+
+  static const DrafterContext& GetDrafterContext(
+      const LlmLiteRtNpuCompiledModelExecutor& executor) {
+    return *executor.drafter_context_;
+  }
+
+  std::vector<std::unique_ptr<::litert::Model>> loaded_models_;
+};
+
+namespace {
+
+TEST_F(LlmLiteRtNpuRunDrafterLoopTest,
+       ModelMaskAndRopeQueryAtStartStepMinusOne) {
+  std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor =
+      MakeMtpExecutor(MaskUpdateMethod::kModel);
+
+  // At `start_step = 5`, the KV cache holds [0..4] and `current_token_id` is at
+  // position 5 (not yet written to the KV cache), so RoPE, mask, and
+  // `input_pos` must receive `start_step - 1 = 4`.
+  ASSERT_THAT(
+      CallRunDrafterLoop(*executor, /*start_step=*/5, /*current_token_id=*/2),
+      IsOkAndHolds(ElementsAre(5, 7)));
+
+  const DrafterContext& ctx = GetDrafterContext(*executor);
+  EXPECT_EQ(*static_cast<const int32_t*>(
+                HostAddressOf(ctx.mtp_input_buffers.at("input_pos"))),
+            4);
+  EXPECT_EQ(GetFirstFloat(ctx.mtp_input_buffers.at("rope_cos")), 4.0f);
+  EXPECT_EQ(GetFirstFloat(ctx.mtp_input_buffers.at("mask_local")), 4.0f);
+}
+
+TEST_F(LlmLiteRtNpuRunDrafterLoopTest,
+       HwMaskUnmasksUpToStartStepMinusOneAndMasksStartStep) {
+  std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor =
+      MakeMtpExecutor(MaskUpdateMethod::kWH);
+  // Warm-start activations have peak magnitude at index 2 -> argmax index 6.
+  SetWarmVerifyActivations(*executor, {0.0f, 0.0f, 60.0f, 0.0f});
+
+  ASSERT_THAT(
+      CallRunDrafterLoop(*executor, /*start_step=*/5, /*current_token_id=*/2),
+      IsOkAndHolds(ElementsAre(6, 7)));
+
+  const DrafterContext& ctx = GetDrafterContext(*executor);
+  EXPECT_EQ(*static_cast<const int32_t*>(
+                HostAddressOf(ctx.mtp_input_buffers.at("input_pos"))),
+            4);
+  EXPECT_EQ(GetFirstFloat(ctx.mtp_input_buffers.at("rope_cos")), 4.0f);
+
+  const float* mask_vals = static_cast<const float*>(
+      HostAddressOf(ctx.mtp_input_buffers.at("mask_local")));
+  // Cached positions [0..4] are unmasked (0.0f); unwritten position 5
+  // (`start_step`) and [6..7] are masked (< 0.0f).
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ(mask_vals[i], 0.0f) << "mask_local[" << i << "]";
+  }
+  for (int i = 5; i < kContextSize; ++i) {
+    EXPECT_LT(mask_vals[i], 0.0f) << "mask_local[" << i << "]";
+  }
+
+  // Boundary case: `start_step = 1` queries at `drafter_step = 0` (only slot 0
+  // unmasked).
+  ASSERT_THAT(
+      CallRunDrafterLoop(*executor, /*start_step=*/1, /*current_token_id=*/3),
+      IsOkAndHolds(ElementsAre(6, 7)));
+  EXPECT_EQ(*static_cast<const int32_t*>(
+                HostAddressOf(ctx.mtp_input_buffers.at("input_pos"))),
+            0);
+  EXPECT_EQ(mask_vals[0], 0.0f);
+  for (int i = 1; i < kContextSize; ++i) {
+    EXPECT_LT(mask_vals[i], 0.0f) << "mask_local[" << i << "]";
+  }
+}
+
+TEST_F(LlmLiteRtNpuRunDrafterLoopTest,
+       RejectsNonPositiveStartStepOrUninitializedContexts) {
+  std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor =
+      MakeMtpExecutor(MaskUpdateMethod::kModel);
+  EXPECT_THAT(CallRunDrafterLoop(*executor, /*start_step=*/0,
+                                 /*current_token_id=*/2),
+              StatusIs(absl::StatusCode::kInternal,
+                       HasSubstr("at least one cached token")));
+  EXPECT_THAT(CallRunDrafterLoop(*executor, /*start_step=*/-1,
+                                 /*current_token_id=*/2),
+              StatusIs(absl::StatusCode::kInternal,
+                       HasSubstr("at least one cached token")));
+
+  std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> no_drafter =
+      MakeMtpExecutor(MaskUpdateMethod::kModel,
+                      /*with_drafter_contexts=*/false);
+  EXPECT_THAT(CallRunDrafterLoop(*no_drafter, /*start_step=*/2,
+                                 /*current_token_id=*/1),
+              StatusIs(absl::StatusCode::kInternal,
+                       HasSubstr("Drafter contexts not initialized")));
+}
+
+TEST_F(LlmLiteRtNpuRunDrafterLoopTest,
+       HwMaskRingBufferWarmupAndDraftLoopUnmaskWrappedWindowSlots) {
+  constexpr int kLocalRing = 4;
+  constexpr int kWindow = 3;
+  std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor =
+      MakeMtpExecutor(MaskUpdateMethod::kWH, /*with_drafter_contexts=*/true,
+                      /*uses_ringbuffer=*/true,
+                      /*local_cache_length=*/kLocalRing,
+                      /*sliding_window_size=*/kWindow);
+
+  // Warmup runs before any token is decoded, with `mask_local` shaped
+  // `[1, 1, 1, kLocalRing]` (no batch suffix).
+  ASSERT_OK(CallWarmupDrafterInference(*executor));
+
+  const DrafterContext& ctx = GetDrafterContext(*executor);
+  const float* mask_vals = static_cast<const float*>(
+      HostAddressOf(ctx.mtp_input_buffers.at("mask_local")));
+
+  // `start_step = 1` (`drafter_step = 0`): only physical slot 0 is cached.
+  ASSERT_THAT(
+      CallRunDrafterLoop(*executor, /*start_step=*/1, /*current_token_id=*/2),
+      IsOkAndHolds(ElementsAre(5, 7)));
+  EXPECT_EQ(mask_vals[0], 0.0f);
+  for (int k = 1; k < kLocalRing; ++k) {
+    EXPECT_LT(mask_vals[k], 0.0f) << "mask_local[" << k << "]";
+  }
+
+  // `start_step = 6` (`drafter_step = 5`): cached positions [0..5] wrap in the
+  // 4-slot ring (`0->t4`, `1->t5`, `2->t2`, `3->t3`). Window 3 over `drafter`
+  // query position 5 attends {3, 4, 5} -> slots {3, 0, 1}, masking slot 2.
+  ASSERT_THAT(
+      CallRunDrafterLoop(*executor, /*start_step=*/6, /*current_token_id=*/2),
+      IsOkAndHolds(ElementsAre(5, 7)));
+  EXPECT_EQ(mask_vals[0], 0.0f);
+  EXPECT_EQ(mask_vals[1], 0.0f);
+  EXPECT_LT(mask_vals[2], 0.0f);
+  EXPECT_EQ(mask_vals[3], 0.0f);
 }
 
 }  // namespace

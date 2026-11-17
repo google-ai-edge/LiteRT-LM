@@ -2074,6 +2074,13 @@ LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop(int start_step,
   if (!drafter_context_.has_value() || !drafter_aux_context_.has_value()) {
     return absl::InternalError("Drafter contexts not initialized.");
   }
+  RET_CHECK_GT(start_step, 0)
+      << "MTP drafter requires at least one cached token before start_step.";
+  // At the start of drafting, the KV cache holds positions [0, start_step - 1],
+  // `current_token_id` is at `start_step` (not yet written to the KV cache),
+  // and the input activations come from `start_step - 1`. Query drafter RoPE,
+  // attention mask, and `input_pos` at `start_step - 1`.
+  const int drafter_step = start_step - 1;
   // Get model drafter sequence length.
   LITERT_ASSIGN_OR_RETURN(
       RankedTensorType verify_output_tensor_type,
@@ -2105,14 +2112,14 @@ LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop(int start_step,
   int input_token_id = current_token_id;
 
   // Set drafter RoPE position.
-  LITERT_RETURN_IF_ERROR(aux_ctx.drafter_rope.SetDecodePosition(start_step));
+  LITERT_RETURN_IF_ERROR(aux_ctx.drafter_rope.SetDecodePosition(drafter_step));
 
   // Set drafter mask input.
   LITERT_RETURN_IF_ERROR(
-      aux_ctx.drafter_mask.SetDecodeInput(start_step, input_token_id));
+      aux_ctx.drafter_mask.SetDecodeInput(drafter_step, input_token_id));
 
   // Set drafter input position.
-  LITERT_RETURN_IF_ERROR(ctx.SetInputPos(start_step));
+  LITERT_RETURN_IF_ERROR(ctx.SetInputPos(drafter_step));
 
   // // Run Rope/Mask for drafter.
   auto start = absl::Now();
@@ -2170,8 +2177,9 @@ LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop(int start_step,
         absl::ToInt64Microseconds(absl::Now() - start);
     draft_tokens.push_back(draft_id);
 
-    NPU_EXECUTOR_LOG(INFO) << "    [Drafter] Step " << i << " at pos "
-                           << start_step << ": Generated Token ID " << draft_id;
+    NPU_EXECUTOR_LOG(INFO) << "    [Drafter] Step " << i << " (cond pos "
+                           << drafter_step << ", gen pos " << start_step + i
+                           << "): Generated Token ID " << draft_id;
     if (i < drafter_sequence_length - 1) {
       LITERT_ASSIGN_OR_RETURN(
           current_activations,

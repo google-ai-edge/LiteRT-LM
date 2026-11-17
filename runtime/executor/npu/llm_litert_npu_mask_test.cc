@@ -1896,5 +1896,211 @@ TEST_F(NpuVisionMaskTest, NpuMaskRunPrefillUsesUnclampedTokenIds) {
   EXPECT_EQ(row2[kRing + 6], kMaskedMaskValue);
 }
 
+std::vector<bool> ReferenceDrafterRingAttend(int drafter_step,
+                                             int ring_capacity, int window) {
+  std::vector<bool> attends(ring_capacity, false);
+  const int num_cached = drafter_step + 1;
+  for (int pos = 0; pos < num_cached; ++pos) {
+    if (pos >= drafter_step - window + 1) {
+      attends[pos % ring_capacity] = true;
+    }
+  }
+  return attends;
+}
+
+TEST_F(NpuMaskTest, NpuMaskRunDrafterRingBufferAndGlobalMasksAcrossSteps) {
+  constexpr int kLocalRing = 8;
+  constexpr int kWindow = 6;
+  constexpr int kGlobalCap = 32;
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  in_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputTimeStep,
+      CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                 {1}));
+  in_buffers.insert_or_assign(
+      MaskSignatures::kMaskInputTokens,
+      CreateTensorBufferWithDims(std::vector<int32_t>{0}, ElementType::Int32,
+                                 {1, 1}));
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  out_buffers.insert_or_assign(
+      "mask_local",
+      CreateTensorBufferWithDims(std::vector<float>(kLocalRing, 0.0f),
+                                 ElementType::Float32, {1, 1, 1, kLocalRing}));
+  out_buffers.insert_or_assign(
+      "mask_global",
+      CreateTensorBufferWithDims(std::vector<float>(kGlobalCap, 0.0f),
+                                 ElementType::Float32, {1, 1, 1, kGlobalCap}));
+
+  NpuGraphLayout layout;
+  layout.uses_ringbuffer = true;
+  layout.local_cache_length = kLocalRing;
+  layout.sliding_window_size = kWindow;
+  layout.global_cache_length = kGlobalCap;
+
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      NpuMask mask,
+      NpuMask::CreateForDrafter(MaskUpdateMethod::kWH, nullptr,
+                                std::move(in_buffers), std::move(out_buffers),
+                                &layout));
+
+  // Initial warmup runs before `SetDecodeInput` with zero-initialized
+  // `time_step` and past-only mask width equal to `local_cache_length`.
+  LITERT_ASSERT_OK(mask.RunDrafter());
+
+  for (int drafter_step : {0, 4, 7, 12}) {
+    SCOPED_TRACE(absl::StrCat("drafter_step=", drafter_step));
+    LITERT_ASSERT_OK(mask.SetDecodeInput(drafter_step, /*token_id=*/42));
+    LITERT_ASSERT_OK(mask.RunDrafter());
+
+    auto local_lock = TensorBufferScopedLock::Create<float>(
+        mask.Context().decode_output_buffers.at("mask_local"),
+        TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(local_lock.HasValue());
+    auto global_lock = TensorBufferScopedLock::Create<float>(
+        mask.Context().decode_output_buffers.at("mask_global"),
+        TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(global_lock.HasValue());
+
+    const std::vector<bool> expected_local =
+        ReferenceDrafterRingAttend(drafter_step, kLocalRing, kWindow);
+    for (int k = 0; k < kLocalRing; ++k) {
+      EXPECT_EQ(local_lock->second[k] == 0.0f, expected_local[k]) << "k=" << k;
+    }
+    for (int k = 0; k < kGlobalCap; ++k) {
+      EXPECT_EQ(global_lock->second[k] == 0.0f, k <= drafter_step) << "k=" << k;
+    }
+  }
+}
+
+class NpuDrafterMaskTest : public NpuMaskTest {
+ protected:
+  template <typename T>
+  std::vector<bool> RunDrafterHwMaskForType(ElementType type, T valid_val,
+                                            int drafter_step, int local_ring,
+                                            int window, int global_cap,
+                                            bool read_global) {
+    absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+    in_buffers.emplace("time_step",
+                       CreateTensorBufferWithDims(
+                           std::vector<int32_t>{drafter_step},
+                           ElementType::Int32, {1}));
+    absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+    out_buffers.emplace("mask_local", CreateTensorBufferWithDims(
+                                          std::vector<T>(local_ring), type,
+                                          {1, 1, 1, local_ring}));
+    out_buffers.emplace("mask_global", CreateTensorBufferWithDims(
+                                           std::vector<T>(global_cap), type,
+                                           {1, 1, 1, global_cap}));
+
+    NpuGraphLayout layout;
+    layout.uses_ringbuffer = true;
+    layout.local_cache_length = local_ring;
+    layout.sliding_window_size = window;
+    layout.global_cache_length = global_cap;
+    ABSL_CHECK_OK(HWMaskUpdateForDrafter(in_buffers, out_buffers, layout));
+
+    const int len = read_global ? global_cap : local_ring;
+    auto lock = TensorBufferScopedLock::Create<T>(
+        out_buffers.at(read_global ? "mask_global" : "mask_local"),
+        TensorBuffer::LockMode::kRead);
+    ABSL_CHECK(lock.HasValue());
+    std::vector<bool> attends(len);
+    for (int i = 0; i < len; ++i) {
+      attends[i] = (lock->second[i] == valid_val);
+    }
+    return attends;
+  }
+};
+
+TEST_F(NpuDrafterMaskTest,
+       HWMaskUpdateDrafterElementTypesAndNonMultipleOf64Linear) {
+  constexpr int kLocalRing = 8;
+  constexpr int kWindow = 6;
+  constexpr int kGlobalCap = 32;
+  constexpr int kDrafterStep = 12;
+
+  for (bool read_global : {false, true}) {
+    SCOPED_TRACE(read_global ? "global" : "local");
+    const std::vector<bool> expected = RunDrafterHwMaskForType<float>(
+        ElementType::Float32, 0.0f, kDrafterStep, kLocalRing, kWindow,
+        kGlobalCap, read_global);
+    EXPECT_EQ(RunDrafterHwMaskForType<int8_t>(
+                  ElementType::Int8, int8_t{127}, kDrafterStep, kLocalRing,
+                  kWindow, kGlobalCap, read_global),
+              expected);
+    EXPECT_EQ(RunDrafterHwMaskForType<int16_t>(
+                  ElementType::Int16, int16_t{0}, kDrafterStep, kLocalRing,
+                  kWindow, kGlobalCap, read_global),
+              expected);
+    EXPECT_EQ(RunDrafterHwMaskForType<uint16_t>(
+                  ElementType::Float16, uint16_t{0x0000}, kDrafterStep,
+                  kLocalRing, kWindow, kGlobalCap, read_global),
+              expected);
+    EXPECT_EQ(RunDrafterHwMaskForType<uint16_t>(
+                  ElementType::BFloat16, uint16_t{0x0000}, kDrafterStep,
+                  kLocalRing, kWindow, kGlobalCap, read_global),
+              expected);
+  }
+
+  // Linear (`uses_ringbuffer = false`) past-only drafter mask whose width 65
+  // satisfies `(seq_k - 1) % 64 == 0`: `is_drafter = true` must still treat all
+  // 65 columns as past KV cache slots rather than unmasking slot 64 as a
+  // current-batch suffix.
+  constexpr int kLinearCap = 65;
+  constexpr int kLinearStep = 10;
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  in_buffers.emplace("time_step",
+                     CreateTensorBufferWithDims(
+                         std::vector<int32_t>{kLinearStep}, ElementType::Int32,
+                         {1}));
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+  out_buffers.emplace("mask_local",
+                      CreateTensorBufferWithDims(
+                          std::vector<float>(kLinearCap, 0.0f),
+                          ElementType::Float32, {1, 1, 1, kLinearCap}));
+  out_buffers.emplace("mask_global",
+                      CreateTensorBufferWithDims(
+                          std::vector<float>(kLinearCap, 0.0f),
+                          ElementType::Float32, {1, 1, 1, kLinearCap}));
+
+  NpuGraphLayout linear_layout;
+  linear_layout.uses_ringbuffer = false;
+  linear_layout.local_cache_length = kLinearCap;
+  linear_layout.sliding_window_size = kWindow;
+  linear_layout.global_cache_length = kLinearCap;
+  LITERT_ASSERT_OK(
+      HWMaskUpdateForDrafter(in_buffers, out_buffers, linear_layout));
+
+  {
+    auto local_lock = TensorBufferScopedLock::Create<float>(
+        out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(local_lock.HasValue());
+    auto global_lock = TensorBufferScopedLock::Create<float>(
+        out_buffers.at("mask_global"), TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(global_lock.HasValue());
+
+    for (int k = 0; k < kLinearCap; ++k) {
+      EXPECT_EQ(global_lock->second[k] == 0.0f, k <= kLinearStep) << "k=" << k;
+      const bool in_window =
+          (k <= kLinearStep) && (k >= kLinearStep - kWindow + 1);
+      EXPECT_EQ(local_lock->second[k] == 0.0f, in_window) << "k=" << k;
+    }
+  }
+
+  // Non-sliding (`sliding_window_size = 0`) linear drafter mask attends full
+  // causal history `[0..kLinearStep]` without window truncation.
+  linear_layout.sliding_window_size = 0;
+  LITERT_ASSERT_OK(
+      HWMaskUpdateForDrafter(in_buffers, out_buffers, linear_layout));
+  auto local_lock = TensorBufferScopedLock::Create<float>(
+      out_buffers.at("mask_local"), TensorBuffer::LockMode::kRead);
+  ASSERT_TRUE(local_lock.HasValue());
+  for (int k = 0; k < kLinearCap; ++k) {
+    EXPECT_EQ(local_lock->second[k] == 0.0f, k <= kLinearStep) << "k=" << k;
+  }
+}
+
 }  // namespace
 }  // namespace litert::lm

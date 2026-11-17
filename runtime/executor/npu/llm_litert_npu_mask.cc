@@ -59,11 +59,16 @@ void FillMasksInternal(T* mask_local, T* mask_global, int64_t seq_q,
                        const bool* valid_mask, int64_t valid_mask_size,
                        T valid_val, T masked_val,
                        int64_t sliding_window_size = 512,
-                       int64_t global_capacity = 0) {
+                       int64_t global_capacity = 0, bool is_drafter = false) {
   // Detection logic for capacity and batch_size.
   int64_t kv_cache_capacity = seq_k;
   bool has_batch_suffix = false;
-  if (global_capacity > 0 && global_capacity < seq_k) {
+  if (is_drafter) {
+    if (global_capacity > 0) {
+      kv_cache_capacity = std::min(global_capacity, seq_k);
+    }
+    has_batch_suffix = false;
+  } else if (global_capacity > 0 && global_capacity < seq_k) {
     kv_cache_capacity = global_capacity;
     has_batch_suffix = true;
   } else if (seq_k > seq_q) {
@@ -109,10 +114,12 @@ void FillMasksInternal(T* mask_local, T* mask_global, int64_t seq_q,
     // For MTP: valid if k <= time_step.
     const int64_t kv_valid_limit =
         has_batch_suffix ? time_step : (time_step + 1);
+    const int64_t local_window_size =
+        (sliding_window_size > 0) ? sliding_window_size : kv_cache_capacity;
     for (int64_t k = 0; k < std::min(kv_valid_limit, kv_cache_capacity); ++k) {
       if (global_row) global_row[k] = valid_val;
-      // Sliding window (sliding_window_size tokens).
-      if (local_row && k >= effective_pos - (sliding_window_size - 1)) {
+      // Sliding window (local_window_size tokens).
+      if (local_row && k >= effective_pos - (local_window_size - 1)) {
         local_row[k] = valid_val;
       }
     }
@@ -185,10 +192,17 @@ void FillMaskSingle(T* mask, int64_t seq_q, int64_t seq_k, int32_t time_step,
                     T valid_val, T masked_val, int64_t capacity,
                     bool uses_ringbuffer, int64_t window_size,
                     proto::AttentionMaskType mask_type,
-                    absl::Span<const int> token_ids) {
-  // Number of tokens processed in this step (e.g., 1 for decode, chunk size for
-  // prefill, or draft length for speculative verification).
-  const int64_t batch_size = seq_q;
+                    absl::Span<const int> token_ids,
+                    bool is_drafter = false) {
+  // Number of tokens processed in the current batch suffix (0 for past-only
+  // drafter masks, or seq_q for prefill/decode/verify).
+  const int64_t batch_size = is_drafter ? 0 : seq_q;
+  // Number of historical tokens committed to the KV cache: `time_step` for
+  // split-cache prefill/decode/verify, or `time_step + 1` for past-only
+  // drafter masks queried at `drafter_step = start_step - 1`.
+  const int64_t kv_valid_limit =
+      is_drafter ? (static_cast<int64_t>(time_step) + 1)
+                 : static_cast<int64_t>(time_step);
 
   // Start out by attending to no tokens.
   if (sizeof(T) == 1) {
@@ -215,25 +229,30 @@ void FillMaskSingle(T* mask, int64_t seq_q, int64_t seq_k, int32_t time_step,
         // Before the cache is full, tokens are written sequentially, so
         // physical index k maps directly to logical token k.
         int64_t t_k = k;
-        if (time_step >= capacity) {
+        if (kv_valid_limit >= capacity && capacity > 0) {
           // 'age' is how many steps ago the token in slot k was written.
-          // age = 0 means it was written at time_step - 1 (the most recent
-          // token).
+          // age = 0 means it was written at kv_valid_limit - 1 (the most recent
+          // cached token).
           // age = capacity - 1 means it is the oldest token still in the cache.
-          int64_t age = (time_step - 1 - k + capacity) % capacity;
-          t_k = time_step - 1 - age;
+          int64_t age = (kv_valid_limit - 1 - k + capacity) % capacity;
+          t_k = kv_valid_limit - 1 - age;
         }
-        // Ensure the token is a valid past token (causality) and falls
-        // within the sliding window constraint.
-        if (t_k >= 0 && t_k < time_step &&
+        // Ensure the token is a valid cached token and falls within the
+        // sliding window constraint.
+        if (t_k >= 0 && t_k < kv_valid_limit &&
             t_k >= logical_pos - window_size + 1) {
           row[k] = valid_val;
         }
       }
     } else {
-      for (int64_t k = 0; k < std::min<int64_t>(time_step, capacity); ++k) {
+      for (int64_t k = 0; k < std::min<int64_t>(kv_valid_limit, capacity);
+           ++k) {
         row[k] = valid_val;
       }
+    }
+
+    if (batch_size == 0) {
+      continue;
     }
 
     // Fill in the mask for the tokens in the current batch.
@@ -300,42 +319,47 @@ absl::Status UpdateInterleavedSWAMasks(
     const bool* valid_mask, int64_t valid_mask_size,
     int64_t sliding_window_size, int64_t local_capacity,
     int64_t global_capacity, proto::AttentionMaskType global_mask_type,
-    proto::AttentionMaskType local_mask_type, absl::Span<const int> token_ids) {
+    proto::AttentionMaskType local_mask_type, absl::Span<const int> token_ids,
+    bool is_drafter) {
+  // Past-only drafter masks have no current-batch suffix (`batch_size == 0`),
+  // whereas regular prefill/decode/verify masks append `seq_q` batch columns.
+  const int64_t batch_size = is_drafter ? 0 : seq_q;
   // If capacities are not explicitly provided, fall back to calculating from
-  // tensor dimensions (seq_k - seq_q).
+  // tensor dimensions (seq_k - batch_size).
   if (local_capacity <= 0) {
-    local_capacity = seq_k_local - seq_q;
+    local_capacity = seq_k_local - batch_size;
   }
   if (global_capacity <= 0) {
-    global_capacity = seq_k_global - seq_q;
+    global_capacity = seq_k_global - batch_size;
   }
 
   // The fill loops index [0, capacity) for the history slots and
-  // [capacity, capacity + seq_q) for the current batch, so the mask has to be
-  // at least capacity + seq_q wide. Capacities arrive from NpuGraphLayout
-  // rather than being derived from the tensor dimensions, so a capacity that
-  // does not fit the bound buffer means the layout and the graph disagree.
-  // That is an internal invariant violation, not bad caller input, hence
-  // RET_CHECK. Clamping instead would silently produce a mask for a cache that
-  // is not the one the model is using.
+  // [capacity, capacity + batch_size) for the current batch, so the mask has to
+  // be at least capacity + batch_size wide. Capacities arrive from
+  // NpuGraphLayout rather than being derived from the tensor dimensions, so a
+  // capacity that does not fit the bound buffer means the layout and the graph
+  // disagree. That is an internal invariant violation, not bad caller input,
+  // hence RET_CHECK. Clamping instead would silently produce a mask for a cache
+  // that is not the one the model is using.
   //
   // The non-negative lower bound has to be stated separately: the batch loop
   // writes row[capacity + k_rel] and only guards the upper end, so a negative
   // capacity indexes before the buffer. The width check alone does not catch
-  // that, because the seq_k - seq_q fallback above reduces it to the tautology
-  // seq_k <= seq_k whenever it is the source of the negative value.
+  // that, because the seq_k - batch_size fallback above reduces it to the
+  // tautology seq_k <= seq_k whenever it is the source of the negative value.
   if (local_ptr != nullptr) {
-    RET_CHECK(local_capacity >= 0 && local_capacity + seq_q <= seq_k_local)
-        << "Local mask capacity (" << local_capacity << ") plus query length ("
-        << seq_q << ") does not fit the local mask key dimension ("
+    RET_CHECK(local_capacity >= 0 &&
+              local_capacity + batch_size <= seq_k_local)
+        << "Local mask capacity (" << local_capacity << ") plus batch size ("
+        << batch_size << ") does not fit the local mask key dimension ("
         << seq_k_local << ").";
   }
   if (global_ptr != nullptr) {
-    RET_CHECK(global_capacity >= 0 && global_capacity + seq_q <= seq_k_global)
-        << "Global mask capacity (" << global_capacity
-        << ") plus query length (" << seq_q
-        << ") does not fit the global mask key dimension (" << seq_k_global
-        << ").";
+    RET_CHECK(global_capacity >= 0 &&
+              global_capacity + batch_size <= seq_k_global)
+        << "Global mask capacity (" << global_capacity << ") plus batch size ("
+        << batch_size << ") does not fit the global mask key dimension ("
+        << seq_k_global << ").";
   }
 
   // The attention window size (how far back a token can attend).
@@ -351,44 +375,44 @@ absl::Status UpdateInterleavedSWAMasks(
           static_cast<int8_t*>(local_ptr), seq_q, seq_k_local, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 127,
           -128, local_capacity, /*uses_ringbuffer=*/true, local_window_size,
-          local_mask_type, token_ids);
+          local_mask_type, token_ids, is_drafter);
     }
     if (global_ptr) {
       FillMaskSingle<int8_t>(
           static_cast<int8_t*>(global_ptr), seq_q, seq_k_global, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 127,
           -128, global_capacity, /*uses_ringbuffer=*/false, 0, global_mask_type,
-          token_ids);
+          token_ids, is_drafter);
     }
   } else if (element_type == ::litert::ElementType::Int16) {
     if (local_ptr) {
-      FillMaskSingle<int16_t>(static_cast<int16_t*>(local_ptr), seq_q,
-                              seq_k_local, time_step, input_tokens,
-                              input_tokens_size, valid_mask, valid_mask_size, 0,
-                              -32767, local_capacity, /*uses_ringbuffer=*/true,
-                              local_window_size, local_mask_type, token_ids);
+      FillMaskSingle<int16_t>(
+          static_cast<int16_t*>(local_ptr), seq_q, seq_k_local, time_step,
+          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0,
+          -32767, local_capacity, /*uses_ringbuffer=*/true, local_window_size,
+          local_mask_type, token_ids, is_drafter);
     }
     if (global_ptr) {
       FillMaskSingle<int16_t>(
           static_cast<int16_t*>(global_ptr), seq_q, seq_k_global, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0,
           -32767, global_capacity, /*uses_ringbuffer=*/false, 0,
-          global_mask_type, token_ids);
+          global_mask_type, token_ids, is_drafter);
     }
   } else if (element_type == ::litert::ElementType::Float32) {
     if (local_ptr) {
-      FillMaskSingle<float>(static_cast<float*>(local_ptr), seq_q, seq_k_local,
-                            time_step, input_tokens, input_tokens_size,
-                            valid_mask, valid_mask_size, 0.0f, -1e9f,
-                            local_capacity, /*uses_ringbuffer=*/true,
-                            local_window_size, local_mask_type, token_ids);
+      FillMaskSingle<float>(
+          static_cast<float*>(local_ptr), seq_q, seq_k_local, time_step,
+          input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0.0f,
+          -1e9f, local_capacity, /*uses_ringbuffer=*/true, local_window_size,
+          local_mask_type, token_ids, is_drafter);
     }
     if (global_ptr) {
       FillMaskSingle<float>(
           static_cast<float*>(global_ptr), seq_q, seq_k_global, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0.0f,
           -1e9f, global_capacity, /*uses_ringbuffer=*/false, 0,
-          global_mask_type, token_ids);
+          global_mask_type, token_ids, is_drafter);
     }
   } else if (element_type == ::litert::ElementType::Float16) {
     if (local_ptr) {
@@ -396,14 +420,14 @@ absl::Status UpdateInterleavedSWAMasks(
           static_cast<uint16_t*>(local_ptr), seq_q, seq_k_local, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0x0000,
           0xFC00, local_capacity, /*uses_ringbuffer=*/true, local_window_size,
-          local_mask_type, token_ids);
+          local_mask_type, token_ids, is_drafter);
     }
     if (global_ptr) {
       FillMaskSingle<uint16_t>(
           static_cast<uint16_t*>(global_ptr), seq_q, seq_k_global, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0x0000,
           0xFC00, global_capacity, /*uses_ringbuffer=*/false, 0,
-          global_mask_type, token_ids);
+          global_mask_type, token_ids, is_drafter);
     }
   } else if (element_type == ::litert::ElementType::BFloat16) {
     if (local_ptr) {
@@ -411,14 +435,14 @@ absl::Status UpdateInterleavedSWAMasks(
           static_cast<uint16_t*>(local_ptr), seq_q, seq_k_local, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0x0000,
           0xFF80, local_capacity, /*uses_ringbuffer=*/true, local_window_size,
-          local_mask_type, token_ids);
+          local_mask_type, token_ids, is_drafter);
     }
     if (global_ptr) {
       FillMaskSingle<uint16_t>(
           static_cast<uint16_t*>(global_ptr), seq_q, seq_k_global, time_step,
           input_tokens, input_tokens_size, valid_mask, valid_mask_size, 0x0000,
           0xFF80, global_capacity, /*uses_ringbuffer=*/false, 0,
-          global_mask_type, token_ids);
+          global_mask_type, token_ids, is_drafter);
     }
   } else {
     return absl::InvalidArgumentError("Unsupported mask element type");
@@ -427,14 +451,13 @@ absl::Status UpdateInterleavedSWAMasks(
   return absl::OkStatus();
 }
 
-}  // namespace
-
-absl::Status HWMaskUpdate(
+absl::Status HWMaskUpdateInternal(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
     int64_t sliding_window_size, bool uses_ringbuffer, int64_t global_capacity,
     int64_t local_capacity, proto::AttentionMaskType global_mask_type,
-    proto::AttentionMaskType local_mask_type, absl::Span<const int> token_ids) {
+    proto::AttentionMaskType local_mask_type, absl::Span<const int> token_ids,
+    bool is_drafter) {
   static constexpr absl::string_view kMaskLocal = "mask_local";
   static constexpr absl::string_view kMaskGlobal = "mask_global";
   static constexpr absl::string_view kInputTimeStep = "time_step";
@@ -575,7 +598,7 @@ absl::Status HWMaskUpdate(
         local_ptr, global_ptr, mask_type.ElementType(), seq_q, seq_k_local,
         seq_k_global, time_step, input_tokens, input_tokens_size, valid_mask,
         valid_mask_size, sliding_window_size, local_capacity, global_capacity,
-        global_mask_type, local_mask_type, token_ids);
+        global_mask_type, local_mask_type, token_ids, is_drafter);
   }
 
   // Models without a ring buffer, where all layers share one KV cache size:
@@ -598,44 +621,55 @@ absl::Status HWMaskUpdate(
                               time_step, input_tokens, input_tokens_size,
                               valid_mask, valid_mask_size,
                               /*valid_val=*/127, /*masked_val=*/-128,
-                              sliding_window_size, global_capacity);
+                              sliding_window_size, global_capacity, is_drafter);
   } else if (mask_type.ElementType() == ::litert::ElementType::Int16) {
-    FillMasksInternal<int16_t>(static_cast<int16_t*>(local_ptr),
-                               static_cast<int16_t*>(global_ptr), seq_q, seq_k,
-                               time_step, input_tokens, input_tokens_size,
-                               valid_mask, valid_mask_size,
-                               /*valid_val=*/0, /*masked_val=*/-32767,
-                               sliding_window_size, global_capacity);
+    FillMasksInternal<int16_t>(
+        static_cast<int16_t*>(local_ptr), static_cast<int16_t*>(global_ptr),
+        seq_q, seq_k, time_step, input_tokens, input_tokens_size, valid_mask,
+        valid_mask_size, /*valid_val=*/0, /*masked_val=*/-32767,
+        sliding_window_size, global_capacity, is_drafter);
   } else if (mask_type.ElementType() == ::litert::ElementType::Float32) {
     FillMasksInternal<float>(static_cast<float*>(local_ptr),
                              static_cast<float*>(global_ptr), seq_q, seq_k,
                              time_step, input_tokens, input_tokens_size,
                              valid_mask, valid_mask_size,
                              /*valid_val=*/0.0f, /*masked_val=*/-1e9f,
-                             sliding_window_size, global_capacity);
+                             sliding_window_size, global_capacity, is_drafter);
   } else if (mask_type.ElementType() == ::litert::ElementType::Float16) {
     // Opaque uint16_t representation of IEEE 754 Float16.
     // valid_val is 0.0f (0x0000) and masked_val is -infinity (0xFC00).
-    FillMasksInternal<uint16_t>(static_cast<uint16_t*>(local_ptr),
-                                static_cast<uint16_t*>(global_ptr), seq_q,
-                                seq_k, time_step, input_tokens,
-                                input_tokens_size, valid_mask, valid_mask_size,
-                                /*valid_val=*/0x0000, /*masked_val=*/0xFC00,
-                                sliding_window_size, global_capacity);
+    FillMasksInternal<uint16_t>(
+        static_cast<uint16_t*>(local_ptr), static_cast<uint16_t*>(global_ptr),
+        seq_q, seq_k, time_step, input_tokens, input_tokens_size, valid_mask,
+        valid_mask_size, /*valid_val=*/0x0000, /*masked_val=*/0xFC00,
+        sliding_window_size, global_capacity, is_drafter);
   } else if (mask_type.ElementType() == ::litert::ElementType::BFloat16) {
     // Opaque uint16_t representation of Brain Float16.
     // valid_val is 0.0f (0x0000) and masked_val is -infinity (0xFF80).
-    FillMasksInternal<uint16_t>(static_cast<uint16_t*>(local_ptr),
-                                static_cast<uint16_t*>(global_ptr), seq_q,
-                                seq_k, time_step, input_tokens,
-                                input_tokens_size, valid_mask, valid_mask_size,
-                                /*valid_val=*/0x0000, /*masked_val=*/0xFF80,
-                                sliding_window_size, global_capacity);
+    FillMasksInternal<uint16_t>(
+        static_cast<uint16_t*>(local_ptr), static_cast<uint16_t*>(global_ptr),
+        seq_q, seq_k, time_step, input_tokens, input_tokens_size, valid_mask,
+        valid_mask_size, /*valid_val=*/0x0000, /*masked_val=*/0xFF80,
+        sliding_window_size, global_capacity, is_drafter);
   } else {
     return absl::InvalidArgumentError("Unsupported mask element type");
   }
 
   return absl::OkStatus();
+}
+
+}  // namespace
+
+absl::Status HWMaskUpdate(
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
+    int64_t sliding_window_size, bool uses_ringbuffer, int64_t global_capacity,
+    int64_t local_capacity, proto::AttentionMaskType global_mask_type,
+    proto::AttentionMaskType local_mask_type, absl::Span<const int> token_ids) {
+  return HWMaskUpdateInternal(in_buffers, out_buffers, sliding_window_size,
+                              uses_ringbuffer, global_capacity, local_capacity,
+                              global_mask_type, local_mask_type, token_ids,
+                              /*is_drafter=*/false);
 }
 
 absl::Status HWMaskUpdate(
@@ -648,6 +682,19 @@ absl::Status HWMaskUpdate(
                       layout.uses_ringbuffer, layout.global_cache_length,
                       local_capacity, layout.global_mask_type,
                       layout.local_mask_type, token_ids);
+}
+
+absl::Status HWMaskUpdateForDrafter(
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
+    const NpuGraphLayout& layout) {
+  const int64_t local_capacity =
+      layout.local_cache_length.value_or(layout.global_cache_length);
+  return HWMaskUpdateInternal(
+      in_buffers, out_buffers, layout.sliding_window_size,
+      layout.uses_ringbuffer, layout.global_cache_length, local_capacity,
+      layout.global_mask_type, layout.local_mask_type, /*token_ids=*/{},
+      /*is_drafter=*/true);
 }
 
 absl::StatusOr<NpuMask> NpuMask::CreateForTest(
@@ -961,7 +1008,7 @@ absl::Status NpuMask::RunVerify(absl::string_view signature) const {
 absl::Status NpuMask::RunDrafter(absl::string_view signature) const {
   if (method_ == MaskUpdateMethod::kWH) {
     RET_CHECK(layout_ != nullptr) << "layout must not be null for kWH";
-    return HWMaskUpdate(
+    return HWMaskUpdateForDrafter(
         const_cast<
             absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&>(
             mask_context_.decode_input_buffers),

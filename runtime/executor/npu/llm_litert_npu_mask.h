@@ -240,6 +240,15 @@ absl::Status HWMaskUpdate(
         proto::ATTENTION_MASK_TYPE_CAUSAL,
     absl::Span<const int> token_ids = {});
 
+// Fills past-only MTP drafter attention masks (`[1, 1, 1, capacity]` with no
+// current-batch suffix), where `time_step` in `in_buffers` is the drafter query
+// position (`start_step - 1`) and `time_step + 1` tokens are committed in the
+// KV cache.
+absl::Status HWMaskUpdateForDrafter(
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
+    const NpuGraphLayout& layout);
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_NPU_LLM_LITERT_NPU_MASK_H_
