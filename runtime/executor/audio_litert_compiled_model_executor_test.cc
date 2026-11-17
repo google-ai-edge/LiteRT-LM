@@ -63,6 +63,16 @@ constexpr absl::string_view kTestAudioStreamingModelPath =
     "litert_lm/runtime/testdata/dummy_audio_streaming.litertlm";
 constexpr absl::string_view kTestAudioNoMaskModelPath =
     "litert_lm/runtime/testdata/dummy_audio_no_mask.litertlm";
+// Audio encoder with runtime-BMM LoRA inputs; see
+// testdata/generate_dummy_audio_lora.py.
+constexpr absl::string_view kTestAudioLoRAModelPath =
+    "litert_lm/runtime/testdata/dummy_audio_lora.litertlm";
+constexpr absl::string_view kTestAllOnesLoRAPath =
+    "litert_lm/runtime/testdata/test_lora_rank32_f16_all_ones.tflite";
+// End channel in `lora_param_tensor` of `kTestAudioLoRAModelPath`: its LoRA
+// inputs are `[1, 32, 1, 2048]` and `[1, 32, 1, 512]` with rank 32, so the
+// largest non-rank extent is 2048.
+constexpr int32_t kLoRAModelParamEnd = 2048;
 constexpr int kNoMaskEmbeddingDimensions = 5;
 constexpr int kSpectrogramFrequencySlots = 8;
 constexpr int kSpectrogramSequenceLength = 10;
@@ -71,8 +81,10 @@ constexpr int kEmbeddingDimensions = 6;
 
 using ::testing::Each;
 using ::testing::ElementsAre;
+using ::testing::FloatNear;
 using ::testing::HasSubstr;
 using ::testing::Not;
+using ::testing::Pointwise;
 using ::testing::status::StatusIs;
 
 template <typename T>
@@ -192,6 +204,41 @@ absl::Status WriteStreamingModelWithPrevMaskInput(
   }
   dst_file.write(model_bytes.data(), model_bytes.size());
   return absl::OkStatus();
+}
+
+// Returns the features that `kTestAudioLoRAModelPath` computes for all-ones
+// spectrogram frames: the fixed projection of the frames plus `lora_delta`, the
+// max of each LoRA weight input (0 for zeroed LoRA weights and 2 for the
+// all-ones LoRA). A wrong `lora_param_tensor` adds 1000.
+std::vector<float> ExpectedLoRAModelFeatures(float lora_delta) {
+  std::vector<float> expected;
+  expected.reserve(kEmbeddingSequenceLength * kNoMaskEmbeddingDimensions);
+  for (int token = 0; token < kEmbeddingSequenceLength; ++token) {
+    for (int dim = 0; dim < kNoMaskEmbeddingDimensions; ++dim) {
+      expected.push_back(60.0f + 1.6f * dim + lora_delta);
+    }
+  }
+  return expected;
+}
+
+// Encodes all-ones spectrogram frames with `kTestAudioLoRAModelPath` and
+// returns the projected audio embeddings.
+absl::StatusOr<std::vector<float>> EncodeOnesWithLoRAModel(
+    AudioLiteRtCompiledModelExecutor& audio_executor) {
+  std::vector<float> mel_spectrogram_data(
+      kSpectrogramSequenceLength * kSpectrogramFrequencySlots, 1.0f);
+  ABSL_ASSIGN_OR_RETURN(
+      auto mel_spectrogram_tensor_buffer,
+      CreateTensorBuffer<const float>(
+          mel_spectrogram_data,
+          RankedTensorType(GetElementType<float>(),
+                           Layout(Dimensions({1, kSpectrogramSequenceLength,
+                                              kSpectrogramFrequencySlots})))));
+  ABSL_ASSIGN_OR_RETURN(auto audio_data,
+                        audio_executor.Encode(mel_spectrogram_tensor_buffer));
+  ABSL_ASSIGN_OR_RETURN(auto projected_audio_embeddings_ptr,
+                        audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+  return GetDataAsVector<float>(*projected_audio_embeddings_ptr);
 }
 
 }  // namespace
@@ -2211,6 +2258,83 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest, ProfilingCollectsAudioStats) {
             kEmbeddingSequenceLength);
   EXPECT_TRUE(stats.GetLatency("Audio encoder inference").has_value());
   EXPECT_TRUE(stats.GetLatency("Audio adapter inference").has_value());
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       InitializeBuffersPopulatesLoRAParamTensorWithoutLoRA) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioLoRAModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  // Without a LoRA, `lora_param_tensor` holds the LoRA channel range rather
+  // than zeros, which would make GPU runtime-BMM LoRA ops skip writing their
+  // intermediate outputs.
+  auto& input_buffers_map = GetMutableEncoderInputBuffersMap(*audio_executor);
+  ASSERT_TRUE(input_buffers_map.contains("lora_param_tensor"));
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<int32_t> lora_params,
+      GetDataAsVector<int32_t>(input_buffers_map.at("lora_param_tensor")));
+  EXPECT_THAT(
+      lora_params,
+      ElementsAre(0, kLoRAModelParamEnd, kLoRAModelParamEnd, kLoRAModelParamEnd,
+                  kLoRAModelParamEnd, kLoRAModelParamEnd, kLoRAModelParamEnd));
+
+  // The model adds a penalty to its output for any other `lora_param_tensor`,
+  // and the zeroed LoRA weights add nothing.
+  ASSERT_OK_AND_ASSIGN(auto embeddings,
+                       EncodeOnesWithLoRAModel(*audio_executor));
+  EXPECT_THAT(embeddings,
+              Pointwise(FloatNear(1e-4f), ExpectedLoRAModelFeatures(
+                                              /*lora_delta=*/0.0f)));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest,
+       UseLoRANulloptRepopulatesLoRAParamTensor) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioLoRAModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+  ASSERT_OK_AND_ASSIGN(
+      ModelAssets lora_assets,
+      ModelAssets::Create((std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAllOnesLoRAPath))
+                              .string()));
+  ASSERT_OK(audio_executor->LoadLoRA(/*lora_id=*/1, lora_assets));
+  ASSERT_OK(audio_executor->UseLoRA(/*lora_id=*/1));
+
+  // The all-ones LoRA weights add 2, and the LoRA's `lora_param_tensor` holds
+  // the LoRA channel range.
+  ASSERT_OK_AND_ASSIGN(auto lora_embeddings,
+                       EncodeOnesWithLoRAModel(*audio_executor));
+  EXPECT_THAT(lora_embeddings,
+              Pointwise(FloatNear(1e-4f), ExpectedLoRAModelFeatures(
+                                              /*lora_delta=*/2.0f)));
+
+  // Deactivating the LoRA rebinds zeroed LoRA weights and a new
+  // `lora_param_tensor`, which must hold the LoRA channel range again.
+  ASSERT_OK(audio_executor->UseLoRA(std::nullopt));
+  auto& input_buffers_map = GetMutableEncoderInputBuffersMap(*audio_executor);
+  ASSERT_TRUE(input_buffers_map.contains("lora_param_tensor"));
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<int32_t> lora_params,
+      GetDataAsVector<int32_t>(input_buffers_map.at("lora_param_tensor")));
+  EXPECT_THAT(
+      lora_params,
+      ElementsAre(0, kLoRAModelParamEnd, kLoRAModelParamEnd, kLoRAModelParamEnd,
+                  kLoRAModelParamEnd, kLoRAModelParamEnd, kLoRAModelParamEnd));
+
+  ASSERT_OK_AND_ASSIGN(auto base_embeddings,
+                       EncodeOnesWithLoRAModel(*audio_executor));
+  EXPECT_THAT(base_embeddings,
+              Pointwise(FloatNear(1e-4f), ExpectedLoRAModelFeatures(
+                                              /*lora_delta=*/0.0f)));
 }
 
 }  // namespace

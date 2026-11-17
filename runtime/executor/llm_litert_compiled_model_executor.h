@@ -427,6 +427,13 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // `RunSignature()`.
   LlmLiteRtVerifier::PassRunner CreateVerifyPassRunner();
 
+  // Binds zero-initialized LoRA weight buffers (and a populated
+  // lora_param_tensor channel range) in `signature_name` when no LoRA is
+  // active.
+  absl::Status BindZeroLoRABuffers(
+      absl::string_view signature_name,
+      absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers);
+
   // Creates Prefill input buffers for a given signature.
   absl::Status CreatePrefillInputBuffers(
       absl::string_view prefill_signature, int sequence_length,
@@ -579,6 +586,12 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // The embedding lookup for the optional per layer embedder model.
   std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup_;
+
+  // Cached zero-initialized LoRA buffers per signature used when no LoRA is
+  // active on a LoRA-capable model.
+  absl::flat_hash_map<std::string,
+                      absl::flat_hash_map<std::string, TensorBuffer>>
+      zero_lora_buffers_by_signature_;
 
   // Whether to use FP16 precision for the calculation.
   bool use_fp16_precision_;
