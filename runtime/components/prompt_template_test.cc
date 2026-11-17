@@ -351,5 +351,45 @@ TEST(PromptTemplateCustomTest, EmptyMessagesAllTestdataTemplates) {
   }
 }
 
+TEST(PromptTemplateTest, NoneTestIsTrueForNull) {
+  PromptTemplate prompt_template(
+      "{% if val is none %}none{% else %}not_none{% endif %},"
+      "{% if val is not none %}not_none{% else %}none{% endif %}");
+  PromptTemplateInput input;
+  input.messages = json::array();
+  input.extra_context["val"] = nullptr;
+
+  ASSERT_OK_AND_ASSIGN(std::string output, prompt_template.Apply(input));
+  EXPECT_EQ(output, "none,none");
+}
+
+TEST(PromptTemplateTest, FunctionGemmaToolCallWithNullContent) {
+  std::ifstream file(GetTestdataPath("google-function-gemma-hf.jinja"));
+  ASSERT_TRUE(file.is_open());
+  std::string template_content((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+
+  PromptTemplate prompt_template(template_content);
+  PromptTemplateInput input;
+  input.messages = json::array({
+      {{"role", "user"}, {"content", "What is the weather in Paris?"}},
+      {{"role", "assistant"},
+       {"content", nullptr},
+       {"tool_calls",
+        json::array({{
+            {"type", "function"},
+            {"function",
+             {{"name", "GetWeather"}, {"arguments", {{"location", "Paris"}}}}},
+        }})}},
+  });
+  input.tools = json::array({GetTools()});
+  input.add_generation_prompt = false;
+
+  ASSERT_OK_AND_ASSIGN(std::string output, prompt_template.Apply(input));
+  EXPECT_THAT(output, testing::HasSubstr(
+                          "<start_function_call>call:GetWeather{location:"
+                          "<escape>Paris<escape>}<end_function_call>"));
+}
+
 }  // namespace
 }  // namespace litert::lm

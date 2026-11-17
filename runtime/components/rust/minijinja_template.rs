@@ -149,8 +149,10 @@ fn tojson(value: minijinja::Value) -> Result<String, minijinja::Error> {
     })
 }
 
+// As in Jinja2, `is none` is true for null values. Undefined values also count
+// as none, e.g. `tools is none` when no tools are passed.
 fn is_none(value: minijinja::Value) -> bool {
-    value.is_undefined()
+    value.is_undefined() || value.is_none()
 }
 
 fn lstrip(s: std::borrow::Cow<'_, str>, chars: Option<std::borrow::Cow<'_, str>>) -> String {
@@ -359,6 +361,22 @@ mod tests {
         let res = wrapper.apply(inputs.to_string());
         assert!(res.is_ok);
         assert_eq!(res.content, "does_not_exist is none,\nexisting is not none");
+    }
+
+    #[test]
+    fn test_is_none_null() {
+        let source = "{% if null_val is none %}null is none{% else %}FAIL{% endif %},{% if null_val is not none %}FAIL{% else %}not none is false{% endif %}";
+        let wrapper = new_minijinja_template(source.to_string());
+
+        let inputs = json!({
+            "messages": [],
+            "tools": null,
+            "add_generation_prompt": false,
+            "extra_context": {"null_val": null}
+        });
+        let res = wrapper.apply(inputs.to_string());
+        assert!(res.is_ok);
+        assert_eq!(res.content, "null is none,not none is false");
     }
 
     #[test]
