@@ -614,7 +614,18 @@ class Conversation(interfaces.AbstractConversation):
                 )
 
               if is_tool_call:
-                full_response_for_tools = msg_dict
+                if full_response_for_tools is None:
+                  full_response_for_tools = dict(msg_dict)
+                  if isinstance(
+                      full_response_for_tools.get("tool_calls"), list
+                  ):
+                    full_response_for_tools["tool_calls"] = list(
+                        full_response_for_tools["tool_calls"]
+                    )
+                elif isinstance(msg_dict.get("tool_calls"), list):
+                  full_response_for_tools.setdefault("tool_calls", []).extend(
+                      msg_dict["tool_calls"]
+                  )
               else:
                 yield Message.from_json(msg_dict)
             else:

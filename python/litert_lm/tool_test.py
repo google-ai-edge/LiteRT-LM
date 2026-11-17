@@ -525,6 +525,108 @@ class ConversationToolHandlingTest(absltest.TestCase):
         ["required", None],
     )
 
+  def test_send_message_async_accumulates_streamed_parallel_tool_calls(self):
+    mock_tool2 = mock.create_autospec(
+        litert_lm.Tool, instance=True, spec_set=True
+    )
+    mock_tool2.execute.return_value = "mock_result_2"
+    conv = self._create_conversation_with_lib()
+    conv._tools_map["my_tool2"] = mock_tool2
+
+    turn_streams = iter([
+        [
+            (
+                json.dumps({
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "function": {
+                            "name": "my_tool",
+                            "arguments": {"arg1": "value1"},
+                        }
+                    }],
+                }).encode(),
+                False,
+            ),
+            (
+                json.dumps({
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "function": {
+                            "name": "my_tool2",
+                            "arguments": {"arg2": "value2"},
+                        }
+                    }],
+                }).encode(),
+                False,
+            ),
+            (b"", True),
+        ],
+        [(json.dumps(_ANSWER_RESPONSE).encode(), True)],
+    ])
+    sent_messages = []
+    current_chunk = [b"", False]
+
+    def send_message_stream(conv_ptr, message, context, args, callback, data):
+      del conv_ptr, context, args  # Unused.
+      sent_messages.append(json.loads(message))
+      for text_bytes, is_final in next(turn_streams):
+        current_chunk[0] = text_bytes
+        current_chunk[1] = is_final
+        callback(data, 1)
+      return 0
+
+    def get_checked(lib, name, restype, chunk_ptr):
+      del lib, restype, chunk_ptr  # Unused.
+      if name == "litert_lm_stream_chunk_get_text":
+        return current_chunk[0]
+      if name == "litert_lm_stream_chunk_is_final":
+        return current_chunk[1]
+      return None
+
+    conv._lib.litert_lm_conversation_send_message_stream.side_effect = (
+        send_message_stream
+    )
+    self.enter_context(
+        mock.patch.object(conv, "_create_optional_args", return_value=None)
+    )
+    self.enter_context(
+        mock.patch.object(
+            litert_lm.conversation, "get_checked", side_effect=get_checked
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            litert_lm.conversation,
+            "STREAM_CALLBACK_TYPE",
+            side_effect=lambda callback: callback,
+        )
+    )
+
+    responses = list(conv.send_message_async("Run both tools"))
+
+    self.mock_tool.execute.assert_called_once_with({"arg1": "value1"})
+    mock_tool2.execute.assert_called_once_with({"arg2": "value2"})
+    self.assertEqual([r.to_json() for r in responses], [_ANSWER_RESPONSE])
+    self.assertLen(sent_messages, 2)
+    self.assertEqual(
+        sent_messages[1],
+        {
+            "role": "tool",
+            "content": [
+                {
+                    "type": "tool_response",
+                    "name": "my_tool",
+                    "response": "mock_result",
+                },
+                {
+                    "type": "tool_response",
+                    "name": "my_tool2",
+                    "response": "mock_result_2",
+                },
+            ],
+        },
+    )
+
 
 class ConversationToolCallLimitTest(absltest.TestCase):
   """Checks that the automatic tool-calling loop stops after 25 rounds."""
