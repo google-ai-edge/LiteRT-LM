@@ -263,6 +263,9 @@ class SerialExecutionManager : public ExecutionManager {
     return runtime_debugger_ != nullptr;
   }
 
+  // Deletes all AI Edge Debugger captures of `session_id`.
+  absl::Status DeleteSessionDebugCaptures(SessionId session_id) override;
+
  private:
   explicit SerialExecutionManager(
       Tokenizer* absl_nonnull tokenizer,

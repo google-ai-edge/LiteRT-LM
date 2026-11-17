@@ -282,6 +282,10 @@ class ThreadedExecutionManager : public ExecutionManager {
     return runtime_debugger_ != nullptr;
   }
 
+  // Deletes all AI Edge Debugger captures of `session_id`.
+  absl::Status DeleteSessionDebugCaptures(SessionId session_id) override
+      ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
+
  private:
   ThreadedExecutionManager(
       Tokenizer* absl_nonnull tokenizer,

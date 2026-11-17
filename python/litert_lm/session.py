@@ -287,3 +287,22 @@ class Session(interfaces.AbstractSession):
         self._engine,
         "litert_lm_experimental_session_get_debug_info",
     )
+
+  def delete_debug_captures(self) -> None:
+    """Deletes all AI Edge Debugger captures of this session.
+
+    Removes captured files under `<cache_dir>/litert_lm_debugger/<session_id>/`
+    while keeping the session open for subsequent turns. Does nothing when the
+    debugger is not enabled for this session.
+
+    Raises:
+      RuntimeError: If the session is closed, if the session has active tasks,
+        or if deleting the captures fails.
+    """
+    if not self._ptr:
+      raise RuntimeError("Session is closed.")
+    call_checked(
+        self._lib,
+        "litert_lm_experimental_session_delete_debug_captures",
+        self._ptr,
+    )

@@ -1193,6 +1193,18 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.c_bool,
   ]
+  lib.litert_lm_experimental_session_delete_debug_captures.restype = (
+      ctypes.c_int
+  )
+  lib.litert_lm_experimental_session_delete_debug_captures.argtypes = [
+      ctypes.c_void_p,
+  ]
+  lib.litert_lm_experimental_conversation_delete_debug_captures.restype = (
+      ctypes.c_int
+  )
+  lib.litert_lm_experimental_conversation_delete_debug_captures.argtypes = [
+      ctypes.c_void_p,
+  ]
   lib.litert_lm_experimental_session_get_debug_info.restype = ctypes.c_int
   lib.litert_lm_experimental_session_get_debug_info.argtypes = [
       ctypes.c_void_p,

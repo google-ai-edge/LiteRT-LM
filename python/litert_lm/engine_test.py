@@ -445,6 +445,30 @@ class EngineTest(LiteRtLmTestBase):
         )
         mock_set_enable_debugger.reset_mock()
 
+  def test_delete_debug_captures(self):
+    cache_dir = self.create_tempdir().full_path
+    capture_root = os.path.join(cache_dir, "litert_lm_debugger")
+    with litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        enable_debugger=True,
+        cache_dir=cache_dir,
+    ) as engine:
+      with engine.create_session() as session:
+        self.assertTrue(os.path.exists(capture_root))
+        session.delete_debug_captures()
+        self.assertTrue(os.path.exists(capture_root))
+      self.assertFalse(os.path.exists(capture_root))
+      with self.assertRaisesRegex(RuntimeError, "Session is closed"):
+        session.delete_debug_captures()
+      with engine.create_conversation() as conversation:
+        self.assertTrue(os.path.exists(capture_root))
+        conversation.delete_debug_captures()
+        self.assertTrue(os.path.exists(capture_root))
+      self.assertFalse(os.path.exists(capture_root))
+      with self.assertRaisesRegex(RuntimeError, "Conversation is closed"):
+        conversation.delete_debug_captures()
+
   def test_engine_init_with_max_vision_tokens_per_image(self):
     lib = litert_lm._ffi._get_lib()
     orig_fn = lib.litert_lm_engine_settings_set_max_vision_tokens_per_image

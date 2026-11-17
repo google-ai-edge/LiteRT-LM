@@ -218,6 +218,9 @@ class SessionAdvanced : public SessionInterface {
   // Returns debug info for this session.
   std::optional<SessionDebugInfo> GetSessionDebugInfo() const override;
 
+  // Deletes all AI Edge Debugger captures of this session.
+  absl::Status DeleteDebugCaptures() override ABSL_LOCKS_EXCLUDED(mutex_);
+
   // Returns the LiteRT environment associated with this session's engine,
   // if available.
   absl::StatusOr<const ::litert::Environment*> GetEnvironment() const override;
