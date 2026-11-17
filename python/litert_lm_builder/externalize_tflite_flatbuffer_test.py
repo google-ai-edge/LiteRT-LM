@@ -725,6 +725,141 @@ class ExternalizeTfliteFlatbufferTest(absltest.TestCase):
           model, raw
       )
 
+  def _externalize_moe_model(
+      self,
+      num_inputs: int,
+      add_fully_connected: bool = False,
+      externalize_moe_weights: bool = True,
+  ) -> list[schema.TensorT]:
+    """Externalizes a model with one CUSTOM "moe" op of `num_inputs` inputs.
+
+    Every moe input, including the activations at inputs 0..2, is a constant
+    with 16 elements (above the threshold of 8), so only the op-specific rules
+    decide which tensors are externalized. Tensor `i` is moe input `i`.
+
+    Args:
+      num_inputs: The number of moe op inputs.
+      add_fully_connected: Whether a FULLY_CONNECTED op also consumes every moe
+        constant input as its weights.
+      externalize_moe_weights: Passed to `externalize`.
+
+    Returns:
+      The tensors of the processed subgraph.
+    """
+    root = pathlib.Path(self.create_tempdir().full_path)
+    model = schema.ModelT()
+    model.version = 3
+    moe_code = schema.OperatorCodeT()
+    moe_code.builtinCode = schema.BuiltinOperator.CUSTOM
+    moe_code.deprecatedBuiltinCode = moe_code.builtinCode
+    moe_code.customCode = b"moe"
+    fc_code = schema.OperatorCodeT()
+    fc_code.builtinCode = schema.BuiltinOperator.FULLY_CONNECTED
+    fc_code.deprecatedBuiltinCode = fc_code.builtinCode
+    model.operatorCodes = [moe_code, fc_code]
+
+    model.buffers = [schema.BufferT()]
+    subgraph = schema.SubGraphT()
+    subgraph.tensors = []
+    for idx in range(num_inputs):
+      buffer = schema.BufferT()
+      buffer.data = bytes([idx]) * (16 * 4)
+      model.buffers.append(buffer)
+      subgraph.tensors.append(
+          _make_float32_tensor([16], len(model.buffers) - 1)
+      )
+    output_idx = len(subgraph.tensors)
+    subgraph.tensors.append(_make_float32_tensor([1, 4], 0))
+    subgraph.inputs = []
+    subgraph.outputs = [output_idx]
+
+    moe_op = schema.OperatorT()
+    moe_op.opcodeIndex = 0
+    moe_op.inputs = list(range(num_inputs))
+    moe_op.outputs = [output_idx]
+    subgraph.operators = [moe_op]
+    if add_fully_connected:
+      for weight_idx in range(3, num_inputs):
+        fc_op = schema.OperatorT()
+        fc_op.opcodeIndex = 1
+        fc_op.inputs = [output_idx, weight_idx, -1]
+        fc_op.outputs = [output_idx]
+        subgraph.operators.append(fc_op)
+    model.subgraphs = [subgraph]
+
+    builder = flatbuffers.Builder(1024)
+    builder.Finish(model.Pack(builder), file_identifier=b"TFL3")
+    input_model = root / "moe.tflite"
+    input_model.write_bytes(bytes(builder.Output()))
+
+    output_dir = root / "out"
+    externalize_tflite_flatbuffer.externalize(
+        input_model=input_model,
+        output_dir=output_dir,
+        group_name="tflite_weights",
+        num_elements_threshold=8,
+        externalize_moe_weights=externalize_moe_weights,
+    )
+    processed = schema.ModelT.InitFromPackedBuf(
+        (output_dir / "model.tflite").read_bytes(), 0
+    )
+    return processed.subgraphs[0].tensors
+
+  def _assert_inline(self, tensors: list[schema.TensorT], idx: int):
+    self.assertEqual(tensors[idx].externalBuffer, 0, f"tensor {idx}")
+    self.assertNotEqual(tensors[idx].buffer, 0, f"tensor {idx}")
+
+  def _assert_externalized(self, tensors: list[schema.TensorT], idx: int):
+    self.assertNotEqual(tensors[idx].externalBuffer, 0, f"tensor {idx}")
+    self.assertEqual(tensors[idx].buffer, 0, f"tensor {idx}")
+
+  def test_keeps_moe_inputs_inline_by_default(self):
+    for num_inputs in (7, 10):
+      with self.subTest(num_inputs=num_inputs):
+        tensors = self._externalize_moe_model(
+            num_inputs=num_inputs, externalize_moe_weights=False
+        )
+
+        for idx in range(num_inputs):
+          self._assert_inline(tensors, idx)
+
+  def test_externalizes_quantized_moe_weights_and_block_scales(self):
+    tensors = self._externalize_moe_model(num_inputs=10)
+
+    # Activations (src, top_weights, top_indices).
+    for idx in range(3):
+      self._assert_inline(tensors, idx)
+    # Expert weights and block scales.
+    for idx in range(3, 9):
+      self._assert_externalized(tensors, idx)
+    # per_expert_scale, which the GPU parser copies on the CPU.
+    self._assert_inline(tensors, 9)
+
+  def test_keeps_fp32_moe_weights_and_scales_inline(self):
+    tensors = self._externalize_moe_model(num_inputs=7)
+
+    for idx in range(7):
+      self._assert_inline(tensors, idx)
+
+  def test_keeps_moe_inputs_copied_on_cpu_inline_when_shared(self):
+    for num_inputs, externalized in ((7, ()), (10, range(3, 9))):
+      with self.subTest(num_inputs=num_inputs):
+        tensors = self._externalize_moe_model(
+            num_inputs=num_inputs, add_fully_connected=True
+        )
+
+        for idx in range(3, num_inputs):
+          if idx in externalized:
+            self._assert_externalized(tensors, idx)
+          else:
+            self._assert_inline(tensors, idx)
+
+  def test_ignores_moe_with_unsupported_input_count(self):
+    tensors = self._externalize_moe_model(num_inputs=8)
+
+    for idx in range(8):
+      self._assert_inline(tensors, idx)
+
 
 if __name__ == "__main__":
   absltest.main()

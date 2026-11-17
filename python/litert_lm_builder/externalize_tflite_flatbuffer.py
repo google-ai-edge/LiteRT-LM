@@ -15,8 +15,11 @@
 
 This FlatBuffer-level tool moves only large constants that LiteRT-LM's scoped
 external-weight path can consume: weights at input 1 of FullyConnected, Conv2D,
-DepthwiseConv2D with depth multiplier 1, and EmbeddingLookup. Other constants
-remain embedded so they do not become delegate partition inputs.
+DepthwiseConv2D with depth multiplier 1, and EmbeddingLookup. With
+`externalize_moe_weights`, it also moves the quantized expert weights and block
+scales (inputs 3..8) of the 10-input CUSTOM "moe" op; this is only supported by
+the CPU (XNNPACK) path for now. Other constants remain embedded so they do not
+become delegate partition inputs.
 
 After externalization, a model can additionally be made to reference payloads
 stored in *another* model's weight blob instead of its own copy (see
@@ -70,6 +73,13 @@ def _builtin_code(operator_code) -> int:
   if builtin == 0 and int(operator_code.deprecatedBuiltinCode) != 0:
     return int(operator_code.deprecatedBuiltinCode)
   return builtin
+
+
+def _custom_code(operator_code) -> str:
+  code = operator_code.customCode
+  if isinstance(code, bytes):
+    return code.decode("utf-8", errors="ignore")
+  return code or ""
 
 
 def _tensor_element_count(tensor) -> int:
@@ -241,9 +251,18 @@ def _bias_tensor_indices(model) -> set[tuple[int, int]]:
   return bias_tensors
 
 
-def _shareable_weight_tensor_indices(model) -> set[tuple[int, int]]:
-  """Returns `(subgraph_index, tensor_index)` pairs of externalizable weights."""
+def _shareable_weight_tensor_indices(
+    model, externalize_moe_weights: bool = False
+) -> set[tuple[int, int]]:
+  """Returns `(subgraph_index, tensor_index)` pairs of externalizable weights.
+
+  Args:
+    model: The `schema.ModelT` to inspect.
+    externalize_moe_weights: Whether to include the quantized expert weights and
+      block scales of CUSTOM "moe" ops. See `externalize`.
+  """
   depthwise_conv = _enum_value(schema.BuiltinOperator, "DEPTHWISE_CONV_2D")
+  custom_op = _enum_value(schema.BuiltinOperator, "CUSTOM")
   weight_ops = {
       _enum_value(schema.BuiltinOperator, "EMBEDDING_LOOKUP"),
       _enum_value(schema.BuiltinOperator, "FULLY_CONNECTED"),
@@ -267,6 +286,32 @@ def _shareable_weight_tensor_indices(model) -> set[tuple[int, int]]:
           ) != 1:
             # The GPU parser transposes these weights on the CPU. Keep them
             # inline even if another supported operator shares the tensor.
+            inline_weight_tensors.add((sg_idx, weight_idx))
+      elif (
+          externalize_moe_weights
+          and builtin_code == custom_op
+          and _custom_code(opcode) == "moe"
+      ):
+        # The `moe` custom op takes activations in inputs 0..2. The ML Drift
+        # GPU parser binds only the quantized expert weights and block scales
+        # of the 10-input int8/int4 op (inputs 3..8) to shared or external
+        # buffers. It copies the weights and scales of the 7-input fp32 op
+        # (inputs 3..6) and the per-expert scale of the 10-input op (input 9)
+        # on the CPU, so keep those inline even if another supported operator
+        # shares the tensor.
+        if len(op.inputs) == 10:
+          external_inputs, inline_inputs = op.inputs[3:9], op.inputs[9:]
+        elif len(op.inputs) == 7:
+          external_inputs, inline_inputs = (), op.inputs[3:]
+        else:
+          external_inputs, inline_inputs = (), ()
+        for input_idx in external_inputs:
+          weight_idx = int(input_idx)
+          if weight_idx >= 0:
+            weight_tensors.add((sg_idx, weight_idx))
+        for input_idx in inline_inputs:
+          weight_idx = int(input_idx)
+          if weight_idx >= 0:
             inline_weight_tensors.add((sg_idx, weight_idx))
   return weight_tensors - inline_weight_tensors
 
@@ -424,8 +469,29 @@ def externalize(
     group_name: str,
     num_elements_threshold: int,
     existing_weights: pathlib.Path | None = None,
+    externalize_moe_weights: bool = False,
 ) -> None:
-  """Externalizes eligible weight buffers of `input_model` into `output_dir`."""
+  """Externalizes eligible weight buffers of `input_model` into `output_dir`.
+
+  Args:
+    input_model: The TFLite model to read.
+    output_dir: The directory to write `model.tflite` and the weight file to.
+    group_name: The name of the external buffer group and of the weight file.
+    num_elements_threshold: Tensors with at most this many elements stay inline.
+    existing_weights: An optional weight file whose content is copied to the
+      start of the output weight file.
+    externalize_moe_weights: Whether to also externalize the quantized expert
+      weights and block scales (inputs 3..8) of 10-input CUSTOM "moe" ops. Only
+      the CPU (XNNPACK) path can run such models: without
+      `RestoreExternalWeightsForCpu()` (e.g. GPU-only compilation), the
+      externalized tensors are not constant and the ML Drift GPU "moe" parser
+      rejects the op.
+  """
+  # TODO(b/585390762): Enable `externalize_moe_weights` by default once the ML
+  # Drift "moe" parsers (`MoeExpertsOperationParser::IsSupported` and
+  # `ir::MoeExpertsIsSupported`) accept inputs 3..8 that have an external buffer
+  # id (`Subgraph::GetExternalTensorBufferIdentifiers()`), like the
+  # FULLY_CONNECTED parser does.
   output_dir.mkdir(parents=True, exist_ok=True)
   output_model = output_dir / "model.tflite"
   output_weights = output_dir / group_name
@@ -441,7 +507,9 @@ def externalize(
 
   group_idx = None
   bias_tensors = _bias_tensor_indices(model)
-  shareable_weight_tensors = _shareable_weight_tensor_indices(model)
+  shareable_weight_tensors = _shareable_weight_tensor_indices(
+      model, externalize_moe_weights
+  )
   input_tensors = _subgraph_input_indices(model)
   externalized_tensors: set[tuple[int, int]] = set()
   candidate_buffers: set[int] = set()
@@ -739,6 +807,15 @@ def main() -> None:
   parser.add_argument("--output_dir", type=pathlib.Path, required=True)
   parser.add_argument("--group_name", default="tflite_weights")
   parser.add_argument("--num_elements_threshold", type=int, default=256)
+  parser.add_argument(
+      "--externalize_moe_weights",
+      action="store_true",
+      help=(
+          "Also externalize the quantized expert weights and block scales of"
+          ' CUSTOM "moe" ops. CPU (XNNPACK) only: the GPU delegate does not'
+          " accept externalized moe inputs yet."
+      ),
+  )
   args = parser.parse_args()
   logging.basicConfig(level=logging.INFO, format="%(message)s")
   externalize(
@@ -746,6 +823,7 @@ def main() -> None:
       output_dir=args.output_dir,
       group_name=args.group_name,
       num_elements_threshold=args.num_elements_threshold,
+      externalize_moe_weights=args.externalize_moe_weights,
   )
 
 
