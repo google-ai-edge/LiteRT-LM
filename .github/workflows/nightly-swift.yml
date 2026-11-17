@@ -32,37 +32,33 @@ jobs:
     name: "Update Package.swift for Nightly Branch"
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout nightly branch
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
-        # zizmor: ignore[artipacked]
-        with:
-          ref: nightly
-        continue-on-error: true
-        id: checkout_nightly
-
-      - name: Fallback to main branch if nightly does not exist
-        if: steps.checkout_nightly.outcome == 'failure'
+      - name: Checkout main branch
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
         # zizmor: ignore[artipacked]
         with:
           ref: main
 
-      - name: Ensure local nightly branch
+      - name: Reset local nightly branch to main
         run: git checkout -B nightly
 
       - name: Fetch Nightly Checksums and Update Package.swift
         run: |
-          set -e
+          set -euo pipefail
           GCS_BASE="https://storage.googleapis.com/litert/litert_lm/swift/nightly"
 
           PKG_VERSION=$(grep '^VERSION =' version.bzl | cut -d'"' -f2)
+          if [[ -z "${PKG_VERSION}" ]]; then
+            echo "Error: Failed to parse VERSION from version.bzl" >&2
+            exit 1
+          fi
           TARGET_DATE=$(TZ='America/Los_Angeles' date +%Y%m%d)
 
           IOS_ZIP_NAME="CLiteRTLM_${PKG_VERSION}-${TARGET_DATE}.xcframework.zip"
           MAC_ZIP_NAME="CLiteRTLM_mac_${PKG_VERSION}-${TARGET_DATE}.xcframework.zip"
 
-          echo "Checking for ${IOS_ZIP_NAME}.sha256..."
-          if ! curl -f -sI "${GCS_BASE}/${IOS_ZIP_NAME}.sha256" > /dev/null; then
+          echo "Checking for ${IOS_ZIP_NAME}.sha256 and ${MAC_ZIP_NAME}.sha256..."
+          if ! curl -fsI "${GCS_BASE}/${IOS_ZIP_NAME}.sha256" > /dev/null || \
+             ! curl -fsI "${GCS_BASE}/${MAC_ZIP_NAME}.sha256" > /dev/null; then
             # Fallback to previous day if today's build is still pending
             TARGET_DATE=$(TZ='America/Los_Angeles' date -d "yesterday" +%Y%m%d 2>/dev/null || date -v-1d +%Y%m%d)
             IOS_ZIP_NAME="CLiteRTLM_${PKG_VERSION}-${TARGET_DATE}.xcframework.zip"
@@ -74,8 +70,14 @@ jobs:
           echo "PKG_VERSION=${PKG_VERSION}" >> "$GITHUB_ENV"
 
           echo "Fetching checksums directly from GCS..."
-          IOS_CHECKSUM=$(curl -f -sL "${GCS_BASE}/${IOS_ZIP_NAME}.sha256" | awk '{print $1}')
-          MAC_CHECKSUM=$(curl -f -sL "${GCS_BASE}/${MAC_ZIP_NAME}.sha256" | awk '{print $1}')
+          IOS_CHECKSUM=$(curl -fsSL "${GCS_BASE}/${IOS_ZIP_NAME}.sha256" | awk '{print $1}')
+          MAC_CHECKSUM=$(curl -fsSL "${GCS_BASE}/${MAC_ZIP_NAME}.sha256" | awk '{print $1}')
+
+          if [[ ! "${IOS_CHECKSUM}" =~ ^[0-9a-fA-F]{64}$ ]] || \
+             [[ ! "${MAC_CHECKSUM}" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "Error: Missing or invalid SHA-256 checksum(s): iOS='${IOS_CHECKSUM}', macOS='${MAC_CHECKSUM}'" >&2
+            exit 1
+          fi
 
           echo "iOS Checksum: ${IOS_CHECKSUM}"
           echo "macOS Checksum: ${MAC_CHECKSUM}"
@@ -93,18 +95,20 @@ jobs:
               content = f.read()
 
           # Replace CLiteRTLM url and checksum
-          content = re.sub(
+          content, ios_count = re.subn(
               r'(\.binaryTarget\(\s*name:\s*\"CLiteRTLM\",\s*url:\s*\")[^\"]+(\",\s*checksum:\s*\")[^\"]+(\"\s*\))',
               r'\g<1>' + ios_url + r'\g<2>' + ios_sum + r'\g<3>',
               content
           )
+          assert ios_count == 1, f'Expected 1 CLiteRTLM target, replaced {ios_count}'
 
           # Replace CLiteRTLM_mac url and checksum
-          content = re.sub(
+          content, mac_count = re.subn(
               r'(\.binaryTarget\(\s*name:\s*\"CLiteRTLM_mac\",\s*url:\s*\")[^\"]+(\",\s*checksum:\s*\")[^\"]+(\"\s*\))',
               r'\g<1>' + mac_url + r'\g<2>' + mac_sum + r'\g<3>',
               content
           )
+          assert mac_count == 1, f'Expected 1 CLiteRTLM_mac target, replaced {mac_count}'
 
           with open('Package.swift', 'w') as f:
               f.write(content)
@@ -112,6 +116,7 @@ jobs:
 
       - name: Commit, Tag, and Push to nightly
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Package.swift
@@ -120,7 +125,7 @@ jobs:
 
           if ! git diff --cached --quiet; then
             git commit -m "[Nightly] Update Swift Package checksums for $(TZ='America/Los_Angeles' date +%Y-%m-%d) [skip ci]"
-            git push origin HEAD:nightly
+            git push --force origin HEAD:nightly
             git tag -f "${TAG_NAME}"
             git push origin "${TAG_NAME}" --force
             echo "Successfully updated Package.swift on nightly branch and pushed tag ${TAG_NAME}."
