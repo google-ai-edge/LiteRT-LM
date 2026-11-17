@@ -30,6 +30,37 @@ cc_library(
 )
 
 cc_library(
+    name = "end_of_turn",
+    srcs = ["end_of_turn.cc"],
+    hdrs = ["end_of_turn.h"],
+    deps = [
+        ":io_types",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
+        "@nlohmann_json//:json",
+        "//runtime/executor:executor_stats",
+    ],
+)
+
+cc_test(
+    name = "end_of_turn_test",
+    srcs = ["end_of_turn_test.cc"],
+    deps = [
+        ":end_of_turn",
+        ":io_types",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/time",
+        "@nlohmann_json//:json",
+        "//runtime/executor:executor_stats",
+        "//runtime/util:test_utils",
+    ],
+)
+
+cc_library(
     name = "thinking_config",
     hdrs = ["thinking_config.h"],
 )

@@ -97,6 +97,24 @@ target_link_libraries(runtime_conversation_io_types
     LITERTLM_DEPS
 )
 
+add_litertlm_library(runtime_conversation_end_of_turn STATIC
+  end_of_turn.cc
+)
+add_library(LiteRTLM::Runtime::Conversation::EndOfTurn ALIAS runtime_conversation_end_of_turn)
+
+target_include_directories(runtime_conversation_end_of_turn
+  PUBLIC
+    ${PKG_ROOT}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_conversation_end_of_turn
+  PUBLIC
+    LiteRTLM::Runtime::Conversation::IoTypes
+    LiteRTLM::Runtime::Executor::ExecutorStats
+    LITERTLM_DEPS
+)
+
 add_litertlm_library(runtime_conversation_prompt_utils STATIC
   prompt_utils.cc
 )
@@ -119,6 +137,7 @@ add_library(LiteRTLM::Runtime::Conversation ALIAS runtime_conversation_libs)
 target_link_libraries(runtime_conversation_libs INTERFACE
   LiteRTLM::Runtime::Conversation::Conversation
   LiteRTLM::Runtime::Conversation::ChannelUtil
+  LiteRTLM::Runtime::Conversation::EndOfTurn
   LiteRTLM::Runtime::Conversation::InternalCallbackUtil
   LiteRTLM::Runtime::Conversation::IoTypes
   LiteRTLM::Runtime::Conversation::PromptUtils
