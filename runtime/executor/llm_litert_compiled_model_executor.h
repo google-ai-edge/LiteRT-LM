@@ -19,7 +19,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,6 +38,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
@@ -328,18 +328,21 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // loaded.
   absl::Status EnsureMtpDrafterLoaded();
 
-  // Configures the MTP drafter's verifier sampler to match the session sampler
-  // (parameters and random generator), or greedy if the session has no sampler
-  // parameters. No-op until both the drafter and the session sampler exist.
+  // Configures the MTP drafter's verifier sampler to match the session
+  // sampler, or greedy if the session has no sampler parameters. No-op until
+  // both the drafter and the session sampler exist.
   absl::Status MaybeUpdateVerifierSamplerConfig();
 
-  // Returns the sampler parameters and the random number generator that verify
-  // passes sample with: the session sampler's, so that the accepted tokens
-  // follow the session's distribution. If the session sampler's generator
-  // can't be shared, returns `verifier_rand_gen_`.
-  std::pair<proto::SamplerParameters,
-            std::shared_ptr<std::default_random_engine>>
-  GetVerifierSamplerConfig();
+  // Returns the sampler parameters that verify passes sample with: the session
+  // sampler's, so that the accepted tokens follow the session's distribution.
+  proto::SamplerParameters GetVerifierSamplerParams() const;
+
+  // Fails with FailedPrecondition if a call without the session's
+  // `random_state` would have to draw: to sample (unless greedy), or for a
+  // lenient acceptance test (`lenience` > 0). Checked before the call runs the
+  // model.
+  absl::Status CheckRandomState(const RandomState* absl_nullable random_state,
+                                float lenience) const;
 
   // Attempts to create a compiled model for the MTP drafter.
   // Returns a unique_ptr to the compiled model if the resource is found, or
@@ -367,14 +370,18 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Sets or resets the input tensors and inference function for the sampler.
   absl::Status SetSamplerInputHandling(bool reset);
 
-  // Samples output logits and write to ids_tensor.
+  // Samples output logits and write to ids_tensor, with uniforms from the
+  // session's `random_state` (see `DrawSampleLogitsUniforms()`).
   absl::Status SampleLogits(const TensorBuffer& logits,
-                            TensorBuffer& ids_tensor);
+                            TensorBuffer& ids_tensor,
+                            RandomState* absl_nullable random_state);
 
-  // Draws the uniforms of a `SampleLogits()` call from the session's random
-  // number generator, or returns zeros without advancing it for
-  // greedy sampling. The span is valid until the next call.
-  absl::Span<const float> DrawSampleLogitsUniforms();
+  // Draws the uniforms of a `SampleLogits()` call from the session's
+  // `random_state`, or returns zeros without advancing it for greedy
+  // sampling. Fails with FailedPrecondition without a random state, unless
+  // the sampling is greedy. The span is valid until the next call.
+  absl::StatusOr<absl::Span<const float>> DrawSampleLogitsUniforms(
+      RandomState* absl_nullable random_state);
 
   // Prefill internal implementation, for one prefill call to the Interpreter
   // with a certain length synchronously or asynchronously.
@@ -611,10 +618,6 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // The MTP drafter model.
   std::unique_ptr<LlmLiteRtMtpDrafter> mtp_drafter_;
-
-  // The random number generator of all verify passes if they can't share the
-  // session sampler's, see `GetVerifierSamplerConfig()`.
-  SeededRandomEngine verifier_rand_gen_;
 
   // The executor metadata.
   const proto::ExecutorMetadata* executor_metadata_ = nullptr;

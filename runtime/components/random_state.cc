@@ -19,8 +19,24 @@
 
 namespace litert::lm {
 
+namespace {
+
+// Seeds a lenience stream with the session seed and the stream's salt, so that
+// the streams of one seed differ from each other.
+std::mt19937_64 SaltedEngine(int32_t seed, uint64_t salt) {
+  return std::mt19937_64(static_cast<uint64_t>(static_cast<uint32_t>(seed)) ^
+                         salt);
+}
+
+}  // namespace
+
 RandomState RandomState::FromSeed(int32_t seed) {
-  return RandomState{.sampling = std::default_random_engine(seed)};
+  return RandomState{
+      .sampling = std::default_random_engine(seed),
+      .drafter_lenience = SaltedEngine(seed, /*salt=*/0x4c454e49),  // "LENI"
+      .draft_verifier_lenience =
+          SaltedEngine(seed, /*salt=*/0x44524654),  // "DRFT"
+  };
 }
 
 }  // namespace litert::lm

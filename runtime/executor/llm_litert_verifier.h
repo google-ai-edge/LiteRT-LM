@@ -15,7 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_VERIFIER_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_VERIFIER_H_
 
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <random>
@@ -23,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/functional/function_ref.h"  // from @com_google_absl
@@ -39,6 +39,7 @@
 #include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
 #include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert/state.h"
@@ -149,70 +150,6 @@ absl::StatusOr<std::vector<VerifySignatureInfo>> FindVerifySignatures(
     absl::Span<const std::string> selected_signatures,
     bool has_embedding_lookup, bool has_per_layer_embedding_lookup);
 
-// Owns a random number generator seeded with the last requested seed. The
-// generator is only recreated when the seed changes, so that repeated requests
-// with the same seed continue its stream instead of restarting it.
-class SeededRandomEngine {
- public:
-  // Returns the generator for `seed`. The generator is created on the first
-  // call and recreated whenever `seed` differs from the previous call's seed;
-  // otherwise the same generator is returned.
-  std::shared_ptr<std::default_random_engine> Get(int32_t seed) {
-    if (engine_ == nullptr || seed != seed_) {
-      engine_ = std::make_shared<std::default_random_engine>(seed);
-      seed_ = seed;
-    }
-    return engine_;
-  }
-
- private:
-  // The current generator, or null before the first call to `Get()`.
-  std::shared_ptr<std::default_random_engine> engine_;
-
-  // The seed that `engine_` was created with.
-  int32_t seed_ = 0;
-};
-
-// Owns the random number generator of the lenient acceptance test. It is a
-// different engine than the verifier's, seeded with a salted seed, so that
-// lenience doesn't perturb the sampled tokens. It restarts together with the
-// verifier's stream, i.e. when the seed changes or the verifier is handed a
-// different generator (e.g. a new session's), so that lenient runs with the
-// same seed are reproducible. Repeated updates with the same seed and generator
-// continue its stream.
-class LenienceRandomEngine {
- public:
-  // The salt of the MTP drafter's stream.
-  static constexpr uint64_t kDefaultSalt = 0x4c454e49;  // "LENI"
-
-  // Engines with different salts have independent streams.
-  explicit LenienceRandomEngine(uint64_t salt = kDefaultSalt)
-      : salt_(salt), engine_(SaltedSeed(0)) {}
-
-  void Update(int32_t seed,
-              const std::shared_ptr<std::default_random_engine>& verifier_gen) {
-    if (seed != seed_ || verifier_gen != verifier_gen_.lock()) {
-      engine_.seed(SaltedSeed(seed));
-      seed_ = seed;
-      verifier_gen_ = verifier_gen;
-    }
-  }
-
-  std::mt19937_64& engine() { return engine_; }
-
- private:
-  uint64_t SaltedSeed(int32_t seed) const {
-    return static_cast<uint64_t>(static_cast<uint32_t>(seed)) ^ salt_;
-  }
-
-  const uint64_t salt_;
-  std::mt19937_64 engine_;
-  int32_t seed_ = 0;
-  // Not owned: only used to detect a new verifier generator. An expired
-  // pointer never compares equal to a live one.
-  std::weak_ptr<std::default_random_engine> verifier_gen_;
-};
-
 // The constraint states along a draft, and the logit masks that they give the
 // draft tokens: state i follows the first i draft tokens, and its mask applies
 // to draft token i, i.e. to row i of a verify pass over the draft.
@@ -304,6 +241,16 @@ class LlmLiteRtVerifier {
       absl::flat_hash_map<absl::string_view, TensorBuffer>& input_buffers,
       absl::flat_hash_map<absl::string_view, TensorBuffer>& output_buffers)>;
 
+  // Lenient acceptance for `Verify()`: a mismatching draft token is accepted
+  // if a uniform drawn from `rng` is below `probability` (see
+  // `EvaluateVerifyPass()`).
+  struct Lenience {
+    // In (0, 1].
+    float probability;
+    // The session's lenience stream, e.g. `RandomState::drafter_lenience`.
+    std::mt19937_64& rng;
+  };
+
   // Creates a verifier for the signature `signature_key` of `base_model`. If
   // the signature takes embeddings, they are looked up with
   // `embedding_lookup`, and the per-layer embeddings with
@@ -332,6 +279,11 @@ class LlmLiteRtVerifier {
   // The vocabulary size V of the logits.
   int vocab_size() const { return vocab_size_; }
 
+  // The sampler parameters of the passes, see `UpdateSamplerConfig()`.
+  const proto::SamplerParameters& sampler_params() const {
+    return sampler_params_;
+  }
+
   // Starts the pass of `ids`, which holds between 1 and W tokens, at the
   // positions [position, position + ids.size()). `state_buffers` are the base
   // model's KV cache buffers of this pass (see
@@ -350,9 +302,11 @@ class LlmLiteRtVerifier {
   // mask leaves its row as is), and returns the sampled token of every row of
   // the pass's tokens: the i-th token follows the first i + 1 tokens of the
   // pass. `masks` is either empty (no masking) or holds W masks, including
-  // the padding rows'.
+  // the padding rows'. The sampling uniforms are drawn from `rng` (the
+  // session's), which only greedy sampling can do without.
   absl::StatusOr<std::vector<int>> MaskAndSample(
-      absl::Span<const std::unique_ptr<LogitMask>> masks);
+      absl::Span<const std::unique_ptr<LogitMask>> masks,
+      std::default_random_engine* absl_nullable rng);
 
   // Verifies `drafts`, the draft tokens after `pending_token` at `position`,
   // in a pass that takes the pending token and up to W - 1 draft tokens (see
@@ -363,32 +317,28 @@ class LlmLiteRtVerifier {
   // first draft token and may already hold some of the pass's draft tokens
   // (e.g. a drafter's), each row is masked with the mask of its draft token.
   // A draft token that the constraint disallows ends the draft.
+  //
+  // The rows are sampled with uniforms from `rng`, see `MaskAndSample()`.
+  // Without it, sampling that isn't greedy fails with FailedPrecondition
+  // before the pass.
+  //
+  // With `lenience`, a mismatching draft token is also accepted as described
+  // in `Lenience`. Lenience never accepts a draft token that the constraint
+  // disallows, by its transition or by its mask. So with lenience,
+  // `constraint_states` also gets the draft token after the pass's inputs,
+  // which can become the next pending token.
   absl::StatusOr<VerifyPassResult> Verify(
       int position, int pending_token, absl::Span<const int> drafts,
       const LitertState::StateBuffers& state_buffers,
-      DraftConstraintStates* constraint_states);
+      DraftConstraintStates* constraint_states,
+      std::default_random_engine* absl_nullable rng,
+      std::optional<Lenience> lenience = std::nullopt);
 
-  // Like above, but also accepts a mismatching draft token i if `uniform(i)` <
-  // `lenience` (see `EvaluateVerifyPass()`). Lenience never accepts a draft
-  // token that the constraint disallows, by its transition or by its mask. So
-  // with lenience, `constraint_states` also gets the draft token after the
-  // pass's inputs, which can become the next pending token.
-  absl::StatusOr<VerifyPassResult> Verify(
-      int position, int pending_token, absl::Span<const int> drafts,
-      const LitertState::StateBuffers& state_buffers,
-      DraftConstraintStates* constraint_states, float lenience,
-      absl::FunctionRef<double(int)> uniform);
-
-  // Reconfigures the sampler to sample from `sampler_params`, with uniforms
-  // drawn from the random number generator `rand_gen` (typically the session
-  // sampler's), recreating it if its top-k capacity is too small. If
-  // `rand_gen` is null, the verifier uses its own generator, seeded with
-  // `sampler_params.seed()` and only reseeded when the seed changes. Returns
-  // the generator that the uniforms are drawn from. On failure, the sampler,
-  // its parameters and the generator are left unchanged.
-  absl::StatusOr<std::shared_ptr<std::default_random_engine>>
-  UpdateSamplerConfig(const proto::SamplerParameters& sampler_params,
-                      std::shared_ptr<std::default_random_engine> rand_gen);
+  // Reconfigures the sampler to sample from `sampler_params` (typically the
+  // session sampler's), recreating it if its top-k capacity is too small. On
+  // failure, the sampler and its parameters are left unchanged.
+  absl::Status UpdateSamplerConfig(
+      const proto::SamplerParameters& sampler_params);
 
   // Returns the output buffer `name` of the signature, e.g. the `activations`
   // of the last pass. The KV cache outputs are not part of the verifier.
@@ -486,16 +436,9 @@ class LlmLiteRtVerifier {
   // The top-k capacity of `sampler_`.
   int sampler_max_top_k_ = 1;
 
-  // The sampler's generator when no shared generator is supplied.
-  SeededRandomEngine own_rand_gen_;
-
   // The parameters of `sampler_` from `UpdateSamplerConfig()` (default
   // parameters are greedy).
   proto::SamplerParameters sampler_params_;
-
-  // The generator that `sampler_` uses from `UpdateSamplerConfig()`, or null
-  // before the first call.
-  std::shared_ptr<std::default_random_engine> rand_gen_;
 
   // The uniforms of the current sampling call, one per row.
   std::vector<float> uniforms_;
@@ -554,12 +497,9 @@ class LlmLiteRtDraftVerifier {
   // fits into the KV cache of `kv_cache_size` entries.
   bool PassFits(int position, int kv_cache_size) const;
 
-  // Sets the sampler parameters and the random number generator of the
-  // passes, see `LlmLiteRtVerifier::UpdateSamplerConfig()`. Greedy until set.
-  // The lenient acceptance test draws from its own stream, which restarts
-  // together with the generator's (see `LenienceRandomEngine`).
-  void SetSamplerConfig(const proto::SamplerParameters& sampler_params,
-                        std::shared_ptr<std::default_random_engine> rand_gen);
+  // Sets the sampler parameters of the passes, see
+  // `LlmLiteRtVerifier::UpdateSamplerConfig()`. Greedy until set.
+  void SetSamplerConfig(const proto::SamplerParameters& sampler_params);
 
   // Sets the lenience factor c with which the passes accept draft tokens, see
   // `EvaluateVerifyPass()`. Fails if c is outside [0, 1]. 0 (the default) is
@@ -578,10 +518,15 @@ class LlmLiteRtDraftVerifier {
   // only if a decode step produced it). Afterwards, the decoder's state
   // follows the accepted draft tokens, except the new pending token, as after
   // a decode step.
+  //
+  // The pass draws from the session's `random_state`: the sampling uniforms
+  // from `sampling`, the lenient acceptance test from
+  // `draft_verifier_lenience`. Fails with FailedPrecondition without it,
+  // unless the sampling is greedy and the pass exact.
   absl::StatusOr<VerifyPassOutcome> VerifyPass(
       int position, int pending_token, absl::Span<const int> drafts,
       LitertState& state, ConstrainedDecoder* constrained_decoder,
-      bool feed_pending_token);
+      bool feed_pending_token, RandomState* absl_nullable random_state);
 
  private:
   LlmLiteRtDraftVerifier(Environment& env, CompiledModel& base_model,
@@ -631,16 +576,8 @@ class LlmLiteRtDraftVerifier {
   // The sampler parameters of the passes.
   proto::SamplerParameters sampler_params_;
 
-  // The random number generator of the passes; null for the verifiers' own.
-  std::shared_ptr<std::default_random_engine> rand_gen_;
-
   // The lenience factor of the passes' acceptance test.
   float lenience_ = 0.0f;
-
-  // The random number generator of the lenient acceptance test. Its salt
-  // differs from the MTP drafter's, so that their streams don't repeat each
-  // other's draws.
-  LenienceRandomEngine lenience_rng_{/*salt=*/0x44524654};  // "DRFT"
 };
 
 }  // namespace litert::lm

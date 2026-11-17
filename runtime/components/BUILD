@@ -150,6 +150,7 @@ cc_library(
     srcs = ["sampling_uniforms.cc"],
     hdrs = ["sampling_uniforms.h"],
     deps = [
+        "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",

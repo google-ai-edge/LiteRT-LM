@@ -14,6 +14,7 @@
 
 #include "runtime/components/random_state.h"
 
+#include <cstdint>
 #include <random>
 
 #include <gtest/gtest.h>
@@ -28,13 +29,31 @@ TEST(RandomStateTest, FromSeedSeedsTheSamplingEngine) {
   EXPECT_EQ(state.sampling, expected);
 }
 
+TEST(RandomStateTest, FromSeedSaltsTheLenienceStreams) {
+  RandomState state = RandomState::FromSeed(42);
+
+  EXPECT_EQ(state.drafter_lenience, std::mt19937_64(42 ^ 0x4c454e49));
+  EXPECT_EQ(state.draft_verifier_lenience, std::mt19937_64(42 ^ 0x44524654));
+}
+
+TEST(RandomStateTest, FromSeedTakesNegativeSeedsAsUnsigned) {
+  RandomState state = RandomState::FromSeed(-1);
+
+  EXPECT_EQ(state.drafter_lenience,
+            std::mt19937_64(uint64_t{0xffffffff} ^ 0x4c454e49));
+}
+
 TEST(RandomStateTest, CopyContinuesFromTheOriginal) {
   RandomState original = RandomState::FromSeed(42);
   original.sampling.discard(3);
 
+  original.drafter_lenience.discard(2);
+
   RandomState copy = original;
 
   EXPECT_EQ(copy.sampling(), original.sampling());
+  EXPECT_EQ(copy.drafter_lenience(), original.drafter_lenience());
+  EXPECT_EQ(copy.draft_verifier_lenience(), original.draft_verifier_lenience());
 }
 
 TEST(RandomStateTest, CopiesAdvanceIndependently) {

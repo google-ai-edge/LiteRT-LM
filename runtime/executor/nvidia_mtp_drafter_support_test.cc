@@ -538,7 +538,8 @@ TEST(NvidiaMtpDrafterSupportTest, CandidatePolicyIsTheCpuSamplerBitForBit) {
           for (int draw = 0; draw < 2; ++draw) {
             // The same uniforms for both, as the executor draws them.
             std::vector<float> uniforms(rows);
-            DrawSamplingUniforms(params, generator, absl::MakeSpan(uniforms));
+            ASSERT_OK(DrawSamplingUniforms(params, &generator,
+                                           absl::MakeSpan(uniforms)));
             LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_ids,
                                         CreateTensorBuffer<int32_t>({1, rows}));
             LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_scores,
@@ -614,7 +615,8 @@ TEST(NvidiaMtpDrafterSupportTest, CandidatePolicyWithFp16ValuesAndMasks) {
     std::default_random_engine generator(3);
     for (int draw = 0; draw < 8; ++draw) {
       std::vector<float> uniforms(kRows);
-      DrawSamplingUniforms(params, generator, absl::MakeSpan(uniforms));
+      ASSERT_OK(
+          DrawSamplingUniforms(params, &generator, absl::MakeSpan(uniforms)));
       LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_ids,
                                   CreateTensorBuffer<int32_t>({1, kRows}));
       LITERT_ASSERT_OK_AND_ASSIGN(auto cpu_scores,
@@ -717,7 +719,8 @@ TEST(NvidiaMtpDrafterSupportTest, VerifierSamplerKeepsTheFactorySemantics) {
                            const proto::SamplerParameters& params, int draws) {
     for (int draw = 0; draw < draws; ++draw) {
       std::vector<float> uniforms(kRows);
-      DrawSamplingUniforms(params, generator, absl::MakeSpan(uniforms));
+      ASSERT_OK(
+          DrawSamplingUniforms(params, &generator, absl::MakeSpan(uniforms)));
       LITERT_ASSERT_OK_AND_ASSIGN(auto ids_a,
                                   CreateTensorBuffer<int32_t>({1, kRows}));
       LITERT_ASSERT_OK_AND_ASSIGN(auto scores_a,
@@ -880,7 +883,8 @@ TEST(NvidiaMtpDrafterSupportTest, VerifierUpdateTakesTheRecreationArguments) {
   std::default_random_engine generator(3);
   for (int draw = 0; draw < 3; ++draw) {
     std::vector<float> uniforms(3);
-    DrawSamplingUniforms(params, generator, absl::MakeSpan(uniforms));
+    ASSERT_OK(
+        DrawSamplingUniforms(params, &generator, absl::MakeSpan(uniforms)));
     LITERT_ASSERT_OK_AND_ASSIGN(auto ids_a,
                                 CreateTensorBuffer<int32_t>({1, 3}));
     LITERT_ASSERT_OK_AND_ASSIGN(auto ids_b,

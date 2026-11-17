@@ -17,6 +17,7 @@
 
 #include <random>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/proto/sampler_params.pb.h"
@@ -31,12 +32,17 @@ namespace litert::lm {
 // clamped below 1.
 void DrawUniforms(std::default_random_engine& rng, absl::Span<float> uniforms);
 
+// Returns whether a sampling call with `sampler_params` draws uniforms, i.e.
+// isn't greedy (`GREEDY` or `k <= 1`).
+bool SamplingDrawsUniforms(const proto::SamplerParameters& sampler_params);
+
 // Fills `uniforms` for a sampling call with `sampler_params`: draws them from
-// `rng`, or sets them to 0 without consuming `rng` for greedy sampling
-// (`GREEDY` or `k <= 1`).
-void DrawSamplingUniforms(const proto::SamplerParameters& sampler_params,
-                          std::default_random_engine& rng,
-                          absl::Span<float> uniforms);
+// `rng` if `SamplingDrawsUniforms()`, else sets them to 0 without consuming
+// `rng`. Fails with FailedPrecondition if the sampling draws and `rng` is null,
+// e.g. for an executor called without the session's random state.
+absl::Status DrawSamplingUniforms(
+    const proto::SamplerParameters& sampler_params,
+    std::default_random_engine* absl_nullable rng, absl::Span<float> uniforms);
 
 // Returns `InvalidArgumentError` unless `uniforms` has `expected_count` values,
 // each in [0, 1).

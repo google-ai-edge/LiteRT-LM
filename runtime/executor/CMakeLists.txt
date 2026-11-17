@@ -460,6 +460,7 @@ target_link_libraries(runtime_executor_llm_litert_compiled_model_executor
     LiteRTLM::Runtime::Components::ModelResourcesInterface
     LiteRTLM::Runtime::Components::ModelResourcesLitertLm
     LiteRTLM::Runtime::Components::ModelResourcesTask
+    LiteRTLM::Runtime::Components::RandomState
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerParamsUtil
     LiteRTLM::Runtime::Components::SamplingUniforms
@@ -743,6 +744,7 @@ target_link_libraries(runtime_executor_llm_litert_verifier
     LiteRTLM::Runtime::Executor::LlmExecutorSettings
     LiteRTLM::Runtime::Executor::LlmExecutorSettingsUtils
     LiteRTLM::Runtime::Executor::NvidiaMtpDrafterSupport
+    LiteRTLM::Runtime::Components::RandomState
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerParamsUtil
     LiteRTLM::Runtime::Components::SamplingUniforms
@@ -780,8 +782,10 @@ target_link_libraries(runtime_executor_llm_litert_mtp_drafter
     LiteRTLM::Runtime::Executor::LlmLitertVerifier
     LiteRTLM::Runtime::Executor::NvidiaMtpDrafterSupport
     LiteRTLM::Runtime::Components::ModelResourcesInterface
+    LiteRTLM::Runtime::Components::RandomState
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerParamsUtil
+    LiteRTLM::Runtime::Components::SamplingUniforms
     LiteRTLM::Runtime::Components::ConstrainedDecoding::ConstraintInterface
     LiteRTLM::Runtime::Components::ConstrainedDecoding::Decoder
     LiteRTLM::Runtime::Components::ConstrainedDecoding::LogitMask

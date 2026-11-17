@@ -1012,7 +1012,13 @@ void TellNvidiaStepDraws(const Environment& env,
   // run at most three samples past the host's.
   std::default_random_engine peek = rng;
   float uniforms[3];
-  DrawSamplingUniforms(sampler_params, peek, absl::MakeSpan(uniforms));
+  if (const absl::Status status =
+          DrawSamplingUniforms(sampler_params, &peek, absl::MakeSpan(uniforms));
+      !status.ok()) {
+    ABSL_LOG_FIRST_N(WARNING, 1)
+        << "NVIDIA step feed: cannot draw the next draws: " << status;
+    return;
+  }
   const double draws[3] = {uniforms[0], uniforms[1], uniforms[2]};
   if (const LiteRtStatus status = push(draws, 3); status != kLiteRtStatusOk) {
     ABSL_LOG_FIRST_N(WARNING, 1)

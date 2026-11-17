@@ -58,6 +58,7 @@
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/components/model_resources_litert_lm.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
@@ -82,6 +83,7 @@ using ::testing::Each;
 using ::testing::FloatNear;
 using ::testing::Ne;
 using ::testing::Pointwise;
+using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
 constexpr char kTestStaticModelPath[] =

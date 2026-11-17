@@ -774,5 +774,45 @@ TEST(EngineTest, RunDecodeReportsExecutorStatsWithoutBenchmark) {
 #endif
 }
 
+// The legacy engine's sessions don't own their random state yet.
+#ifdef ENGINE_ADVANCED
+TEST(EngineTest, ClonedSessionContinuesItsOriginalsRandomState) {
+  auto task_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(task_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  ASSERT_OK_AND_ASSIGN(auto engine, CreateEngine(engine_settings));
+
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.SetUseExternalSampler(false);
+  auto& sampler_params = session_config.GetMutableSamplerParams();
+  sampler_params.set_type(proto::SamplerParameters::TOP_P);
+  sampler_params.set_k(40);
+  sampler_params.set_p(1.0f);
+  sampler_params.set_temperature(10.0f);
+  sampler_params.set_seed(42);
+  ASSERT_OK_AND_ASSIGN(auto session, engine->CreateSession(session_config));
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello world!"));
+  ASSERT_OK(session->RunPrefill(inputs));
+
+  // The clone starts from a copy of the session's random state, so both
+  // sample the same tokens, and the session's decode doesn't advance the
+  // clone's state.
+  ASSERT_OK_AND_ASSIGN(auto clone, session->Clone());
+  ASSERT_OK_AND_ASSIGN(Responses responses, session->RunDecode());
+  ASSERT_OK_AND_ASSIGN(Responses clone_responses, clone->RunDecode());
+  ASSERT_EQ(responses.GetTexts().size(), 1);
+  ASSERT_EQ(clone_responses.GetTexts().size(), 1);
+  EXPECT_EQ(clone_responses.GetTexts()[0], responses.GetTexts()[0]);
+}
+#endif  // ENGINE_ADVANCED
+
 }  // namespace
 }  // namespace litert::lm

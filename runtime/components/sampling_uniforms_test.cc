@@ -56,10 +56,21 @@ TEST(SamplingUniformsTest, DrawUniformsMatchesUniformRealDistribution) {
   EXPECT_EQ(rng, expected_rng);
 }
 
+TEST(SamplingUniformsTest, SamplingDrawsUniformsUnlessGreedy) {
+  EXPECT_TRUE(SamplingDrawsUniforms(ParamsWithK(40)));
+  EXPECT_FALSE(SamplingDrawsUniforms(ParamsWithK(1)));
+
+  proto::SamplerParameters greedy_with_stale_k;
+  greedy_with_stale_k.set_type(proto::SamplerParameters::GREEDY);
+  greedy_with_stale_k.set_k(40);
+  EXPECT_FALSE(SamplingDrawsUniforms(greedy_with_stale_k));
+}
+
 TEST(SamplingUniformsTest, DrawSamplingUniformsDrawsForNonGreedySampling) {
   std::default_random_engine rng(3);
   std::vector<float> uniforms(4);
-  DrawSamplingUniforms(ParamsWithK(40), rng, absl::MakeSpan(uniforms));
+  ASSERT_OK(
+      DrawSamplingUniforms(ParamsWithK(40), &rng, absl::MakeSpan(uniforms)));
 
   std::default_random_engine expected_rng(3);
   std::vector<float> expected(4);
@@ -71,7 +82,8 @@ TEST(SamplingUniformsTest, DrawSamplingUniformsDrawsForNonGreedySampling) {
 TEST(SamplingUniformsTest, DrawSamplingUniformsSkipsGreedySampling) {
   std::default_random_engine rng(3);
   std::vector<float> uniforms(4, 0.5f);
-  DrawSamplingUniforms(ParamsWithK(1), rng, absl::MakeSpan(uniforms));
+  ASSERT_OK(
+      DrawSamplingUniforms(ParamsWithK(1), &rng, absl::MakeSpan(uniforms)));
   EXPECT_THAT(uniforms, Each(0.0f));
   EXPECT_EQ(rng, std::default_random_engine(3));
 
@@ -79,9 +91,24 @@ TEST(SamplingUniformsTest, DrawSamplingUniformsSkipsGreedySampling) {
   greedy_with_stale_k.set_type(proto::SamplerParameters::GREEDY);
   greedy_with_stale_k.set_k(40);
   std::fill(uniforms.begin(), uniforms.end(), 0.5f);
-  DrawSamplingUniforms(greedy_with_stale_k, rng, absl::MakeSpan(uniforms));
+  ASSERT_OK(DrawSamplingUniforms(greedy_with_stale_k, &rng,
+                                 absl::MakeSpan(uniforms)));
   EXPECT_THAT(uniforms, Each(0.0f));
   EXPECT_EQ(rng, std::default_random_engine(3));
+}
+
+TEST(SamplingUniformsTest, DrawSamplingUniformsWithoutAGeneratorFailsToDraw) {
+  std::vector<float> uniforms(4);
+  EXPECT_THAT(DrawSamplingUniforms(ParamsWithK(40), /*rng=*/nullptr,
+                                   absl::MakeSpan(uniforms)),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST(SamplingUniformsTest, DrawSamplingUniformsWithoutAGeneratorSamplesGreedy) {
+  std::vector<float> uniforms(4, 0.5f);
+  ASSERT_OK(DrawSamplingUniforms(ParamsWithK(1), /*rng=*/nullptr,
+                                 absl::MakeSpan(uniforms)));
+  EXPECT_THAT(uniforms, Each(0.0f));
 }
 
 TEST(SamplingUniformsTest, ValidateUniformsAcceptsValuesInRange) {

@@ -19,11 +19,11 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <random>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -38,6 +38,7 @@
 #include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
@@ -113,6 +114,9 @@ class LlmLiteRtMtpDrafter {
   //   activations: Activations corresponding to the token_id. This is only
   //    required for the first invocation of the drafter.
   //   state: The model's runtime KV cache state.
+  //   random_state: The session's random state. The verify pass samples with
+  //    `sampling` and the lenient acceptance test draws from
+  //    `drafter_lenience`. May be null only for greedy, exact rounds.
   //   constrained_decoder: Optional decoder of the constraint to apply during
   //    drafting and verification. Like a decode step, the round feeds it
   //    `token_id` first, so its state must be the one `token_id` was sampled
@@ -123,19 +127,16 @@ class LlmLiteRtMtpDrafter {
   //   [batch_size, num_tokens].
   absl::StatusOr<std::vector<std::vector<int>>> Draft(
       int position, int token_id, std::optional<TensorBuffer> activations,
-      StateInterface& state, ConstrainedDecoder* constrained_decoder = nullptr);
+      StateInterface& state, RandomState* absl_nullable random_state,
+      ConstrainedDecoder* constrained_decoder = nullptr);
 
-  // Reconfigures the verifier sampler to sample from `sampler_params`, with
-  // uniforms drawn from the shared random number generator `rand_gen`
-  // (typically the session sampler's configuration and generator), recreating
-  // the sampler if its top-k capacity is too small. If `rand_gen` is null, the
-  // verifier uses its own generator seeded with `sampler_params.seed()`, which
-  // is only reseeded when the seed changes. The drafter sampler stays greedy,
+  // Reconfigures the verifier sampler to sample from `sampler_params`
+  // (typically the session sampler's configuration), recreating the sampler
+  // if its top-k capacity is too small. The drafter sampler stays greedy,
   // which keeps the exact-match acceptance lossless with respect to the
   // verifier's distribution.
   absl::Status UpdateVerifierSamplerConfig(
-      const proto::SamplerParameters& sampler_params,
-      std::shared_ptr<std::default_random_engine> rand_gen);
+      const proto::SamplerParameters& sampler_params);
 
   // Sets the lenience factor c in [0, 1] of the acceptance test. With c > 0,
   // a draft token that the verifier's sample disagrees with is still accepted
@@ -225,9 +226,6 @@ class LlmLiteRtMtpDrafter {
 
   // The lenience factor of the acceptance test.
   float lenience_ = 0.0f;
-  // Random number generator of the lenient acceptance test, updated by
-  // `UpdateVerifierSamplerConfig()`.
-  LenienceRandomEngine lenience_rng_;
 
   // The names of the key/value cache input tensors for the MTP drafter model.
   std::vector<std::string> kv_cache_input_names_;

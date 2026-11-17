@@ -32,6 +32,12 @@ struct RandomState {
 
   // Draws the uniforms that samplers turn into tokens.
   std::default_random_engine sampling;
+
+  // Draw the lenient acceptance tests of speculative decoding: one stream for
+  // the MTP drafter's rounds, one for draft verification. They are separate
+  // from `sampling`, so that lenience doesn't change the sampled tokens.
+  std::mt19937_64 drafter_lenience;
+  std::mt19937_64 draft_verifier_lenience;
 };
 
 }  // namespace litert::lm

@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -52,6 +53,7 @@
 #include "runtime/components/constrained_decoding/litert_logit_mask_runner.h"
 #include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler_params_util.h"
 #include "runtime/components/sampling_uniforms.h"
 #include "runtime/executor/executor_settings_base.h"
@@ -801,7 +803,8 @@ absl::Status LlmLiteRtVerifier::FillEmbeddings(EmbeddingLookupManager& lookup,
 }
 
 absl::StatusOr<std::vector<int>> LlmLiteRtVerifier::MaskAndSample(
-    absl::Span<const std::unique_ptr<LogitMask>> masks) {
+    absl::Span<const std::unique_ptr<LogitMask>> masks,
+    std::default_random_engine* absl_nullable rng) {
   if (num_pass_tokens_ == 0) {
     return absl::FailedPreconditionError("No pass has been run.");
   }
@@ -814,14 +817,10 @@ absl::StatusOr<std::vector<int>> LlmLiteRtVerifier::MaskAndSample(
   if (!masks.empty()) {
     ABSL_RETURN_IF_ERROR(mask_runner_->ApplySequence(logits->second, masks));
   }
-  // One uniform per row, from the sampler's generator (typically the
-  // session's, see `UpdateSamplerConfig()`); zeros for the default greedy
-  // sampler.
+  // One uniform per row; zeros for the default greedy sampler.
   uniforms_.resize(width_);
-  if (rand_gen_ == nullptr) {
-    rand_gen_ = own_rand_gen_.Get(sampler_params_.seed());
-  }
-  DrawSamplingUniforms(sampler_params_, *rand_gen_, absl::MakeSpan(uniforms_));
+  ABSL_RETURN_IF_ERROR(
+      DrawSamplingUniforms(sampler_params_, rng, absl::MakeSpan(uniforms_)));
   ABSL_RETURN_IF_ERROR(sampler_->SampleToIdAndScoreBuffer(
       logits->second, id_tensor_, /*scores_tensor=*/nullptr, uniforms_));
   LITERT_ASSIGN_OR_RETURN(auto id_vector,
@@ -835,17 +834,15 @@ absl::StatusOr<std::vector<int>> LlmLiteRtVerifier::MaskAndSample(
 absl::StatusOr<VerifyPassResult> LlmLiteRtVerifier::Verify(
     int position, int pending_token, absl::Span<const int> drafts,
     const LitertState::StateBuffers& state_buffers,
-    DraftConstraintStates* constraint_states) {
-  // Without lenience, no uniform is drawn.
-  return Verify(position, pending_token, drafts, state_buffers,
-                constraint_states, /*lenience=*/0.0f, [](int) { return 1.0; });
-}
-
-absl::StatusOr<VerifyPassResult> LlmLiteRtVerifier::Verify(
-    int position, int pending_token, absl::Span<const int> drafts,
-    const LitertState::StateBuffers& state_buffers,
-    DraftConstraintStates* constraint_states, float lenience,
-    absl::FunctionRef<double(int)> uniform) {
+    DraftConstraintStates* constraint_states,
+    std::default_random_engine* absl_nullable rng,
+    std::optional<Lenience> lenience) {
+  if (rng == nullptr && SamplingDrawsUniforms(sampler_params_)) {
+    return absl::FailedPreconditionError(
+        "Sampling that isn't greedy needs a random number generator.");
+  }
+  const float lenience_probability =
+      lenience.has_value() ? lenience->probability : 0.0f;
   // 1. Start the pass over the pending token and up to W - 1 draft inputs. Row
   // i of the pass predicts `drafts[i]`.
   int num_draft_inputs = std::min(width_ - 1, static_cast<int>(drafts.size()));
@@ -863,8 +860,9 @@ absl::StatusOr<VerifyPassResult> LlmLiteRtVerifier::Verify(
   int num_allowed = static_cast<int>(drafts.size());
   if (constraint_states != nullptr) {
     const int num_constrained =
-        lenience > 0.0f ? std::min(width_, static_cast<int>(drafts.size()))
-                        : num_draft_inputs;
+        lenience_probability > 0.0f
+            ? std::min(width_, static_cast<int>(drafts.size()))
+            : num_draft_inputs;
     RET_CHECK_LE(constraint_states->num_tokens(), num_constrained);
     while (constraint_states->num_tokens() < num_constrained) {
       ABSL_RETURN_IF_ERROR(constraint_states->NextMask().status());
@@ -878,13 +876,14 @@ absl::StatusOr<VerifyPassResult> LlmLiteRtVerifier::Verify(
   }
 
   // 3. Sample every row under its mask.
-  ABSL_ASSIGN_OR_RETURN(std::vector<int> pass_tokens, MaskAndSample(masks));
+  ABSL_ASSIGN_OR_RETURN(std::vector<int> pass_tokens,
+                        MaskAndSample(masks, rng));
 
   // 4. A sampled token always satisfies its mask, but a leniently accepted
   // draft token differs from it. Some constraints (e.g. suppressed tokens)
   // disallow tokens only through their masks, so the draft also ends before
   // the first mismatching draft token that its row's mask disallows.
-  if (constraint_states != nullptr && lenience > 0.0f) {
+  if (constraint_states != nullptr && lenience_probability > 0.0f) {
     const int num_checked = std::min(num_allowed, num_draft_inputs + 1);
     for (int i = 0; i < num_checked; ++i) {
       if (pass_tokens[i] == drafts[i]) {
@@ -909,8 +908,10 @@ absl::StatusOr<VerifyPassResult> LlmLiteRtVerifier::Verify(
   pass_tokens.resize(num_draft_inputs + 1);
 
   VerifyPassResult result;
-  result.outcome = EvaluateVerifyPass(pass_tokens, drafts, num_draft_inputs,
-                                      lenience, uniform);
+  std::uniform_real_distribution<double> unit(0.0, 1.0);
+  result.outcome = EvaluateVerifyPass(
+      pass_tokens, drafts, num_draft_inputs, lenience_probability,
+      [&](int /*i*/) { return unit(lenience->rng); });
   // 6. Return the constraint state after the accepted inputs. A draft token
   // accepted after the last input is the new pending token, which the caller
   // feeds to the constraint like a decoded token.
@@ -923,27 +924,16 @@ absl::StatusOr<VerifyPassResult> LlmLiteRtVerifier::Verify(
   return result;
 }
 
-absl::StatusOr<std::shared_ptr<std::default_random_engine>>
-LlmLiteRtVerifier::UpdateSamplerConfig(
-    const proto::SamplerParameters& sampler_params,
-    std::shared_ptr<std::default_random_engine> rand_gen) {
-  // Staged, so that a failed update leaves the generators unchanged.
-  SeededRandomEngine own_rand_gen = own_rand_gen_;
-  if (rand_gen == nullptr) {
-    // Reused while the seed is unchanged, so that re-syncs (e.g. each turn)
-    // continue the verifier's stream instead of restarting it.
-    rand_gen = own_rand_gen.Get(sampler_params.seed());
-  }
+absl::Status LlmLiteRtVerifier::UpdateSamplerConfig(
+    const proto::SamplerParameters& sampler_params) {
   // On NVIDIA's TensorRT-RTX backend (Backend::NPU) the verifier samples from
   // candidates the device selects; elsewhere this is UpdateOrRecreateSampler().
   ABSL_RETURN_IF_ERROR(UpdateOrRecreateMtpVerifierSampler(
       sampler_, sampler_max_top_k_, sampler_backend_,
       /*batch_size=*/1, sampler_params, std::cref(env_),
       /*sequence_size=*/width_, vocab_size_, logits_data_type_));
-  own_rand_gen_ = std::move(own_rand_gen);
   sampler_params_ = sampler_params;
-  rand_gen_ = rand_gen;
-  return rand_gen;
+  return absl::OkStatus();
 }
 
 absl::StatusOr<TensorBuffer*> LlmLiteRtVerifier::GetOutputBuffer(
@@ -1027,12 +1017,8 @@ bool LlmLiteRtDraftVerifier::PassFits(int position, int kv_cache_size) const {
 }
 
 void LlmLiteRtDraftVerifier::SetSamplerConfig(
-    const proto::SamplerParameters& sampler_params,
-    std::shared_ptr<std::default_random_engine> rand_gen) {
-  // The lenience stream restarts only when the sampler's stream does.
-  lenience_rng_.Update(sampler_params.seed(), rand_gen);
+    const proto::SamplerParameters& sampler_params) {
   sampler_params_ = sampler_params;
-  rand_gen_ = std::move(rand_gen);
 }
 
 absl::Status LlmLiteRtDraftVerifier::SetLenience(float lenience) {
@@ -1047,7 +1033,22 @@ absl::Status LlmLiteRtDraftVerifier::SetLenience(float lenience) {
 absl::StatusOr<VerifyPassOutcome> LlmLiteRtDraftVerifier::VerifyPass(
     int position, int pending_token, absl::Span<const int> drafts,
     LitertState& state, ConstrainedDecoder* constrained_decoder,
-    bool feed_pending_token) {
+    bool feed_pending_token, RandomState* absl_nullable random_state) {
+  // Fails before anything changes if the pass would draw without the session's
+  // random state.
+  std::optional<LlmLiteRtVerifier::Lenience> lenience;
+  if (lenience_ > 0.0f) {
+    if (random_state == nullptr) {
+      return absl::FailedPreconditionError(
+          "Lenient draft verification needs the session's random state.");
+    }
+    lenience.emplace(LlmLiteRtVerifier::Lenience{
+        lenience_, random_state->draft_verifier_lenience});
+  }
+  if (random_state == nullptr && SamplingDrawsUniforms(sampler_params_)) {
+    return absl::FailedPreconditionError(
+        "Sampled draft verification needs the session's random state.");
+  }
   const int kv_cache_size = state.GetNumEntries();
   const std::optional<int> width =
       SelectVerifyWidth(widths_, drafts.size(), position, kv_cache_size);
@@ -1058,8 +1059,7 @@ absl::StatusOr<VerifyPassOutcome> LlmLiteRtDraftVerifier::VerifyPass(
   }
   ABSL_ASSIGN_OR_RETURN(LlmLiteRtVerifier * verifier,
                         GetOrCreateVerifier(*width));
-  ABSL_RETURN_IF_ERROR(
-      verifier->UpdateSamplerConfig(sampler_params_, rand_gen_).status());
+  ABSL_RETURN_IF_ERROR(verifier->UpdateSamplerConfig(sampler_params_));
 
   std::optional<DraftConstraintStates> constraint_states;
   if (constrained_decoder != nullptr) {
@@ -1080,14 +1080,13 @@ absl::StatusOr<VerifyPassOutcome> LlmLiteRtDraftVerifier::VerifyPass(
   LITERT_ASSIGN_OR_RETURN(
       auto state_buffers,
       state.GetStateBuffers(base_model_, verifier->signature_key()));
-  std::uniform_real_distribution<double> unit(0.0, 1.0);
   ABSL_ASSIGN_OR_RETURN(
       VerifyPassResult pass,
       verifier->Verify(
           position, pending_token, drafts, state_buffers,
           constraint_states.has_value() ? &*constraint_states : nullptr,
-          lenience_,
-          [&](int /*i*/) -> double { return unit(lenience_rng_.engine()); }));
+          random_state != nullptr ? &random_state->sampling : nullptr,
+          lenience));
 
   if (pass.outcome.next_token.has_value() && *pass.outcome.next_token < 0) {
     const auto& advanced_settings = executor_settings_.GetAdvancedSettings();

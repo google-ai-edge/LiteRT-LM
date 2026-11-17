@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <random>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -36,15 +37,24 @@ void DrawUniforms(std::default_random_engine& rng, absl::Span<float> uniforms) {
   }
 }
 
-void DrawSamplingUniforms(const proto::SamplerParameters& sampler_params,
-                          std::default_random_engine& rng,
-                          absl::Span<float> uniforms) {
-  if (sampler_params.type() != proto::SamplerParameters::GREEDY &&
-      sampler_params.k() > 1) {
-    DrawUniforms(rng, uniforms);
-  } else {
+bool SamplingDrawsUniforms(const proto::SamplerParameters& sampler_params) {
+  return sampler_params.type() != proto::SamplerParameters::GREEDY &&
+         sampler_params.k() > 1;
+}
+
+absl::Status DrawSamplingUniforms(
+    const proto::SamplerParameters& sampler_params,
+    std::default_random_engine* absl_nullable rng, absl::Span<float> uniforms) {
+  if (!SamplingDrawsUniforms(sampler_params)) {
     std::fill(uniforms.begin(), uniforms.end(), 0.0f);
+    return absl::OkStatus();
   }
+  if (rng == nullptr) {
+    return absl::FailedPreconditionError(
+        "Sampling that isn't greedy needs the session's random state.");
+  }
+  DrawUniforms(*rng, uniforms);
+  return absl::OkStatus();
 }
 
 absl::Status ValidateUniforms(absl::Span<const float> uniforms,

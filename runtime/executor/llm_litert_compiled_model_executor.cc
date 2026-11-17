@@ -22,12 +22,12 @@
 #include <limits>
 #include <memory>
 #include <optional>
-#include <random>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -62,6 +62,7 @@
 #include "runtime/components/constrained_decoding/constrained_decoder.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler_params_util.h"
 #include "runtime/components/sampling_uniforms.h"
 #include "runtime/executor/common_utils.h"
@@ -1336,32 +1337,24 @@ LlmLiteRtCompiledModelExecutorBase::MaybeUpdateVerifierSamplerConfig() {
   if (mtp_drafter_ == nullptr || sampler_ == nullptr) {
     return absl::OkStatus();
   }
-  auto [sampler_params, rand_gen] = GetVerifierSamplerConfig();
-  return mtp_drafter_->UpdateVerifierSamplerConfig(sampler_params,
-                                                   std::move(rand_gen));
+  return mtp_drafter_->UpdateVerifierSamplerConfig(GetVerifierSamplerParams());
 }
 
-std::pair<proto::SamplerParameters, std::shared_ptr<std::default_random_engine>>
-LlmLiteRtCompiledModelExecutorBase::GetVerifierSamplerConfig() {
-  proto::SamplerParameters sampler_params = ResolveExecutorSamplerParams(
+proto::SamplerParameters
+LlmLiteRtCompiledModelExecutorBase::GetVerifierSamplerParams() const {
+  return ResolveExecutorSamplerParams(
       llm_context_->runtime_config().sampler_params);
-  // The session sampler draws its uniforms from `runtime_state().rand_gen`
-  // (see `DrawSampleLogitsUniforms()`); share it with the verifier too so that
-  // plain and speculative steps consume a single random stream.
-  std::shared_ptr<std::default_random_engine> rand_gen =
-      llm_context_->runtime_state().rand_gen;
-  if (rand_gen == nullptr) {
-    // `DrawSampleLogitsUniforms()` creates a generator seeded with the session
-    // seed. Give the verifiers an independent stream rather than a second
-    // generator with the same seed (which would correlate its draws with the
-    // session's), and the same one for all of them, so that the passes of
-    // different verify signatures and the MTP drafter's don't repeat each
-    // other's draws.
-    constexpr int32_t kVerifierSeedSalt = 0x56455249;  // "VERI"
-    sampler_params.set_seed(sampler_params.seed() ^ kVerifierSeedSalt);
-    rand_gen = verifier_rand_gen_.Get(sampler_params.seed());
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorBase::CheckRandomState(
+    const RandomState* absl_nullable random_state, float lenience) const {
+  if (random_state == nullptr &&
+      (SamplingDrawsUniforms(GetVerifierSamplerParams()) || lenience > 0.0f)) {
+    return absl::FailedPreconditionError(
+        "Sampling that isn't greedy, and lenient speculative decoding, need "
+        "the session's random state (`ExecutorDecodeParams::SetRandomState`).");
   }
-  return {std::move(sampler_params), std::move(rand_gen)};
+  return absl::OkStatus();
 }
 
 absl::StatusOr<std::vector<std::vector<int>>>
@@ -1383,6 +1376,9 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
   // a fully committed speculative round.
   const bool was_mtp_primed = mtp_primed_;
   mtp_primed_ = false;
+
+  // Plain steps and MTP rounds sample with the session's random state.
+  RandomState* random_state = decode_params.GetRandomState();
 
   ABSL_ASSIGN_OR_RETURN(
       SpeculativeDecodingController::Decision speculation,
@@ -1410,6 +1406,11 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
     }
   }
   const bool enable_mtp_drafter = speculation.speculate;
+  const float lenience =
+      enable_mtp_drafter
+          ? decode_params.GetSpeculativeDecodingConfig().lenience.value_or(0.0f)
+          : 0.0f;
+  ABSL_RETURN_IF_ERROR(CheckRandomState(random_state, lenience));
 
   std::vector<std::vector<int>> output_tokens_vector;
   absl::Duration step_elapsed;
@@ -1428,7 +1429,8 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
           output_tokens,
           CreateTensorBuffer<int>({dimensions[0], dimensions[1]}));
     }
-    ABSL_RETURN_IF_ERROR(SampleLogits(decoded_logits, *output_tokens));
+    ABSL_RETURN_IF_ERROR(
+        SampleLogits(decoded_logits, *output_tokens, random_state));
     LITERT_ASSIGN_OR_RETURN(output_tokens_vector,
                             CopyFromTensorBuffer2D<int>(*output_tokens));
     step_elapsed = absl::Now() - plain_start;
@@ -1437,8 +1439,6 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
     const absl::Time round_start = absl::Now();
     absl::Duration priming_time = absl::ZeroDuration();
 
-    const float lenience =
-        decode_params.GetSpeculativeDecodingConfig().lenience.value_or(0.0f);
     ABSL_RETURN_IF_ERROR(mtp_drafter_->SetLenience(lenience));
 
     // MTP keeps an internal state of the last time it was called and will
@@ -1463,7 +1463,7 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
           mtp_drafter_->Draft(step_and_token.step,
                               step_and_token.token[0]->id(),
                               /*activations=*/std::nullopt, *active_state,
-                              constrained_decoder));
+                              random_state, constrained_decoder));
       RET_CHECK_EQ(output_tokens_vector.size(), 1);
       llm_context_->runtime_state().current_step +=
           output_tokens_vector[0].size();
@@ -1484,7 +1484,8 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
         LITERT_ASSIGN_OR_RETURN(
             auto output_tokens,
             CreateTensorBuffer<int>({dimensions[0], dimensions[1]}));
-        ABSL_RETURN_IF_ERROR(SampleLogits(decoded_logits, output_tokens));
+        ABSL_RETURN_IF_ERROR(
+            SampleLogits(decoded_logits, output_tokens, random_state));
         LITERT_ASSIGN_OR_RETURN(output_tokens_vector,
                                 CopyFromTensorBuffer2D<int>(output_tokens));
         RET_CHECK_EQ(output_tokens_vector.size(), 1);
@@ -1504,7 +1505,7 @@ LlmLiteRtCompiledModelExecutorBase::Decode(
           output_tokens_vector,
           mtp_drafter_->Draft(llm_context_->runtime_state().current_step - 1,
                               token_id, std::move(activations), *active_state,
-                              constrained_decoder));
+                              random_state, constrained_decoder));
       llm_context_->runtime_state().current_step +=
           output_tokens_vector[0].size();
       output_tokens_vector[0].insert(output_tokens_vector[0].begin(), token_id);
@@ -1804,18 +1805,10 @@ LlmLiteRtCompiledModelExecutorBase::CreateNewContext(
   std::unique_ptr<ProcessedContext> processed_context =
       std::make_unique<LlmProcessedContext>(lora_id, nullptr);
 
-  auto runtime_state = std::make_unique<RuntimeState>();
-  if (runtime_config.sampler_params.has_value()) {
-    runtime_state->rand_gen = std::make_shared<std::default_random_engine>(
-        runtime_config.sampler_params->seed());
-  } else {
-    runtime_state->rand_gen = std::make_shared<std::default_random_engine>(0);
-  }
-
   return std::make_unique<LlmContext>(
       std::move(processed_context),
       std::make_unique<RuntimeConfig>(std::move(runtime_config)),
-      std::move(runtime_state));
+      std::make_unique<RuntimeState>());
 }
 
 absl::StatusOr<std::unique_ptr<LlmContext>>
@@ -1929,19 +1922,6 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
       CreateExecutorSampler(executor_settings_.GetBackend(), sampler_backend,
                             output_heads, std::move(sampler_params), env_,
                             /*sequence_size=*/1, vocab_size, data_type));
-
-  // Keep the context's generator: it may already have drawn uniforms, e.g.
-  // when `UpdateSamplerConfig()` recreates the sampler mid-session. Seed one
-  // for a context without one (`CreateNewContext()` always sets one), so that
-  // `MaybeUpdateVerifierSamplerConfig()` below shares it with
-  // `DrawSampleLogitsUniforms()`.
-  if (llm_context_->runtime_state().rand_gen == nullptr) {
-    llm_context_->runtime_state().rand_gen =
-        std::make_shared<std::default_random_engine>(
-            llm_context_->runtime_config().sampler_params.has_value()
-                ? llm_context_->runtime_config().sampler_params->seed()
-                : 0);
-  }
 
   // The sampler can feed the sampled token straight into the next decode step
   // only when the decode signature looks up the token embedding in the graph.
@@ -2080,7 +2060,8 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SetSamplerInputHandling(
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::SampleLogits(
-    const TensorBuffer& logits, TensorBuffer& ids_tensor) {
+    const TensorBuffer& logits, TensorBuffer& ids_tensor,
+    RandomState* absl_nullable random_state) {
   if (sampler_ == nullptr) {
     LITERT_ASSIGN_OR_RETURN(auto logits_tensor_type, logits.TensorType());
     ActivationDataType logits_data_type;
@@ -2101,35 +2082,32 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::SampleLogits(
     ABSL_RETURN_IF_ERROR(SwapSamplerInputTensors());
   }
 
+  ABSL_ASSIGN_OR_RETURN(absl::Span<const float> uniforms,
+                        DrawSampleLogitsUniforms(random_state));
   ABSL_RETURN_IF_ERROR(sampler_->SampleToIdAndScoreBuffer(
-      logits, ids_tensor, /*scores_tensor=*/nullptr,
-      DrawSampleLogitsUniforms()));
+      logits, ids_tensor, /*scores_tensor=*/nullptr, uniforms));
   return absl::OkStatus();
 }
 
-absl::Span<const float>
-LlmLiteRtCompiledModelExecutorBase::DrawSampleLogitsUniforms() {
+absl::StatusOr<absl::Span<const float>>
+LlmLiteRtCompiledModelExecutorBase::DrawSampleLogitsUniforms(
+    RandomState* absl_nullable random_state) {
   // Default parameters sample greedily, as in `InitializeSampler()`.
   const proto::SamplerParameters sampler_params = ResolveExecutorSamplerParams(
       llm_context_->runtime_config().sampler_params);
-  std::shared_ptr<std::default_random_engine>& rand_gen =
-      llm_context_->runtime_state().rand_gen;
-  if (rand_gen == nullptr) {
-    // Seeded like the generator of a context from `CreateNewContext()`.
-    rand_gen =
-        std::make_shared<std::default_random_engine>(sampler_params.seed());
-  }
   const int output_heads =
       llm_context_->runtime_config().output_heads.value_or(1);
   // One uniform per output head; `SampleLogits()` samples one position.
   sampling_uniforms_.resize(output_heads);
-  DrawSamplingUniforms(sampler_params, *rand_gen,
-                       absl::MakeSpan(sampling_uniforms_));
+  ABSL_RETURN_IF_ERROR(DrawSamplingUniforms(
+      sampler_params,
+      random_state != nullptr ? &random_state->sampling : nullptr,
+      absl::MakeSpan(sampling_uniforms_)));
   // The NVIDIA decode step that feeds itself samples its steps ahead with the
   // draws that come next (greedy sampling draws none).
   if (executor_settings_.GetBackend() == Backend::NPU &&
-      sampler_params.k() > 1) {
-    TellNvidiaStepDraws(env_, sampler_params, *rand_gen);
+      sampler_params.k() > 1 && random_state != nullptr) {
+    TellNvidiaStepDraws(env_, sampler_params, random_state->sampling);
   }
 
   return absl::MakeConstSpan(sampling_uniforms_);
@@ -2725,8 +2703,11 @@ LlmLiteRtCompiledModelExecutorStatic::VerifyDraft(
   }
   ABSL_ASSIGN_OR_RETURN(const int vocab_size, GetVocabSize());
   ABSL_RETURN_IF_ERROR(ValidateDraftTokenIds(draft_token_ids, vocab_size));
-  ABSL_RETURN_IF_ERROR(draft_verifier_->SetLenience(
-      decode_params.GetSpeculativeDecodingConfig().lenience.value_or(0.0f)));
+  const float lenience =
+      decode_params.GetSpeculativeDecodingConfig().lenience.value_or(0.0f);
+  ABSL_RETURN_IF_ERROR(draft_verifier_->SetLenience(lenience));
+  ABSL_RETURN_IF_ERROR(
+      CheckRandomState(decode_params.GetRandomState(), lenience));
   // Applies a pending rewind, as a decode would.
   ABSL_RETURN_IF_ERROR(RollBackProcessedTokens());
   const ProcessedTokens::StepAndToken pending =
@@ -2792,8 +2773,7 @@ LlmLiteRtCompiledModelExecutorStatic::VerifyDraft(
   if (sampler_ != nullptr && sampler_->HandlesInput()) {
     ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
   }
-  auto [sampler_params, rand_gen] = GetVerifierSamplerConfig();
-  draft_verifier_->SetSamplerConfig(sampler_params, std::move(rand_gen));
+  draft_verifier_->SetSamplerConfig(GetVerifierSamplerParams());
 
   DraftVerificationResult result;
   int num_passes = 0;
@@ -2830,7 +2810,7 @@ LlmLiteRtCompiledModelExecutorStatic::VerifyDraft(
         draft_verifier_->VerifyPass(
             step_and_token.step, step_and_token.token[0]->id(), drafts,
             *litert_state, decode_params.GetConstrainedDecoder(),
-            feed_pending_token));
+            feed_pending_token, decode_params.GetRandomState()));
     ++num_passes;
 
     // Commits the pass: the pending token and the accepted draft inputs are

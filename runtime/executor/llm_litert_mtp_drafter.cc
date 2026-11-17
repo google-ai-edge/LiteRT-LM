@@ -20,11 +20,11 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <random>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
@@ -52,8 +52,10 @@
 #include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler.h"
 #include "runtime/components/sampler_params_util.h"
+#include "runtime/components/sampling_uniforms.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert/state.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
@@ -370,15 +372,8 @@ LlmLiteRtMtpDrafter::Create(
 }
 
 absl::Status LlmLiteRtMtpDrafter::UpdateVerifierSamplerConfig(
-    const proto::SamplerParameters& sampler_params,
-    std::shared_ptr<std::default_random_engine> rand_gen) {
-  ABSL_ASSIGN_OR_RETURN(
-      std::shared_ptr<std::default_random_engine> verifier_rand_gen,
-      verifier_->UpdateSamplerConfig(sampler_params, std::move(rand_gen)));
-  // This is called on every sampler re-sync (e.g. each session switch); the
-  // lenience stream restarts only when the verifier's stream does.
-  lenience_rng_.Update(sampler_params.seed(), verifier_rand_gen);
-  return absl::OkStatus();
+    const proto::SamplerParameters& sampler_params) {
+  return verifier_->UpdateSamplerConfig(sampler_params);
 }
 
 absl::Status LlmLiteRtMtpDrafter::SetLenience(float lenience) {
@@ -507,7 +502,24 @@ absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunDraftingLoop(
 
 absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
     int position, int token_id, std::optional<TensorBuffer> activations,
-    StateInterface& state, ConstrainedDecoder* constrained_decoder) {
+    StateInterface& state, RandomState* absl_nullable random_state,
+    ConstrainedDecoder* constrained_decoder) {
+  // Fails before anything changes if the round would draw without the
+  // session's random state.
+  std::optional<LlmLiteRtVerifier::Lenience> lenience;
+  if (lenience_ > 0.0f) {
+    if (random_state == nullptr) {
+      return absl::FailedPreconditionError(
+          "Lenient MTP rounds need the session's random state.");
+    }
+    lenience.emplace(
+        LlmLiteRtVerifier::Lenience{lenience_, random_state->drafter_lenience});
+  }
+  if (random_state == nullptr &&
+      SamplingDrawsUniforms(verifier_->sampler_params())) {
+    return absl::FailedPreconditionError(
+        "Sampled MTP rounds need the session's random state.");
+  }
   auto* litert_state = dynamic_cast<LitertState*>(&state);
   RET_CHECK(litert_state != nullptr);
   LITERT_ASSIGN_OR_RETURN(
@@ -540,13 +552,13 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
   const absl::Duration drafting_time = absl::Now() - draft_start;
 
   const absl::Time verify_start = absl::Now();
-  std::uniform_real_distribution<double> unit(0.0, 1.0);
-  ABSL_ASSIGN_OR_RETURN(VerifyPassResult pass,
-                        verifier_->Verify(position, token_id, drafted_tokens,
-                                          state_buffers, constraint_states_ptr,
-                                          lenience_, [&](int /*i*/) -> double {
-                                            return unit(lenience_rng_.engine());
-                                          }));
+  ABSL_ASSIGN_OR_RETURN(
+      VerifyPassResult pass,
+      verifier_->Verify(
+          position, token_id, drafted_tokens, state_buffers,
+          constraint_states_ptr,
+          random_state != nullptr ? &random_state->sampling : nullptr,
+          lenience));
   const absl::Duration verify_time = absl::Now() - verify_start;
 
   // The pass takes all the drafted tokens, so it always decodes a bonus token.

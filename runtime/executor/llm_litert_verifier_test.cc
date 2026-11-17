@@ -14,7 +14,6 @@
 
 #include "runtime/executor/llm_litert_verifier.h"
 
-#include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17)
 #include <limits>
 #include <memory>
@@ -50,6 +49,7 @@
 #include "runtime/components/constrained_decoding/logit_mask.h"
 #include "runtime/components/constrained_decoding/suppress_tokens_constraint.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler_params_util.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert/state.h"
@@ -350,7 +350,7 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, FullPassesReturnTheNextTokenOfEveryRow) {
     SCOPED_TRACE(::testing::Message() << "Position: " << position);
     ASSERT_OK(RunPass(*verifier, context, position, kVerifyWidth));
     EXPECT_THAT(
-        verifier->MaskAndSample({}),
+        verifier->MaskAndSample({}, /*rng=*/nullptr),
         IsOkAndHolds(ElementsAreArray(FakeLmPassTokens(context, position))));
   }
 }
@@ -371,7 +371,7 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, PaddedPassesReturnTheNextTokenOfTheirRows) {
     SCOPED_TRACE(::testing::Message() << "Position: " << pass.position
                                       << ", tokens: " << pass.num_tokens);
     ASSERT_OK(RunPass(*verifier, context, pass.position, pass.num_tokens));
-    EXPECT_THAT(verifier->MaskAndSample({}),
+    EXPECT_THAT(verifier->MaskAndSample({}, /*rng=*/nullptr),
                 IsOkAndHolds(ElementsAreArray(FakeLmPassTokens(
                     context, pass.position, pass.num_tokens))));
   }
@@ -388,7 +388,7 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, MaskAndSampleAppliesTheMaskOfEachRow) {
   expected[1] = forced_token;
 
   ASSERT_OK(RunPass(*verifier, context, /*position=*/0, kVerifyWidth));
-  EXPECT_THAT(verifier->MaskAndSample(masks),
+  EXPECT_THAT(verifier->MaskAndSample(masks, /*rng=*/nullptr),
               IsOkAndHolds(ElementsAreArray(expected)));
 }
 
@@ -398,13 +398,13 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, MaskAndSampleRejectsAPartialMaskSequence) {
   // Masks cover the padding rows too.
   ASSERT_OK(RunPass(*verifier, context, /*position=*/0, /*num_tokens=*/3));
   std::vector<std::unique_ptr<LogitMask>> masks(3);
-  EXPECT_THAT(verifier->MaskAndSample(masks),
+  EXPECT_THAT(verifier->MaskAndSample(masks, /*rng=*/nullptr),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST_P(LlmLiteRtVerifierFakeLmTest, MaskAndSampleFailsBeforeAnyPass) {
   ASSERT_OK_AND_ASSIGN(auto verifier, CreateVerifier("verify"));
-  EXPECT_THAT(verifier->MaskAndSample({}),
+  EXPECT_THAT(verifier->MaskAndSample({}, /*rng=*/nullptr),
               StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
@@ -445,7 +445,7 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, PassRunnerStartsThePasses) {
     SCOPED_TRACE(::testing::Message() << "Position: " << position);
     ASSERT_OK(RunPass(*verifier, context, position, kVerifyWidth));
     EXPECT_THAT(
-        verifier->MaskAndSample({}),
+        verifier->MaskAndSample({}, /*rng=*/nullptr),
         IsOkAndHolds(ElementsAreArray(FakeLmPassTokens(context, position))));
   }
   EXPECT_THAT(run_signatures, ElementsAre("verify", "verify"));
@@ -465,7 +465,7 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, RunFailsIfThePassRunnerFails) {
   EXPECT_THAT(RunPass(*verifier, {3, 1, 4, 1}, /*position=*/0, kVerifyWidth),
               StatusIs(absl::StatusCode::kUnavailable));
   // No pass has started.
-  EXPECT_THAT(verifier->MaskAndSample({}),
+  EXPECT_THAT(verifier->MaskAndSample({}, /*rng=*/nullptr),
               StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
@@ -480,57 +480,62 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, GetOutputBufferReturnsNonKvCacheOutputs) {
 
 TEST_P(LlmLiteRtVerifierFakeLmTest, SamplerSamplesWithTheGivenGenerator) {
   ASSERT_OK_AND_ASSIGN(auto verifier, CreateVerifier("verify"));
-  auto rand_gen = std::make_shared<std::default_random_engine>(7);
-  EXPECT_THAT(
-      verifier->UpdateSamplerConfig(SampledParams(/*seed=*/0), rand_gen),
-      IsOkAndHolds(rand_gen));
+  ASSERT_OK(verifier->UpdateSamplerConfig(SampledParams(/*seed=*/0)));
 
   ASSERT_OK(RunPass(*verifier, {3, 1, 4, 1}, /*position=*/0, kVerifyWidth));
-  const std::default_random_engine before_sampling = *rand_gen;
-  ASSERT_OK(verifier->MaskAndSample({}));
-  EXPECT_THAT(*rand_gen, Ne(before_sampling));
+  std::default_random_engine rng(7);
+  ASSERT_OK(verifier->MaskAndSample({}, &rng));
+  EXPECT_THAT(rng, Ne(std::default_random_engine(7)));
 }
 
-TEST_P(LlmLiteRtVerifierFakeLmTest,
-       SamplerWithoutGeneratorUsesOneGeneratorPerSeed) {
+TEST_P(LlmLiteRtVerifierFakeLmTest, SampledPassesNeedAGenerator) {
   ASSERT_OK_AND_ASSIGN(auto verifier, CreateVerifier("verify"));
-  ASSERT_OK_AND_ASSIGN(auto first, verifier->UpdateSamplerConfig(
-                                       SampledParams(/*seed=*/1), nullptr));
-  ASSERT_NE(first, nullptr);
-  EXPECT_THAT(verifier->UpdateSamplerConfig(SampledParams(/*seed=*/1), nullptr),
-              IsOkAndHolds(first));
-  EXPECT_THAT(verifier->UpdateSamplerConfig(SampledParams(/*seed=*/2), nullptr),
-              IsOkAndHolds(Ne(first)));
+  ASSERT_OK(verifier->UpdateSamplerConfig(SampledParams(/*seed=*/0)));
+
+  ASSERT_OK(RunPass(*verifier, {3, 1, 4, 1}, /*position=*/0, kVerifyWidth));
+  EXPECT_THAT(verifier->MaskAndSample({}, /*rng=*/nullptr),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
-TEST_P(LlmLiteRtVerifierFakeLmTest,
-       FailedSamplerConfigUpdateKeepsTheGenerator) {
+TEST_P(LlmLiteRtVerifierFakeLmTest, SampledVerifyNeedsAGenerator) {
   ASSERT_OK_AND_ASSIGN(auto verifier, CreateVerifier("verify"));
-  auto rand_gen = std::make_shared<std::default_random_engine>(7);
-  ASSERT_OK(verifier->UpdateSamplerConfig(SampledParams(/*seed=*/0), rand_gen));
+  ASSERT_OK(verifier->UpdateSamplerConfig(SampledParams(/*seed=*/0)));
+  ASSERT_OK_AND_ASSIGN(auto state_buffers,
+                       state_->GetStateBuffers(*model_, "verify"));
+  EXPECT_THAT(verifier->Verify(/*position=*/0, /*pending_token=*/3, {1, 4},
+                               state_buffers, /*constraint_states=*/nullptr,
+                               /*rng=*/nullptr),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  // It failed before the pass.
+  EXPECT_THAT(verifier->MaskAndSample({}, /*rng=*/nullptr),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       HasSubstr("No pass has been run")));
+}
+
+TEST_P(LlmLiteRtVerifierFakeLmTest, FailedSamplerConfigUpdateKeepsTheSampler) {
+  ASSERT_OK_AND_ASSIGN(auto verifier, CreateVerifier("verify"));
+  ASSERT_OK(verifier->UpdateSamplerConfig(SampledParams(/*seed=*/0)));
   // A larger k recreates the sampler, which rejects p > 1.
   proto::SamplerParameters invalid_params = SampledParams(/*seed=*/0);
   invalid_params.set_k(kFakeLmVocabSize + 1);
   invalid_params.set_p(2.0f);
-  auto rejected_rand_gen = std::make_shared<std::default_random_engine>(7);
-  EXPECT_THAT(verifier->UpdateSamplerConfig(invalid_params, rejected_rand_gen),
+  EXPECT_THAT(verifier->UpdateSamplerConfig(invalid_params),
               StatusIs(absl::StatusCode::kInvalidArgument));
 
-  // The uniforms still come from the generator of the last successful update.
+  // The passes still sample with the parameters of the last successful update.
   ASSERT_OK(RunPass(*verifier, {3, 1, 4, 1}, /*position=*/0, kVerifyWidth));
-  const std::default_random_engine before_sampling = *rand_gen;
-  ASSERT_OK(verifier->MaskAndSample({}));
-  EXPECT_THAT(*rand_gen, Ne(before_sampling));
-  EXPECT_EQ(*rejected_rand_gen, std::default_random_engine(7));
+  std::default_random_engine rng(7);
+  ASSERT_OK(verifier->MaskAndSample({}, &rng));
+  EXPECT_THAT(rng, Ne(std::default_random_engine(7)));
 }
 
 TEST_P(LlmLiteRtVerifierFakeLmTest, GreedySamplerConfigKeepsExactPredictions) {
   ASSERT_OK_AND_ASSIGN(auto verifier, CreateVerifier("verify"));
-  ASSERT_OK(verifier->UpdateSamplerConfig(SampledParams(/*seed=*/0), nullptr));
-  ASSERT_OK(verifier->UpdateSamplerConfig(GreedySamplerParams(), nullptr));
+  ASSERT_OK(verifier->UpdateSamplerConfig(SampledParams(/*seed=*/0)));
+  ASSERT_OK(verifier->UpdateSamplerConfig(GreedySamplerParams()));
   const std::vector<int> context = {3, 1, 4, 1};
   ASSERT_OK(RunPass(*verifier, context, /*position=*/0, kVerifyWidth));
-  EXPECT_THAT(verifier->MaskAndSample({}),
+  EXPECT_THAT(verifier->MaskAndSample({}, /*rng=*/nullptr),
               IsOkAndHolds(
                   ElementsAreArray(FakeLmPassTokens(context, /*position=*/0))));
 }
@@ -544,7 +549,7 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, VerifyAcceptsTheDraftTokensThatItPredicts) {
   ASSERT_OK_AND_ASSIGN(
       VerifyPassResult result,
       verifier->Verify(/*position=*/0, context[0], drafts, state_buffers,
-                       /*constraint_states=*/nullptr));
+                       /*constraint_states=*/nullptr, /*rng=*/nullptr));
   // The pass takes 3 draft tokens, and its last row accepts the fourth, which
   // becomes the pending token of the next pass.
   EXPECT_THAT(result.outcome, FieldsAre(4, Eq(std::nullopt), 0));
@@ -560,7 +565,7 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, VerifyReturnsTheCorrectionOfAMismatch) {
                        state_->GetStateBuffers(*model_, "verify"));
   EXPECT_THAT(
       verifier->Verify(/*position=*/0, context[0], drafts, state_buffers,
-                       /*constraint_states=*/nullptr),
+                       /*constraint_states=*/nullptr, /*rng=*/nullptr),
       IsOkAndHolds(Field(&VerifyPassResult::outcome,
                          FieldsAre(1, Optional(context[2]), 0))));
 }
@@ -573,7 +578,7 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, VerifyPadsAPassOfAShortDraft) {
                        state_->GetStateBuffers(*model_, "verify"));
   EXPECT_THAT(
       verifier->Verify(/*position=*/0, context[0], drafts, state_buffers,
-                       /*constraint_states=*/nullptr),
+                       /*constraint_states=*/nullptr, /*rng=*/nullptr),
       IsOkAndHolds(Field(&VerifyPassResult::outcome,
                          FieldsAre(2, Optional(context[3]), 0))));
 }
@@ -585,17 +590,17 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, VerifyAcceptsMismatchesWithLenience) {
   const std::vector<int> drafts = {(context[1] + 1) % kFakeLmVocabSize};
   ASSERT_OK_AND_ASSIGN(auto state_buffers,
                        state_->GetStateBuffers(*model_, "verify"));
-  int num_uniforms = 0;
+  std::mt19937_64 lenience_rng(1);
   EXPECT_THAT(verifier->Verify(/*position=*/0, context[0], drafts,
                                state_buffers, /*constraint_states=*/nullptr,
-                               /*lenience=*/1.0f,
-                               [&](int) {
-                                 ++num_uniforms;
-                                 return 0.5;
-                               }),
+                               /*rng=*/nullptr,
+                               LlmLiteRtVerifier::Lenience{1.0f, lenience_rng}),
               IsOkAndHolds(Field(&VerifyPassResult::outcome,
                                  FieldsAre(1, Ne(std::nullopt), 1))));
-  EXPECT_EQ(num_uniforms, 1);
+  // One uniform drawn, for the mismatching draft token.
+  std::mt19937_64 expected_rng(1);
+  expected_rng.discard(1);
+  EXPECT_EQ(lenience_rng, expected_rng);
 }
 
 TEST_P(LlmLiteRtVerifierFakeLmTest, VerifyMasksTheRowsWithTheConstraint) {
@@ -609,7 +614,7 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, VerifyMasksTheRowsWithTheConstraint) {
   ASSERT_OK_AND_ASSIGN(
       VerifyPassResult result,
       verifier->Verify(/*position=*/0, /*pending_token=*/3, {10, 11, 12, 13},
-                       state_buffers, &constraint_states));
+                       state_buffers, &constraint_states, /*rng=*/nullptr));
   EXPECT_THAT(result.outcome, FieldsAre(4, Eq(std::nullopt), 0));
   // The state follows the draft tokens that the pass took, but not the one
   // that becomes the pending token.
@@ -628,7 +633,7 @@ TEST_P(LlmLiteRtVerifierFakeLmTest,
   ASSERT_OK_AND_ASSIGN(
       VerifyPassResult result,
       verifier->Verify(/*position=*/0, /*pending_token=*/3, {10, 0, 12},
-                       state_buffers, &constraint_states));
+                       state_buffers, &constraint_states, /*rng=*/nullptr));
   // The masked row of the disallowed draft token decodes the forced token.
   EXPECT_THAT(result.outcome, FieldsAre(1, Optional(11), 0));
   ASSERT_NE(result.constraint_state, nullptr);
@@ -651,7 +656,7 @@ TEST_P(LlmLiteRtVerifierFakeLmTest, VerifyUsesTheMasksOfAppendedDraftTokens) {
   ASSERT_OK_AND_ASSIGN(
       VerifyPassResult result,
       verifier->Verify(/*position=*/0, /*pending_token=*/3, drafts,
-                       state_buffers, &constraint_states));
+                       state_buffers, &constraint_states, /*rng=*/nullptr));
   EXPECT_THAT(result.outcome, FieldsAre(3, Optional(13), 0));
   // Only the mask of the last row is new.
   EXPECT_EQ(constraint.num_masks(), 4);
@@ -676,11 +681,12 @@ TEST_P(LlmLiteRtVerifierFakeLmTest,
     ASSERT_OK_AND_ASSIGN(auto state_buffers,
                          state_->GetStateBuffers(*model_, "verify"));
     // Full lenience would accept the disallowed draft token 0.
+    std::mt19937_64 lenience_rng(1);
     ASSERT_OK_AND_ASSIGN(
         VerifyPassResult result,
         verifier->Verify(/*position=*/0, /*pending_token=*/3, {10, 0, 12},
-                         state_buffers, &constraint_states, /*lenience=*/1.0f,
-                         [](int) { return 0.5; }));
+                         state_buffers, &constraint_states, /*rng=*/nullptr,
+                         LlmLiteRtVerifier::Lenience{1.0f, lenience_rng}));
     EXPECT_THAT(result.outcome, FieldsAre(1, Optional(11), 0));
     ASSERT_NE(result.constraint_state, nullptr);
     EXPECT_EQ(NumForcedTokens(*result.constraint_state), 1);
@@ -697,11 +703,12 @@ TEST_P(LlmLiteRtVerifierFakeLmTest,
                        state_->GetStateBuffers(*model_, "verify"));
   // The pass takes 3 draft tokens. Lenience would accept the disallowed fourth
   // as the pending token of the next pass.
+  std::mt19937_64 lenience_rng(1);
   ASSERT_OK_AND_ASSIGN(
       VerifyPassResult result,
       verifier->Verify(/*position=*/0, /*pending_token=*/3, {10, 11, 12, 0, 14},
-                       state_buffers, &constraint_states, /*lenience=*/1.0f,
-                       [](int) { return 0.5; }));
+                       state_buffers, &constraint_states, /*rng=*/nullptr,
+                       LlmLiteRtVerifier::Lenience{1.0f, lenience_rng}));
   EXPECT_THAT(result.outcome, FieldsAre(3, Optional(13), 0));
   ASSERT_NE(result.constraint_state, nullptr);
   EXPECT_EQ(NumForcedTokens(*result.constraint_state), 3);
@@ -734,17 +741,18 @@ TEST_P(LlmLiteRtVerifierFakeLmTest,
     ASSERT_OK_AND_ASSIGN(auto state_buffers,
                          state_->GetStateBuffers(*model_, "verify"));
     // The fake LM predicts 3 after the pending token 3, and 9 after 3, 5.
-    int num_uniforms = 0;
-    EXPECT_THAT(verifier->Verify(/*position=*/0, /*pending_token=*/3, {5, 0, 7},
-                                 state_buffers, &constraint_states,
-                                 /*lenience=*/1.0f,
-                                 [&](int) {
-                                   ++num_uniforms;
-                                   return 0.5;
-                                 }),
-                IsOkAndHolds(Field(&VerifyPassResult::outcome,
-                                   FieldsAre(1, Optional(9), 1))));
-    EXPECT_EQ(num_uniforms, 1);
+    std::mt19937_64 lenience_rng(1);
+    EXPECT_THAT(
+        verifier->Verify(/*position=*/0, /*pending_token=*/3, {5, 0, 7},
+                         state_buffers, &constraint_states,
+                         /*rng=*/nullptr,
+                         LlmLiteRtVerifier::Lenience{1.0f, lenience_rng}),
+        IsOkAndHolds(
+            Field(&VerifyPassResult::outcome, FieldsAre(1, Optional(9), 1))));
+    // One uniform drawn, for the leniently accepted draft token 5.
+    std::mt19937_64 expected_rng(1);
+    expected_rng.discard(1);
+    EXPECT_EQ(lenience_rng, expected_rng);
   }
 }
 
@@ -763,16 +771,16 @@ TEST_F(LlmLiteRtVerifierTest, SignaturesOfDifferentWidthsShareTheKvCache) {
 
   ASSERT_OK(RunPass(*wide_verifier, context, /*position=*/0,
                     /*num_tokens=*/8));
-  EXPECT_THAT(wide_verifier->MaskAndSample({}),
+  EXPECT_THAT(wide_verifier->MaskAndSample({}, /*rng=*/nullptr),
               IsOkAndHolds(ElementsAreArray(FakeLmPassTokens(
                   context, /*position=*/0, /*num_tokens=*/8))));
   ASSERT_OK(RunPass(*verifier, context, /*position=*/8, kVerifyWidth));
-  EXPECT_THAT(verifier->MaskAndSample({}),
+  EXPECT_THAT(verifier->MaskAndSample({}, /*rng=*/nullptr),
               IsOkAndHolds(
                   ElementsAreArray(FakeLmPassTokens(context, /*position=*/8))));
   ASSERT_OK(RunPass(*wide_verifier, context, /*position=*/12,
                     /*num_tokens=*/1));
-  EXPECT_THAT(wide_verifier->MaskAndSample({}),
+  EXPECT_THAT(wide_verifier->MaskAndSample({}, /*rng=*/nullptr),
               IsOkAndHolds(ElementsAreArray(FakeLmPassTokens(
                   context, /*position=*/12, /*num_tokens=*/1))));
 }
@@ -790,7 +798,7 @@ TEST_F(LlmLiteRtVerifierTest, PositionsInputMayBeNamedPositions) {
   EXPECT_EQ(verifier->width(), kVerifyWidth);
   const std::vector<int> context = {3, 1, 4};
   ASSERT_OK(RunPass(*verifier, context, /*position=*/0, /*num_tokens=*/3));
-  EXPECT_THAT(verifier->MaskAndSample({}),
+  EXPECT_THAT(verifier->MaskAndSample({}, /*rng=*/nullptr),
               IsOkAndHolds(ElementsAreArray(FakeLmPassTokens(
                   context, /*position=*/0, /*num_tokens=*/3))));
 }
@@ -1003,13 +1011,13 @@ TEST_F(LlmLiteRtDraftVerifierTest,
   EXPECT_THAT(draft_verifier_->VerifyPass(
                   /*position=*/0, context[0], drafts, *state_,
                   /*constrained_decoder=*/nullptr,
-                  /*feed_pending_token=*/false),
+                  /*feed_pending_token=*/false, /*random_state=*/nullptr),
               IsOkAndHolds(FieldsAre(8, Eq(std::nullopt), 0)));
   // The narrowest pass takes the last 2 draft tokens.
   EXPECT_THAT(draft_verifier_->VerifyPass(
                   /*position=*/8, context[8], drafts.subspan(8), *state_,
                   /*constrained_decoder=*/nullptr,
-                  /*feed_pending_token=*/false),
+                  /*feed_pending_token=*/false, /*random_state=*/nullptr),
               IsOkAndHolds(FieldsAre(2, Optional(context[11]), 0)));
   EXPECT_THAT(passes_, ElementsAre("verify_8", "verify"));
 }
@@ -1019,20 +1027,32 @@ TEST_F(LlmLiteRtDraftVerifierTest, PassesFailIfNoneFitsIntoTheKvCache) {
   EXPECT_THAT(draft_verifier_->VerifyPass(
                   /*position=*/61, /*pending_token=*/3, {1}, *state_,
                   /*constrained_decoder=*/nullptr,
-                  /*feed_pending_token=*/false),
+                  /*feed_pending_token=*/false, /*random_state=*/nullptr),
               StatusIs(absl::StatusCode::kResourceExhausted));
   EXPECT_THAT(passes_, IsEmpty());
 }
 
 TEST_F(LlmLiteRtDraftVerifierTest, PassesSampleWithTheSamplerConfig) {
   ASSERT_NO_FATAL_FAILURE(CreateDraftVerifier(kTokenInputLm));
-  auto rand_gen = std::make_shared<std::default_random_engine>(7);
-  draft_verifier_->SetSamplerConfig(SampledParams(/*seed=*/0), rand_gen);
-  const std::default_random_engine before_sampling = *rand_gen;
+  draft_verifier_->SetSamplerConfig(SampledParams(/*seed=*/0));
+  RandomState random_state = RandomState::FromSeed(7);
   ASSERT_OK(draft_verifier_->VerifyPass(
       /*position=*/0, /*pending_token=*/3, {1, 4}, *state_,
-      /*constrained_decoder=*/nullptr, /*feed_pending_token=*/false));
-  EXPECT_NE(*rand_gen, before_sampling);
+      /*constrained_decoder=*/nullptr, /*feed_pending_token=*/false,
+      &random_state));
+  EXPECT_NE(random_state.sampling, RandomState::FromSeed(7).sampling);
+}
+
+TEST_F(LlmLiteRtDraftVerifierTest, SampledPassesNeedARandomState) {
+  ASSERT_NO_FATAL_FAILURE(CreateDraftVerifier(kTokenInputLm));
+  draft_verifier_->SetSamplerConfig(SampledParams(/*seed=*/0));
+  EXPECT_THAT(draft_verifier_->VerifyPass(
+                  /*position=*/0, /*pending_token=*/3, {1, 4}, *state_,
+                  /*constrained_decoder=*/nullptr,
+                  /*feed_pending_token=*/false, /*random_state=*/nullptr),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  // It failed before the pass.
+  EXPECT_THAT(passes_, IsEmpty());
 }
 
 TEST_F(LlmLiteRtDraftVerifierTest, PassesMaskTheRowsWithTheConstrainedDecoder) {
@@ -1042,20 +1062,22 @@ TEST_F(LlmLiteRtDraftVerifierTest, PassesMaskTheRowsWithTheConstrainedDecoder) {
   ASSERT_OK_AND_ASSIGN(auto decoder,
                        ConstrainedDecoder::CreateForHost(&constraint));
   // A pending token from a prefill is not fed to the decoder.
-  EXPECT_THAT(draft_verifier_->VerifyPass(
-                  /*position=*/0, /*pending_token=*/3, {10, 11}, *state_,
-                  decoder.get(), /*feed_pending_token=*/false),
-              IsOkAndHolds(FieldsAre(2, Optional(12), 0)));
+  EXPECT_THAT(
+      draft_verifier_->VerifyPass(
+          /*position=*/0, /*pending_token=*/3, {10, 11}, *state_, decoder.get(),
+          /*feed_pending_token=*/false, /*random_state=*/nullptr),
+      IsOkAndHolds(FieldsAre(2, Optional(12), 0)));
   // The decoder's state follows the accepted draft tokens, but not the new
   // pending token.
   ASSERT_OK_AND_ASSIGN(const Constraint::State* state, decoder->GetState(0));
   EXPECT_EQ(NumForcedTokens(*state), 2);
 
   // A decoded pending token is fed to the decoder first.
-  EXPECT_THAT(draft_verifier_->VerifyPass(
-                  /*position=*/3, /*pending_token=*/12, {13, 0}, *state_,
-                  decoder.get(), /*feed_pending_token=*/true),
-              IsOkAndHolds(FieldsAre(1, Optional(14), 0)));
+  EXPECT_THAT(
+      draft_verifier_->VerifyPass(
+          /*position=*/3, /*pending_token=*/12, {13, 0}, *state_, decoder.get(),
+          /*feed_pending_token=*/true, /*random_state=*/nullptr),
+      IsOkAndHolds(FieldsAre(1, Optional(14), 0)));
   ASSERT_OK_AND_ASSIGN(state, decoder->GetState(0));
   EXPECT_EQ(NumForcedTokens(*state), 4);
 }
@@ -1067,10 +1089,11 @@ TEST_F(LlmLiteRtDraftVerifierTest,
   ASSERT_OK_AND_ASSIGN(auto decoder,
                        ConstrainedDecoder::CreateForHost(&constraint));
   ASSERT_OK_AND_ASSIGN(const Constraint::State* state, decoder->GetState(0));
-  EXPECT_THAT(draft_verifier_->VerifyPass(
-                  /*position=*/0, /*pending_token=*/3, {0}, *state_,
-                  decoder.get(), /*feed_pending_token=*/false),
-              IsOkAndHolds(FieldsAre(0, Optional(10), 0)));
+  EXPECT_THAT(
+      draft_verifier_->VerifyPass(
+          /*position=*/0, /*pending_token=*/3, {0}, *state_, decoder.get(),
+          /*feed_pending_token=*/false, /*random_state=*/nullptr),
+      IsOkAndHolds(FieldsAre(0, Optional(10), 0)));
   ASSERT_OK_AND_ASSIGN(const Constraint::State* new_state,
                        decoder->GetState(0));
   EXPECT_EQ(new_state, state);
@@ -1080,12 +1103,13 @@ TEST_F(LlmLiteRtDraftVerifierTest,
 TEST_F(LlmLiteRtDraftVerifierTest, PassesAcceptDraftTokensWithTheLenience) {
   ASSERT_NO_FATAL_FAILURE(CreateDraftVerifier(kTokenInputLm));
   ASSERT_OK(draft_verifier_->SetLenience(1.0f));
+  RandomState random_state;
   // The fake LM predicts 3 after the pending token 3, and 9 after 3, 5.
   EXPECT_THAT(
       draft_verifier_->VerifyPass(
           /*position=*/0, /*pending_token=*/3, {5, 0}, *state_,
           /*constrained_decoder=*/nullptr,
-          /*feed_pending_token=*/false),
+          /*feed_pending_token=*/false, &random_state),
       IsOkAndHolds(FieldsAre(2, Optional(FakeLmNextToken({3, 5, 0})), 2)));
   // Exact again.
   ASSERT_OK(draft_verifier_->SetLenience(0.0f));
@@ -1093,40 +1117,54 @@ TEST_F(LlmLiteRtDraftVerifierTest, PassesAcceptDraftTokensWithTheLenience) {
       draft_verifier_->VerifyPass(
           /*position=*/3, /*pending_token=*/10, {5, 0}, *state_,
           /*constrained_decoder=*/nullptr,
-          /*feed_pending_token=*/false),
+          /*feed_pending_token=*/false, /*random_state=*/nullptr),
       IsOkAndHolds(FieldsAre(0, Optional(FakeLmNextToken({3, 5, 0, 10})), 0)));
 }
 
 TEST_F(LlmLiteRtDraftVerifierTest,
-       LenientPassesDrawFromAStreamThatRestartsWithTheGenerator) {
+       LenientPassesDrawFromTheDraftVerifierLenienceStream) {
   ASSERT_NO_FATAL_FAILURE(CreateDraftVerifier(kTokenInputLm));
   ASSERT_OK(draft_verifier_->SetLenience(0.5f));
   // Returns whether each of 32 passes leniently accepts the draft token 0,
   // which the fake LM doesn't predict after the pending token 3.
   auto lenient_accepts =
-      [&](std::shared_ptr<std::default_random_engine> rand_gen)
-      -> absl::StatusOr<std::vector<int>> {
-    draft_verifier_->SetSamplerConfig(GreedySamplerParams(),
-                                      std::move(rand_gen));
+      [&](RandomState& random_state) -> absl::StatusOr<std::vector<int>> {
     std::vector<int> accepts;
     for (int i = 0; i < 32; ++i) {
       ABSL_ASSIGN_OR_RETURN(VerifyPassOutcome outcome,
                             draft_verifier_->VerifyPass(
                                 /*position=*/0, /*pending_token=*/3, {0},
                                 *state_, /*constrained_decoder=*/nullptr,
-                                /*feed_pending_token=*/false));
+                                /*feed_pending_token=*/false, &random_state));
       accepts.push_back(outcome.num_lenient_accepted);
     }
     return accepts;
   };
-  auto rand_gen = std::make_shared<std::default_random_engine>(0);
-  ASSERT_OK_AND_ASSIGN(const std::vector<int> first, lenient_accepts(rand_gen));
+  RandomState random_state = RandomState::FromSeed(0);
+  const RandomState copy = random_state;
+  ASSERT_OK_AND_ASSIGN(const std::vector<int> first,
+                       lenient_accepts(random_state));
   EXPECT_THAT(first, AllOf(Contains(0), Contains(1)));
-  // The same generator continues the stream.
-  EXPECT_THAT(lenient_accepts(rand_gen), IsOkAndHolds(Ne(first)));
-  // A new generator with the same seed (e.g. a new session's) restarts it.
-  EXPECT_THAT(lenient_accepts(std::make_shared<std::default_random_engine>(0)),
-              IsOkAndHolds(first));
+  // Only the draft verifier's lenience stream advanced.
+  EXPECT_EQ(random_state.sampling, copy.sampling);
+  EXPECT_EQ(random_state.drafter_lenience, copy.drafter_lenience);
+  EXPECT_NE(random_state.draft_verifier_lenience, copy.draft_verifier_lenience);
+  // The same state continues the stream, and a copy of the earlier state
+  // repeats it.
+  EXPECT_THAT(lenient_accepts(random_state), IsOkAndHolds(Ne(first)));
+  RandomState repeat = copy;
+  EXPECT_THAT(lenient_accepts(repeat), IsOkAndHolds(first));
+}
+
+TEST_F(LlmLiteRtDraftVerifierTest, LenientPassesNeedARandomState) {
+  ASSERT_NO_FATAL_FAILURE(CreateDraftVerifier(kTokenInputLm));
+  ASSERT_OK(draft_verifier_->SetLenience(0.5f));
+  EXPECT_THAT(draft_verifier_->VerifyPass(
+                  /*position=*/0, /*pending_token=*/3, {0}, *state_,
+                  /*constrained_decoder=*/nullptr,
+                  /*feed_pending_token=*/false, /*random_state=*/nullptr),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(passes_, IsEmpty());
 }
 
 TEST_F(LlmLiteRtDraftVerifierTest, LenienceMustBeBetweenZeroAndOne) {
@@ -1223,72 +1261,6 @@ TEST(DraftConstraintStatesTest, TakeStateMovesOutAnOwnedStartState) {
                        states.TakeState(0));
   ASSERT_NE(state, nullptr);
   EXPECT_EQ(NumForcedTokens(*state), 1);
-}
-
-TEST(SeededRandomEngineTest, KeepsStreamWhileSeedIsUnchanged) {
-  SeededRandomEngine engine;
-  std::default_random_engine reference(7);
-  const auto first = engine.Get(7);
-  ASSERT_NE(first, nullptr);
-  EXPECT_EQ((*first)(), reference());
-  const auto again = engine.Get(7);
-  EXPECT_EQ(again, first);
-  EXPECT_EQ((*again)(), reference());
-}
-
-TEST(SeededRandomEngineTest, ReseedsWhenSeedChanges) {
-  SeededRandomEngine engine;
-  const auto seven = engine.Get(7);
-  seven->discard(1);
-  const auto eight = engine.Get(8);
-  EXPECT_NE(eight, seven);
-  std::default_random_engine reference_eight(8);
-  EXPECT_EQ((*eight)(), reference_eight());
-  // Going back to a previous seed restarts its stream.
-  const auto seven_again = engine.Get(7);
-  std::default_random_engine reference_seven(7);
-  EXPECT_EQ((*seven_again)(), reference_seven());
-}
-
-TEST(LenienceRandomEngineTest, RestartsWithVerifierStream) {
-  auto first_gen = std::make_shared<std::default_random_engine>(7);
-  LenienceRandomEngine lenience;
-  lenience.Update(/*seed=*/7, first_gen);
-  const uint64_t first_draw = lenience.engine()();
-  const uint64_t second_draw = lenience.engine()();
-
-  // The same seed and generator continue the stream.
-  lenience.Update(/*seed=*/7, first_gen);
-  const uint64_t third_draw = lenience.engine()();
-  EXPECT_NE(third_draw, first_draw);
-
-  // A new generator with the same seed (e.g. a new session) restarts it.
-  auto second_gen = std::make_shared<std::default_random_engine>(7);
-  lenience.Update(/*seed=*/7, second_gen);
-  EXPECT_EQ(lenience.engine()(), first_draw);
-  EXPECT_EQ(lenience.engine()(), second_draw);
-
-  // So does a seed change, and going back to the old seed.
-  lenience.Update(/*seed=*/8, second_gen);
-  EXPECT_NE(lenience.engine()(), first_draw);
-  lenience.Update(/*seed=*/7, second_gen);
-  EXPECT_EQ(lenience.engine()(), first_draw);
-}
-
-TEST(LenienceRandomEngineTest, DefaultsToSeedZero) {
-  LenienceRandomEngine never_updated;
-  LenienceRandomEngine seed_zero;
-  seed_zero.Update(/*seed=*/0, std::make_shared<std::default_random_engine>(0));
-  EXPECT_EQ(never_updated.engine()(), seed_zero.engine()());
-}
-
-TEST(LenienceRandomEngineTest, SaltsGiveDifferentStreams) {
-  auto gen = std::make_shared<std::default_random_engine>(7);
-  LenienceRandomEngine default_salt;
-  LenienceRandomEngine other_salt(/*salt=*/1);
-  default_salt.Update(/*seed=*/7, gen);
-  other_salt.Update(/*seed=*/7, gen);
-  EXPECT_NE(default_salt.engine()(), other_salt.engine()());
 }
 
 constexpr int kLargeKvCache = 1000;

@@ -53,6 +53,7 @@
 #include "runtime/components/constrained_decoding/constraint.h"
 #include "runtime/components/constrained_decoding/fake_constraint.h"
 #include "runtime/components/model_resources.h"
+#include "runtime/components/random_state.h"
 #include "runtime/components/sampler_params_util.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
@@ -60,6 +61,7 @@
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 #include "runtime/proto/llm_metadata.pb.h"
+#include "runtime/proto/sampler_params.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -595,8 +597,11 @@ TEST_P(FakeLmDraftVerificationTest, AcceptsMismatchesWithTheLenience) {
     num_mismatches += token != FakeLmNextToken(context);
     context.push_back(token);
   }
+  // Lenience draws from the session's random state.
+  RandomState random_state;
   ExecutorDecodeParams params;
   params.SetSpeculativeDecodingConfig({.lenience = 1.0f});
+  params.SetRandomState(&random_state);
 
   // Full lenience accepts every draft token.
   ASSERT_OK_AND_ASSIGN(DraftVerificationResult result,
@@ -614,6 +619,49 @@ TEST_P(FakeLmDraftVerificationTest, AcceptsMismatchesWithTheLenience) {
   EXPECT_EQ(stats->draft_verify_lenient_accepted_tokens(), num_mismatches);
   // Decoding continues after the accepted draft tokens.
   DecodeAndExpectFakeLmTokens(/*num_steps=*/2);
+}
+
+TEST_P(FakeLmDraftVerificationTest, LenienceNeedsTheSessionRandomState) {
+  ASSERT_OK(Prefill({3, 1, 4}));
+  ExecutorDecodeParams params;
+  params.SetSpeculativeDecodingConfig({.lenience = 0.5f});
+  EXPECT_THAT(executor_->VerifyDraft(FakeLmContinuation(3), params),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  // The failed verification leaves the context as it was.
+  DecodeAndExpectFakeLmTokens(/*num_steps=*/2);
+}
+
+TEST_P(FakeLmDraftVerificationTest,
+       SampledVerificationNeedsTheSessionRandomState) {
+  ASSERT_OK(Prefill({3, 1, 4}));
+  ASSERT_OK_AND_ASSIGN(RuntimeConfig greedy_config,
+                       executor_->GetRuntimeConfig());
+  RuntimeConfig sampled_config = greedy_config;
+  proto::SamplerParameters sampler_params;
+  sampler_params.set_type(proto::SamplerParameters::TOP_P);
+  sampler_params.set_k(4);
+  sampler_params.set_p(1.0f);
+  sampler_params.set_temperature(1.0f);
+  sampled_config.sampler_params = sampler_params;
+
+  ASSERT_OK(executor_->UpdateRuntimeConfig(sampled_config));
+  EXPECT_THAT(
+      executor_->VerifyDraft(FakeLmContinuation(3), ExecutorDecodeParams()),
+      StatusIs(absl::StatusCode::kFailedPrecondition));
+  // The failed verification leaves the context as it was.
+  ASSERT_OK(executor_->UpdateRuntimeConfig(greedy_config));
+  DecodeAndExpectFakeLmTokens(/*num_steps=*/2);
+
+  // With the state, the passes sample with its `sampling` stream only.
+  ASSERT_OK(executor_->UpdateRuntimeConfig(sampled_config));
+  RandomState random_state = RandomState::FromSeed(7);
+  ExecutorDecodeParams params;
+  params.SetRandomState(&random_state);
+  ASSERT_OK(VerifyDraft(FakeLmContinuation(3), params));
+  const RandomState initial = RandomState::FromSeed(7);
+  EXPECT_NE(random_state.sampling, initial.sampling);
+  EXPECT_EQ(random_state.draft_verifier_lenience,
+            initial.draft_verifier_lenience);
 }
 
 TEST_P(FakeLmDraftVerificationTest, RejectsALenienceOutsideZeroToOne) {
@@ -772,9 +820,11 @@ TEST_P(FakeLmDraftVerificationTest,
         ASSERT_OK(Prefill({3, 1, 4}));
         ASSERT_OK_AND_ASSIGN(auto decoder,
                              ConstrainedDecoder::CreateForHost(constraint));
+        RandomState random_state;
         ExecutorDecodeParams params;
         params.SetConstrainedDecoder(decoder.get());
         params.SetSpeculativeDecodingConfig({.lenience = lenience});
+        params.SetRandomState(&random_state);
         std::vector<int> draft(kForcedTokens.begin(),
                                kForcedTokens.begin() + 8);
         draft[cut] = 0;

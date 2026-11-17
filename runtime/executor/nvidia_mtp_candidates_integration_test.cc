@@ -285,7 +285,8 @@ class NvidiaMtpCandidatesIntegrationTest : public testing::Test {
   std::vector<float> Uniforms(const proto::SamplerParameters& params, int rows,
                               std::default_random_engine& generator) {
     std::vector<float> uniforms(rows);
-    DrawSamplingUniforms(params, generator, absl::MakeSpan(uniforms));
+    EXPECT_OK(
+        DrawSamplingUniforms(params, &generator, absl::MakeSpan(uniforms)));
     return uniforms;
   }
 
