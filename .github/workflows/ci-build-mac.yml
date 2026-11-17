@@ -145,17 +145,28 @@ jobs:
         run: |
           ! otool -L bazel-bin/runtime/engine/litert_lm_main | grep libLiteRt.dylib
 
+      - name: Package litert_lm_main with the dylibs it loads.
+        # litert_lm_main finds its @rpath dylibs beside it via @loader_path.
+        run: |
+          rm -rf litert_lm_macos_arm64
+          mkdir litert_lm_macos_arm64
+          cp bazel-bin/runtime/engine/litert_lm_main litert_lm_macos_arm64/
+          for dylib in $(otool -L bazel-bin/runtime/engine/litert_lm_main |
+                         awk '$1 ~ /^@rpath\// { sub(/^@rpath\//, "", $1); print $1 }'); do
+            cp "prebuilt/macos_arm64/${dylib}" litert_lm_macos_arm64/
+          done
+          tar -czvf litert_lm_macos_arm64.tar.gz -C litert_lm_macos_arm64 .
+
+      - name: Check that the packaged litert_lm_main starts.
+        # dyld stops before main() if a dylib is missing; --version exits 0.
+        run: |
+          mkdir -p "${RUNNER_TEMP}/litert_lm_macos_arm64"
+          tar -xzf litert_lm_macos_arm64.tar.gz -C "${RUNNER_TEMP}/litert_lm_macos_arm64"
+          "${RUNNER_TEMP}/litert_lm_macos_arm64/litert_lm_main" --version
+
       - name: Update litert_lm_main prebuilt for MacOS if new version tag is pushed.
         if: github.ref_type == 'tag'
         run: |
-          mkdir -p litert_lm_macos_arm64
-          cp bazel-bin/runtime/engine/litert_lm_main litert_lm_macos_arm64/litert_lm_main
-          cp prebuilt/macos_arm64/libGemmaModelConstraintProvider.dylib litert_lm_macos_arm64/
-          tar -czvf litert_lm_macos_arm64.tar.gz -C litert_lm_macos_arm64 .
-
-          cp bazel-bin/runtime/engine/litert_lm_main litert_lm_main.macos_arm64
-          gh release upload ${GITHUB_REF_NAME} litert_lm_main.macos_arm64 --clobber
-          gh release upload ${GITHUB_REF_NAME} prebuilt/macos_arm64/libGemmaModelConstraintProvider.dylib --clobber
           gh release upload ${GITHUB_REF_NAME} litert_lm_macos_arm64.tar.gz --clobber
 
       - name: Run bazel build on MacOS with dynamic linking.
