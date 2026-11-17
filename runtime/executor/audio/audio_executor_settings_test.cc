@@ -15,6 +15,7 @@
 #include "runtime/executor/audio/audio_executor_settings.h"
 
 #include <memory>
+#include <sstream>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -223,6 +224,21 @@ TEST(AudioExecutorSettingsTest, GetProgramCacheFile) {
       settings.GetProgramCacheFile(AudioExecutorSettings::kAdapterName));
   EXPECT_EQ(std::get<std::shared_ptr<litert::ScopedFile>>(result2),
             adapter_program);
+}
+
+TEST(AudioExecutorSettingsTest, GetAndSetFrontPaddingEnabled) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 10, Backend::CPU, Backend::CPU));
+  EXPECT_TRUE(settings.GetFrontPaddingEnabled());
+  settings.SetFrontPaddingEnabled(false);
+  EXPECT_FALSE(settings.GetFrontPaddingEnabled());
+  std::ostringstream oss;
+  oss << settings;
+  EXPECT_THAT(oss.str(), ::testing::HasSubstr("FrontPaddingEnabled: 0"));
+  settings.SetFrontPaddingEnabled(true);
+  EXPECT_TRUE(settings.GetFrontPaddingEnabled());
 }
 
 }  // namespace
