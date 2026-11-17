@@ -28,6 +28,26 @@
 
 namespace litert::lm {
 
+// Load-time configuration for exposing per-token text encoder outputs. When
+// enabled and any active encoder signature lacks a requested output, the
+// encoder FlatBuffer is rewritten in memory while keeping output 0
+// (`encodings`) untouched and bit-identical.
+struct PerTokenOutputsConfig {
+  // Expose `token_embeddings` (`[batch, seq_len, embedding_dim]`) via the
+  // pooling projection applied before masked mean pooling.
+  bool token_embeddings = false;
+
+  // 0-based layer indices exposed as `layer_<NN>` (`[batch, seq_len, dim]`),
+  // tapped after each layer's residual ADD and skip-scale MUL.
+  std::vector<int> hidden_state_layers;
+
+  bool IsEnabled() const {
+    return token_embeddings || !hidden_state_layers.empty();
+  }
+
+  bool operator==(const PerTokenOutputsConfig& other) const = default;
+};
+
 // Settings for configuring an embedding executor.
 class EmbeddingExecutorSettings : public ExecutorSettingsBase {
  public:
@@ -103,6 +123,17 @@ class EmbeddingExecutorSettings : public ExecutorSettingsBase {
     selected_signatures_ = std::move(selected_signatures);
   }
 
+  // Optional load-time injection of per-token encoder outputs.
+  const PerTokenOutputsConfig& GetPerTokenOutputs() const {
+    return per_token_outputs_;
+  }
+  PerTokenOutputsConfig& GetMutablePerTokenOutputs() {
+    return per_token_outputs_;
+  }
+  void SetPerTokenOutputs(PerTokenOutputsConfig per_token_outputs) {
+    per_token_outputs_ = std::move(per_token_outputs);
+  }
+
  private:
   int num_threads_ = 4;
 
@@ -110,6 +141,8 @@ class EmbeddingExecutorSettings : public ExecutorSettingsBase {
   NpuOptions npu_options_;
 
   std::vector<std::string> selected_signatures_;
+
+  PerTokenOutputsConfig per_token_outputs_;
 };
 
 std::ostream& operator<<(std::ostream& os,

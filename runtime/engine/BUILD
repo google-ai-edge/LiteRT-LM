@@ -71,6 +71,7 @@ cc_library(
     hdrs = ["embedding_engine.h"],
     deps = [
         ":io_types",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:optional",

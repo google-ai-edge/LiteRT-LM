@@ -18,6 +18,7 @@
 #include <optional>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/optional.h"  // from @com_google_absl
@@ -49,6 +50,19 @@ struct EmbeddingOptions {
   // the default output embedding size. Must be non-negative and not exceed the
   // default output embedding size.
   std::optional<int> output_size = std::nullopt;
+
+  // If true, also returns per-token embeddings in
+  // `EmbeddingResponse::token_embeddings`. Requires a text encoder with a
+  // `token_embeddings` output (either baked into the model or injected at load
+  // time via `EmbeddingEngineSettings::SetPerTokenOutputs`); fails with
+  // FailedPreconditionError otherwise.
+  bool return_token_embeddings = false;
+
+  // 0-based transformer layer indices whose per-token hidden states (`layer_NN`
+  // encoder outputs) should be returned in `EmbeddingResponse::hidden_states`.
+  // Fails with InvalidArgumentError if any layer index is negative, or
+  // FailedPreconditionError if the encoder does not expose `layer_<NN>`.
+  std::vector<int> return_hidden_state_layers = {};
 };
 
 // Represents the result of an embedding computation.
@@ -61,6 +75,22 @@ struct EmbeddingResponse {
   std::optional<int> truncated_length = std::nullopt;
   // The number of chunks the input was split into.
   int num_chunks = 1;
+  // Per-token embeddings in row-major `[num_tokens, token_embedding_dim]`
+  // layout, one row per active token fed to the encoder (including any BOS/EOS
+  // or prompt tokens inserted before/after the body, and excluding padding).
+  // Not normalized or truncated by `EmbeddingOptions::normalize` or
+  // `EmbeddingOptions::output_size`. Only populated when
+  // `EmbeddingOptions::return_token_embeddings` is true.
+  std::vector<float> token_embeddings;
+  // The dimension of each row in `token_embeddings`, or 0 if not set.
+  int token_embedding_dim = 0;
+  // Per-token residual-stream hidden states keyed by 0-based layer index, each
+  // in row-major `[num_tokens, hidden_state_dim]` layout covering the same
+  // active tokens as `token_embeddings`. Only populated for layers listed in
+  // `EmbeddingOptions::return_hidden_state_layers`.
+  absl::flat_hash_map<int, std::vector<float>> hidden_states;
+  // The dimension of each row in `hidden_states`, or 0 if not set.
+  int hidden_state_dim = 0;
 };
 
 // Interface for embedding models.

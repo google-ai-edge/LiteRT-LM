@@ -43,6 +43,7 @@ namespace {
 
 using ::testing::ElementsAre;
 using ::testing::IsEmpty;
+using ::testing::Not;
 using ::testing::Optional;
 using ::testing::VariantWith;
 using ::testing::status::IsOkAndHolds;
@@ -84,16 +85,16 @@ TEST(LlmExecutorConfigTest, Backend) {
 }
 
 TEST(LlmExecutorConfigTest, StringToBackend) {
-  auto backend = GetBackendFromString("gpu_artisan");
-  EXPECT_EQ(*backend, Backend::GPU_ARTISAN);
-  backend = GetBackendFromString("gpu");
-  EXPECT_EQ(*backend, Backend::GPU);
-  backend = GetBackendFromString("cpu");
-  EXPECT_EQ(*backend, Backend::CPU);
-  backend = GetBackendFromString("google_tensor_artisan");
-  EXPECT_EQ(*backend, Backend::GOOGLE_TENSOR_ARTISAN);
-  backend = GetBackendFromString("npu");
-  EXPECT_EQ(*backend, Backend::NPU);
+  ASSERT_OK_AND_ASSIGN(auto backend, GetBackendFromString("gpu_artisan"));
+  EXPECT_EQ(backend, Backend::GPU_ARTISAN);
+  ASSERT_OK_AND_ASSIGN(backend, GetBackendFromString("gpu"));
+  EXPECT_EQ(backend, Backend::GPU);
+  ASSERT_OK_AND_ASSIGN(backend, GetBackendFromString("cpu"));
+  EXPECT_EQ(backend, Backend::CPU);
+  ASSERT_OK_AND_ASSIGN(backend, GetBackendFromString("google_tensor_artisan"));
+  EXPECT_EQ(backend, Backend::GOOGLE_TENSOR_ARTISAN);
+  ASSERT_OK_AND_ASSIGN(backend, GetBackendFromString("npu"));
+  EXPECT_EQ(backend, Backend::NPU);
   EXPECT_THAT(GetBackendFromString("cpu_artisan"),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
@@ -109,16 +110,21 @@ TEST(LlmExecutorConfigTest, IsCpuBackend) {
 }
 
 TEST(LlmExecutorConfigTest, StringToActivationDataType) {
-  auto activation_data_type = GetActivationDataTypeFromString("float32");
-  EXPECT_EQ(*activation_data_type, ActivationDataType::FLOAT32);
-  activation_data_type = GetActivationDataTypeFromString("float16");
-  EXPECT_EQ(*activation_data_type, ActivationDataType::FLOAT16);
-  activation_data_type = GetActivationDataTypeFromString("int16");
-  EXPECT_EQ(*activation_data_type, ActivationDataType::INT16);
-  activation_data_type = GetActivationDataTypeFromString("int8");
-  EXPECT_EQ(*activation_data_type, ActivationDataType::INT8);
-  activation_data_type = GetActivationDataTypeFromString("invalid");
-  EXPECT_EQ(activation_data_type.status(),
+  ASSERT_OK_AND_ASSIGN(auto activation_data_type,
+                       GetActivationDataTypeFromString("float32"));
+  EXPECT_EQ(activation_data_type, ActivationDataType::FLOAT32);
+  ASSERT_OK_AND_ASSIGN(activation_data_type,
+                       GetActivationDataTypeFromString("float16"));
+  EXPECT_EQ(activation_data_type, ActivationDataType::FLOAT16);
+  ASSERT_OK_AND_ASSIGN(activation_data_type,
+                       GetActivationDataTypeFromString("int16"));
+  EXPECT_EQ(activation_data_type, ActivationDataType::INT16);
+  ASSERT_OK_AND_ASSIGN(activation_data_type,
+                       GetActivationDataTypeFromString("int8"));
+  EXPECT_EQ(activation_data_type, ActivationDataType::INT8);
+  const auto invalid_activation_data_type =
+      GetActivationDataTypeFromString("invalid");
+  EXPECT_EQ(invalid_activation_data_type.status(),
             absl::InvalidArgumentError(
                 "Unsupported activation data type: invalid. Supported "
                 "activation data types are: [FLOAT32, "
@@ -626,6 +632,28 @@ TEST(LlmExecutorConfigTest, ScopedCacheFilesArePerModel) {
   EXPECT_EQ(settings.GetScopedCacheFile(CacheModel::kMtpDrafter,
                                         CacheFileKind::kWeight),
             nullptr);
+}
+
+TEST(LlmExecutorConfigTest, ModelVariantSuffixUsesModelScopedCacheFile) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("/path/to/model.tflite"));
+  TestExecutorSettings settings(model_assets);
+  auto main_file = OpenTestFile();
+  auto encoder_file = OpenTestFile();
+  ASSERT_TRUE(main_file && encoder_file);
+  settings.SetScopedCacheFile(main_file);
+  settings.SetScopedCacheFile(CacheModel::kTextEncoder, CacheFileKind::kWeight,
+                              encoder_file);
+
+  EXPECT_THAT(
+      settings.GetWeightCacheFile(".text_encoder.pt_te_l06.xnnpack_cache",
+                                  /*check_and_clean=*/true),
+      IsOkAndHolds(VariantWith<std::shared_ptr<ScopedFile>>(encoder_file)));
+  // A name that only starts with a model's name is not a variant of it.
+  EXPECT_THAT(settings.GetWeightCacheFile(".text_encoder_other.xnnpack_cache",
+                                          /*check_and_clean=*/true),
+              Not(IsOkAndHolds(
+                  VariantWith<std::shared_ptr<ScopedFile>>(encoder_file))));
 }
 
 TEST(LlmExecutorConfigTest, SubModelScopedCacheFileIgnoresDisabledCache) {

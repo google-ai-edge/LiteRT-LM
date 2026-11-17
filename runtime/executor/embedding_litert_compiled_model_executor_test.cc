@@ -15,8 +15,11 @@
 #include "runtime/executor/embedding_litert_compiled_model_executor.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -28,6 +31,7 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
@@ -67,6 +71,7 @@ using ::litert::lm::ExecutorInputs;
 using ::litert::lm::ExecutorTextData;
 using ::litert::lm::ModelAssets;
 using ::testing::ElementsAre;
+using ::testing::ElementsAreArray;
 using ::testing::HasSubstr;
 using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
@@ -302,11 +307,15 @@ std::vector<uint8_t> BuildDummyMultiSignatureEncoderModelBuffer(
 class FakeEmbeddingModelResources : public ModelResources {
  public:
   using ModelResources::GetTFLiteModel;
+  using ModelResources::GetTFLiteModelBuffer;
   using ModelResources::HasTFLiteModel;
 
   FakeEmbeddingModelResources(const litert::Model* embedder,
-                              const litert::Model* encoder)
-      : embedder_(embedder), encoder_(encoder) {}
+                              const litert::Model* encoder,
+                              absl::string_view encoder_buffer = {})
+      : embedder_(embedder),
+        encoder_(encoder),
+        encoder_buffer_(encoder_buffer) {}
 
   bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override {
     return HasTFLiteModel(TfLiteModelTypeToWireString(model_type));
@@ -342,6 +351,14 @@ class FakeEmbeddingModelResources : public ModelResources {
 
   absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
       proto::LlmMetadata::TfLiteModelType model_type) override {
+    return GetTFLiteModelBuffer(TfLiteModelTypeToWireString(model_type));
+  }
+
+  absl::StatusOr<absl::string_view> GetTFLiteModelBuffer(
+      absl::string_view model_type_str) override {
+    if (model_type_str == "tf_lite_text_encoder" && !encoder_buffer_.empty()) {
+      return encoder_buffer_;
+    }
     return absl::UnimplementedError("Unimplemented");
   }
 
@@ -385,6 +402,7 @@ class FakeEmbeddingModelResources : public ModelResources {
  private:
   const litert::Model* embedder_;
   const litert::Model* encoder_;
+  absl::string_view encoder_buffer_;
 };
 
 TEST(EmbeddingLiteRtCompiledModelExecutorTest, CreateExecutor_Success) {
@@ -1400,6 +1418,1106 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
   EXPECT_EQ(output.embedding.size(), 12 * 8);
   EXPECT_EQ(output.input_length, 24);
   EXPECT_EQ(output.truncated_length, 12);
+}
+
+// Builds an embedder model that converts INT32 token IDs `[1]` into FLOAT32
+// embeddings `[1, 1, hidden_dim]` (`CAST(input) + ramp_const`).
+std::vector<uint8_t> BuildCastAddEmbedderBuffer(int32_t hidden_dim) {
+  tflite::ModelT model;
+  model.version = 3;
+  model.description = "cast_add_embedder";
+
+  auto add_opcode = [&](tflite::BuiltinOperator code) -> uint32_t {
+    auto oc = std::make_unique<tflite::OperatorCodeT>();
+    oc->builtin_code = code;
+    oc->deprecated_builtin_code =
+        code < 127
+            ? static_cast<int8_t>(code)
+            : static_cast<int8_t>(
+                  tflite::BuiltinOperator_PLACEHOLDER_FOR_GREATER_OP_CODES);
+    oc->version = 1;
+    model.operator_codes.push_back(std::move(oc));
+    return static_cast<uint32_t>(model.operator_codes.size() - 1);
+  };
+  const uint32_t op_cast = add_opcode(tflite::BuiltinOperator_CAST);
+  const uint32_t op_add = add_opcode(tflite::BuiltinOperator_ADD);
+
+  model.buffers.push_back(std::make_unique<tflite::BufferT>());
+  auto ramp_buf = std::make_unique<tflite::BufferT>();
+  std::vector<float> ramp(hidden_dim);
+  for (int32_t d = 0; d < hidden_dim; ++d) {
+    ramp[d] = 0.1f * static_cast<float>(d + 1);
+  }
+  ramp_buf->data.resize(ramp.size() * sizeof(float));
+  std::memcpy(ramp_buf->data.data(), ramp.data(), ramp_buf->data.size());
+  model.buffers.push_back(std::move(ramp_buf));
+
+  auto sg = std::make_unique<tflite::SubGraphT>();
+  sg->name = "main";
+  auto make_tensor = [&](std::vector<int32_t> shape, tflite::TensorType type,
+                         uint32_t buffer, std::string name) -> int32_t {
+    auto tensor = std::make_unique<tflite::TensorT>();
+    tensor->shape = std::move(shape);
+    tensor->type = type;
+    tensor->buffer = buffer;
+    tensor->name = std::move(name);
+    sg->tensors.push_back(std::move(tensor));
+    return static_cast<int32_t>(sg->tensors.size() - 1);
+  };
+
+  const int32_t t_in =
+      make_tensor({1}, tflite::TensorType_INT32, 0, "token_ids");
+  const int32_t t_float =
+      make_tensor({1}, tflite::TensorType_FLOAT32, 0, "token_float");
+  const int32_t t_ramp =
+      make_tensor({1, 1, hidden_dim}, tflite::TensorType_FLOAT32, 1, "ramp");
+  const int32_t t_out =
+      make_tensor({1, 1, hidden_dim}, tflite::TensorType_FLOAT32, 0, "output");
+
+  {
+    auto op = std::make_unique<tflite::OperatorT>();
+    op->opcode_index = op_cast;
+    op->inputs = {t_in};
+    op->outputs = {t_float};
+    tflite::CastOptionsT cast_opts;
+    cast_opts.in_data_type = tflite::TensorType_INT32;
+    cast_opts.out_data_type = tflite::TensorType_FLOAT32;
+    op->builtin_options.Set(cast_opts);
+    sg->operators.push_back(std::move(op));
+  }
+  {
+    auto op = std::make_unique<tflite::OperatorT>();
+    op->opcode_index = op_add;
+    op->inputs = {t_float, t_ramp};
+    op->outputs = {t_out};
+    tflite::AddOptionsT add_opts;
+    op->builtin_options.Set(add_opts);
+    sg->operators.push_back(std::move(op));
+  }
+
+  sg->inputs = {t_in};
+  sg->outputs = {t_out};
+  model.subgraphs.push_back(std::move(sg));
+
+  auto sig = std::make_unique<tflite::SignatureDefT>();
+  sig->signature_key = "embedder";
+  sig->subgraph_index = 0;
+  auto in_map = std::make_unique<tflite::TensorMapT>();
+  in_map->name = "token_ids";
+  in_map->tensor_index = t_in;
+  sig->inputs.push_back(std::move(in_map));
+  auto out_map = std::make_unique<tflite::TensorMapT>();
+  out_map->name = "embeddings";
+  out_map->tensor_index = t_out;
+  sig->outputs.push_back(std::move(out_map));
+  model.signature_defs.push_back(std::move(sig));
+
+  flatbuffers::FlatBufferBuilder builder;
+  tflite::FinishModelBuffer(builder, tflite::Model::Pack(builder, &model));
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+struct SyntheticEncoderOptions {
+  std::vector<std::string> signature_keys = {"encoder_4"};
+  std::vector<int32_t> seq_lengths = {4};
+  int32_t hidden_dim = 4;
+  int32_t emb_dim = 6;
+  int32_t num_layers = 8;
+  bool pre_expose_token_embeddings = false;
+  bool add_pooling_bias = false;
+  bool append_proj_weight_buffer = false;
+};
+
+// Hand-builds a synthetic EGv2-structured TFLite encoder FlatBuffer with:
+//   - per-layer UNPACK -> MUL -> FULLY_CONNECTED -> STABLEHLO_COMPOSITE -> ADD
+//     -> skip_scale MUL residual chain (`num_layers` layers),
+//   - final STABLEHLO_COMPOSITE norm producing `h` `[1, seq_len, hidden_dim]`,
+//   - masked mean pooling `MUL(h, input_mask) -> SUM -> DIV -> FULLY_CONNECTED`
+//     producing output 0 `encodings` `[1, emb_dim]`.
+std::vector<uint8_t> BuildSyntheticEgv2LikeEncoderBuffer(
+    const SyntheticEncoderOptions& opts) {
+  tflite::ModelT model;
+  model.version = 3;
+  model.description = "synthetic_egv2_encoder";
+
+  auto add_opcode = [&](tflite::BuiltinOperator code) -> uint32_t {
+    auto oc = std::make_unique<tflite::OperatorCodeT>();
+    oc->builtin_code = code;
+    oc->deprecated_builtin_code =
+        code < 127
+            ? static_cast<int8_t>(code)
+            : static_cast<int8_t>(
+                  tflite::BuiltinOperator_PLACEHOLDER_FOR_GREATER_OP_CODES);
+    oc->version = 1;
+    model.operator_codes.push_back(std::move(oc));
+    return static_cast<uint32_t>(model.operator_codes.size() - 1);
+  };
+
+  const uint32_t op_add = add_opcode(tflite::BuiltinOperator_ADD);
+  const uint32_t op_mul = add_opcode(tflite::BuiltinOperator_MUL);
+  const uint32_t op_div = add_opcode(tflite::BuiltinOperator_DIV);
+  const uint32_t op_sum = add_opcode(tflite::BuiltinOperator_SUM);
+  const uint32_t op_reshape = add_opcode(tflite::BuiltinOperator_RESHAPE);
+  const uint32_t op_unpack = add_opcode(tflite::BuiltinOperator_UNPACK);
+  const uint32_t op_fc = add_opcode(tflite::BuiltinOperator_FULLY_CONNECTED);
+  const uint32_t op_composite =
+      add_opcode(tflite::BuiltinOperator_STABLEHLO_COMPOSITE);
+
+  model.buffers.push_back(std::make_unique<tflite::BufferT>());  // buffer 0
+
+  auto add_float_buffer = [&](const std::vector<float>& vals) -> uint32_t {
+    auto buf = std::make_unique<tflite::BufferT>();
+    buf->data.resize(vals.size() * sizeof(float));
+    std::memcpy(buf->data.data(), vals.data(), buf->data.size());
+    model.buffers.push_back(std::move(buf));
+    return static_cast<uint32_t>(model.buffers.size() - 1);
+  };
+  auto add_int32_buffer = [&](const std::vector<int32_t>& vals) -> uint32_t {
+    auto buf = std::make_unique<tflite::BufferT>();
+    buf->data.resize(vals.size() * sizeof(int32_t));
+    std::memcpy(buf->data.data(), vals.data(), buf->data.size());
+    model.buffers.push_back(std::move(buf));
+    return static_cast<uint32_t>(model.buffers.size() - 1);
+  };
+
+  // Shared constant buffers across signatures.
+  const uint32_t zeros_hidden_buf =
+      add_float_buffer(std::vector<float>(opts.hidden_dim, 0.0f));
+  const uint32_t ones_hidden_buf =
+      add_float_buffer(std::vector<float>(opts.hidden_dim, 1.0f));
+  const uint32_t half_hidden_buf =
+      add_float_buffer(std::vector<float>(opts.hidden_dim, 0.5f));
+
+  std::vector<float> ple_fc_weights(opts.hidden_dim * opts.hidden_dim, 0.0f);
+  for (int32_t d = 0; d < opts.hidden_dim; ++d) {
+    ple_fc_weights[d * opts.hidden_dim + d] = 0.25f;
+  }
+  const uint32_t ple_fc_buf = add_float_buffer(ple_fc_weights);
+
+  std::vector<float> layer_bias(opts.num_layers * opts.hidden_dim);
+  for (int32_t li = 0; li < opts.num_layers; ++li) {
+    for (int32_t d = 0; d < opts.hidden_dim; ++d) {
+      layer_bias[li * opts.hidden_dim + d] =
+          0.2f * static_cast<float>(li + 1) + 0.01f * static_cast<float>(d);
+    }
+  }
+  const uint32_t layer_bias_buf = add_float_buffer(layer_bias);
+
+  std::vector<float> proj_weights(opts.emb_dim * opts.hidden_dim);
+  for (int32_t o = 0; o < opts.emb_dim; ++o) {
+    for (int32_t d = 0; d < opts.hidden_dim; ++d) {
+      proj_weights[o * opts.hidden_dim + d] =
+          0.1f * static_cast<float>((o + 1) * (d + 1));
+    }
+  }
+  std::vector<uint8_t> appended_proj_bytes(
+      reinterpret_cast<const uint8_t*>(proj_weights.data()),
+      reinterpret_cast<const uint8_t*>(proj_weights.data() +
+                                       proj_weights.size()));
+  uint32_t proj_weight_buf = 0;
+  if (opts.append_proj_weight_buffer) {
+    auto buf = std::make_unique<tflite::BufferT>();
+    buf->offset = 64;  // Placeholder > 1; stabilized below.
+    buf->size = appended_proj_bytes.size();
+    model.buffers.push_back(std::move(buf));
+    proj_weight_buf = static_cast<uint32_t>(model.buffers.size() - 1);
+  } else {
+    proj_weight_buf = add_float_buffer(proj_weights);
+  }
+
+  uint32_t proj_bias_buf = 0;
+  if (opts.add_pooling_bias) {
+    proj_bias_buf = add_float_buffer(std::vector<float>(opts.emb_dim, 0.05f));
+  }
+  const uint32_t axis_1_buf = add_int32_buffer({1});
+
+  // Valid minimal FlexBuffer map `{}` bytes: `[0x00, 0x24, 0x01]`.
+  const std::vector<uint8_t> empty_flex_map = {0x00, 0x24, 0x01};
+
+  // First create one identity decomposition subgraph per signature seq_len so
+  // STABLEHLO_COMPOSITE runs cleanly on CPU.
+  std::vector<int32_t> decomp_sg_indices;
+  for (size_t s = 0; s < opts.signature_keys.size(); ++s) {
+    const int32_t seq_len = opts.seq_lengths[s];
+    auto dsg = std::make_unique<tflite::SubGraphT>();
+    dsg->name = absl::StrCat("rms_norm_decomp_", seq_len);
+    auto make_dtensor = [&](std::vector<int32_t> shape, uint32_t buffer,
+                            std::string name) -> int32_t {
+      auto tensor = std::make_unique<tflite::TensorT>();
+      tensor->shape = std::move(shape);
+      tensor->type = tflite::TensorType_FLOAT32;
+      tensor->buffer = buffer;
+      tensor->name = std::move(name);
+      dsg->tensors.push_back(std::move(tensor));
+      return static_cast<int32_t>(dsg->tensors.size() - 1);
+    };
+    const int32_t dx = make_dtensor({1, seq_len, opts.hidden_dim}, 0, "x");
+    const int32_t dz =
+        make_dtensor({1, 1, opts.hidden_dim}, zeros_hidden_buf, "zero");
+    const int32_t dy = make_dtensor({1, seq_len, opts.hidden_dim}, 0, "y");
+    auto op = std::make_unique<tflite::OperatorT>();
+    op->opcode_index = op_add;
+    op->inputs = {dx, dz};
+    op->outputs = {dy};
+    tflite::AddOptionsT add_opts;
+    op->builtin_options.Set(add_opts);
+    dsg->operators.push_back(std::move(op));
+    dsg->inputs = {dx};
+    dsg->outputs = {dy};
+    decomp_sg_indices.push_back(static_cast<int32_t>(model.subgraphs.size()));
+    model.subgraphs.push_back(std::move(dsg));
+  }
+
+  for (size_t s = 0; s < opts.signature_keys.size(); ++s) {
+    const int32_t seq_len = opts.seq_lengths[s];
+    const int32_t decomp_idx = decomp_sg_indices[s];
+    const uint32_t shape_4d_buf =
+        add_int32_buffer({1, seq_len, 1, opts.hidden_dim});
+
+    auto sg = std::make_unique<tflite::SubGraphT>();
+    sg->name = absl::StrCat("main_", seq_len);
+
+    auto make_tensor = [&](std::vector<int32_t> shape, tflite::TensorType type,
+                           uint32_t buffer, std::string name) -> int32_t {
+      auto tensor = std::make_unique<tflite::TensorT>();
+      tensor->shape = std::move(shape);
+      tensor->type = type;
+      tensor->buffer = buffer;
+      tensor->name = std::move(name);
+      sg->tensors.push_back(std::move(tensor));
+      return static_cast<int32_t>(sg->tensors.size() - 1);
+    };
+
+    auto add_composite_op = [&](int32_t in_idx, int32_t out_idx) {
+      auto op = std::make_unique<tflite::OperatorT>();
+      op->opcode_index = op_composite;
+      op->inputs = {in_idx};
+      op->outputs = {out_idx};
+      tflite::StableHLOCompositeOptionsT comp_opts;
+      comp_opts.name = "odml.rms_norm.impl";
+      comp_opts.decomposition_subgraph_index = decomp_idx;
+      comp_opts.composite_attributes = empty_flex_map;
+      comp_opts.composite_attributes_format =
+          tflite::CustomOptionsFormat_FLEXBUFFERS;
+      comp_opts.version = 1;
+      op->builtin_options_2.Set(comp_opts);
+      sg->operators.push_back(std::move(op));
+    };
+
+    const int32_t t_emb =
+        make_tensor({1, seq_len, opts.hidden_dim}, tflite::TensorType_FLOAT32,
+                    0, "embeddings");
+    const int32_t t_mask = make_tensor(
+        {1, seq_len, 1}, tflite::TensorType_FLOAT32, 0, "input_mask");
+    const int32_t t_shape_4d =
+        make_tensor({4}, tflite::TensorType_INT32, shape_4d_buf, "shape_4d");
+    const int32_t t_emb_4d =
+        make_tensor({1, seq_len, 1, opts.hidden_dim},
+                    tflite::TensorType_FLOAT32, 0, "emb_4d");
+    const int32_t t_layer_bias =
+        make_tensor({1, 1, opts.num_layers, opts.hidden_dim},
+                    tflite::TensorType_FLOAT32, layer_bias_buf, "layer_bias");
+    const int32_t t_ple =
+        make_tensor({1, seq_len, opts.num_layers, opts.hidden_dim},
+                    tflite::TensorType_FLOAT32, 0, "per_layer_all");
+
+    {
+      auto op = std::make_unique<tflite::OperatorT>();
+      op->opcode_index = op_reshape;
+      op->inputs = {t_emb, t_shape_4d};
+      op->outputs = {t_emb_4d};
+      tflite::ReshapeOptionsT reshape_opts;
+      reshape_opts.new_shape = {1, seq_len, 1, opts.hidden_dim};
+      op->builtin_options.Set(reshape_opts);
+      sg->operators.push_back(std::move(op));
+    }
+    {
+      auto op = std::make_unique<tflite::OperatorT>();
+      op->opcode_index = op_add;
+      op->inputs = {t_emb_4d, t_layer_bias};
+      op->outputs = {t_ple};
+      tflite::AddOptionsT add_opts;
+      op->builtin_options.Set(add_opts);
+      sg->operators.push_back(std::move(op));
+    }
+
+    std::vector<int32_t> unpack_outs;
+    unpack_outs.reserve(opts.num_layers);
+    for (int32_t li = 0; li < opts.num_layers; ++li) {
+      unpack_outs.push_back(make_tensor({1, seq_len, opts.hidden_dim},
+                                        tflite::TensorType_FLOAT32, 0,
+                                        absl::StrCat("ple_", li)));
+    }
+    {
+      auto op = std::make_unique<tflite::OperatorT>();
+      op->opcode_index = op_unpack;
+      op->inputs = {t_ple};
+      op->outputs = unpack_outs;
+      tflite::UnpackOptionsT unpack_opts;
+      unpack_opts.num = opts.num_layers;
+      unpack_opts.axis = 2;
+      op->builtin_options.Set(unpack_opts);
+      sg->operators.push_back(std::move(op));
+    }
+
+    const int32_t t_ones =
+        make_tensor({1, 1, opts.hidden_dim}, tflite::TensorType_FLOAT32,
+                    ones_hidden_buf, "ones");
+    const int32_t t_half =
+        make_tensor({1, 1, opts.hidden_dim}, tflite::TensorType_FLOAT32,
+                    half_hidden_buf, "half");
+    const int32_t t_ple_w =
+        make_tensor({opts.hidden_dim, opts.hidden_dim},
+                    tflite::TensorType_FLOAT32, ple_fc_buf, "ple_fc_w");
+
+    int32_t cur = t_emb;
+    for (int32_t li = 0; li < opts.num_layers; ++li) {
+      int32_t cur_pre = cur;
+      if (li > 0) {
+        cur_pre = make_tensor({1, seq_len, opts.hidden_dim},
+                              tflite::TensorType_FLOAT32, 0,
+                              absl::StrCat("pre_norm_", li));
+        add_composite_op(cur, cur_pre);
+      }
+
+      const int32_t mul1_out =
+          make_tensor({1, seq_len, opts.hidden_dim}, tflite::TensorType_FLOAT32,
+                      0, absl::StrCat("ple_mul_", li));
+      {
+        auto op = std::make_unique<tflite::OperatorT>();
+        op->opcode_index = op_mul;
+        op->inputs = {unpack_outs[li], t_ones};
+        op->outputs = {mul1_out};
+        tflite::MulOptionsT mul_opts;
+        op->builtin_options.Set(mul_opts);
+        sg->operators.push_back(std::move(op));
+      }
+
+      const int32_t fc_out =
+          make_tensor({1, seq_len, opts.hidden_dim}, tflite::TensorType_FLOAT32,
+                      0, absl::StrCat("ple_fc_", li));
+      {
+        auto op = std::make_unique<tflite::OperatorT>();
+        op->opcode_index = op_fc;
+        op->inputs = {mul1_out, t_ple_w, -1};
+        op->outputs = {fc_out};
+        tflite::FullyConnectedOptionsT fc_opts;
+        fc_opts.keep_num_dims = true;
+        op->builtin_options.Set(fc_opts);
+        sg->operators.push_back(std::move(op));
+      }
+
+      const int32_t norm_out =
+          make_tensor({1, seq_len, opts.hidden_dim}, tflite::TensorType_FLOAT32,
+                      0, absl::StrCat("ple_norm_", li));
+      add_composite_op(fc_out, norm_out);
+
+      const int32_t add_out =
+          make_tensor({1, seq_len, opts.hidden_dim}, tflite::TensorType_FLOAT32,
+                      0, absl::StrCat("res_add_", li));
+      {
+        auto op = std::make_unique<tflite::OperatorT>();
+        op->opcode_index = op_add;
+        op->inputs = {cur_pre, norm_out};
+        op->outputs = {add_out};
+        tflite::AddOptionsT add_opts;
+        op->builtin_options.Set(add_opts);
+        sg->operators.push_back(std::move(op));
+      }
+
+      const int32_t skip_out =
+          make_tensor({1, seq_len, opts.hidden_dim}, tflite::TensorType_FLOAT32,
+                      0, absl::StrCat("skip_out_", li));
+      {
+        auto op = std::make_unique<tflite::OperatorT>();
+        op->opcode_index = op_mul;
+        op->inputs = {add_out, t_half};
+        op->outputs = {skip_out};
+        tflite::MulOptionsT mul_opts;
+        op->builtin_options.Set(mul_opts);
+        sg->operators.push_back(std::move(op));
+      }
+      cur = skip_out;
+    }
+
+    const int32_t t_final_h =
+        make_tensor({1, seq_len, opts.hidden_dim}, tflite::TensorType_FLOAT32,
+                    0, "final_norm_h");
+    add_composite_op(cur, t_final_h);
+
+    const int32_t t_masked =
+        make_tensor({1, seq_len, opts.hidden_dim}, tflite::TensorType_FLOAT32,
+                    0, "h_masked");
+    {
+      auto op = std::make_unique<tflite::OperatorT>();
+      op->opcode_index = op_mul;
+      op->inputs = {t_final_h, t_mask};
+      op->outputs = {t_masked};
+      tflite::MulOptionsT mul_opts;
+      op->builtin_options.Set(mul_opts);
+      sg->operators.push_back(std::move(op));
+    }
+
+    const int32_t t_axis1 =
+        make_tensor({1}, tflite::TensorType_INT32, axis_1_buf, "axis_1");
+    const int32_t t_sum = make_tensor({1, opts.hidden_dim},
+                                      tflite::TensorType_FLOAT32, 0, "h_sum");
+    {
+      auto op = std::make_unique<tflite::OperatorT>();
+      op->opcode_index = op_sum;
+      op->inputs = {t_masked, t_axis1};
+      op->outputs = {t_sum};
+      tflite::ReducerOptionsT red_opts;
+      red_opts.keep_dims = false;
+      op->builtin_options.Set(red_opts);
+      sg->operators.push_back(std::move(op));
+    }
+
+    const int32_t t_mask_sum =
+        make_tensor({1, 1}, tflite::TensorType_FLOAT32, 0, "mask_sum");
+    {
+      auto op = std::make_unique<tflite::OperatorT>();
+      op->opcode_index = op_sum;
+      op->inputs = {t_mask, t_axis1};
+      op->outputs = {t_mask_sum};
+      tflite::ReducerOptionsT red_opts;
+      red_opts.keep_dims = false;
+      op->builtin_options.Set(red_opts);
+      sg->operators.push_back(std::move(op));
+    }
+
+    const int32_t t_mean = make_tensor({1, opts.hidden_dim},
+                                       tflite::TensorType_FLOAT32, 0, "h_mean");
+    {
+      auto op = std::make_unique<tflite::OperatorT>();
+      op->opcode_index = op_div;
+      op->inputs = {t_sum, t_mask_sum};
+      op->outputs = {t_mean};
+      tflite::DivOptionsT div_opts;
+      op->builtin_options.Set(div_opts);
+      sg->operators.push_back(std::move(op));
+    }
+
+    const int32_t t_proj_w =
+        make_tensor({opts.emb_dim, opts.hidden_dim}, tflite::TensorType_FLOAT32,
+                    proj_weight_buf, "proj_weight");
+    int32_t t_proj_bias = -1;
+    if (opts.add_pooling_bias) {
+      t_proj_bias = make_tensor({opts.emb_dim}, tflite::TensorType_FLOAT32,
+                                proj_bias_buf, "proj_bias");
+    }
+    const int32_t t_encodings = make_tensor(
+        {1, opts.emb_dim}, tflite::TensorType_FLOAT32, 0, "encodings");
+    {
+      auto op = std::make_unique<tflite::OperatorT>();
+      op->opcode_index = op_fc;
+      op->inputs = {t_mean, t_proj_w, t_proj_bias};
+      op->outputs = {t_encodings};
+      tflite::FullyConnectedOptionsT fc_opts;
+      fc_opts.keep_num_dims = false;
+      op->builtin_options.Set(fc_opts);
+      sg->operators.push_back(std::move(op));
+    }
+
+    sg->inputs = {t_emb, t_mask};
+    sg->outputs = {t_encodings};
+
+    int32_t t_pre_tok = -1;
+    if (opts.pre_expose_token_embeddings) {
+      t_pre_tok =
+          make_tensor({1, seq_len, opts.emb_dim}, tflite::TensorType_FLOAT32, 0,
+                      "pre_token_embeddings");
+      auto op = std::make_unique<tflite::OperatorT>();
+      op->opcode_index = op_fc;
+      op->inputs = {t_final_h, t_proj_w, -1};
+      op->outputs = {t_pre_tok};
+      tflite::FullyConnectedOptionsT fc_opts;
+      fc_opts.keep_num_dims = true;
+      op->builtin_options.Set(fc_opts);
+      sg->operators.push_back(std::move(op));
+      sg->outputs.push_back(t_pre_tok);
+    }
+
+    const uint32_t sg_idx = static_cast<uint32_t>(model.subgraphs.size());
+    model.subgraphs.push_back(std::move(sg));
+
+    auto sig = std::make_unique<tflite::SignatureDefT>();
+    sig->signature_key = opts.signature_keys[s];
+    sig->subgraph_index = sg_idx;
+    {
+      auto m = std::make_unique<tflite::TensorMapT>();
+      m->name = "embeddings";
+      m->tensor_index = t_emb;
+      sig->inputs.push_back(std::move(m));
+    }
+    {
+      auto m = std::make_unique<tflite::TensorMapT>();
+      m->name = "input_mask";
+      m->tensor_index = t_mask;
+      sig->inputs.push_back(std::move(m));
+    }
+    {
+      auto m = std::make_unique<tflite::TensorMapT>();
+      m->name = "encodings";
+      m->tensor_index = t_encodings;
+      sig->outputs.push_back(std::move(m));
+    }
+    if (opts.pre_expose_token_embeddings) {
+      auto m = std::make_unique<tflite::TensorMapT>();
+      m->name = "token_embeddings";
+      m->tensor_index = t_pre_tok;
+      sig->outputs.push_back(std::move(m));
+    }
+    model.signature_defs.push_back(std::move(sig));
+  }
+
+  if (opts.append_proj_weight_buffer) {
+    constexpr size_t kAlign = 64;
+    uint64_t new_start = 0;
+    for (int iter = 0; iter < 3; ++iter) {
+      flatbuffers::FlatBufferBuilder probe;
+      tflite::FinishModelBuffer(probe, tflite::Model::Pack(probe, &model));
+      new_start = (probe.GetSize() + kAlign - 1) / kAlign * kAlign;
+      model.buffers[proj_weight_buf]->offset = new_start;
+    }
+    flatbuffers::FlatBufferBuilder builder;
+    tflite::FinishModelBuffer(builder, tflite::Model::Pack(builder, &model));
+    std::vector<uint8_t> out(
+        static_cast<size_t>(new_start) + appended_proj_bytes.size(), 0);
+    std::memcpy(out.data(), builder.GetBufferPointer(), builder.GetSize());
+    std::memcpy(out.data() + new_start, appended_proj_bytes.data(),
+                appended_proj_bytes.size());
+    return out;
+  }
+
+  flatbuffers::FlatBufferBuilder builder;
+  tflite::FinishModelBuffer(builder, tflite::Model::Pack(builder, &model));
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     PerTokenInjection_PooledEncodingsBitIdenticalAndMeanMatchesAnalytical) {
+  constexpr int32_t kHiddenDim = 4;
+  constexpr int32_t kEmbDim = 6;
+  auto embedder_buf = BuildCastAddEmbedderBuffer(kHiddenDim);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto embedder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                               embedder_buf.data(), embedder_buf.size())));
+
+  SyntheticEncoderOptions enc_opts;
+  enc_opts.signature_keys = {"encoder_4", "encoder_8"};
+  enc_opts.seq_lengths = {4, 8};
+  enc_opts.hidden_dim = kHiddenDim;
+  enc_opts.emb_dim = kEmbDim;
+  enc_opts.num_layers = 8;
+  auto encoder_buf = BuildSyntheticEgv2LikeEncoderBuffer(enc_opts);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  // Unpatched baseline executor.
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingExecutorSettings unpatched_settings,
+      EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  unpatched_settings.SetNumThreads(1);
+  ASSERT_OK_AND_ASSIGN(auto unpatched_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           unpatched_settings, env,
+                           std::make_unique<FakeEmbeddingModelResources>(
+                               &embedder_model, &encoder_model)));
+
+  // Patched executor with `token_embeddings` and `layer_02` + `layer_06` taps.
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingExecutorSettings patched_settings,
+      EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  patched_settings.SetNumThreads(1);
+  patched_settings.SetPerTokenOutputs(PerTokenOutputsConfig{
+      .token_embeddings = true, .hidden_state_layers = {6, 2, 6}});
+  ASSERT_OK_AND_ASSIGN(auto patched_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           patched_settings, env,
+                           std::make_unique<FakeEmbeddingModelResources>(
+                               &embedder_model, &encoder_model,
+                               absl::string_view(reinterpret_cast<const char*>(
+                                                     encoder_buf.data()),
+                                                 encoder_buf.size()))));
+
+  // Feed 3 active tokens into the 4-token signature (1 padded slot).
+  alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[] = {1, 3, 7};
+  auto make_inputs = [&]() {
+    auto buf = TensorBuffer::CreateFromHostMemory(
+        env, RankedTensorType(ElementType::Int32, Layout(Dimensions({3}))),
+        token_data, sizeof(token_data));
+    return ExecutorInputs(ExecutorTextData(std::move(*buf)), std::nullopt,
+                          std::nullopt);
+  };
+
+  ASSERT_OK_AND_ASSIGN(EmbeddingOutput baseline_out,
+                       unpatched_executor->ComputeEmbedding(make_inputs()));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingOutput patched_out,
+      patched_executor->ComputeEmbedding(
+          make_inputs(),
+          ComputeEmbeddingOptions{.return_token_embeddings = true,
+                                  .return_hidden_state_layers = {6, 2}}));
+
+  // Pooled `encodings` must be bit-identical between unpatched and patched.
+  EXPECT_THAT(patched_out.embedding, ElementsAreArray(baseline_out.embedding));
+
+  // Only the 3 active tokens are returned (signature padding is stripped).
+  EXPECT_EQ(patched_out.token_embedding_dim, kEmbDim);
+  ASSERT_EQ(patched_out.token_embeddings.size(), 3 * kEmbDim);
+
+  // Because pooling is bias-free linear projection of masked mean(h), the mean
+  // of active `token_embeddings` rows must match `embedding` to FP tolerance.
+  for (int32_t d = 0; d < kEmbDim; ++d) {
+    const float mean_tok = (patched_out.token_embeddings[0 * kEmbDim + d] +
+                            patched_out.token_embeddings[1 * kEmbDim + d] +
+                            patched_out.token_embeddings[2 * kEmbDim + d]) /
+                           3.0f;
+    EXPECT_NEAR(mean_tok, patched_out.embedding[d], 1e-5f);
+  }
+  // Distinct tokens produce distinct token embedding rows.
+  EXPECT_NE(patched_out.token_embeddings[0],
+            patched_out.token_embeddings[kEmbDim]);
+
+  // Verify `layer_06` and `layer_02` hidden state taps (`[3, kHiddenDim]`).
+  EXPECT_EQ(patched_out.hidden_state_dim, kHiddenDim);
+  ASSERT_TRUE(patched_out.hidden_states.contains(6));
+  ASSERT_TRUE(patched_out.hidden_states.contains(2));
+  ASSERT_EQ(patched_out.hidden_states.at(6).size(), 3 * kHiddenDim);
+  ASSERT_EQ(patched_out.hidden_states.at(2).size(), 3 * kHiddenDim);
+  EXPECT_NE(patched_out.hidden_states.at(6), patched_out.hidden_states.at(2));
+
+  // Default options on the patched executor return empty per-token fields and
+  // bit-identical pooled embedding.
+  ASSERT_OK_AND_ASSIGN(EmbeddingOutput patched_default_out,
+                       patched_executor->ComputeEmbedding(make_inputs()));
+  EXPECT_TRUE(patched_default_out.token_embeddings.empty());
+  EXPECT_TRUE(patched_default_out.hidden_states.empty());
+  EXPECT_THAT(patched_default_out.embedding,
+              ElementsAreArray(baseline_out.embedding));
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     PerTokenInjection_ChunkAndAverageConcatenatesActiveTokensAcrossChunks) {
+  constexpr int32_t kHiddenDim = 4;
+  constexpr int32_t kEmbDim = 6;
+  auto embedder_buf = BuildCastAddEmbedderBuffer(kHiddenDim);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto embedder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                               embedder_buf.data(), embedder_buf.size())));
+
+  SyntheticEncoderOptions enc_opts;
+  enc_opts.signature_keys = {"encoder_4"};
+  enc_opts.seq_lengths = {4};
+  enc_opts.hidden_dim = kHiddenDim;
+  enc_opts.emb_dim = kEmbDim;
+  enc_opts.num_layers = 8;
+  auto encoder_buf = BuildSyntheticEgv2LikeEncoderBuffer(enc_opts);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingExecutorSettings settings,
+      EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  settings.SetPerTokenOutputs(PerTokenOutputsConfig{
+      .token_embeddings = true, .hidden_state_layers = {6}});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env,
+                           std::make_unique<FakeEmbeddingModelResources>(
+                               &embedder_model, &encoder_model,
+                               absl::string_view(reinterpret_cast<const char*>(
+                                                     encoder_buf.data()),
+                                                 encoder_buf.size()))));
+
+  // 6 tokens -> chunk 0 has 4 tokens, chunk 1 has 2 active tokens (padded to
+  // 4).
+  alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT)
+      int32_t token_data[] = {1, 2, 3, 4, 5, 6};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto token_ids_buffer,
+      TensorBuffer::CreateFromHostMemory(
+          env, RankedTensorType(ElementType::Int32, Layout(Dimensions({6}))),
+          token_data, sizeof(token_data)));
+  ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                        std::nullopt, std::nullopt);
+
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingOutput out,
+      executor->ComputeEmbedding(
+          inputs, ComputeEmbeddingOptions{
+                      .input_overflow_strategy =
+                          InputOverflowStrategy::kChunkAndAverage,
+                      .return_token_embeddings = true,
+                      .return_hidden_state_layers = {6},
+                  }));
+  EXPECT_EQ(out.num_chunks, 2);
+  EXPECT_EQ(out.token_embedding_dim, kEmbDim);
+  EXPECT_EQ(out.token_embeddings.size(), 6 * kEmbDim);
+  EXPECT_EQ(out.hidden_state_dim, kHiddenDim);
+  ASSERT_TRUE(out.hidden_states.contains(6));
+  EXPECT_EQ(out.hidden_states.at(6).size(), 6 * kHiddenDim);
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     PerTokenInjection_RelocatesAppendedBufferOffsetsAndCreatesDistinctCache) {
+  constexpr int32_t kHiddenDim = 4;
+  constexpr int32_t kEmbDim = 6;
+  auto embedder_buf = BuildCastAddEmbedderBuffer(kHiddenDim);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto embedder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                               embedder_buf.data(), embedder_buf.size())));
+
+  SyntheticEncoderOptions enc_opts;
+  enc_opts.signature_keys = {"encoder_4"};
+  enc_opts.seq_lengths = {4};
+  enc_opts.hidden_dim = kHiddenDim;
+  enc_opts.emb_dim = kEmbDim;
+  enc_opts.num_layers = 8;
+  enc_opts.append_proj_weight_buffer = true;
+  auto encoder_buf = BuildSyntheticEgv2LikeEncoderBuffer(enc_opts);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  const std::string cache_dir =
+      absl::StrCat(::testing::TempDir(), "/per_token_xnn_cache_test");
+  std::filesystem::remove_all(cache_dir);
+  std::filesystem::create_directories(cache_dir);
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("/tmp/synth_egv2.litertlm"));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingExecutorSettings base_settings,
+      EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  base_settings.SetNumThreads(1);
+  base_settings.SetCacheDir(cache_dir);
+  ASSERT_OK_AND_ASSIGN(auto base_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           base_settings, env,
+                           std::make_unique<FakeEmbeddingModelResources>(
+                               &embedder_model, &encoder_model)));
+
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingExecutorSettings patched_settings,
+      EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  patched_settings.SetNumThreads(1);
+  patched_settings.SetCacheDir(cache_dir);
+  patched_settings.SetPerTokenOutputs(PerTokenOutputsConfig{
+      .token_embeddings = true, .hidden_state_layers = {6}});
+  ASSERT_OK_AND_ASSIGN(auto patched_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           patched_settings, env,
+                           std::make_unique<FakeEmbeddingModelResources>(
+                               &embedder_model, &encoder_model,
+                               absl::string_view(reinterpret_cast<const char*>(
+                                                     encoder_buf.data()),
+                                                 encoder_buf.size()))));
+
+  // Verify two distinct XNNPACK cache files exist (unpatched vs patched).
+  int xnnpack_cache_files = 0;
+  bool found_patched_tag = false;
+  for (const auto& entry : std::filesystem::directory_iterator(cache_dir)) {
+    const std::string filename = entry.path().filename().string();
+    if (absl::StrContains(filename, ".xnnpack_cache")) {
+      ++xnnpack_cache_files;
+      if (absl::StrContains(filename, ".pt_te_l06.")) {
+        found_patched_tag = true;
+      }
+    }
+  }
+  EXPECT_EQ(xnnpack_cache_files, 2);
+  EXPECT_TRUE(found_patched_tag);
+
+  // Verify relocated appended projection weights produce bit-identical pooled
+  // output and valid non-zero token embeddings.
+  alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[] = {2, 5};
+  auto make_inputs = [&]() {
+    auto buf = TensorBuffer::CreateFromHostMemory(
+        env, RankedTensorType(ElementType::Int32, Layout(Dimensions({2}))),
+        token_data, sizeof(token_data));
+    return ExecutorInputs(ExecutorTextData(std::move(*buf)), std::nullopt,
+                          std::nullopt);
+  };
+  ASSERT_OK_AND_ASSIGN(EmbeddingOutput base_out,
+                       base_executor->ComputeEmbedding(make_inputs()));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingOutput patched_out,
+      patched_executor->ComputeEmbedding(
+          make_inputs(),
+          ComputeEmbeddingOptions{.return_token_embeddings = true,
+                                  .return_hidden_state_layers = {6}}));
+  EXPECT_THAT(patched_out.embedding, ElementsAreArray(base_out.embedding));
+  ASSERT_EQ(patched_out.token_embeddings.size(), 2 * kEmbDim);
+  EXPECT_GT(std::abs(patched_out.token_embeddings[0]), 0.0f);
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     PerTokenInjection_SkipsRewriteWhenOutputsAlreadyExist) {
+  constexpr int32_t kHiddenDim = 4;
+  constexpr int32_t kEmbDim = 6;
+  auto embedder_buf = BuildCastAddEmbedderBuffer(kHiddenDim);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto embedder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                               embedder_buf.data(), embedder_buf.size())));
+
+  SyntheticEncoderOptions enc_opts;
+  enc_opts.pre_expose_token_embeddings = true;
+  auto encoder_buf = BuildSyntheticEgv2LikeEncoderBuffer(enc_opts);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingExecutorSettings settings,
+      EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  settings.SetPerTokenOutputs(PerTokenOutputsConfig{.token_embeddings = true});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  // Notice `encoder_buffer` is NOT supplied to `FakeEmbeddingModelResources`:
+  // if `CompileTextEncoder` tried to rewrite, `GetTFLiteModelBuffer` would fail
+  // with `UnimplementedError`.
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env,
+                           std::make_unique<FakeEmbeddingModelResources>(
+                               &embedder_model, &encoder_model)));
+
+  alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[] = {3, 4};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto token_ids_buffer,
+      TensorBuffer::CreateFromHostMemory(
+          env, RankedTensorType(ElementType::Int32, Layout(Dimensions({2}))),
+          token_data, sizeof(token_data)));
+  ExecutorInputs inputs(ExecutorTextData(std::move(token_ids_buffer)),
+                        std::nullopt, std::nullopt);
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingOutput out,
+      executor->ComputeEmbedding(
+          inputs, ComputeEmbeddingOptions{.return_token_embeddings = true}));
+  EXPECT_EQ(out.token_embedding_dim, kEmbDim);
+  EXPECT_EQ(out.token_embeddings.size(), 2 * kEmbDim);
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     PerTokenInjection_ValidationAndMissingOutputErrors) {
+  auto embedder_buf = BuildCastAddEmbedderBuffer(4);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto embedder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                               embedder_buf.data(), embedder_buf.size())));
+
+  SyntheticEncoderOptions enc_opts;
+  enc_opts.num_layers = 8;
+  auto encoder_buf = BuildSyntheticEgv2LikeEncoderBuffer(enc_opts);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+
+  // 1. Out-of-range layer index at load time -> InvalidArgumentError.
+  {
+    ASSERT_OK_AND_ASSIGN(
+        EmbeddingExecutorSettings bad_layer_settings,
+        EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+    bad_layer_settings.SetPerTokenOutputs(
+        PerTokenOutputsConfig{.hidden_state_layers = {8}});
+    EXPECT_THAT(EmbeddingLiteRtCompiledModelExecutor::Create(
+                    bad_layer_settings, env,
+                    std::make_unique<FakeEmbeddingModelResources>(
+                        &embedder_model, &encoder_model,
+                        absl::string_view(
+                            reinterpret_cast<const char*>(encoder_buf.data()),
+                            encoder_buf.size()))),
+                StatusIs(absl::StatusCode::kInvalidArgument,
+                         HasSubstr("out of range")));
+  }
+
+  // 2. Biased pooling projection -> FailedPreconditionError.
+  {
+    SyntheticEncoderOptions biased_opts = enc_opts;
+    biased_opts.add_pooling_bias = true;
+    auto biased_buf = BuildSyntheticEgv2LikeEncoderBuffer(biased_opts);
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto biased_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                               biased_buf.data(), biased_buf.size())));
+    ASSERT_OK_AND_ASSIGN(
+        EmbeddingExecutorSettings settings,
+        EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+    settings.SetPerTokenOutputs(
+        PerTokenOutputsConfig{.token_embeddings = true});
+    EXPECT_THAT(EmbeddingLiteRtCompiledModelExecutor::Create(
+                    settings, env,
+                    std::make_unique<FakeEmbeddingModelResources>(
+                        &embedder_model, &biased_model,
+                        absl::string_view(
+                            reinterpret_cast<const char*>(biased_buf.data()),
+                            biased_buf.size()))),
+                StatusIs(absl::StatusCode::kFailedPrecondition,
+                         HasSubstr("bias-free")));
+  }
+
+  // 3. Requesting un-injected outputs at inference time -> FailedPrecondition
+  //    (and negative layer -> InvalidArgument).
+  {
+    ASSERT_OK_AND_ASSIGN(
+        EmbeddingExecutorSettings unpatched_settings,
+        EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+    ASSERT_OK_AND_ASSIGN(auto executor,
+                         EmbeddingLiteRtCompiledModelExecutor::Create(
+                             unpatched_settings, env,
+                             std::make_unique<FakeEmbeddingModelResources>(
+                                 &embedder_model, &encoder_model)));
+
+    alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[] = {1};
+    auto make_inputs = [&]() {
+      auto buf = TensorBuffer::CreateFromHostMemory(
+          env, RankedTensorType(ElementType::Int32, Layout(Dimensions({1}))),
+          token_data, sizeof(token_data));
+      return ExecutorInputs(ExecutorTextData(std::move(*buf)), std::nullopt,
+                            std::nullopt);
+    };
+    EXPECT_THAT(executor->ComputeEmbedding(
+                    make_inputs(),
+                    ComputeEmbeddingOptions{.return_token_embeddings = true}),
+                StatusIs(absl::StatusCode::kFailedPrecondition));
+    EXPECT_THAT(executor->ComputeEmbedding(
+                    make_inputs(),
+                    ComputeEmbeddingOptions{.return_hidden_state_layers = {6}}),
+                StatusIs(absl::StatusCode::kFailedPrecondition));
+    EXPECT_THAT(
+        executor->ComputeEmbedding(
+            make_inputs(),
+            ComputeEmbeddingOptions{.return_hidden_state_layers = {-1}}),
+        StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+
+  // 4. Truncated FlatBuffer with valid "TFL3" magic -> FailedPreconditionError
+  //    (caught by flatbuffers::Verifier instead of reading out-of-bounds).
+  {
+    ASSERT_OK_AND_ASSIGN(
+        EmbeddingExecutorSettings settings,
+        EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+    settings.SetPerTokenOutputs(
+        PerTokenOutputsConfig{.token_embeddings = true});
+    constexpr absl::string_view kTruncatedTfl3 = "XXXXTFL3\x7f\x7f\x7f\x7f";
+    EXPECT_THAT(EmbeddingLiteRtCompiledModelExecutor::Create(
+                    settings, env,
+                    std::make_unique<FakeEmbeddingModelResources>(
+                        &embedder_model, &encoder_model, kTruncatedTfl3)),
+                StatusIs(absl::StatusCode::kFailedPrecondition,
+                         HasSubstr("Invalid TFLite FlatBuffer")));
+  }
+
+  // 5. Appended buffer with out-of-bounds `offset + size` (even when minimum
+  //    `data_start` is within bounds) -> FailedPreconditionError.
+  {
+    std::unique_ptr<tflite::ModelT> unpacked =
+        tflite::UnPackModel(encoder_buf.data());
+    auto ok_appended = std::make_unique<tflite::BufferT>();
+    ok_appended->offset = 64;
+    ok_appended->size = 16;
+    unpacked->buffers.push_back(std::move(ok_appended));
+    auto oob_appended = std::make_unique<tflite::BufferT>();
+    oob_appended->offset = 64;
+    oob_appended->size = 1ULL << 30;
+    unpacked->buffers.push_back(std::move(oob_appended));
+    flatbuffers::FlatBufferBuilder fbb;
+    tflite::FinishModelBuffer(fbb, tflite::Model::Pack(fbb, unpacked.get()));
+    std::vector<uint8_t> bad_appended_buf(fbb.GetSize() + 128, 0);
+    std::memcpy(bad_appended_buf.data(), fbb.GetBufferPointer(), fbb.GetSize());
+
+    ASSERT_OK_AND_ASSIGN(
+        EmbeddingExecutorSettings settings,
+        EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+    settings.SetPerTokenOutputs(
+        PerTokenOutputsConfig{.token_embeddings = true});
+    EXPECT_THAT(EmbeddingLiteRtCompiledModelExecutor::Create(
+                    settings, env,
+                    std::make_unique<FakeEmbeddingModelResources>(
+                        &embedder_model, &encoder_model,
+                        absl::string_view(reinterpret_cast<const char*>(
+                                              bad_appended_buf.data()),
+                                          bad_appended_buf.size()))),
+                StatusIs(absl::StatusCode::kFailedPrecondition,
+                         HasSubstr("out-of-bounds appended buffer offset")));
+  }
+
+  // 6. Selected signatures: unselected malformed signature is ignored while
+  //    selected signature is patched and executes cleanly.
+  {
+    SyntheticEncoderOptions multi_opts;
+    multi_opts.signature_keys = {"encoder_4", "encoder_8"};
+    multi_opts.seq_lengths = {4, 8};
+    auto multi_buf = BuildSyntheticEgv2LikeEncoderBuffer(multi_opts);
+    std::unique_ptr<tflite::ModelT> unpacked =
+        tflite::UnPackModel(multi_buf.data());
+    // Corrupt unselected `encoder_8` subgraph by clearing its operators so
+    // patching it would fail if `selected_signatures` were not respected.
+    unpacked->subgraphs[unpacked->signature_defs[1]->subgraph_index]
+        ->operators.clear();
+    flatbuffers::FlatBufferBuilder fbb;
+    tflite::FinishModelBuffer(fbb, tflite::Model::Pack(fbb, unpacked.get()));
+    std::vector<uint8_t> selective_buf(fbb.GetBufferPointer(),
+                                       fbb.GetBufferPointer() + fbb.GetSize());
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto selective_model,
+        Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+            selective_buf.data(), selective_buf.size())));
+
+    ASSERT_OK_AND_ASSIGN(
+        EmbeddingExecutorSettings settings,
+        EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+    settings.SetSelectedSignatures({"encoder_4"});
+    settings.SetPerTokenOutputs(PerTokenOutputsConfig{
+        .token_embeddings = true, .hidden_state_layers = {6}});
+    ASSERT_OK_AND_ASSIGN(
+        auto executor, EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env,
+                           std::make_unique<FakeEmbeddingModelResources>(
+                               &embedder_model, &selective_model,
+                               absl::string_view(reinterpret_cast<const char*>(
+                                                     selective_buf.data()),
+                                                 selective_buf.size()))));
+    alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t tok[] = {2, 4};
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto tok_buf,
+        TensorBuffer::CreateFromHostMemory(
+            env, RankedTensorType(ElementType::Int32, Layout(Dimensions({2}))),
+            tok, sizeof(tok)));
+    ASSERT_OK_AND_ASSIGN(
+        EmbeddingOutput out,
+        executor->ComputeEmbedding(
+            ExecutorInputs(ExecutorTextData(std::move(tok_buf)), std::nullopt,
+                           std::nullopt),
+            ComputeEmbeddingOptions{.return_token_embeddings = true,
+                                    .return_hidden_state_layers = {6}}));
+    EXPECT_EQ(out.token_embeddings.size(), 2 * multi_opts.emb_dim);
+    EXPECT_EQ(out.hidden_states.at(6).size(), 2 * multi_opts.hidden_dim);
+  }
 }
 
 }  // namespace
