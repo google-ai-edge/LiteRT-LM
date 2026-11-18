@@ -774,8 +774,6 @@ TEST(EngineTest, RunDecodeReportsExecutorStatsWithoutBenchmark) {
 #endif
 }
 
-// The legacy engine's sessions don't own their random state yet.
-#ifdef ENGINE_ADVANCED
 TEST(EngineTest, ClonedSessionContinuesItsOriginalsRandomState) {
   auto task_path =
       std::filesystem::path(::testing::SrcDir()) /
@@ -812,7 +810,6 @@ TEST(EngineTest, ClonedSessionContinuesItsOriginalsRandomState) {
   ASSERT_EQ(clone_responses.GetTexts().size(), 1);
   EXPECT_EQ(clone_responses.GetTexts()[0], responses.GetTexts()[0]);
 }
-#endif  // ENGINE_ADVANCED
 
 }  // namespace
 }  // namespace litert::lm
