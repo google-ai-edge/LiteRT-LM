@@ -29,10 +29,12 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
 #include "runtime/conversation/channel_util.h"
+#include "runtime/conversation/end_of_turn.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/executor_stats.h"
 
 namespace litert::lm {
 namespace {
@@ -90,8 +92,9 @@ void SendMessageToChannel(
   user_callback(std::move(message));
 }
 
-// Sends remaining un-flushed text at the end of generation and then invokes
-// `complete_message_callback` on the final message.
+// Sends remaining un-flushed text at the end of generation, invokes
+// `complete_message_callback` on the final message, and then ends the turn
+// with the end-of-turn message for `finish_reason` and `executor_stats`.
 void SendCompleteMessage(
     absl::AnyInvocable<void(absl::StatusOr<Message>)>& user_callback,
     absl::string_view accumulated_response_text,
@@ -100,8 +103,9 @@ void SendCompleteMessage(
     absl::AnyInvocable<void(Message)>& complete_message_callback,
     const std::string& active_channel_name,
     const std::vector<Channel>& channels,
-    const std::optional<std::string>& initial_open_channel_name =
-        std::nullopt) {
+    const std::optional<std::string>& initial_open_channel_name,
+    FinishReason finish_reason,
+    const std::optional<ExecutorStats>& executor_stats) {
   // Send remaining un-flushed text at the end of generation.
   if (cursor < accumulated_response_text.size()) {
     if (!active_channel_name.empty()) {
@@ -145,7 +149,7 @@ void SendCompleteMessage(
   if (complete_message_callback) {
     complete_message_callback(*complete_message);
   }
-  user_callback(Message());
+  user_callback(CreateEndOfTurnMessage(finish_reason, executor_stats));
 }
 
 // Returns the complete list of channels the parser should search for, including
@@ -337,7 +341,11 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
                           model_data_processor, processor_args, cursor,
                           complete_message_callback,
                           inside_channel ? active_channel_name : "", channels,
-                          open_channel_name);
+                          open_channel_name,
+                          responses->GetTaskState() == TaskState::kDone
+                              ? FinishReason::kStop
+                              : FinishReason::kMaxTokens,
+                          responses->GetExecutorStats());
       cursor = accumulated_response_text.size();
       return;
     }

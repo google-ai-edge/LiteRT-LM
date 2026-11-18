@@ -783,6 +783,7 @@ absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
                                                   OptionalArgs optional_args) {
   absl::Notification done;
   absl::Status error_status;
+  Message end_of_turn;
   const bool appending = optional_args.has_pending_message;
 
   absl::Status status = SendMessageAsync(
@@ -799,6 +800,7 @@ absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
 
         if (IsEndOfTurnMessage(*message)) {
           if (!done.HasBeenNotified()) {
+            end_of_turn = *std::move(message);
             done.Notify();
           }
         }
@@ -821,14 +823,27 @@ absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
   }
 
   if (appending) {
-    return Message();
+    return end_of_turn;
   }
 
-  absl::MutexLock lock(history_mutex_);
-  if (history_.empty()) {
-    return absl::InternalError("History is empty after SendMessage");
+  Message response;
+  {
+    absl::MutexLock lock(history_mutex_);
+    if (history_.empty()) {
+      return absl::InternalError("History is empty after SendMessage");
+    }
+    response = history_.back();
   }
-  return history_.back();
+  // The returned message also carries the end-of-turn fields, which the
+  // history leaves out so that they never reach the prompt.
+  if (response.is_object() && end_of_turn.is_object()) {
+    for (absl::string_view key : {kFinishReasonKey, kExecutorStatsKey}) {
+      if (auto it = end_of_turn.find(key); it != end_of_turn.end()) {
+        response[key] = std::move(*it);
+      }
+    }
+  }
+  return response;
 }
 
 absl::Status Conversation::SendMessageAsync(
@@ -933,7 +948,8 @@ absl::Status Conversation::SendMessageAsync(
 
   if (is_appending_message) {
     if (session_inputs.empty()) {
-      user_callback(Message());
+      user_callback(CreateEndOfTurnMessage(FinishReason::kAppended,
+                                           /*executor_stats=*/std::nullopt));
       return absl::OkStatus();
     }
     ABSL_ASSIGN_OR_RETURN(
@@ -957,12 +973,15 @@ absl::Status Conversation::SendMessageAsync(
                   }
                   callback(status);
                 } else {
-                  callback(Message());
+                  callback(
+                      CreateEndOfTurnMessage(FinishReason::kAppended,
+                                             /*executor_stats=*/std::nullopt));
                 }
                 return;
               }
               if (responses->GetTaskState() == TaskState::kDone) {
-                callback(Message());
+                callback(CreateEndOfTurnMessage(
+                    FinishReason::kAppended, /*executor_stats=*/std::nullopt));
               } else if (responses->GetTaskState() == TaskState::kCancelled ||
                          responses->GetTaskState() ==
                              TaskState::kDependentTaskCancelled) {

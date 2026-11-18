@@ -554,7 +554,10 @@ class Conversation {
   // - `optional_args`: The optional arguments for sending the message. See the
   //    definition of `OptionalArgs` for more details.
   // Returns :
-  // - The complete message from the LLM.
+  // - The complete message from the LLM, with the `finish_reason` and
+  //   `executor_stats` of the end-of-turn message (see `end_of_turn.h`). The
+  //   history keeps the message without them. When appending a message
+  //   without a response, the end-of-turn message itself.
   absl::StatusOr<Message> SendMessage(
       const Message& message, OptionalArgs optional_args = OptionalArgs());
 
@@ -566,7 +569,10 @@ class Conversation {
   //    user_callback will be invoked in the following conditions:
   //    - On every new message chunk.
   //    - When the generation is complete, the user_callback will be invoked
-  //      with an empty message.
+  //      with the end-of-turn message, e.g. `{"role": "assistant",
+  //      "finish_reason": "stop", "executor_stats": {...}}`. Detect it with
+  //      `IsEndOfTurnMessage()` and read its stats with `GetExecutorStats()`
+  //      (see `end_of_turn.h`).
   //    - When the generation is cancelled, the user_callback will be invoked
   //      with absl::CancelledError.
   //    - When an error occurs, the user_callback will be invoked with the error

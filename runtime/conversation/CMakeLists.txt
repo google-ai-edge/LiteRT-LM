@@ -76,9 +76,11 @@ target_include_directories(runtime_conversation_internal_callback_util
 
 target_link_libraries(runtime_conversation_internal_callback_util
   PUBLIC
+    LiteRTLM::Runtime::Conversation::EndOfTurn
     LiteRTLM::Runtime::Conversation::IoTypes
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::ConfigRegistry
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Interface
+    LiteRTLM::Runtime::Executor::ExecutorStats
     LITERTLM_DEPS
 )
 

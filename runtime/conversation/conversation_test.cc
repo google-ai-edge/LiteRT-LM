@@ -57,6 +57,7 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -222,6 +223,14 @@ class MockTaskController : public SessionInterface::TaskController {
   ~MockTaskController() override = default;
   MOCK_METHOD(absl::Status, Cancel, (), (override));
 };
+
+// Returns `message` without the end-of-turn fields that `SendMessage` adds to
+// the complete message.
+Message WithoutEndOfTurnFields(Message message) {
+  message.erase(std::string(kFinishReasonKey));
+  message.erase(std::string(kExecutorStatsKey));
+  return message;
+}
 
 absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateTestMessageCallback(
     Message& expected_message, absl::Notification& done) {
@@ -662,7 +671,7 @@ TEST_P(ConversationTest, SendMessage) {
          {"text",
           " spectrophot "
           "spectrophot<unused178><unused178><unused178><unused178>"}}}}};
-  EXPECT_EQ(message, expected_message);
+  EXPECT_EQ(WithoutEndOfTurnFields(message), expected_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, expected_message));
 }
@@ -1091,9 +1100,110 @@ TEST_P(ConversationTest, SendSingleMessage) {
       }
     ]
   })");
-  EXPECT_EQ(response, assistant_message);
+  EXPECT_EQ(WithoutEndOfTurnFields(response), assistant_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, assistant_message));
+  // The decode reported no executor stats, so the turn ends with null stats.
+  EXPECT_EQ(response.value(kFinishReasonKey, ""), "stop");
+  ASSERT_TRUE(response.contains(kExecutorStatsKey));
+  EXPECT_TRUE(response[kExecutorStatsKey].is_null());
+}
+
+TEST_P(ConversationTest, SendMessageReturnsTheEndOfTurnFields) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .WillOnce([](const std::vector<InputData>& contents,
+                   absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                       user_callback) {
+        user_callback(Responses(TaskState::kDone));
+        return nullptr;
+      });
+  ExecutorStats stats{.module_name = "LLM"};
+  stats.AccumulatePlainStep(absl::Microseconds(10));
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .WillOnce(
+          [&stats](
+              absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
+              const DecodeConfig& decode_config) {
+            user_callback(Responses(TaskState::kProcessing, {"I am good."}));
+            Responses done(TaskState::kDone);
+            done.SetExecutorStats(stats);
+            user_callback(std::move(done));
+            return nullptr;
+          });
+  EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+      .WillOnce(Return(absl::OkStatus()));
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
+
+  ASSERT_OK_AND_ASSIGN(const Message response,
+                       conversation->SendMessage(user_message));
+
+  EXPECT_EQ(response[kFinishReasonKey], "stop");
+  EXPECT_EQ(response[kExecutorStatsKey], ExecutorStatsToJson(stats));
+  // The history keeps the complete message without the end-of-turn fields.
+  EXPECT_THAT(
+      conversation->GetHistory(),
+      testing::ElementsAre(user_message, WithoutEndOfTurnFields(response)));
+  EXPECT_FALSE(conversation->GetHistory().back().contains(kFinishReasonKey));
+}
+
+TEST_P(ConversationTest, SendMessageAsyncEndsTheTurnWithTheEndOfTurnMessage) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+  EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+      .WillOnce([](const std::vector<InputData>& contents,
+                   absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                       user_callback) {
+        user_callback(Responses(TaskState::kDone));
+        return nullptr;
+      });
+  ExecutorStats stats{.module_name = "LLM"};
+  stats.AccumulateMtpRound(/*drafted_tokens=*/3, /*accepted_tokens=*/2,
+                           /*emitted_tokens=*/3, absl::Microseconds(1),
+                           absl::Microseconds(2), absl::Microseconds(3));
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .WillOnce(
+          [&stats](
+              absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
+              const DecodeConfig& decode_config) {
+            user_callback(Responses(TaskState::kProcessing, {"I am good."}));
+            Responses done(TaskState::kMaxNumTokensReached);
+            done.SetExecutorStats(stats);
+            user_callback(std::move(done));
+            return nullptr;
+          });
+  std::vector<Message> messages;
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
+
+  ASSERT_OK(conversation->SendMessageAsync(
+      user_message, [&messages](absl::StatusOr<Message> message) {
+        ASSERT_OK(message);
+        messages.push_back(*std::move(message));
+      }));
+
+  ASSERT_THAT(messages, testing::SizeIs(2));
+  EXPECT_FALSE(IsEndOfTurnMessage(messages[0]));
+  EXPECT_EQ(messages[1],
+            CreateEndOfTurnMessage(FinishReason::kMaxTokens, stats));
 }
 
 TEST_P(ConversationTest, SendMessageWithPrefaceAndImage) {
@@ -1249,7 +1359,7 @@ Thinking disabled.<end_of_turn>
       }
     ]
   })");
-  EXPECT_EQ(response, assistant_message);
+  EXPECT_EQ(WithoutEndOfTurnFields(response), assistant_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, assistant_message));
 }
@@ -1330,7 +1440,7 @@ Thinking disabled.<end_of_turn>
       }
     ]
   })");
-  EXPECT_EQ(response, assistant_message);
+  EXPECT_EQ(WithoutEndOfTurnFields(response), assistant_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, assistant_message));
 }
@@ -1413,7 +1523,7 @@ Thinking disabled.<end_of_turn>
       }
     ]
   })");
-  EXPECT_EQ(response, assistant_message);
+  EXPECT_EQ(WithoutEndOfTurnFields(response), assistant_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, assistant_message));
 }
@@ -1481,7 +1591,7 @@ TEST_P(ConversationTest,
     },
     "reasoning_content": ""
   })");
-  EXPECT_EQ(response, assistant_message);
+  EXPECT_EQ(WithoutEndOfTurnFields(response), assistant_message);
 }
 
 TEST_P(ConversationTest, SendSingleMessageWithEnableThinkingOverriddenToTrue) {
@@ -1562,7 +1672,7 @@ Thinking disabled.<end_of_turn>
       }
     ]
   })");
-  EXPECT_EQ(response, assistant_message);
+  EXPECT_EQ(WithoutEndOfTurnFields(response), assistant_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, assistant_message));
 }
@@ -1802,7 +1912,7 @@ Key3: {{ key3 + "\n"}}
       }
     ]
   })");
-  EXPECT_EQ(response, assistant_message);
+  EXPECT_EQ(WithoutEndOfTurnFields(response), assistant_message);
 }
 
 TEST_P(ConversationTest, SendMessageWithParserErrorFailFast) {
@@ -2019,7 +2129,7 @@ TEST_P(ConversationTest, SendSingleMessageWithChannel) {
     },
     "reasoning_content": "hmm"
   })");
-  EXPECT_THAT(response, testing::Eq(assistant_message));
+  EXPECT_THAT(WithoutEndOfTurnFields(response), testing::Eq(assistant_message));
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, assistant_message));
 }
@@ -2204,7 +2314,7 @@ TEST_P(ConversationTest, SendSingleMessageWithChannelQwenThink) {
     },
     "reasoning_content": "hmm"
   })");
-  EXPECT_THAT(response, testing::Eq(assistant_message));
+  EXPECT_THAT(WithoutEndOfTurnFields(response), testing::Eq(assistant_message));
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, assistant_message));
 }
@@ -2841,7 +2951,7 @@ TEST_P(ConversationTest, SendMessageWithMultipleToolResponses) {
       }
     ]
   })");
-  EXPECT_EQ(response, assistant_message);
+  EXPECT_EQ(WithoutEndOfTurnFields(response), assistant_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(tool_message, assistant_message));
 }
@@ -3643,7 +3753,7 @@ TEST_P(ConversationTest, SendMessageWithPreface) {
        {{{"type", "text"},
          {"text",
           "debugElementdebugElementdebugElementdebugElementdebugElement"}}}}};
-  EXPECT_EQ(message, expected_message);
+  EXPECT_EQ(WithoutEndOfTurnFields(message), expected_message);
 }
 
 TEST_P(ConversationTest, GetBenchmarkInfo) {
@@ -3788,13 +3898,15 @@ TEST(ConversationBenchmarkTest,
       conversation->SendMessage(
           Message{{"role", "user"}, {"content", "Hello world!"}},
           {.has_pending_message = true}));
-  EXPECT_TRUE(first_chunk_response.is_null());
+  EXPECT_EQ(first_chunk_response,
+            CreateEndOfTurnMessage(FinishReason::kAppended, std::nullopt));
   ASSERT_OK_AND_ASSIGN(
       const Message second_chunk_response,
       conversation->SendMessage(
           Message{{"role", "user"}, {"content", " This is a long message."}},
           {.has_pending_message = true}));
-  EXPECT_TRUE(second_chunk_response.is_null());
+  EXPECT_EQ(second_chunk_response,
+            CreateEndOfTurnMessage(FinishReason::kAppended, std::nullopt));
   ASSERT_OK_AND_ASSIGN(
       const Message closing_response,
       conversation->SendMessage(Message{{"role", "user"}, {"content", ""}},
@@ -5048,11 +5160,21 @@ TEST(AppendMessageTest, Gemma3Async) {
       .Times(1)
       .WillOnce(test_callback);
   absl::Notification done1;
+  Message end_of_turn1;
   ASSERT_OK(conversation->SendMessageAsync(
       Message{{"role", "user"}, {"content", "Hello world!"}},
-      [&done1](absl::StatusOr<Message> message) { done1.Notify(); },
+      [&done1, &end_of_turn1](absl::StatusOr<Message> message) {
+        EXPECT_OK(message);
+        if (message.ok()) {
+          end_of_turn1 = *std::move(message);
+        }
+        done1.Notify();
+      },
       {.has_pending_message = true}));
-  done1.WaitForNotificationWithTimeout(absl::Seconds(3));
+  ASSERT_TRUE(done1.WaitForNotificationWithTimeout(absl::Seconds(3)));
+  // An appended message ends its turn without a response or stats.
+  EXPECT_EQ(end_of_turn1,
+            CreateEndOfTurnMessage(FinishReason::kAppended, std::nullopt));
 
   // Append the 2nd message.
   absl::string_view expected_prefill_2 = " This is a long message.";
@@ -5811,11 +5933,21 @@ TEST(AppendMessageTest, Gemma4Async) {
       .Times(1)
       .WillOnce(test_callback);
   absl::Notification done1;
+  Message end_of_turn1;
   ASSERT_OK(conversation->SendMessageAsync(
       Message{{"role", "user"}, {"content", "Hello world!"}},
-      [&done1](absl::StatusOr<Message> message) { done1.Notify(); },
+      [&done1, &end_of_turn1](absl::StatusOr<Message> message) {
+        EXPECT_OK(message);
+        if (message.ok()) {
+          end_of_turn1 = *std::move(message);
+        }
+        done1.Notify();
+      },
       {.has_pending_message = true}));
-  done1.WaitForNotificationWithTimeout(absl::Seconds(3));
+  ASSERT_TRUE(done1.WaitForNotificationWithTimeout(absl::Seconds(3)));
+  // An appended message ends its turn without a response or stats.
+  EXPECT_EQ(end_of_turn1,
+            CreateEndOfTurnMessage(FinishReason::kAppended, std::nullopt));
 
   // Append the 2nd message.
   absl::string_view expected_prefill_2 = " This is a long message.";

@@ -120,6 +120,7 @@ cc_library(
     hdrs = ["internal_callback_util.h"],
     deps = [
         ":channel_util",
+        ":end_of_turn",
         ":io_types",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",
@@ -129,6 +130,7 @@ cc_library(
         "//runtime/conversation/model_data_processor",
         "//runtime/conversation/model_data_processor:config_registry",
         "//runtime/engine:io_types",
+        "//runtime/executor:executor_stats",
     ],
 )
 
@@ -147,11 +149,13 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/time",
         "@nlohmann_json//:json",
         "//runtime/conversation/model_data_processor:config_registry",
         "//runtime/conversation/model_data_processor:gemma3_data_processor",
         "//runtime/conversation/model_data_processor:gemma3_data_processor_config",
         "//runtime/engine:io_types",
+        "//runtime/executor:executor_stats",
         "//runtime/util:test_utils",
     ],
 )
@@ -380,6 +384,7 @@ cc_test(
         "//runtime/engine:io_types",
         "//runtime/engine:litert_lm_lib",  # buildcleaner: keep
         "//runtime/executor:executor_settings_base",
+        "//runtime/executor:executor_stats",
         "//runtime/executor:llm_executor_settings",
         "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/util:test_utils",

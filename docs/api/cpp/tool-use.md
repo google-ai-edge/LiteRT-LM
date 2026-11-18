@@ -443,8 +443,8 @@ while (true) {
       return;
     }
 
-    // An empty message indicates the model is done generating.
-    if (message->empty()) {
+    // The end-of-turn message indicates the model is done generating.
+    if (IsEndOfTurnMessage(*message)) {
       std::cout << std::endl << std::flush;
       done.Notify();
       return;

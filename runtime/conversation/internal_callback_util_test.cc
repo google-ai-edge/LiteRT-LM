@@ -26,6 +26,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/conversation/end_of_turn.h"
 #include "runtime/conversation/io_types.h"
@@ -33,7 +34,8 @@
 #include "runtime/conversation/model_data_processor/gemma3_data_processor.h"
 #include "runtime/conversation/model_data_processor/gemma3_data_processor_config.h"
 #include "runtime/engine/io_types.h"
-#include "runtime/util/test_utils.h"  // NOLINT
+#include "runtime/executor/executor_stats.h"
+#include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::lm {
 namespace {
@@ -60,10 +62,12 @@ nlohmann::ordered_json ChannelMessage(absl::string_view text,
   return message;
 }
 
+// Returns a callback that appends content chunks to `output`, and on the end of
+// the turn sets `done` and, if given, `end_of_turn`.
 absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateUserMessageCallback(
     std::vector<nlohmann::ordered_json>& output, bool& done,
-    absl::Status& status) {
-  return [&](absl::StatusOr<Message> message) {
+    absl::Status& status, Message* end_of_turn = nullptr) {
+  return [&, end_of_turn](absl::StatusOr<Message> message) {
     if (!message.ok()) {
       done = true;
       status = message.status();
@@ -71,6 +75,9 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateUserMessageCallback(
     }
     if (IsEndOfTurnMessage(*message)) {
       done = true;
+      if (end_of_turn != nullptr) {
+        *end_of_turn = *std::move(message);
+      }
     } else {
       output.push_back(*message);
     }
@@ -103,7 +110,9 @@ class InternalCallbackTest : public testing::Test {
 };
 
 TEST_F(InternalCallbackTest, OnDone) {
-  auto user_callback = CreateUserMessageCallback(output_, done_, status_);
+  Message end_of_turn;
+  auto user_callback =
+      CreateUserMessageCallback(output_, done_, status_, &end_of_turn);
   auto callback =
       CreateInternalCallback(*model_data_processor_, processor_args_, channels_,
                              std::move(user_callback));
@@ -113,6 +122,28 @@ TEST_F(InternalCallbackTest, OnDone) {
   EXPECT_THAT(output_, IsEmpty());
   EXPECT_TRUE(done_);
   EXPECT_OK(status_);
+  EXPECT_EQ(end_of_turn,
+            CreateEndOfTurnMessage(FinishReason::kStop, std::nullopt));
+}
+
+TEST_F(InternalCallbackTest, OnDoneWithExecutorStats) {
+  Message end_of_turn;
+  auto user_callback =
+      CreateUserMessageCallback(output_, done_, status_, &end_of_turn);
+  auto callback =
+      CreateInternalCallback(*model_data_processor_, processor_args_, channels_,
+                             std::move(user_callback));
+  ExecutorStats stats{.module_name = "LLM"};
+  stats.AccumulatePlainStep(absl::Microseconds(10));
+  Responses done(TaskState::kDone);
+  done.SetExecutorStats(stats);
+
+  callback(Responses(TaskState::kProcessing, {"Hello"}));
+  callback(std::move(done));
+
+  EXPECT_THAT(output_, ElementsAre(TextMessage("Hello")));
+  EXPECT_OK(status_);
+  EXPECT_EQ(end_of_turn, CreateEndOfTurnMessage(FinishReason::kStop, stats));
 }
 
 TEST_F(InternalCallbackTest, OnError) {
@@ -876,7 +907,9 @@ TEST_F(InternalCallbackTest, MaxNumTokensReachedReturnsError) {
 }
 
 TEST_F(InternalCallbackTest, MaxNumTokensReachedTreatedAsDoneWhenFlagIsFalse) {
-  auto user_callback = CreateUserMessageCallback(output_, done_, status_);
+  Message end_of_turn;
+  auto user_callback =
+      CreateUserMessageCallback(output_, done_, status_, &end_of_turn);
   bool cancel_called = false;
   auto cancel_callback = [&]() { cancel_called = true; };
   Message final_message;
@@ -903,6 +936,8 @@ TEST_F(InternalCallbackTest, MaxNumTokensReachedTreatedAsDoneWhenFlagIsFalse) {
                 "role": "assistant",
                 "content": [{"type": "text", "text": "Hello"}]
               })json")));
+  EXPECT_EQ(end_of_turn,
+            CreateEndOfTurnMessage(FinishReason::kMaxTokens, std::nullopt));
 }
 
 }  // namespace

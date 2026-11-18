@@ -97,7 +97,7 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreatePrintMessageCallback(
       std::cout << message.status().message() << std::endl;
       return;
     }
-    if (message->empty()) {
+    if (IsEndOfTurnMessage(*message)) {
       std::cout << std::endl << std::flush;
       return;
     }
@@ -516,8 +516,14 @@ This function is triggered under the following conditions:
 *   When a new chunk of the [`Message`][Message] is received from the Model.
 *   If an error occurs during LiteRT-LM's message processing.
 *   Upon completion of the LLM's inference, the callback is triggered with an
-    empty [`Message`][Message] (e.g., `Message()`) to signal the end of the
-    response.
+    end-of-turn [`Message`][Message] to signal the end of the response, e.g.
+    `{"role": "assistant", "finish_reason": "stop", "executor_stats": {...}}`.
+    Detect it with `IsEndOfTurnMessage()` and read the executor stats of the
+    turn (e.g. speculative decoding rounds and accepted draft tokens) with
+    `GetExecutorStats()`, both from `runtime/conversation/end_of_turn.h`.
+    `finish_reason` is `stop`, `max_tokens` or `appended` (a message appended
+    without a response); treat unknown values as the end of the turn too.
+    `executor_stats` is null when the turn has no stats.
 
 Refer to the [Step 6 asynchronous call](#text-only-content) for an example
 implementation.
