@@ -64,6 +64,7 @@ let package = Package(
         "ConversationTests.swift",
         "ToolTests.swift",
         "MessageTests.swift",
+        "SessionTests.swift",
         "BUILD",
         "Info.plist",
       ],
@@ -115,6 +116,12 @@ let package = Package(
       dependencies: ["LiteRTLM"],
       path: "swift",
       sources: ["MessageTests.swift"]
+    ),
+    .testTarget(
+      name: "SessionTests",
+      dependencies: ["LiteRTLM"],
+      path: "swift",
+      sources: ["SessionTests.swift"]
     ),
   ]
 )

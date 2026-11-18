@@ -408,6 +408,48 @@ public struct ConversationConfig {
   }
 }
 
+/// Configuration of a LiteRT-LM `Session`, see `Engine.createSession(with:)`.
+///
+/// Every field defaults to `nil`, which keeps the runtime default (or, for
+/// `speculativeDecodingConfig`, the engine's configuration).
+public struct SessionConfig {
+  /// Configuration for the sampling process. If `nil`, uses the model's default sampler
+  /// parameters when present, or greedy decoding otherwise.
+  public let samplerConfig: SamplerConfig?
+
+  /// The file path to the text LoRA weights file. Requires `EngineConfig.loraRank`. If `nil`, no
+  /// text LoRA is used.
+  public let loraPath: String?
+
+  /// The file path to the audio LoRA weights file. Requires `EngineConfig.audioLoraRank`. If
+  /// `nil`, no audio LoRA is used.
+  public let audioLoraPath: String?
+
+  /// The speculative decoding configuration of this session, which overrides
+  /// `EngineConfig.speculativeDecodingConfig`. Fields left `nil` (or a `nil` config) inherit the
+  /// engine's values.
+  public let speculativeDecodingConfig: SpeculativeDecodingConfig?
+
+  /// - Parameters:
+  ///   - samplerConfig: Configuration for the sampling process. If `nil`, uses the model's
+  ///     default sampler parameters when present, or greedy decoding otherwise.
+  ///   - loraPath: The file path to the text LoRA weights file.
+  ///   - audioLoraPath: The file path to the audio LoRA weights file.
+  ///   - speculativeDecodingConfig: The speculative decoding configuration of this session.
+  ///     Fields left `nil` (or a `nil` config) inherit the engine's configuration.
+  public init(
+    samplerConfig: SamplerConfig? = nil,
+    loraPath: String? = nil,
+    audioLoraPath: String? = nil,
+    speculativeDecodingConfig: SpeculativeDecodingConfig? = nil
+  ) {
+    self.samplerConfig = samplerConfig
+    self.loraPath = loraPath
+    self.audioLoraPath = audioLoraPath
+    self.speculativeDecodingConfig = speculativeDecodingConfig
+  }
+}
+
 /// Configuration for penalizing repetitive tokens during generation.
 public struct RepetitionPenaltyConfig {
 

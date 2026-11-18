@@ -356,6 +356,35 @@ public actor Engine {
       visualTokenBudget: conversationConfig.visualTokenBudget)
   }
 
+  /// Creates a new `Session` from the initialized engine.
+  ///
+  /// A session is the lower-level alternative to a `Conversation`: it takes raw text, image and
+  /// audio inputs and returns raw text, with explicit prefill and decode steps.
+  ///
+  /// - Parameter config: The configuration for the session. If `nil`, uses the runtime defaults.
+  /// - Returns: The created session. It keeps the engine alive until it is closed or deallocated.
+  /// - Throws: `LiteRTLMError.engine(.notInitialized)` if the engine is not initialized, or a
+  ///   `LiteRTLMError` if the session config can't be applied or the session can't be created.
+  public func createSession(with config: SessionConfig? = nil) throws -> Session {
+    guard let engineHandle = handle else {
+      throw LiteRTLMError.engine(.notInitialized)
+    }
+
+    let cSessionConfig = try makeCSessionConfig(
+      samplerConfig: config?.samplerConfig,
+      loraPath: config?.loraPath,
+      audioLoraPath: config?.audioLoraPath,
+      speculativeDecodingConfig: config?.speculativeDecodingConfig)
+    defer { litert_lm_session_config_delete(cSessionConfig) }
+
+    let sessionHandle = try LiteRTLMError.create(
+      "litert_lm_engine_create_session", { .engine(.failedToCreateSession($0)) }
+    ) { out in
+      litert_lm_engine_create_session(engineHandle, cSessionConfig, out)
+    }
+    return Session(handle: sessionHandle, engine: self)
+  }
+
   /// Updates whether to enable Metal residency set on GPU at runtime.
   ///
   /// Note: This is an experimental API. To use it, call

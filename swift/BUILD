@@ -34,6 +34,7 @@ LITERT_LM_SWIFT_SRCS = [
     "Message.swift",
     "ModelInfo.swift",
     "ResponseFormat.swift",
+    "Session.swift",
     "Tool.swift",
     "ToolChoice.swift",
     "ToolManager.swift",
@@ -86,6 +87,21 @@ swift_library(
     name = "LiteRT_LM_ConversationTestsLib",
     testonly = True,
     srcs = ["ConversationTests.swift"],
+    copts = ["-enable-testing"],
+    data = ["//runtime/testdata"],
+    features = ["-swift.enable_v6"],
+    deps = [
+        ":LiteRT_LM_Swift",
+
+        "//c:engine",
+    ],
+)
+
+# Swift library containing test sources for Session.
+swift_library(
+    name = "LiteRT_LM_SessionTestsLib",
+    testonly = True,
+    srcs = ["SessionTests.swift"],
     copts = ["-enable-testing"],
     data = ["//runtime/testdata"],
     features = ["-swift.enable_v6"],
@@ -254,6 +270,18 @@ ios_unit_test(
     # The ios_unit_test depends on the swift_library containing the test code.
     deps = [
         ":LiteRT_LM_ConversationTestsLib",
+    ],
+)
+
+ios_unit_test(
+    name = "LiteRT_LM_Session_Tests",
+    data = [
+        "//runtime/testdata",
+    ],
+    minimum_os_version = "15.0",
+    # The ios_unit_test depends on the swift_library containing the test code.
+    deps = [
+        ":LiteRT_LM_SessionTestsLib",
     ],
 )
 

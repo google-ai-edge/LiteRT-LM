@@ -20,6 +20,7 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
   case engine(EngineError)
   case embeddingEngine(EmbeddingEngineError)
   case conversation(ConversationError)
+  case session(SessionError)
   case config(ConfigError)
   case tool(ToolError)
   case message(MessageError)
@@ -30,6 +31,7 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
     case .engine(let error): return error.errorDescription
     case .embeddingEngine(let error): return error.errorDescription
     case .conversation(let error): return error.errorDescription
+    case .session(let error): return error.errorDescription
     case .config(let error): return error.errorDescription
     case .tool(let error): return error.errorDescription
     case .message(let error): return error.errorDescription
@@ -145,6 +147,7 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
     case failedToCreateSessionConfig(String)
     case failedToCreateConversationConfig(String)
     case failedToCreateConversation(String)
+    case failedToCreateSession(String)
     case failedToSetLoraPath(String)
     case failedToSetAudioLoraPath(String)
     case failedToSetSupportedLoraRanks(String)
@@ -158,6 +161,7 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
     public static let failedToCreateConversationConfig =
       EngineError.failedToCreateConversationConfig("")
     public static let failedToCreateConversation = EngineError.failedToCreateConversation("")
+    public static let failedToCreateSession = EngineError.failedToCreateSession("")
     public static let failedToSetLoraPath = EngineError.failedToSetLoraPath("")
     public static let failedToSetAudioLoraPath = EngineError.failedToSetAudioLoraPath("")
     public static let failedToSetSupportedLoraRanks = EngineError.failedToSetSupportedLoraRanks("")
@@ -192,6 +196,10 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
         return details.isEmpty
           ? "Failed to create conversation."
           : "Failed to create conversation: \(details)"
+      case .failedToCreateSession(let details):
+        return details.isEmpty
+          ? "Failed to create session."
+          : "Failed to create session: \(details)"
       case .failedToSetLoraPath(let details):
         return details.isEmpty
           ? "Failed to set LoRA path."
@@ -236,6 +244,7 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
         (.failedToCreateSessionConfig(let a), .failedToCreateSessionConfig(let b)),
         (.failedToCreateConversationConfig(let a), .failedToCreateConversationConfig(let b)),
         (.failedToCreateConversation(let a), .failedToCreateConversation(let b)),
+        (.failedToCreateSession(let a), .failedToCreateSession(let b)),
         (.failedToSetLoraPath(let a), .failedToSetLoraPath(let b)),
         (.failedToSetAudioLoraPath(let a), .failedToSetAudioLoraPath(let b)),
         (.failedToSetSupportedLoraRanks(let a), .failedToSetSupportedLoraRanks(let b)),
@@ -390,6 +399,46 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
         return n1 == n2 && e1 == e2
       default:
         return false
+      }
+    }
+  }
+
+  /// Specific errors related to `Session`.
+  public enum SessionError: Error, LocalizedError, Equatable {
+    /// The session was closed with `Session.close()`, or cancelled with `Session.cancel()` or by
+    /// terminating one of its streams early, and can't be used anymore.
+    case notAlive
+    /// A stream started by `Session.runDecodeStream()` or `Session.generateContentStream(_:)` is
+    /// still running. Wait until it finishes before starting another operation.
+    case streamInProgress
+    /// The input passed to the session is invalid, e.g. an empty input list, which the native
+    /// session rejects, or input data that couldn't be created.
+    case invalidInput(String)
+    /// A native session operation failed.
+    case operationFailed(String)
+    /// A stream couldn't be started.
+    case failedToStartStream(status: Int, message: String)
+    /// A stream that has started failed.
+    case streamFailed(String)
+    /// A stream was cancelled with `Session.cancel()` or `Session.close()`.
+    case cancelled
+
+    public var errorDescription: String? {
+      switch self {
+      case .notAlive:
+        return "Session is not alive."
+      case .streamInProgress:
+        return "A stream is in progress on the session."
+      case .invalidInput(let details):
+        return "Invalid session input: \(details)"
+      case .operationFailed(let details):
+        return "Session operation failed: \(details)"
+      case .failedToStartStream(let status, let details):
+        return "Failed to start stream (status \(status)): \(details)"
+      case .streamFailed(let details):
+        return "Stream failed: \(details)"
+      case .cancelled:
+        return "The session operation was cancelled."
       }
     }
   }
