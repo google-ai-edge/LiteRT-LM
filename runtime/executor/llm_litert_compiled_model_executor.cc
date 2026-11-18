@@ -79,6 +79,7 @@
 #include "runtime/executor/llm_litert_verifier.h"
 #include "runtime/executor/nvidia_mtp_drafter_support.h"
 #include "runtime/executor/nvidia_token_table_support.h"
+#include "runtime/executor/run_options.h"
 #include "runtime/executor/speculative_decoding_controller.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/executor/state_interface.h"
@@ -941,13 +942,19 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::RunSignature(
     pre_graph_run_callback_(signature, current_step, input_buffers);
   }
 
-  litert::Options run_options = GetRunOptions();
+  // The options of SetRunOptions() replace the ones built from the executor
+  // settings.
+  ABSL_ASSIGN_OR_RETURN(std::optional<litert::Options> run_options,
+                        CreateRunOptions(run_options_factory_));
+  if (!run_options.has_value()) {
+    run_options.emplace(GetRunOptions());
+  }
   if (async) {
     LITERT_RETURN_IF_ERROR(compiled_model_->RunAsync(
-        signature, input_buffers, output_buffers, async, &run_options));
+        signature, input_buffers, output_buffers, async, &*run_options));
   } else {
     LITERT_RETURN_IF_ERROR(compiled_model_->Run(signature, input_buffers,
-                                                output_buffers, &run_options));
+                                                output_buffers, &*run_options));
   }
 
   if (post_graph_run_callback_) {
@@ -1321,6 +1328,7 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::EnsureMtpDrafterLoaded() {
                        per_layer_embedding_lookup_.get(), executor_metadata_,
                        CreateVerifyPassRunner(),
                        /*compiled_mtp_drafter_model=*/nullptr));
+  mtp_drafter_->SetRunOptionsFactory(&run_options_factory_);
   // Speculative rounds sample and verify on their own, so the sampler must no
   // longer start the next decode step by itself.
   if (sampler_handles_input_) {
@@ -2663,6 +2671,8 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
                          executor->per_layer_embedding_lookup_.get(),
                          executor_metadata, executor->CreateVerifyPassRunner(),
                          std::move(compiled_mtp_drafter_model)));
+    executor->mtp_drafter_->SetRunOptionsFactory(
+        &executor->run_options_factory_);
   }
 
   if (enable_profiling) {
@@ -3117,6 +3127,8 @@ LlmLiteRtCompiledModelExecutorDynamic::Create(
                          executor->per_layer_embedding_lookup_.get(),
                          executor_metadata, executor->CreateVerifyPassRunner(),
                          std::move(compiled_mtp_drafter_model)));
+    executor->mtp_drafter_->SetRunOptionsFactory(
+        &executor->run_options_factory_);
   }
   if (enable_profiling) {
     auto status = executor->StartProfiling();

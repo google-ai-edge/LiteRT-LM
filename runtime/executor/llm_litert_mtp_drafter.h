@@ -43,6 +43,7 @@
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_verifier.h"
+#include "runtime/executor/run_options.h"
 #include "runtime/executor/state_interface.h"
 #include "runtime/proto/sampler_params.pb.h"
 
@@ -151,6 +152,15 @@ class LlmLiteRtMtpDrafter {
   // `num_draft_steps() + 1` positions.
   int num_draft_steps() const { return num_draft_steps_; }
 
+  // Sets the factory of the LiteRT options of the drafter model runs, or
+  // nullptr (the default) to use the compile-time options. The factory is not
+  // owned and must outlive the drafter; it may be changed in place between
+  // rounds (e.g. by the executor's SetRunOptions()).
+  void SetRunOptionsFactory(
+      const RunOptionsFactory* absl_nullable run_options_factory) {
+    run_options_factory_ = run_options_factory;
+  }
+
  private:
   LlmLiteRtMtpDrafter(
       CompiledModel mtp_drafter_model, SimpleSignature drafter_signature,
@@ -209,6 +219,10 @@ class LlmLiteRtMtpDrafter {
   // The MTP drafter model.
   CompiledModel mtp_drafter_model_;
   SimpleSignature drafter_signature_;
+
+  // The factory of the LiteRT options of the drafter model runs (not owned),
+  // or nullptr. See SetRunOptionsFactory().
+  const RunOptionsFactory* run_options_factory_ = nullptr;
 
   // The base model, used for verification. The model is owned by the base
   // LiteRtCompiledModelExecutor.

@@ -48,6 +48,7 @@
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/executor_stats.h"
+#include "runtime/executor/run_options.h"
 #include "runtime/executor/vision/vision_executor_utils.h"
 #if !defined(LITERT_DISABLE_NPU)
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
@@ -614,9 +615,12 @@ absl::Status VisionLiteRtCompiledModelExecutor::RunCompiledModel(
   if (latch != nullptr && latch->IsCancelled()) {
     return absl::CancelledError("Vision encoding was cancelled.");
   }
+  ABSL_ASSIGN_OR_RETURN(std::optional<litert::Options> run_options,
+                        CreateRunOptions(run_options_factory_));
   ScopedLatency scoped(latency_stats_, latency_metric);
   auto result =
-      compiled_model.Run(signature_index, input_buffers, output_buffers);
+      compiled_model.Run(signature_index, input_buffers, output_buffers,
+                         GetRunOptionsPtr(run_options));
   // An interrupted run reports a generic error.
   if (!result.HasValue() && latch != nullptr && latch->IsCancelled()) {
     return absl::CancelledError("Vision encoding was cancelled.");

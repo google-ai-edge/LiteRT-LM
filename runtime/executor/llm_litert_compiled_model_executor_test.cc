@@ -67,6 +67,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_executor_settings_utils.h"
+#include "runtime/executor/run_options_test_util.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/sampler_params.pb.h"
@@ -558,6 +559,68 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   second_inputs.SetTextData(ExecutorTextData(std::move(second_buffer)));
   EXPECT_THAT(executor->Prefill(second_inputs),
               StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST(LlmLiteRtCompiledModelExecutorStaticTest, DecodeWithRunOptionsTest) {
+  auto model_path =
+      std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+  ASSERT_OK_AND_ASSIGN(
+      auto model_resources,
+      CreateExecutorModelResourcesLitertLm(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+  executor_settings.SetCacheDir(":nocache");
+  executor_settings.SetMaxNumTokens(kMaxNumTokens);
+  ::litert::lm::CpuConfig config;
+  config.number_of_threads = kNumThreads;
+  executor_settings.SetBackendConfig(config);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor,
+                       LlmLiteRtCompiledModelExecutorStatic::Create(
+                           executor_settings, env, *model_resources));
+  ASSERT_NE(executor, nullptr);
+  RuntimeConfig runtime_config;
+  runtime_config.sampler_params = proto::SamplerParameters();
+  ASSERT_OK_AND_ASSIGN(
+      auto context, executor->CreateNewContext(std::nullopt, runtime_config));
+  ASSERT_OK(executor->RestoreContext(std::move(context)));
+
+  // The CPU model ignores the run options, so the results are the same as in
+  // DecodeTest. Every model run gets new options.
+  int num_calls = 0;
+  ASSERT_OK(executor->SetRunOptions(CountingRunOptionsFactory(&num_calls)));
+
+  ExecutorInputs inputs;
+  const std::vector<int> input_tokens = {1, 2, 0};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto input_tokens_buffer,
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 3}));
+  inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
+  ASSERT_OK(executor->Prefill(inputs));
+  const int num_prefill_calls = num_calls;
+  EXPECT_GT(num_prefill_calls, 0);
+
+  ASSERT_OK_AND_ASSIGN(auto output_tokens, executor->Decode());
+  EXPECT_GT(num_calls, num_prefill_calls);
+  ASSERT_EQ(output_tokens.size(), 1);
+  ASSERT_EQ(output_tokens[0].size(), 1);
+  EXPECT_EQ(output_tokens[0][0], 126670);
+
+  // A failure to create the options fails the call.
+  ASSERT_OK(executor->SetRunOptions(
+      FailingRunOptionsFactory(absl::InvalidArgumentError("bad options"))));
+  EXPECT_THAT(executor->Decode(),
+              StatusIs(absl::StatusCode::kInvalidArgument, "bad options"));
+
+  // An empty factory reverts to the default run options.
+  ASSERT_OK(executor->SetRunOptions(nullptr));
+  const int num_calls_before_reset = num_calls;
+  EXPECT_OK(executor->Decode());
+  EXPECT_EQ(num_calls, num_calls_before_reset);
 }
 
 TEST(LlmLiteRtCompiledModelExecutorStaticTest, DecodeTest) {

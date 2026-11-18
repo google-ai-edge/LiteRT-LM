@@ -50,6 +50,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/run_options.h"
 #include "runtime/executor/vision/vision_executor.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/executor/vision_litert_compiled_model_executor.h"
@@ -151,6 +152,10 @@ class LockedVisionExecutor : public VisionExecutor {
     return vision_executor_->GetVisionExecutorProperties();
   }
 
+  absl::Status SetRunOptions(RunOptionsFactory run_options_factory) override {
+    return vision_executor_->SetRunOptions(std::move(run_options_factory));
+  }
+
  private:
   std::shared_ptr<VisionExecutor> vision_executor_;
   // The mutex lock.
@@ -204,6 +209,10 @@ class LockedAudioExecutor : public AudioExecutor {
 
   absl::Status UseLoRA(std::optional<uint32_t> lora_id) override {
     return audio_executor_->UseLoRA(lora_id);
+  }
+
+  absl::Status SetRunOptions(RunOptionsFactory run_options_factory) override {
+    return audio_executor_->SetRunOptions(std::move(run_options_factory));
   }
 
  private:
@@ -476,6 +485,10 @@ class LockedLlmExecutor : public LlmExecutor {
 
   ::litert::Environment* GetEnvironment() const override {
     return llm_executor_->GetEnvironment();
+  }
+
+  absl::Status SetRunOptions(RunOptionsFactory run_options_factory) override {
+    return llm_executor_->SetRunOptions(std::move(run_options_factory));
   }
 
  private:
