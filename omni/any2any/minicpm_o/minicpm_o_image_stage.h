@@ -17,12 +17,11 @@
 
 #include <cstddef>
 #include <memory>
-#include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/any2any/any2any_image_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
 #include "omni/base/fan_out_stage.h"
@@ -31,19 +30,18 @@
 #include "omni/base/sequenced.h"
 #include "omni/base/stage.h"
 #include "omni/omni_session.h"
-#include "runtime/components/preprocessor/image_preprocessor.h"
-#include "runtime/components/preprocessor/minicpmv_image_preprocess.h"
 
 namespace litert::omni::any2any {
 
 // Image input processing stage for MiniCPM-o:
-// - Consumes `Sequenced<ImageInput>` from `Any2AnyInputFanOutStage`.
-// - Slices images using MiniCPM-V dynamic high-resolution grid slicing.
-// - Runs the vision encoder model on each slice.
-// - Outputs `Sequenced<MiniCpmOEmbeddingSegment>` containing the continuous
-//   vision query embeddings and `<image>...</image>`, `<slice>...</slice>`,
-//   placeholder (`-1`), and newline token IDs for downstream reordering and
-//   chat-template framing in `MiniCpmOFrontendStage`.
+// - Wraps `Any2AnyImageStage` to consume `Sequenced<ImageInput>` from
+//   `Any2AnyInputFanOutStage`, decode/validate RGB888 images, slice images
+//   using MiniCPM-V dynamic high-resolution grid slicing, and run the vision
+//   encoder model on each slice.
+// - Frames the emitted vision embeddings into
+//   `Sequenced<MiniCpmOEmbeddingSegment>` with `<image>...</image>`,
+//   `<slice>...</slice>`, placeholder (`-1`), and newline token IDs for
+//   downstream reordering and chat-template framing in `MiniCpmOFrontendStage`.
 class MiniCpmOImageStage
     : public SingleThreadedStageWithDeque<Sequenced<MiniCpmOEmbeddingSegment>> {
  public:
@@ -79,10 +77,12 @@ class MiniCpmOImageStage
   //
   // Returns:
   //   A newly initialized `MiniCpmOImageStage` on success, or an error status
-  //   if `config.llm_hidden_size <= 0`, if creating input/output buffers fails,
-  //   if any buffer list is empty, if output buffer byte size is not a positive
-  //   multiple of `config.llm_hidden_size * sizeof(float)`, or if
-  //   `input_indices` exceed `vision_input_buffers.size()`.
+  //   if `config.llm_hidden_size <= 0`, if `config.vision_patch_size <= 0`, if
+  //   creating input/output buffers fails, if any buffer list is empty, if
+  //   output buffer byte size is not a positive multiple of
+  //   `config.llm_hidden_size * sizeof(float)`, if `input_indices` exceed
+  //   `vision_input_buffers.size()`, or if image input buffer size is not a
+  //   positive multiple of `3 * vision_patch_size^2 * sizeof(float)`.
   static absl::StatusOr<std::unique_ptr<MiniCpmOImageStage>> Create(
       FanOutOutputQueue<OmniSession::Input, ImageInput>* absl_nonnull
           image_queue,
@@ -95,71 +95,15 @@ class MiniCpmOImageStage
  protected:
   bool NeedScheduleInternal() const override;
   absl::Status ScheduleInternal() override;
+  void ResetInternal() override;
 
  private:
   static InputIndices DefaultInputIndices() { return InputIndices{}; }
 
-  MiniCpmOImageStage(
-      FanOutOutputQueue<OmniSession::Input, ImageInput>* absl_nonnull
-          image_queue,
-      std::unique_ptr<lm::ImagePreprocessor> absl_nullable image_preprocessor,
-      std::unique_ptr<LiteRtRunner> absl_nonnull vision_encoder_runner,
-      std::vector<TensorBuffer> vision_input_buffers,
-      std::vector<TensorBuffer> vision_output_buffers,
-      const MiniCpmOModelConfig& config, InputIndices input_indices);
+  explicit MiniCpmOImageStage(
+      std::unique_ptr<Any2AnyImageStage> absl_nonnull image_stage);
 
-  // Slices `image` using MiniCPM-V dynamic high-resolution slicing and runs the
-  // vision encoder on the overview and sub-slices.
-  //
-  // Args:
-  //   image: Raw RGB/RGBA/grayscale pixel buffer or encoded image bytes.
-  //
-  // Returns:
-  //   A `MiniCpmOEmbeddingSegment` containing the continuous vision query
-  //   embeddings and `<image>...</image>`, `<slice>...</slice>`, placeholder
-  //   (`-1`), and newline token IDs, or an error status if decoding, slicing,
-  //   or model execution fails.
-  absl::StatusOr<MiniCpmOEmbeddingSegment> ProcessImage(
-      const ImageInput& image);
-
-  // Decodes or converts `image` into RGB pixels and slices it into an overview
-  // plus optional high-resolution sub-slices.
-  absl::StatusOr<lm::MiniCpmVSliced> SliceImage(const ImageInput& image);
-
-  // Formats and pads `slice` to match the vision encoder signature, executes
-  // `vision_encoder_runner_`, and reads the resulting query embeddings.
-  //
-  // Args:
-  //   slice: Preprocessed MiniCPM-V image slice strip and patch positions
-  //     (padded in-place if the model signature expects more patches).
-  //
-  // Returns:
-  //   Flattened vision query embeddings of size `num_queries * hidden_dim_`,
-  //   or an error status if buffer I/O or runner execution fails.
-  absl::StatusOr<std::vector<float>> RunVisionSlice(lm::MiniCpmVSlice& slice);
-
-  // Populates `vision_input_buffers_` for the 3-input MiniCPM-V vision encoder
-  // signature (`images`, `positions_xy`, `vit_positions`).
-  absl::Status PrepareThreeInputBuffers(lm::MiniCpmVSlice& slice);
-
-  // Populates `vision_input_buffers_` for the 2-input MiniCPM-o vision encoder
-  // signature (`pixel_values` strip and `position_ids` encoding
-  // `resampler_pos_id * 10000 + vit_pos_id`).
-  absl::Status PrepareTwoInputBuffers(lm::MiniCpmVSlice& slice);
-
-  // Populates `vision_input_buffers_` for the 1-input vision encoder signature
-  // (`pixel_values` strip).
-  absl::Status PrepareSingleInputBuffer(lm::MiniCpmVSlice& slice);
-
-  FanOutOutputQueue<OmniSession::Input, ImageInput>& image_queue_;
-  MiniCpmOModelConfig config_;
-  int hidden_dim_;
-
-  std::unique_ptr<lm::ImagePreprocessor> image_preprocessor_;
-  std::unique_ptr<LiteRtRunner> vision_encoder_runner_;
-  std::vector<TensorBuffer> vision_input_buffers_;
-  std::vector<TensorBuffer> vision_output_buffers_;
-  InputIndices input_indices_;
+  std::unique_ptr<Any2AnyImageStage> image_stage_;
 };
 
 }  // namespace litert::omni::any2any

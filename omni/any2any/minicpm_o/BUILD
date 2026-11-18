@@ -92,6 +92,7 @@ cc_library(
         ":minicpm_o_model_config",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/functional:bind_front",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -103,13 +104,14 @@ cc_library(
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
         "//omni:omni_session",
+        "//omni/any2any:any2any_image_stage",
+        "//omni/any2any:io_types",
         "//omni/base:fan_out_stage",
         "//omni/base:io_types",
         "//omni/base:litert_runner",
         "//omni/base:sequenced",
         "//omni/base:stage",
         "//runtime/components/preprocessor:image_preprocessor",
-        "//runtime/components/preprocessor:image_preprocessor_impl",  # build_cleaner: keep
         "//runtime/components/preprocessor:minicpmv_image_preprocess",
     ],
 )

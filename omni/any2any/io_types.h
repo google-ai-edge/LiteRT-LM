@@ -27,6 +27,25 @@ struct EncodedAudioChunk {
   int valid_tokens = 0;
 };
 
+// Continuous vision embeddings produced by `Any2AnyImageStage` for a single
+// `ImageInput`. Empty (`embeddings.empty()` and `num_tokens == 0`) for empty
+// `ImageInput` passthrough items.
+struct Any2AnyImageEmbeddings {
+  // Flattened `[num_tokens, llm_hidden_size]` float32 vision embeddings.
+  // For multi-slice vision encoders (e.g., MiniCPM-o), contains the overview
+  // slice followed by `grid_x * grid_y` sub-slices in row-major order, each
+  // contributing `tokens_per_slice` tokens.
+  std::vector<float> embeddings;
+  // Total number of vision embedding tokens in `embeddings`.
+  int num_tokens = 0;
+  // Number of vision embedding tokens per encoder slice (equals `num_tokens`
+  // for single-pass vision encoders).
+  int tokens_per_slice = 0;
+  // Optional 2D high-resolution sub-slice grid dimensions (`0` when unsliced).
+  int grid_x = 0;
+  int grid_y = 0;
+};
+
 }  // namespace litert::omni::any2any
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_IO_TYPES_H_
