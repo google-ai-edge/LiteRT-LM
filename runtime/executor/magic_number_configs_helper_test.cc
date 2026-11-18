@@ -15,12 +15,14 @@
 #include "runtime/executor/magic_number_configs_helper.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -28,6 +30,8 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/components/model_resources.h"
@@ -37,6 +41,7 @@
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
 #include "runtime/util/test_utils.h"  // NOLINT
+#include "tflite/schema/schema_generated.h"  // from @litert
 
 namespace litert::lm {
 namespace {
@@ -198,6 +203,31 @@ TEST(MagicNumberConfigsHelperTest, ContextLength_DefaultSettings) {
   const auto& config0 = Get(helper.magic_number_configs()->configs, 0);
   EXPECT_EQ(config0.magic_number, 8209);
   EXPECT_EQ(config0.target_number, 8192);
+  EXPECT_EQ(config0.signature_prefix, nullptr);
+
+  // Verifications are disabled by default.
+  EXPECT_EQ(helper.magic_number_verifications(), nullptr);
+}
+
+TEST(MagicNumberConfigsHelperTest,
+     ContextLength_ExplicitSettingsEqualToMagicNumber) {
+  auto model = LoadModelFromFile(kTestModelPathContextLength);
+  ASSERT_OK(model);
+  auto executor_settings = GetLlmExecutorSettings();
+  ASSERT_OK(executor_settings);
+  executor_settings->SetMaxNumTokens(8209);
+
+  ModelResourcesMock model_resources(*model);
+  MagicNumberConfigsHelper helper;
+  auto env_options =
+      helper.GetLiteRtEnvOptions(model_resources, *executor_settings);
+  EXPECT_EQ(env_options.size(), 1);
+  EXPECT_NE(helper.magic_number_configs(), nullptr);
+  EXPECT_EQ(helper.magic_number_configs()->num_configs, 1);
+
+  const auto& config0 = Get(helper.magic_number_configs()->configs, 0);
+  EXPECT_EQ(config0.magic_number, 8209);
+  EXPECT_EQ(config0.target_number, 8209);
   EXPECT_EQ(config0.signature_prefix, nullptr);
 
   // Verifications are disabled by default.
@@ -1136,6 +1166,154 @@ TEST(MagicNumberConfigsHelperTest,
   EXPECT_EQ(std::string(verification1.signature), "prefill_4099");
   EXPECT_EQ(std::string(verification1.test_signature), "test_prefill_1024");
   EXPECT_EQ(verification1.is_superset, true);
+}
+
+// Builds a model with the given signatures of (key, inputs of (name, shape)).
+// Each signature has a "logits" output of shape [1, 1, 16].
+using Inputs = std::vector<std::pair<std::string, std::vector<int32_t>>>;
+std::string BuildModel(
+    const std::vector<std::pair<std::string, Inputs>>& sigs) {
+  tflite::ModelT model;
+  model.version = 3;
+  model.buffers.push_back(std::make_unique<tflite::BufferT>());
+  for (const auto& [key, inputs] : sigs) {
+    auto subgraph = std::make_unique<tflite::SubGraphT>();
+    auto signature = std::make_unique<tflite::SignatureDefT>();
+    signature->signature_key = key;
+    signature->subgraph_index = model.subgraphs.size();
+    auto add_tensor = [&](const std::string& name, std::vector<int32_t> shape,
+                          bool input) {
+      auto tensor = std::make_unique<tflite::TensorT>();
+      tensor->name = name;
+      tensor->shape = std::move(shape);
+      auto tensor_map = std::make_unique<tflite::TensorMapT>();
+      tensor_map->name = name;
+      tensor_map->tensor_index = subgraph->tensors.size();
+      (input ? subgraph->inputs : subgraph->outputs)
+          .push_back(subgraph->tensors.size());
+      (input ? signature->inputs : signature->outputs)
+          .push_back(std::move(tensor_map));
+      subgraph->tensors.push_back(std::move(tensor));
+    };
+    for (const auto& [name, shape] : inputs) add_tensor(name, shape, true);
+    add_tensor("logits", {1, 1, 16}, false);
+    model.subgraphs.push_back(std::move(subgraph));
+    model.signature_defs.push_back(std::move(signature));
+  }
+  flatbuffers::FlatBufferBuilder builder;
+  tflite::FinishModelBuffer(builder, tflite::Model::Pack(builder, &model));
+  return std::string(reinterpret_cast<const char*>(builder.GetBufferPointer()),
+                     builder.GetSize());
+}
+
+// Model of a block-compressed cache with idx_block_size P = 8209 and R = 4.
+//   prefill: mask = 4 * 8209, idx_block = [1, 8209, 8], prefill_length = 4099
+//   decode: mask = 4 * 8209, idx_block = [1, 8209, 8]
+//   test_prefill_4096: mask = 4096, idx_block = [1, 1024, 8],
+//                      prefill_length = 4096
+//   test_decode_4096: mask = 4096, idx_block = [1, 1024, 8]
+std::string BuildIdxBlockModel(int32_t idx_block_size = 8209) {
+  const int32_t mask = 4 * idx_block_size;
+  const std::vector<int32_t> idx_block = {1, idx_block_size, 8};
+  const std::vector<int32_t> test_idx_block = {1, 1024, 8};
+  return BuildModel({{"prefill",
+                      {{"mask", {1, 1, 4099, mask}},
+                       {"input_pos", {4099}},
+                       {"kv_cache_idx_block_k_0", idx_block}}},
+                     {"decode",
+                      {{"mask", {1, 1, 1, mask}},
+                       {"input_pos", {1}},
+                       {"kv_cache_idx_block_k_0", idx_block}}},
+                     {"test_prefill_4096",
+                      {{"mask", {1, 1, 4096, 4096}},
+                       {"input_pos", {4096}},
+                       {"kv_cache_idx_block_k_0", test_idx_block}}},
+                     {"test_decode_4096",
+                      {{"mask", {1, 1, 1, 4096}},
+                       {"input_pos", {1}},
+                       {"kv_cache_idx_block_k_0", test_idx_block}}}});
+}
+
+struct IdxBlockConfigs {
+  std::vector<std::pair<int64_t, int64_t>> configs;  // {magic, target}
+  int num_verifications = 0;
+};
+
+IdxBlockConfigs GetIdxBlockConfigs(const std::string& buffer,
+                                   int max_num_tokens,
+                                   const AdvancedSettings& advanced_settings) {
+  auto model =
+      Model::CreateFromBuffer(BufferRef<uint8_t>(buffer.data(), buffer.size()));
+  if (!model) {
+    ADD_FAILURE() << "Failed to create model: " << model.Error().Message();
+    return {};
+  }
+  auto executor_settings = GetLlmExecutorSettings();
+  if (!executor_settings.ok()) {
+    ADD_FAILURE() << executor_settings.status();
+    return {};
+  }
+  executor_settings->SetMaxNumTokens(max_num_tokens);
+  executor_settings->SetAdvancedSettings(advanced_settings);
+
+  ModelResourcesMock model_resources(*model);
+  MagicNumberConfigsHelper helper;
+  helper.GetLiteRtEnvOptions(model_resources, *executor_settings);
+  IdxBlockConfigs result;
+  if (const auto* configs = helper.magic_number_configs()) {
+    for (int i = 0; i < configs->num_configs; ++i) {
+      const auto& config = Get(configs->configs, i);
+      result.configs.push_back({config.magic_number, config.target_number});
+    }
+  }
+  if (const auto* verifications = helper.magic_number_verifications()) {
+    result.num_verifications = verifications->num_verifications;
+  }
+  return result;
+}
+
+using ::testing::ElementsAre;
+using ::testing::Pair;
+
+TEST(MagicNumberConfigsHelperTest, IdxBlock_ResizesContextLength) {
+  const std::string model = BuildIdxBlockModel();
+  // Context length 4 * target covers max_num_tokens.
+  EXPECT_THAT(GetIdxBlockConfigs(model, 4096, {}).configs,
+              ElementsAre(Pair(8209, 1024), Pair(4099, 4096)));
+  EXPECT_THAT(GetIdxBlockConfigs(model, 4097, {}).configs,
+              ElementsAre(Pair(8209, 1025), Pair(4099, 4096)));
+  EXPECT_THAT(GetIdxBlockConfigs(model, 32768, {}).configs,
+              ElementsAre(Pair(8209, 8192), Pair(4099, 4096)));
+  EXPECT_THAT(GetIdxBlockConfigs(model, 4 * 8209, {}).configs,
+              ElementsAre(Pair(8209, 8209), Pair(4099, 4096)));
+  // Default or too large max_num_tokens use the default target number.
+  EXPECT_THAT(GetIdxBlockConfigs(model, 0, {}).configs,
+              ElementsAre(Pair(8209, 8192), Pair(4099, 4096)));
+  EXPECT_THAT(GetIdxBlockConfigs(model, 65536, {}).configs,
+              ElementsAre(Pair(8209, 8192), Pair(4099, 4096)));
+  EXPECT_THAT(
+      GetIdxBlockConfigs(model, 65536, {.allow_context_length_expansion = true})
+          .configs,
+      ElementsAre(Pair(8209, 16384), Pair(4099, 4096)));
+}
+
+TEST(MagicNumberConfigsHelperTest, IdxBlock_ClampsPrefillLength) {
+  // Prefill length is clamped to the context length 4 * 256.
+  EXPECT_THAT(GetIdxBlockConfigs(BuildIdxBlockModel(), 1024, {}).configs,
+              ElementsAre(Pair(8209, 256), Pair(4099, 1024)));
+}
+
+TEST(MagicNumberConfigsHelperTest, IdxBlock_Verifications) {
+  EXPECT_EQ(GetIdxBlockConfigs(BuildIdxBlockModel(), 4096,
+                               {.verify_magic_numbers = true})
+                .num_verifications,
+            2);
+}
+
+TEST(MagicNumberConfigsHelperTest, IdxBlock_NonPrimeIsNotMagic) {
+  // Only the prefill length is a magic number.
+  EXPECT_THAT(GetIdxBlockConfigs(BuildIdxBlockModel(8192), 4096, {}).configs,
+              ElementsAre(Pair(4099, 4096)));
 }
 
 }  // namespace

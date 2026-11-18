@@ -1571,6 +1571,8 @@ cc_test(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
+        "@flatbuffers",
+        "@litert//litert/cc:litert_buffer_ref",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_model",
         "//runtime/components:model_resources",
@@ -1578,6 +1580,7 @@ cc_test(
         "//runtime/util:litert_status_util",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",  # buildcleaner: keep
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 

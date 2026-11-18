@@ -42,6 +42,9 @@ using Signature = ::litert::SimpleSignature;
 
 struct MagicNumbers {
   int64_t context_length = 0;
+  // {P, R} if dimension 1 of idx_block is a prime P and the context length is
+  // R * P. Ignored if context_length is a magic number.
+  std::pair<int64_t, int64_t> idx_block = {0, 0};
   std::vector<int64_t> prefill_lengths;
   int64_t num_output_candidates = 0;
 };
@@ -51,6 +54,9 @@ constexpr absl::string_view kDecodeSignaturePrefix = "decode";
 constexpr absl::string_view kTestPrefillSignaturePrefix = "test_prefill";
 constexpr absl::string_view kTestDecodeSignaturePrefix = "test_decode";
 constexpr absl::string_view kMaskSubstr = "mask";
+// idx_block has shape [B, P, D_idx] where P is the number of context blocks.
+constexpr absl::string_view kIdxBlockSubstr = "idx_block";
+constexpr int kIdxBlockDimIndex = 1;
 constexpr absl::string_view kInputPosSubstr = "pos";
 constexpr absl::string_view kOutputLogitsSubstr = "logits";
 constexpr int64_t kDefaultTargetNumberBase = 256;
@@ -110,6 +116,37 @@ Expected<void> SetMagicNumberIfPrime(const Signature& signature,
   return {};
 }
 
+// Sets idx_block to {P, R} if dimension 1 of the idx_block input is a prime P
+// and the last dimension of the mask input of the signature is R * P, R >= 2.
+Expected<void> SetIdxBlockIfPrime(const Signature& signature,
+                                  absl::string_view input_name,
+                                  std::pair<int64_t, int64_t>& idx_block) {
+  LITERT_ASSIGN_OR_RETURN(auto tensor, signature.InputTensor(input_name));
+  LITERT_ASSIGN_OR_RETURN(auto type, tensor.RankedTensorType());
+  if (type.Layout().Rank() <= kIdxBlockDimIndex) {
+    return {};
+  }
+  const int64_t size = type.Layout().Dimensions()[kIdxBlockDimIndex];
+  if (!IsMagicNumber(size)) {
+    return {};
+  }
+  for (const auto& mask_name : signature.InputNames()) {
+    if (!absl::StrContains(mask_name, kMaskSubstr)) continue;
+    LITERT_ASSIGN_OR_RETURN(auto mask_dim,
+                            GetLastDimensionOfInput(signature, mask_name));
+    if (mask_dim % size != 0 || mask_dim / size < 2) {
+      return {};
+    }
+    const std::pair<int64_t, int64_t> found = {size, mask_dim / size};
+    if (idx_block.first == 0) {
+      idx_block = found;
+    }
+    LITERT_RETURN_IF_ERROR(idx_block == found);
+    return {};
+  }
+  return {};
+}
+
 // Returns the magic numbers from the model. prefill_lengths are sorted in
 // ascending order.
 Expected<MagicNumbers> GetMagicNumbersFromModel(const Model& litert_model) {
@@ -130,6 +167,9 @@ Expected<MagicNumbers> GetMagicNumbersFromModel(const Model& litert_model) {
           if (prefill_length > 0) {
             magic_numbers.prefill_lengths.push_back(prefill_length);
           }
+        } else if (absl::StrContains(input_name, kIdxBlockSubstr)) {
+          LITERT_RETURN_IF_ERROR(SetIdxBlockIfPrime(signature, input_name,
+                                                    magic_numbers.idx_block));
         }
       }
     } else if (signature.Key().starts_with(kDecodeSignaturePrefix)) {
@@ -141,6 +181,9 @@ Expected<MagicNumbers> GetMagicNumbersFromModel(const Model& litert_model) {
           LITERT_RETURN_IF_ERROR(
               SetMagicNumberIfPrime(signature, input_name, /*input=*/true,
                                     magic_numbers.context_length));
+        } else if (absl::StrContains(input_name, kIdxBlockSubstr)) {
+          LITERT_RETURN_IF_ERROR(SetIdxBlockIfPrime(signature, input_name,
+                                                    magic_numbers.idx_block));
         }
       }
       for (const auto& output_name : signature.OutputNames()) {
@@ -155,6 +198,10 @@ Expected<MagicNumbers> GetMagicNumbersFromModel(const Model& litert_model) {
 
   std::sort(magic_numbers.prefill_lengths.begin(),
             magic_numbers.prefill_lengths.end());
+  // idx_block is ignored if the context length is a magic number.
+  if (magic_numbers.context_length > 0) {
+    magic_numbers.idx_block = {0, 0};
+  }
   return magic_numbers;
 }
 
@@ -194,6 +241,16 @@ GetVerificationPairs(const Model& litert_model,
           if (dim != test_dim) {
             if (dim == magic_numbers.context_length &&
                 test_dim == target_numbers.context_length) {
+              continue;
+            }
+            // The context length R * P of idx_block {P, R} is R * target.
+            // Note that target_numbers.idx_block is not set; when idx_block is
+            // used, target_numbers.context_length holds the target idx_block
+            // size, so the target context length is
+            // R * target_numbers.context_length.
+            const auto [size, multiple] = magic_numbers.idx_block;
+            if (size > 0 && dim == multiple * size &&
+                test_dim == multiple * target_numbers.context_length) {
               continue;
             }
             auto it = std::find(magic_numbers.prefill_lengths.begin(),
@@ -258,10 +315,10 @@ int64_t GetDefaultTargetNumber(int64_t magic_number) {
 }
 
 // Returns the target number for the given magic number and target number hint.
-// If the hint is less than magic number, it returns the hint. If the hint is
-// larger than magic number, it returns the default target number.
+// If the hint is less than or equal to magic number, it returns the hint. If
+// the hint is larger than magic number, it returns the default target number.
 int64_t GetTargetNumber(int64_t magic_number, int64_t target_number_hint) {
-  if (target_number_hint > 0 && target_number_hint < magic_number) {
+  if (target_number_hint > 0 && target_number_hint <= magic_number) {
     return target_number_hint;
   }
   int64_t default_target_number = GetDefaultTargetNumber(magic_number);
@@ -281,14 +338,22 @@ MagicNumberConfigsHelper::GetLiteRtEnvOptions(
   if (!litert_model.ok() || !*litert_model) return {};
   auto magic_numbers = GetMagicNumbersFromModel(**litert_model);
   if (!magic_numbers || (magic_numbers->context_length == 0 &&
+                         magic_numbers->idx_block.first == 0 &&
                          magic_numbers->prefill_lengths.empty() &&
                          magic_numbers->num_output_candidates == 0)) {
     return {};
   }
 
+  // If idx_block {P, R} is magic, P is used as the context magic number, and
+  // the context length R * P is resized to R * target.
+  const auto [idx_block_size, idx_block_multiple] = magic_numbers->idx_block;
+  const int64_t context_magic_number =
+      idx_block_size > 0 ? idx_block_size : magic_numbers->context_length;
+  const int64_t context_multiple = idx_block_size > 0 ? idx_block_multiple : 1;
+
   // Build magic number configs.
   int prefill_config_index_base = 0;
-  if (magic_numbers->context_length > 0) {
+  if (context_magic_number > 0) {
     ++prefill_config_index_base;
   }
   if (magic_numbers->num_output_candidates > 0) {
@@ -312,12 +377,15 @@ MagicNumberConfigsHelper::GetLiteRtEnvOptions(
 
   MagicNumbers target_numbers{.context_length = 0, .num_output_candidates = 0};
   // Magic number configs for context length.
-  if (magic_numbers->context_length > 0) {
+  if (context_magic_number > 0) {
     auto& config = magic_number_configs_->configs[0];
-    config.magic_number = magic_numbers->context_length;
-    const int64_t requested_context = executor_settings.GetMaxNumTokens();
+    config.magic_number = context_magic_number;
+    // ceil(max_num_tokens / R) to cover max_num_tokens with R * target.
+    const int64_t requested_context =
+        (executor_settings.GetMaxNumTokens() + context_multiple - 1) /
+        context_multiple;
     if (advanced_settings.allow_context_length_expansion &&
-        requested_context >= config.magic_number) {
+        requested_context > config.magic_number) {
       config.target_number = requested_context;
       ABSL_LOG(WARNING) << "Expanding exported context magic number "
                         << config.magic_number << " to " << requested_context
@@ -327,12 +395,14 @@ MagicNumberConfigsHelper::GetLiteRtEnvOptions(
       config.target_number =
           GetTargetNumber(config.magic_number, requested_context);
     }
+    // If idx_block is used, this is the target idx_block size, not the target
+    // context length, which is R * target. target_numbers.idx_block is not set.
     target_numbers.context_length = config.target_number;
     config.signature_prefix = nullptr;
   }
 
   if (magic_numbers->num_output_candidates > 0) {
-    int config_index = magic_numbers->context_length > 0 ? 1 : 0;
+    int config_index = context_magic_number > 0 ? 1 : 0;
     auto& config = magic_number_configs_->configs[config_index];
     config.magic_number = magic_numbers->num_output_candidates;
     config.target_number = target_numbers.num_output_candidates =
@@ -377,9 +447,11 @@ MagicNumberConfigsHelper::GetLiteRtEnvOptions(
         ++it_prefill;
       }
       // Target prefill length must not be longer than context length.
-      if (target_numbers.context_length > 0 &&
-          target_prefill_number > target_numbers.context_length) {
-        target_prefill_number = target_numbers.context_length;
+      const int64_t target_context_length =
+          context_multiple * target_numbers.context_length;
+      if (target_context_length > 0 &&
+          target_prefill_number > target_context_length) {
+        target_prefill_number = target_context_length;
       }
       target_numbers.prefill_lengths.push_back(target_prefill_number);
     }
