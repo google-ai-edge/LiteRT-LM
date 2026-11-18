@@ -1439,7 +1439,10 @@ LlmLiteRtNpuCompiledModelExecutor::Decode(
                          << rs_result.bonus_token_id;
 
   auto start_commit = absl::Now();
-  LITERT_RETURN_IF_ERROR(CommitVerifiedKVCache(mtp_start_step));
+  // Commit only the input token and the accepted drafts: with a ring buffer, a
+  // rejected draft would overwrite a slot that is still in the window.
+  LITERT_RETURN_IF_ERROR(
+      CommitVerifiedKVCache(mtp_start_step, rs_result.num_accepted + 1));
   latency_stats_.decode_cache_update_inference_latency_us +=
       absl::ToInt64Microseconds(absl::Now() - start_commit);
 
@@ -2533,9 +2536,10 @@ LlmLiteRtNpuCompiledModelExecutor::PerformRejectionSampling(
 }
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::CommitVerifiedKVCache(
-    int start_step) {
+    int start_step, int num_valid_tokens) {
   return main_cache_.CommitVerifiedKVCache(
-      start_step, ActiveContextGroup().verify_aux_signatures.cache_update);
+      start_step, num_valid_tokens,
+      ActiveContextGroup().verify_aux_signatures.cache_update);
 }
 
 absl::Status LlmLiteRtNpuCompiledModelExecutor::SetCurrentStep(int new_step) {

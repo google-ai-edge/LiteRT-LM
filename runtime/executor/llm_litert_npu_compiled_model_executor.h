@@ -405,8 +405,10 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
       const std::vector<int>& draft_tokens,
       const ::litert::TensorBuffer& verifier_logits_buffer);
 
-  // Commit the verified KV cache for MTP.
-  absl::Status CommitVerifiedKVCache(int start_step);
+  // Commits the KV cache of the first `num_valid_tokens` verify tokens (the
+  // input token and the accepted drafts) for MTP. The rejected drafts are not
+  // committed.
+  absl::Status CommitVerifiedKVCache(int start_step, int num_valid_tokens);
 
   // Determines the logical maximum sequence length (`max_num_tokens`) for the
   // NPU model.
