@@ -40,8 +40,8 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/any2any/any2any_test_utils.h"
+#include "omni/any2any/io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_factory.h"
-#include "omni/any2any/minicpm_o/minicpm_o_io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_llm_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
 #include "omni/any2any/minicpm_o/minicpm_o_tts_stage.h"
@@ -306,9 +306,9 @@ absl::StatusOr<std::string> WriteTestMiniCpmOLitertLmFile(
 }
 
 class FakeFrontendStage
-    : public SingleThreadedStageWithDeque<MiniCpmOFrontendOutput> {
+    : public SingleThreadedStageWithDeque<Any2AnyFrontendOutput> {
  public:
-  void Push(MiniCpmOFrontendOutput prompt) { PushOutput(std::move(prompt)); }
+  void Push(Any2AnyFrontendOutput prompt) { PushOutput(std::move(prompt)); }
 
  protected:
   bool NeedScheduleInternal() const override { return false; }
@@ -684,7 +684,7 @@ TEST(MiniCpmOTest, LlmTtsAndVocoderPipelineGeneratesTextWithMockLmRunner) {
   ASSERT_OK_AND_ASSIGN(
       auto session, MultiStagedSession::Create(std::move(stages), raw_vocoder));
 
-  MiniCpmOFrontendOutput prompt;
+  Any2AnyFrontendOutput prompt;
   prompt.prompt_embeddings.assign(2 * config.llm_hidden_size, 0.25f);
   prompt.prompt_len = 2;
   prompt.generate_audio = false;
@@ -752,7 +752,7 @@ TEST(MiniCpmOTest, LlmStagePrefillsMultiTokenPromptInSingleCall) {
   ASSERT_OK_AND_ASSIGN(
       auto session, MultiStagedSession::Create(std::move(stages), raw_vocoder));
 
-  MiniCpmOFrontendOutput prompt;
+  Any2AnyFrontendOutput prompt;
   prompt.prompt_embeddings.assign(4 * config.llm_hidden_size, 0.25f);
   prompt.prompt_len = 4;
   prompt.generate_audio = false;

@@ -27,6 +27,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "omni/any2any/io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
 #include "omni/any2any/minicpm_o/minicpm_o_text_stage.h"
@@ -422,7 +423,7 @@ void MiniCpmOFrontendStage::FlushTurn() {
                                ? static_cast<int>(prompt_embeddings_.size() /
                                                   config_.llm_hidden_size)
                                : static_cast<int>(token_ids_.size());
-    this->PushOutput(MiniCpmOFrontendOutput{
+    this->PushOutput(Any2AnyFrontendOutput{
         .prompt_embeddings = std::move(prompt_embeddings_),
         .prompt_len = prompt_len,
         .token_ids = std::move(token_ids_),

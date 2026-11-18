@@ -38,6 +38,7 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/any2any/any2any_input_fan_out_stage.h"
 #include "omni/any2any/any2any_test_utils.h"
+#include "omni/any2any/io_types.h"
 #include "omni/any2any/qwen_omni/qwen_omni_frontend_stage.h"
 #include "omni/any2any/qwen_omni/qwen_omni_io_types.h"
 #include "omni/any2any/qwen_omni/qwen_omni_model_config.h"
@@ -538,7 +539,7 @@ TEST(QwenOmniFrontendTest,
   ASSERT_OK(text_stage->Schedule());
   ASSERT_OK(frontend->Schedule());
 
-  ASSERT_OK_AND_ASSIGN(QwenOmniFrontendOutput out, frontend->GetOutput());
+  ASSERT_OK_AND_ASSIGN(Any2AnyFrontendOutput out, frontend->GetOutput());
   // Prefix (`<|im_start|>user\n` = {1, 15, 5}) and suffix
   // (`<|im_end|>\n<|im_start|>assistant\n` = {2, 5, 1, 13, 5}) surround the
   // user tokens. None of the untrusted user pieces should emit special token
@@ -673,7 +674,7 @@ TEST(QwenOmniFrontendTest, TextAndFrontendReordersAndFramesModalitySegments) {
   ASSERT_OK(frontend->Schedule());
 
   // Assert
-  ASSERT_OK_AND_ASSIGN(QwenOmniFrontendOutput out, frontend->GetOutput());
+  ASSERT_OK_AND_ASSIGN(Any2AnyFrontendOutput out, frontend->GetOutput());
   // Turn prefix:
   //   <|im_start|>(1) system\n(14,5) sys(16) <|im_end|>(2) \n(5)
   //   <|im_start|>(1) user\n(15,5)
@@ -726,7 +727,7 @@ TEST(QwenOmniFrontendTest, FrontendAudioFirstTurnUsesConfiguredAudioTokenId) {
          });
   ASSERT_OK(frontend->Schedule());
 
-  ASSERT_OK_AND_ASSIGN(QwenOmniFrontendOutput out, frontend->GetOutput());
+  ASSERT_OK_AND_ASSIGN(Any2AnyFrontendOutput out, frontend->GetOutput());
   EXPECT_TRUE(out.generate_audio);
   EXPECT_THAT(out.token_ids, ElementsAre(1, 15, 5, 6, 10, 7, 2, 5, 1, 13, 5));
   ASSERT_EQ(out.prompt_embeddings.size(),
@@ -784,17 +785,17 @@ TEST(QwenOmniFrontendTest, FrontendMultiTurnEndOfInputFlushAndReset) {
   EXPECT_TRUE(frontend->NeedSchedule());
   ASSERT_OK(frontend->Schedule());
 
-  ASSERT_OK_AND_ASSIGN(QwenOmniFrontendOutput turn1, frontend->GetOutput());
+  ASSERT_OK_AND_ASSIGN(Any2AnyFrontendOutput turn1, frontend->GetOutput());
   EXPECT_THAT(turn1.token_ids,
               ElementsAre(1, 14, 5, 16, 2, 5, 1, 15, 5, 3, 2, 5, 1, 13, 5));
 
-  ASSERT_OK_AND_ASSIGN(QwenOmniFrontendOutput turn2, frontend->GetOutput());
+  ASSERT_OK_AND_ASSIGN(Any2AnyFrontendOutput turn2, frontend->GetOutput());
   EXPECT_THAT(turn2.token_ids, ElementsAre(1, 15, 5, 3, 2, 5, 1, 13, 5));
 
-  ASSERT_OK_AND_ASSIGN(QwenOmniFrontendOutput turn3, frontend->GetOutput());
+  ASSERT_OK_AND_ASSIGN(Any2AnyFrontendOutput turn3, frontend->GetOutput());
   EXPECT_THAT(turn3.token_ids, ElementsAre(1, 15, 5, 2, 5, 1, 13, 5));
 
-  ASSERT_OK_AND_ASSIGN(QwenOmniFrontendOutput turn4, frontend->GetOutput());
+  ASSERT_OK_AND_ASSIGN(Any2AnyFrontendOutput turn4, frontend->GetOutput());
   EXPECT_THAT(turn4.token_ids, ElementsAre(1, 15, 5, 3, 2, 5, 1, 13, 5));
   EXPECT_FALSE(frontend->HasOutput());
 
@@ -806,7 +807,7 @@ TEST(QwenOmniFrontendTest, FrontendMultiTurnEndOfInputFlushAndReset) {
   }
   ASSERT_OK(text_stage->Schedule());
   ASSERT_OK(frontend->Flush());
-  ASSERT_OK_AND_ASSIGN(QwenOmniFrontendOutput flushed, frontend->GetOutput());
+  ASSERT_OK_AND_ASSIGN(Any2AnyFrontendOutput flushed, frontend->GetOutput());
   EXPECT_THAT(flushed.token_ids, ElementsAre(1, 15, 5, 3, 2, 5, 1, 13, 5));
 
   // Flushing again with no open turn is a no-op.
@@ -826,7 +827,7 @@ TEST(QwenOmniFrontendTest, FrontendMultiTurnEndOfInputFlushAndReset) {
   }
   ASSERT_OK(text_stage->Schedule());
   ASSERT_OK(frontend->Schedule());
-  ASSERT_OK_AND_ASSIGN(QwenOmniFrontendOutput after_reset,
+  ASSERT_OK_AND_ASSIGN(Any2AnyFrontendOutput after_reset,
                        frontend->GetOutput());
   EXPECT_THAT(after_reset.token_ids,
               ElementsAre(1, 14, 5, 16, 2, 5, 1, 15, 5, 3, 2, 5, 1, 13, 5));
@@ -994,7 +995,7 @@ TEST(QwenOmniFrontendTest,
   image_stage.Push(2, make_vision_seg());
   image_stage.Push(3, make_vision_seg());
   ASSERT_OK(frontend.Flush());
-  ASSERT_OK_AND_ASSIGN(QwenOmniFrontendOutput turn1, frontend.GetOutput());
+  ASSERT_OK_AND_ASSIGN(Any2AnyFrontendOutput turn1, frontend.GetOutput());
   EXPECT_THAT(turn1.token_ids,
               ElementsAre(1, 15, 5, 6, config.audio_token_id, 7, 6,
                           config.audio_token_id, 7, 8, config.image_token_id, 9,
@@ -1007,7 +1008,7 @@ TEST(QwenOmniFrontendTest,
   audio_stage.Push(4, make_audio_seg());
   image_stage.Push(5, make_vision_seg());
   ASSERT_OK(frontend.Flush());
-  ASSERT_OK_AND_ASSIGN(QwenOmniFrontendOutput turn2, frontend.GetOutput());
+  ASSERT_OK_AND_ASSIGN(Any2AnyFrontendOutput turn2, frontend.GetOutput());
   EXPECT_THAT(turn2.token_ids,
               ElementsAre(1, 15, 5, 6, config.audio_token_id, 7, 8,
                           config.image_token_id, 9, 2, 5, 1, 13, 5));

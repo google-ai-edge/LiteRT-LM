@@ -35,22 +35,6 @@ struct MiniCpmOEmbeddingSegment {
   bool is_turn_end = false;
 };
 
-// Output of Stage 1 (MiniCpmOFrontendStage): interleaved multimodal prompt
-// embeddings in LLM hidden dimension space ([prompt_len, llm_hidden_size]).
-struct MiniCpmOFrontendOutput {
-  // Flattened interleaved multimodal prompt embeddings in LLM hidden dimension
-  // space with shape `[prompt_len, llm_hidden_size]`.
-  std::vector<float> prompt_embeddings;
-  // Total number of tokens across all interleaved modality segments in the
-  // prompt.
-  int prompt_len = 0;
-  // Concatenated token IDs from text and control token segments in the prompt.
-  std::vector<int> token_ids;
-  // Whether downstream LLM and TTS stages should synthesize speech output for
-  // this turn.
-  bool generate_audio = true;
-};
-
 }  // namespace litert::omni::any2any
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_MINICPM_O_MINICPM_O_IO_TYPES_H_

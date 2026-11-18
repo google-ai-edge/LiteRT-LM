@@ -20,6 +20,7 @@
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "omni/any2any/io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
 #include "omni/any2any/minicpm_o/minicpm_o_text_stage.h"
@@ -43,15 +44,15 @@ namespace litert::omni::any2any {
 //   (and optional `<slice>...</slice>` sub-slice grids) boundary token
 //   embeddings.
 // - Aggregates all segments belonging to the same user turn into a single
-//   turn-level prompt buffer and emits `MiniCpmOFrontendOutput` when a turn is
+//   turn-level prompt buffer and emits `Any2AnyFrontendOutput` when a turn is
 //   complete (`is_turn_end = true`).
 class MiniCpmOFrontendStage
-    : public SingleThreadedStageWithDeque<MiniCpmOFrontendOutput> {
+    : public SingleThreadedStageWithDeque<Any2AnyFrontendOutput> {
  public:
   // Constructs a `MiniCpmOFrontendStage` that reorders sequenced embedding
   // segments from `text_stage`, optional `audio_stage`, and optional
   // `image_stage` via `FanInStage`, frames chat turns and audio/image boundary
-  // tokens, and emits a turn-level `MiniCpmOFrontendOutput` at the end of each
+  // tokens, and emits a turn-level `Any2AnyFrontendOutput` at the end of each
   // user turn.
   //
   // Args:

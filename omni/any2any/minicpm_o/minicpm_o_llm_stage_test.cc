@@ -38,7 +38,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
-#include "omni/any2any/minicpm_o/minicpm_o_io_types.h"
+#include "omni/any2any/io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
 #include "omni/base/mock_litert_lm_runner.h"
 #include "omni/base/stage.h"
@@ -56,9 +56,9 @@ using ::testing::_;
 using ::testing::NiceMock;
 
 class FakeFrontendStage
-    : public SingleThreadedStageWithDeque<MiniCpmOFrontendOutput> {
+    : public SingleThreadedStageWithDeque<Any2AnyFrontendOutput> {
  public:
-  void Push(MiniCpmOFrontendOutput prompt) { PushOutput(std::move(prompt)); }
+  void Push(Any2AnyFrontendOutput prompt) { PushOutput(std::move(prompt)); }
 
  protected:
   bool NeedScheduleInternal() const override { return false; }
@@ -182,7 +182,7 @@ TEST(MiniCpmOLlmStageTest, NeedScheduleAndPromptValidation) {
   EXPECT_THAT(stage->Schedule(), StatusIs(absl::StatusCode::kNotFound));
 
   // Arrange: push an empty prompt.
-  frontend.Push(MiniCpmOFrontendOutput{.prompt_len = 0});
+  frontend.Push(Any2AnyFrontendOutput{.prompt_len = 0});
   EXPECT_TRUE(stage->NeedSchedule());
 
   // Act & Assert: empty prompt returns InvalidArgumentError.
@@ -190,7 +190,7 @@ TEST(MiniCpmOLlmStageTest, NeedScheduleAndPromptValidation) {
 
   // Arrange: push a prompt whose embeddings size does not match
   // prompt_len * llm_hidden_size.
-  MiniCpmOFrontendOutput misaligned_prompt;
+  Any2AnyFrontendOutput misaligned_prompt;
   misaligned_prompt.prompt_embeddings = {1.0f, 2.0f};
   misaligned_prompt.prompt_len = 1;
   frontend.Push(std::move(misaligned_prompt));
@@ -247,7 +247,7 @@ TEST(MiniCpmOLlmStageTest,
                       &frontend, std::make_shared<FakeTokenizer>(), llm_runner,
                       config));
 
-  MiniCpmOFrontendOutput prompt;
+  Any2AnyFrontendOutput prompt;
   prompt.prompt_embeddings.assign(2 * config.llm_hidden_size, 0.5f);
   prompt.prompt_len = 2;
   prompt.generate_audio = false;
@@ -327,7 +327,7 @@ TEST(MiniCpmOLlmStageTest,
                       config));
 
   // All 5 prompt tokens are passed in a single Prefill call.
-  MiniCpmOFrontendOutput prompt;
+  Any2AnyFrontendOutput prompt;
   prompt.prompt_embeddings.assign(5 * config.llm_hidden_size, 0.25f);
   prompt.prompt_len = 5;
   prompt.generate_audio = true;
@@ -419,7 +419,7 @@ TEST(MiniCpmOLlmStageTest,
                       config));
 
   // Act: Turn 1 (hits max_new_tokens = 2).
-  MiniCpmOFrontendOutput turn1_prompt;
+  Any2AnyFrontendOutput turn1_prompt;
   turn1_prompt.prompt_embeddings.assign(3 * config.llm_hidden_size, 1.0f);
   turn1_prompt.prompt_len = 3;
   turn1_prompt.generate_audio = false;
@@ -430,7 +430,7 @@ TEST(MiniCpmOLlmStageTest,
   EXPECT_EQ(turn1_out.generated_token_ids, (std::vector<int>{3, 4}));
 
   // Act: Turn 2 (without Reset(); stops on <|im_end|>).
-  MiniCpmOFrontendOutput turn2_prompt;
+  Any2AnyFrontendOutput turn2_prompt;
   turn2_prompt.prompt_embeddings.assign(4 * config.llm_hidden_size, 2.0f);
   turn2_prompt.prompt_len = 4;
   turn2_prompt.generate_audio = false;
@@ -507,7 +507,7 @@ TEST(MiniCpmOLlmStageTest,
       auto stage, MiniCpmOLlmStage::Create(&frontend, tokenizer, llm_runner,
                                            config));
 
-  MiniCpmOFrontendOutput prompt;
+  Any2AnyFrontendOutput prompt;
   prompt.prompt_embeddings.assign(config.llm_hidden_size, 0.1f);
   prompt.prompt_len = 1;
   prompt.generate_audio = true;
@@ -587,7 +587,7 @@ TEST(MiniCpmOLlmStageTest,
                       &frontend, std::make_shared<FakeTokenizer>(), llm_runner,
                       config));
 
-  MiniCpmOFrontendOutput prompt;
+  Any2AnyFrontendOutput prompt;
   prompt.prompt_embeddings.assign(config.llm_hidden_size, 0.1f);
   prompt.prompt_len = 1;
   prompt.generate_audio = true;
@@ -600,7 +600,7 @@ TEST(MiniCpmOLlmStageTest,
   // llm_vocab_size + llm_hidden_size, returns InvalidArgumentError even when
   // generate_audio is false.
   mode = DecodeOutputMode::kMismatchedFloatLength;
-  MiniCpmOFrontendOutput text_only_prompt = prompt;
+  Any2AnyFrontendOutput text_only_prompt = prompt;
   text_only_prompt.generate_audio = false;
   frontend.Push(std::move(text_only_prompt));
   EXPECT_THAT(stage->Schedule(), StatusIs(absl::StatusCode::kInvalidArgument));
@@ -653,7 +653,7 @@ TEST(MiniCpmOLlmStageTest,
                       &frontend, std::make_shared<FakeTokenizer>(), llm_runner,
                       config));
 
-  MiniCpmOFrontendOutput prompt1;
+  Any2AnyFrontendOutput prompt1;
   prompt1.prompt_embeddings.assign(config.llm_hidden_size, 1.0f);
   prompt1.prompt_len = 1;
   prompt1.generate_audio = false;

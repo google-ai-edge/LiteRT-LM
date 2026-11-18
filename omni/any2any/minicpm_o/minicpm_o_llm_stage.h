@@ -16,15 +16,14 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_MINICPM_O_MINICPM_O_LLM_STAGE_H_
 
 #include <memory>
-#include <random>
 #include <string>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "omni/any2any/minicpm_o/minicpm_o_io_types.h"
+#include "omni/any2any/any2any_llm_stage.h"
+#include "omni/any2any/io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
 #include "omni/base/litert_lm_runner.h"
 #include "omni/base/stage.h"
@@ -53,10 +52,10 @@ struct MiniCpmOLlmOutput {
 };
 
 // Stage 2: Autoregressive Multimodal LLM Backbone Stage (Qwen3-8B in
-// MiniCPM-o 4.5). Consumes multimodal prompt embeddings from
-// `MiniCpmOFrontendStage`, runs prefill and token decoding via
-// `LiteRtLmRunner`, detokenizes the assistant text response, and collects
-// per-token hidden states for downstream TTS audio generation.
+// MiniCPM-o 4.5). Wraps `Any2AnyLlmStage` in `HiddenStateMode::kPreToken` mode
+// to run prefill and token decoding via `LiteRtLmRunner`, then strips Qwen3
+// `<think>...</think>` reasoning blocks from generated token IDs, aligned
+// hidden states, and detokenized assistant text.
 class MiniCpmOLlmStage
     : public SingleThreadedStageWithDeque<MiniCpmOLlmOutput> {
  public:
@@ -64,7 +63,7 @@ class MiniCpmOLlmStage
   // tokenizer, and stateful LLM backbone runner.
   //
   // Args:
-  //   frontend: Non-null upstream stage producing `MiniCpmOFrontendOutput`
+  //   frontend: Non-null upstream stage producing `Any2AnyFrontendOutput`
   //     prompt embeddings.
   //   tokenizer: Non-null tokenizer used to resolve stop token IDs and
   //     detokenize generated token IDs into text.
@@ -77,7 +76,7 @@ class MiniCpmOLlmStage
   //   A newly initialized `MiniCpmOLlmStage` on success, or an error status if
   //   `config.llm_hidden_size <= 0` or `config.llm_vocab_size <= 0`.
   static absl::StatusOr<std::unique_ptr<MiniCpmOLlmStage>> Create(
-      Stage<MiniCpmOFrontendOutput>* absl_nonnull frontend,
+      Stage<Any2AnyFrontendOutput>* absl_nonnull frontend,
       std::shared_ptr<support::Tokenizer> absl_nonnull tokenizer,
       std::shared_ptr<LiteRtLmRunner> absl_nonnull llm_runner,
       const MiniCpmOModelConfig& config = {});
@@ -92,20 +91,13 @@ class MiniCpmOLlmStage
   absl::Status ScheduleInternal() override;
 
  private:
-  MiniCpmOLlmStage(Stage<MiniCpmOFrontendOutput>* absl_nonnull frontend,
+  MiniCpmOLlmStage(std::unique_ptr<Any2AnyLlmStage> absl_nonnull llm_stage,
                    std::shared_ptr<support::Tokenizer> absl_nonnull tokenizer,
-                   std::shared_ptr<LiteRtLmRunner> absl_nonnull llm_runner,
-                   MiniCpmOModelConfig config);
+                   int hidden_dim);
 
-  Stage<MiniCpmOFrontendOutput>& frontend_;
-  MiniCpmOModelConfig config_;
+  std::unique_ptr<Any2AnyLlmStage> llm_stage_;
   std::shared_ptr<support::Tokenizer> tokenizer_;
-  std::shared_ptr<LiteRtLmRunner> llm_runner_;
-
-  absl::flat_hash_set<int> stop_token_ids_;
-  std::vector<int> turn_end_token_ids_;
-  int hidden_dim_ = minicpm_o::kLlmHiddenSize;
-  std::mt19937_64 rng_;
+  int hidden_dim_;
 };
 
 }  // namespace litert::omni::any2any

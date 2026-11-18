@@ -45,22 +45,6 @@ struct QwenOmniEmbeddingSegment {
   bool is_turn_end = false;
 };
 
-// Output of `QwenOmniFrontendStage`: interleaved multimodal prompt embeddings
-// and token IDs in Thinker LLM hidden dimension space.
-struct QwenOmniFrontendOutput {
-  // Flattened interleaved multimodal prompt embeddings with shape
-  // `[prompt_len, llm_hidden_size]`.
-  std::vector<float> prompt_embeddings;
-  // Total number of tokens across all interleaved modality segments in the
-  // prompt.
-  int prompt_len = 0;
-  // Concatenated token IDs across the prompt (`[prompt_len]`).
-  std::vector<int> token_ids;
-  // Whether downstream LLM and TTS stages should synthesize speech output for
-  // this turn.
-  bool generate_audio = true;
-};
-
 }  // namespace litert::omni::any2any
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_QWEN_OMNI_QWEN_OMNI_IO_TYPES_H_

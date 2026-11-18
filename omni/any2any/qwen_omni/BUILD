@@ -137,9 +137,30 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
+        "//omni/any2any:io_types",
         "//omni/base:fan_in_stage",
         "//omni/base:sequenced",
         "//omni/base:stage",
+    ],
+)
+
+cc_library(
+    name = "qwen_omni_llm_stage",
+    srcs = ["qwen_omni_llm_stage.cc"],
+    hdrs = ["qwen_omni_llm_stage.h"],
+    deps = [
+        ":qwen_omni_model_config",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "//omni/any2any:any2any_llm_stage",
+        "//omni/any2any:io_types",
+        "//omni/base:litert_lm_runner",
+        "//omni/base:stage",
+        "//support/tokenizer",
     ],
 )
 
@@ -178,6 +199,7 @@ cc_test(
         "//omni:omni_session",
         "//omni/any2any:any2any_input_fan_out_stage",
         "//omni/any2any:any2any_test_utils",
+        "//omni/any2any:io_types",
         "//omni/base:io_types",
         "//omni/base:litert_runner",
         "//omni/base:mock_litert_runner",
@@ -255,5 +277,32 @@ cc_test(
         "//support/util:convert_tensor_buffer",
         "//support/util:test_utils",
         "@litert//tflite/schema:schema_fbs",
+    ],
+)
+
+cc_test(
+    name = "qwen_omni_llm_stage_test",
+    srcs = ["qwen_omni_llm_stage_test.cc"],
+    deps = [
+        ":qwen_omni_llm_stage",
+        ":qwen_omni_model_config",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/any2any:io_types",
+        "//omni/base:mock_litert_lm_runner",
+        "//omni/base:stage",
+        "//runtime/executor:llm_executor_io_types",
+        "//support/tokenizer",
+        "//support/util:convert_tensor_buffer",
+        "//support/util:test_utils",
+        "@litert//tflite/types:half",
     ],
 )

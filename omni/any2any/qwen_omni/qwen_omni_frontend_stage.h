@@ -22,6 +22,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "omni/any2any/io_types.h"
 #include "omni/any2any/qwen_omni/qwen_omni_io_types.h"
 #include "omni/any2any/qwen_omni/qwen_omni_model_config.h"
 #include "omni/any2any/qwen_omni/qwen_omni_text_stage.h"
@@ -42,15 +43,15 @@ namespace litert::omni::any2any {
 //   segments with `<|vision_bos|>...<|vision_eos|>`, matching
 //   `chat_template.json` (no trailing newline after markers).
 // - Aggregates all segments belonging to the same user turn into a single
-//   turn-level prompt buffer and emits `QwenOmniFrontendOutput` when a turn is
+//   turn-level prompt buffer and emits `Any2AnyFrontendOutput` when a turn is
 //   closed (`EndOfInputTurn`, `EndOfInput`, or `Flush()`).
 class QwenOmniFrontendStage
-    : public SingleThreadedStageWithDeque<QwenOmniFrontendOutput> {
+    : public SingleThreadedStageWithDeque<Any2AnyFrontendOutput> {
  public:
   // Constructs a `QwenOmniFrontendStage` that reorders sequenced embedding
   // segments from `text_stage`, optional `audio_stage`, and optional
   // `image_stage` via `FanInStage`, frames ChatML turns and audio/vision
-  // boundary tokens, and emits a turn-level `QwenOmniFrontendOutput` when a
+  // boundary tokens, and emits a turn-level `Any2AnyFrontendOutput` when a
   // user turn completes.
   //
   // Args:

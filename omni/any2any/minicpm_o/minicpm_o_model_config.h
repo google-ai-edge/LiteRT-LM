@@ -48,7 +48,7 @@ inline constexpr int kEosTokenId = 151643;
 inline constexpr int kAudioStartTokenId = 151665;
 inline constexpr int kAudioEndTokenId = 151666;
 // Sentinel token ID placed in `MiniCpmOEmbeddingSegment::token_ids` and
-// `MiniCpmOFrontendOutput::token_ids` for continuous audio encoder embeddings;
+// `Any2AnyFrontendOutput::token_ids` for continuous audio encoder embeddings;
 // never passed to the token embedder.
 inline constexpr int kAudioEmbedPlaceholderTokenId = -2;
 inline constexpr int kThinkStartTokenId = 151667;
@@ -62,7 +62,7 @@ inline constexpr int kSliceEndTokenId = 151672;
 inline constexpr int kImageIdStartTokenId = 151673;
 inline constexpr int kImageIdEndTokenId = 151674;
 // Sentinel token ID placed in `MiniCpmOEmbeddingSegment::token_ids` and
-// `MiniCpmOFrontendOutput::token_ids` for continuous vision encoder embeddings;
+// `Any2AnyFrontendOutput::token_ids` for continuous vision encoder embeddings;
 // never passed to the token embedder.
 inline constexpr int kImageEmbedPlaceholderTokenId = -1;
 // Sentinel token ID placed in `MiniCpmOEmbeddingSegment::token_ids` between
