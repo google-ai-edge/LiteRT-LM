@@ -20,7 +20,6 @@
 #include <memory>
 #include <optional>
 #include <ostream>
-#include <random>
 #include <utility>
 #include <vector>
 
@@ -79,9 +78,6 @@ class AudioContext {
 struct RuntimeState {
   // The current time step.
   int current_step = 0;
-
-  // Random generator for sampling step.
-  std::shared_ptr<std::default_random_engine> rand_gen;
 
   // Whether decode has been run ever after prefill.
   // This is only used by the compiled model executor to determine whether
