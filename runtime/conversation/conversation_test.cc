@@ -202,6 +202,13 @@ class MockSession : public SessionInterface {
   MOCK_METHOD(const SessionConfig&, GetSessionConfig, (), (const, override));
 };
 
+// `~Conversation()` cancels and waits for the session. Call this after a test
+// has checked the `CancelProcess()` and `WaitUntilDone()` calls it expects.
+void AllowSessionDrainOnDestruction(MockSession& session) {
+  EXPECT_CALL(session, CancelProcess()).Times(testing::AnyNumber());
+  EXPECT_CALL(session, WaitUntilDone()).Times(testing::AnyNumber());
+}
+
 class MockEngine : public Engine {
  public:
   MOCK_METHOD(const EngineSettings&, GetEngineSettings, (), (const, override));
@@ -1094,6 +1101,7 @@ TEST_P(ConversationTest, SendSingleMessage) {
   EXPECT_EQ(response, assistant_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, assistant_message));
+  AllowSessionDrainOnDestruction(*mock_session_ptr);
 }
 
 TEST_P(ConversationTest, SendMessageWithPrefaceAndImage) {
@@ -1168,6 +1176,7 @@ TEST_P(ConversationTest, SendMessageWithPrefaceAndImage) {
 
   ASSERT_OK_AND_ASSIGN(const Message response,
                        conversation->SendMessage(user_message));
+  AllowSessionDrainOnDestruction(*mock_session_ptr);
 }
 
 TEST_P(ConversationTest, SendSingleMessageWithExtraContext) {
@@ -1880,6 +1889,7 @@ TEST_P(ConversationTest, SendMessageWithParserErrorSoftError) {
   ASSERT_OK(response);
   EXPECT_TRUE(response->contains("content"));
   EXPECT_TRUE((*response)["content"][0].contains("error"));
+  AllowSessionDrainOnDestruction(*mock_session_ptr);
 }
 
 TEST_P(ConversationTest, WaitUntilDoneForwardsToSession) {
@@ -1891,6 +1901,7 @@ TEST_P(ConversationTest, WaitUntilDoneForwardsToSession) {
   EXPECT_CALL(session, WaitUntilDone()).WillOnce(Return(absl::OkStatus()));
 
   EXPECT_OK(mock_conv.conversation->WaitUntilDone());
+  AllowSessionDrainOnDestruction(session);
 }
 
 TEST_P(ConversationTest, WaitUntilDonePropagatesSessionError) {
@@ -1905,6 +1916,7 @@ TEST_P(ConversationTest, WaitUntilDonePropagatesSessionError) {
   EXPECT_THAT(
       mock_conv.conversation->WaitUntilDone(),
       StatusIs(absl::StatusCode::kInternal, HasSubstr("session failed")));
+  AllowSessionDrainOnDestruction(session);
 }
 
 TEST_P(ConversationTest, SendMessageArrayFails) {
@@ -2571,6 +2583,7 @@ TEST_P(ConversationTest,
 
   Message user_message = {{"role", "user"}, {"content", "How are you?"}};
   ASSERT_OK(conversation->SendMessage(user_message));
+  AllowSessionDrainOnDestruction(*mock_session_ptr);
 }
 
 TEST_P(ConversationTest,
@@ -3445,6 +3458,7 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
   ASSERT_OK_AND_ASSIGN(int token_count, conversation->GetTokenCount());
   EXPECT_EQ(token_count, 42);
   EXPECT_OK(conversation->GetBenchmarkInfo());
+  AllowSessionDrainOnDestruction(*mock_session_ptr);
 }
 
 // Verifies that if scheduling the post-decode KV-cache refill task fails
@@ -3934,6 +3948,7 @@ TEST_P(ConversationTest, CancelProcessDuringSendMessageAsync) {
 
   done.WaitForNotification();
   EXPECT_THAT(status, testing::status::StatusIs(absl::StatusCode::kCancelled));
+  AllowSessionDrainOnDestruction(*mock_session_ptr);
 }
 
 TEST_P(ConversationTest, CancelGroupWithRunTextScoringAsync) {
@@ -5449,6 +5464,7 @@ TEST(AppendMessageTest, CancelProcessDuringSendMessageAsyncWithPendingMessage) {
   done.WaitForNotification();
   EXPECT_THAT(status, testing::status::StatusIs(absl::StatusCode::kCancelled));
   EXPECT_TRUE(conversation->GetHistory().empty());
+  AllowSessionDrainOnDestruction(*mock_session_ptr);
 }
 
 TEST(AppendMessageTest, CancelGroupWithSendMessageAsyncWithPendingMessage) {
@@ -5615,6 +5631,7 @@ TEST(AppendMessageTest, CancelProcessDuringSendMessageAsync) {
   done.WaitForNotification();
   EXPECT_THAT(status, testing::status::StatusIs(absl::StatusCode::kCancelled));
   EXPECT_TRUE(conversation->GetHistory().empty());
+  AllowSessionDrainOnDestruction(*mock_session_ptr);
 }
 
 TEST(AppendMessageTest, Gemma4Sync) {
@@ -6463,6 +6480,323 @@ TEST(ConversationAsyncLifecycleTest,
         }
       }));
   EXPECT_TRUE(conv2_done.WaitForNotificationWithTimeout(absl::Seconds(5)));
+}
+
+TEST_P(ConversationTest,
+       SendMessageTimeoutCancelsSessionAndDestructorDrainsLateDecodeCallback) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
+          .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+          .SetFilterChannelContentFromKvCache(true)
+          .SetChannels({litert::lm::Channel{
+              .channel_name = "thought",
+              .start = "<|channel>thought\n",
+              .end = "<channel|>",
+          }})
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  // Complete Turn 1 normally so history is non-empty before Turn 2 times out.
+  Message user_message_1 = {{"role", "user"}, {"content", "Hello"}};
+  {
+    testing::InSequence seq;
+    EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+        .WillOnce([](const std::vector<InputData>& contents,
+                     absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                         user_callback) {
+          user_callback(Responses(TaskState::kDone));
+          return nullptr;
+        });
+    EXPECT_CALL(*mock_session_ptr, SaveContext("channel_content_checkpoint"))
+        .WillOnce(Return(absl::OkStatus()));
+    EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+        .WillOnce([](absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                         user_callback,
+                     const DecodeConfig& decode_config) {
+          user_callback(Responses(TaskState::kProcessing, {"Hi there."}));
+          user_callback(Responses(TaskState::kDone));
+          return nullptr;
+        });
+    EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+        .WillOnce(Return(absl::OkStatus()));
+  }
+  ASSERT_OK_AND_ASSIGN(const Message assistant_message_1,
+                       conversation->SendMessage(user_message_1));
+  ASSERT_THAT(conversation->GetHistory(),
+              ElementsAre(user_message_1, assistant_message_1));
+
+  // Turn 2: WaitUntilDone() times out while RunDecodeAsync is still running on
+  // the worker thread, and RunDecodeAsync's completion callback fires later
+  // while ~Conversation() is draining the session.
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> stored_decode_callback;
+  Message user_message_2 = {{"role", "user"}, {"content", "What is 17 * 3?"}};
+
+  EXPECT_CALL(*mock_session_ptr, RestoreContext(testing::_)).Times(0);
+  EXPECT_CALL(*mock_session_ptr, RewindToCheckpoint(testing::_)).Times(0);
+
+  {
+    testing::InSequence seq;
+    EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+        .WillOnce([](const std::vector<InputData>& contents,
+                     absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                         user_callback) {
+          user_callback(Responses(TaskState::kDone));
+          return nullptr;
+        });
+    EXPECT_CALL(*mock_session_ptr, SaveContext("channel_content_checkpoint"))
+        .WillOnce(Return(absl::OkStatus()));
+    EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+        .WillOnce([&](absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                          user_callback,
+                      const DecodeConfig& decode_config) {
+          stored_decode_callback = std::move(user_callback);
+          return nullptr;
+        });
+    // 1. SendMessage's initial WaitUntilDone() hits Engine::kDefaultTimeout.
+    EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+        .WillOnce(Return(absl::DeadlineExceededError("Session timed out")));
+    // 2. SendMessage cancels the timed-out turn and attempts to drain it.
+    EXPECT_CALL(*mock_session_ptr, CancelProcess());
+    EXPECT_CALL(*mock_session_ptr, WaitUntilDone())
+        .WillOnce(Return(absl::DeadlineExceededError("Still draining")));
+    // 3. ~Conversation() cancels and drains while `session_` is still alive;
+    //    the cancelled decode task calls back during this drain.
+    EXPECT_CALL(*mock_session_ptr, CancelProcess());
+    EXPECT_CALL(*mock_session_ptr, WaitUntilDone()).WillOnce([&]() {
+      if (stored_decode_callback) {
+        stored_decode_callback(Responses(TaskState::kCancelled));
+      }
+      return absl::OkStatus();
+    });
+  }
+
+  EXPECT_THAT(conversation->SendMessage(user_message_2),
+              StatusIs(absl::StatusCode::kDeadlineExceeded));
+  // Turn 2 was rolled back while Turn 1 remains intact.
+  EXPECT_THAT(conversation->GetHistory(),
+              ElementsAre(user_message_1, assistant_message_1));
+
+  // Destroying `conversation` after `SendMessage` returned must not write to
+  // `SendMessage`'s destroyed stack frame or dereference a null `session_`.
+  conversation.reset();
+}
+
+TEST_P(ConversationTest,
+       DestroyConversationDrainsInFlightChannelFilteringAndRefill) {
+  // Subcase 1: Destroying Conversation while prefill is in flight cancels the
+  // prefill, and the turn ends with an error instead of scheduling decode.
+  {
+    auto mock_session = CreateMockSession();
+    MockSession* mock_session_ptr = mock_session.get();
+    auto mock_engine = CreateMockEngine(std::move(mock_session));
+
+    ASSERT_OK_AND_ASSIGN(
+        auto config,
+        ConversationConfig::Builder()
+            .SetSessionConfig(session_config_)
+            .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+            .SetOverwritePromptTemplate(
+                PromptTemplate(kTestJinjaPromptTemplate))
+            .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+            .SetFilterChannelContentFromKvCache(true)
+            .SetChannels({litert::lm::Channel{
+                .channel_name = "thought",
+                .start = "<|channel>thought\n",
+                .end = "<channel|>",
+            }})
+            .Build(*mock_engine));
+    ASSERT_OK_AND_ASSIGN(auto conversation,
+                         Conversation::Create(*mock_engine, config));
+
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> stored_prefill_cb;
+    EXPECT_CALL(*mock_session_ptr, SaveContext(testing::_)).Times(0);
+    EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+        .Times(0);
+    EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+        .WillOnce([&](const std::vector<InputData>& contents,
+                      absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                          user_callback) {
+          stored_prefill_cb = std::move(user_callback);
+          return nullptr;
+        });
+    EXPECT_CALL(*mock_session_ptr, CancelProcess());
+    EXPECT_CALL(*mock_session_ptr, WaitUntilDone()).WillOnce([&]() {
+      if (stored_prefill_cb) {
+        stored_prefill_cb(Responses(TaskState::kCancelled));
+      }
+      return absl::OkStatus();
+    });
+
+    absl::Status callback_status = absl::OkStatus();
+    ASSERT_OK(conversation->SendMessageAsync(
+        Message{{"role", "user"}, {"content", "Hello"}},
+        [&](absl::StatusOr<Message> msg) {
+          if (!msg.ok()) {
+            callback_status = msg.status();
+          }
+        }));
+    conversation.reset();
+    EXPECT_THAT(callback_status, StatusIs(absl::StatusCode::kCancelled));
+  }
+
+  // Subcase 2: Destroying Conversation right after SendMessageAsync completes
+  // while the background channel-stripping refill prefill is still running
+  // cancels and drains the refill task cleanly.
+  {
+    auto mock_session = CreateMockSession();
+    MockSession* mock_session_ptr = mock_session.get();
+    auto mock_engine = CreateMockEngine(std::move(mock_session));
+
+    ASSERT_OK_AND_ASSIGN(
+        auto config,
+        ConversationConfig::Builder()
+            .SetSessionConfig(session_config_)
+            .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+            .SetOverwritePromptTemplate(
+                PromptTemplate(kTestJinjaPromptTemplate))
+            .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+            .SetFilterChannelContentFromKvCache(true)
+            .SetChannels({litert::lm::Channel{
+                .channel_name = "thought",
+                .start = "<|channel>thought\n",
+                .end = "<channel|>",
+            }})
+            .Build(*mock_engine));
+    ASSERT_OK_AND_ASSIGN(auto conversation,
+                         Conversation::Create(*mock_engine, config));
+
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> stored_refill_cb;
+    {
+      testing::InSequence seq;
+      EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+          .WillOnce([](const std::vector<InputData>& contents,
+                       absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                           user_callback) {
+            user_callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+      EXPECT_CALL(*mock_session_ptr, SaveContext("channel_content_checkpoint"))
+          .WillOnce(Return(absl::OkStatus()));
+      EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+          .WillOnce([](absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                           user_callback,
+                       const DecodeConfig& decode_config) {
+            user_callback(Responses(TaskState::kProcessing,
+                                    {"<|channel>thought\nhmm<channel|>Done."}));
+            user_callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+      EXPECT_CALL(*mock_session_ptr,
+                  RestoreContext("channel_content_checkpoint"))
+          .WillOnce(Return(absl::OkStatus()));
+      EXPECT_CALL(*mock_session_ptr, RunPrefillAsync(testing::_, testing::_))
+          .WillOnce([&](const std::vector<InputData>& contents,
+                        absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                            user_callback) {
+            stored_refill_cb = std::move(user_callback);
+            return nullptr;
+          });
+      EXPECT_CALL(*mock_session_ptr, CancelProcess());
+      EXPECT_CALL(*mock_session_ptr, WaitUntilDone()).WillOnce([&]() {
+        if (stored_refill_cb) {
+          stored_refill_cb(absl::CancelledError("Cancelled refill"));
+        }
+        return absl::OkStatus();
+      });
+    }
+
+    bool received_completion = false;
+    ASSERT_OK(conversation->SendMessageAsync(
+        Message{{"role", "user"}, {"content", "Hello"}},
+        [&](absl::StatusOr<Message> msg) {
+          ASSERT_OK(msg);
+          if (IsEndOfTurnMessage(*msg)) {
+            received_completion = true;
+          }
+        }));
+    EXPECT_TRUE(received_completion);
+    conversation.reset();
+  }
+}
+
+TEST(ConversationDestructionTest, DestroyWithTasksInFlightOnCpuEngine) {
+  // The prompt opens the "thought" channel, so the whole response is channel
+  // content, which is stripped from the KV cache by a refill prefill task
+  // scheduled when decoding finishes.
+  constexpr absl::string_view kPromptTemplateWithOpenChannel = R"jinja(
+{%- for message in messages -%}
+  {{- '<start_of_turn>' + message.role + '\n' -}}
+  {%- if message.content is string -%}
+    {{- message.content -}}
+  {%- else -%}
+    {%- for item in message.content -%}
+      {{- item.text -}}
+    {%- endfor -%}
+  {%- endif -%}
+  {{- '<end_of_turn>\n' -}}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+  {{- '<start_of_turn>assistant\n<|channel>thought\n' -}}
+{%- endif -%}
+)jinja";
+
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(32);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+  ASSERT_OK_AND_ASSIGN(auto config,
+                       ConversationConfig::Builder()
+                           .SetOverwritePromptTemplate(
+                               PromptTemplate(kPromptTemplateWithOpenChannel))
+                           .SetFilterChannelContentFromKvCache(true)
+                           .SetChannels({litert::lm::Channel{
+                               .channel_name = "thought",
+                               .start = "<|channel>thought\n",
+                               .end = "<channel|>",
+                           }})
+                           .Build(*engine));
+
+  Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
+  for (int i = 0; i < 5; ++i) {
+    // Destroy while prefill is in flight, and while decode (or the refill
+    // scheduled when it finishes) is in flight. Late callbacks must not
+    // dereference the Conversation's members, including `session_`.
+    for (bool wait_for_first_chunk : {false, true}) {
+      ASSERT_OK_AND_ASSIGN(auto conversation,
+                           Conversation::Create(*engine, config));
+      absl::Notification first_chunk;
+      int num_terminal_messages = 0;
+      ASSERT_OK(conversation->SendMessageAsync(
+          user_message,
+          [&](absl::StatusOr<Message> message) {
+            if (!message.ok() || IsEndOfTurnMessage(*message)) {
+              ++num_terminal_messages;
+            } else if (!first_chunk.HasBeenNotified()) {
+              first_chunk.Notify();
+            }
+          },
+          {.max_output_tokens = 24}));
+      if (wait_for_first_chunk) {
+        EXPECT_TRUE(
+            first_chunk.WaitForNotificationWithTimeout(absl::Seconds(5)));
+      }
+      conversation.reset();
+      EXPECT_LE(num_terminal_messages, 1);
+    }
+  }
 }
 
 }  // namespace
