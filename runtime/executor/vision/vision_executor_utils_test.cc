@@ -461,5 +461,23 @@ TEST(VisionExecutorUtilsTest,
   EXPECT_EQ(properties_or.status().code(), absl::StatusCode::kInvalidArgument);
 }
 
+TEST(ValidateTemporalFrameInputTest, SingleFrameSignatureNeedsNoSecondFrame) {
+  const std::vector<absl::string_view> signature = {"images", "positions_xy"};
+  EXPECT_TRUE(ValidateTemporalFrameInput(signature, {"images"}).ok());
+  EXPECT_TRUE(
+      ValidateTemporalFrameInput(signature, {"images", "positions_xy"}).ok());
+}
+
+TEST(ValidateTemporalFrameInputTest, TwoFrameSignatureRequiresSecondFrame) {
+  const std::vector<absl::string_view> signature = {"images", "images_t1",
+                                                    "positions_xy"};
+  EXPECT_TRUE(ValidateTemporalFrameInput(
+                  signature, {"images", "images_t1", "positions_xy"})
+                  .ok());
+  EXPECT_EQ(
+      ValidateTemporalFrameInput(signature, {"images", "positions_xy"}).code(),
+      absl::StatusCode::kInvalidArgument);
+}
+
 }  // namespace
 }  // namespace litert::lm

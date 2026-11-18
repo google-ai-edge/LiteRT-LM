@@ -722,6 +722,19 @@ VisionLiteRtCompiledModelExecutor::EncodeInputMaps(
                  << " name: " << adapter_signature.Key();
   }
 
+  // An encoder with a second temporal frame input must get it: unfilled input
+  // buffers would silently hold zeros or a previous frame.
+  LITERT_ASSIGN_OR_RETURN(std::vector<absl::string_view> signature_input_names,
+                          vision_encoder_->GetModel().GetSignatureInputNames(
+                              encoder_signature_index));
+  std::vector<absl::string_view> provided_input_names;
+  provided_input_names.reserve(input_maps.size());
+  for (const auto& [name, buffer] : input_maps) {
+    provided_input_names.push_back(name);
+  }
+  ABSL_RETURN_IF_ERROR(
+      ValidateTemporalFrameInput(signature_input_names, provided_input_names));
+
   for (const auto& [key, value] : input_maps) {
     LITERT_ASSIGN_OR_RETURN(auto tensor_type, value.TensorType());
     size_t input_index = 0;

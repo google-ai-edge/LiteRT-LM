@@ -15,11 +15,34 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_VISION_EXECUTOR_UTILS_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_VISION_EXECUTOR_UTILS_H_
 
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/components/model_resources.h"
 #include "runtime/engine/io_types.h"
 
 namespace litert::lm {
+
+// The optional second temporal frame input of vision encoders whose patch
+// embedding fuses two consecutive frames (`temporal_patch_size = 2`). Still
+// images fill it with the same patches as `images`.
+constexpr absl::string_view kVisionTemporalFrameInput = "images_t1";
+
+// Checks that a vision encoder call provides the second temporal frame input
+// when the selected encoder signature takes one. Unfilled input buffers would
+// otherwise silently hold zeros or a previous frame.
+//
+// Args:
+//   - signature_input_names: The input names of the selected encoder
+//     signature.
+//   - provided_input_names: The names of the input tensors of the call.
+// Returns:
+//   OK, or an InvalidArgumentError if the signature takes
+//   `kVisionTemporalFrameInput` but it is not provided.
+absl::Status ValidateTemporalFrameInput(
+    absl::Span<const absl::string_view> signature_input_names,
+    absl::Span<const absl::string_view> provided_input_names);
 
 // Utility function to get the properties of the vision executor from LiteRT
 // Model. This function fetches the properties from the vision model by

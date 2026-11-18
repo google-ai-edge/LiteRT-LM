@@ -322,4 +322,16 @@ GetVisionExecutorPropertiesFromModelResources(ModelResources& model_resources) {
   return properties;
 }
 
+absl::Status ValidateTemporalFrameInput(
+    absl::Span<const absl::string_view> signature_input_names,
+    absl::Span<const absl::string_view> provided_input_names) {
+  if (absl::c_linear_search(signature_input_names, kVisionTemporalFrameInput) &&
+      !absl::c_linear_search(provided_input_names, kVisionTemporalFrameInput)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "The vision encoder signature requires a `", kVisionTemporalFrameInput,
+        "` input (second temporal frame), which was not provided."));
+  }
+  return absl::OkStatus();
+}
+
 }  // namespace litert::lm
