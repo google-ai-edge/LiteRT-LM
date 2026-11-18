@@ -19,6 +19,7 @@
 #include <optional>
 #include <vector>
 
+#include "absl/base/attributes.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "c/engine.h"
@@ -68,9 +69,9 @@ void SetExecutorCacheDirs(
     absl::string_view cache_dir);
 
 // Invokes a C streaming callback with a single `LiteRtLmStreamChunk`.
-inline void EmitStreamChunk(LiteRtLmStreamCallback callback,
-                            void* callback_data, const char* text,
-                            bool is_final, const char* error_msg) {
+ABSL_ATTRIBUTE_NO_SANITIZE_CFI inline void EmitStreamChunk(
+    LiteRtLmStreamCallback callback, void* callback_data, const char* text,
+    bool is_final, const char* error_msg) {
   LiteRtLmStreamChunk chunk{text, is_final, error_msg};
   callback(callback_data, &chunk);
 }

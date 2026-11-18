@@ -283,6 +283,7 @@ cc_library(
         ":engine_headers",
         ":engine_internal",
         ":error_reporter_internal",
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
