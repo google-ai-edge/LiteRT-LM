@@ -29,11 +29,13 @@ class EngineTests: XCTestCase {
     super.setUp()
     ExperimentalFlags.optIntoExperimentalAPIs()
     ExperimentalFlags.gpuEnableMetalResidencySet = nil
+    ExperimentalFlags.gpuUseIrModel = nil
     ExperimentalFlags.enableYnnpack = nil
   }
 
   override func tearDown() {
     ExperimentalFlags.gpuEnableMetalResidencySet = nil
+    ExperimentalFlags.gpuUseIrModel = nil
     ExperimentalFlags.enableYnnpack = nil
     super.tearDown()
   }
@@ -155,6 +157,36 @@ class EngineTests: XCTestCase {
 
   func testInitialize_WithEnableYnnpackFalse_Succeeds() async throws {
     ExperimentalFlags.enableYnnpack = false
+
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_lm_new_metadata.task"
+    let modelPath = testDataPath(forResource: modelResource)
+    let engineConfig = try EngineConfig(
+      modelPath: modelPath, maxNumTokens: 16, cacheDir: NSTemporaryDirectory())
+    let engine = Engine(engineConfig: engineConfig)
+    try await engine.initialize()
+    let isInitialized = await engine.isInitialized()
+    XCTAssertTrue(isInitialized)
+  }
+
+  func testInitialize_WithGpuUseIrModel_Succeeds() async throws {
+    ExperimentalFlags.gpuUseIrModel = true
+
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/test_lm_new_metadata.task"
+    let modelPath = testDataPath(forResource: modelResource)
+    let engineConfig = try EngineConfig(
+      modelPath: modelPath, maxNumTokens: 16, cacheDir: NSTemporaryDirectory())
+    let engine = Engine(engineConfig: engineConfig)
+    try await engine.initialize()
+    let isInitialized = await engine.isInitialized()
+    XCTAssertTrue(isInitialized)
+  }
+
+  func testInitialize_WithGpuUseIrModelFalse_Succeeds() async throws {
+    ExperimentalFlags.gpuUseIrModel = false
 
     // swift-format-ignore
     let modelResource =

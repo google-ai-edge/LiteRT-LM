@@ -208,6 +208,26 @@ public struct ExperimentalFlags {
     }
   }
 
+  private static var _gpuUseIrModel: Bool? = nil
+
+  /// Whether the GPU backend uses the IrModel initialization path.
+  ///
+  /// If nil, use the engine's default. If true, force enable IrModel. If false, force disable
+  /// IrModel.
+  ///
+  /// Note: This flag is read only when a new [Engine] is initialized or [benchmark] is called.
+  /// Changing this value will not affect any existing [Engine] or [Conversation] instances.
+  public static var gpuUseIrModel: Bool? {
+    get { return _gpuUseIrModel }
+    set {
+      guard optedIn else {
+        logger.error("LiteRTLM: Must opt into experimental APIs before setting this flag.")
+        return
+      }
+      _gpuUseIrModel = newValue
+    }
+  }
+
   private static var _enableYnnpack: Bool? = nil
 
   /// Whether YNNPACK should delegate supported CPU operations before XNNPACK.

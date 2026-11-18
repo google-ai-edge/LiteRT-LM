@@ -26,6 +26,8 @@
 #include "c/experimental_internal.h"  // IWYU pragma: keep
 #include "runtime/conversation/conversation.h"
 #include "runtime/engine/engine.h"
+#include "runtime/engine/engine_settings.h"
+#include "runtime/executor/executor_settings_base.h"  // IWYU pragma: keep
 
 namespace {
 
@@ -55,6 +57,24 @@ LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_enable_debugger(
     return kLiteRtLmStatusInvalidArgument;
   }
   settings->settings->SetEnableDebugger(enable_debugger);
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_gpu_use_ir_model(
+    LiteRtLmEngineSettings* settings, bool use_ir_model) {
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  settings->settings->GetMutableMainExecutorSettings().SetUseIrModel(
+      use_ir_model);
+  if (settings->settings->GetMutableVisionExecutorSettings().has_value()) {
+    settings->settings->GetMutableVisionExecutorSettings()->SetUseIrModel(
+        use_ir_model);
+  }
+  if (settings->settings->GetMutableAudioExecutorSettings().has_value()) {
+    settings->settings->GetMutableAudioExecutorSettings()->SetUseIrModel(
+        use_ir_model);
+  }
   return kLiteRtLmStatusOk;
 }
 

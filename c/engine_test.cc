@@ -3652,6 +3652,11 @@ AllEngineSettingsSetters() {
          return litert_lm_engine_settings_set_gpu_enable_metal_residency_set(
              s, true);
        }},
+      {"set_gpu_use_ir_model",
+       [](E* s) {
+         return litert_lm_experimental_engine_settings_set_gpu_use_ir_model(
+             s, true);
+       }},
       {"set_selected_signatures",
        [](E* s) {
          const char* const signatures[] = {"prefill_1024", "decode"};
@@ -5341,6 +5346,43 @@ TEST(EngineCStatusTest, OutOfRangeEnumsAcrossCAbiReturnInvalidArgument) {
     EXPECT_THAT(litert_lm_get_last_error_message(),
                 HasSubstr("Unknown LiteRtLmConstraintProviderType"));
   }
+}
+
+TEST(EngineCTest, SetGpuUseIrModel) {
+  const std::string task_path = GetTestdataPath(
+      "litert_lm/runtime/testdata/test_lm_new_metadata.task");
+  std::unique_ptr<LiteRtLmEngineSettings,
+                  decltype(&litert_lm_engine_settings_delete)>
+      settings(CreateEngineSettings(task_path.c_str(), "cpu", "gpu", "gpu"),
+               &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  EXPECT_EQ(settings->settings->GetMainExecutorSettings().UseIrModel(),
+            std::nullopt);
+  EXPECT_EQ(settings->settings->GetVisionExecutorSettings()->UseIrModel(),
+            std::nullopt);
+  EXPECT_EQ(settings->settings->GetAudioExecutorSettings()->UseIrModel(),
+            std::nullopt);
+
+  EXPECT_EQ(litert_lm_experimental_engine_settings_set_gpu_use_ir_model(
+                settings.get(), true),
+            kLiteRtLmStatusOk);
+  EXPECT_THAT(settings->settings->GetMainExecutorSettings().UseIrModel(),
+              testing::Optional(true));
+  EXPECT_THAT(settings->settings->GetVisionExecutorSettings()->UseIrModel(),
+              testing::Optional(true));
+  EXPECT_THAT(settings->settings->GetAudioExecutorSettings()->UseIrModel(),
+              testing::Optional(true));
+
+  EXPECT_EQ(litert_lm_experimental_engine_settings_set_gpu_use_ir_model(
+                settings.get(), false),
+            kLiteRtLmStatusOk);
+  EXPECT_THAT(settings->settings->GetMainExecutorSettings().UseIrModel(),
+              testing::Optional(false));
+  EXPECT_THAT(settings->settings->GetVisionExecutorSettings()->UseIrModel(),
+              testing::Optional(false));
+  EXPECT_THAT(settings->settings->GetAudioExecutorSettings()->UseIrModel(),
+              testing::Optional(false));
 }
 
 }  // namespace

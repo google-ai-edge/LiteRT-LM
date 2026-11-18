@@ -183,6 +183,11 @@ public actor Engine {
           settings, gpuEnableMetalResidencySet),
         "litert_lm_engine_settings_set_gpu_enable_metal_residency_set", settingsError)
     }
+    if let gpuUseIrModel = ExperimentalFlags.gpuUseIrModel {
+      try LiteRTLMError.check(
+        litert_lm_experimental_engine_settings_set_gpu_use_ir_model(settings, gpuUseIrModel),
+        "litert_lm_experimental_engine_settings_set_gpu_use_ir_model", settingsError)
+    }
     if let enableYnnpack = ExperimentalFlags.enableYnnpack {
       try LiteRTLMError.check(
         litert_lm_engine_settings_set_enable_ynnpack(settings, enableYnnpack),

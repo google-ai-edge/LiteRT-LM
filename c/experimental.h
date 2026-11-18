@@ -96,6 +96,21 @@ LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_enable_debugger(
     LiteRtLmEngineSettings* settings, bool enable_debugger);
 
+// Sets whether the GPU backend uses the IrModel initialization path.
+//
+// When unset, the engine uses its default. On non-GPU backends, this setting
+// has no effect and is safely ignored.
+//
+// @param settings The engine settings.
+// @param use_ir_model Whether to use the IrModel path on the GPU backend.
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL.
+//
+// Added in version 1.1.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_gpu_use_ir_model(
+    LiteRtLmEngineSettings* settings, bool use_ir_model);
+
 // Opaque pointer for session debug info.
 // Use `litert_lm_experimental_session_debug_info_delete` to free memory.
 //
