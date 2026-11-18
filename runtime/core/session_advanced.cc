@@ -118,12 +118,13 @@ absl::StatusOr<std::unique_ptr<SessionAdvanced>> SessionAdvanced::Create(
 absl::Status SessionAdvanced::RunPrefill(
     const std::vector<InputData>& contents) {
   absl::Status status = absl::OkStatus();
-  ABSL_ASSIGN_OR_RETURN(
-      auto task_controller,
+  ABSL_RETURN_IF_ERROR(
       RunPrefillAsync(contents, [&status](absl::StatusOr<Responses> responses) {
         status = responses.status();
-      }));
-  ABSL_RETURN_IF_ERROR(task_controller->WaitUntilDone(Engine::kDefaultTimeout));
+      }).status());
+  // Waits on the session, whose timeout restarts on progress, rather than on
+  // the task, whose timeout is a total deadline.
+  ABSL_RETURN_IF_ERROR(WaitUntilDone());
   return status;
 }
 
@@ -277,10 +278,9 @@ absl::StatusOr<Responses> SessionAdvanced::RunDecode(
     }
   };
 
-  ABSL_ASSIGN_OR_RETURN(
-      auto task_controller,
-      RunDecodeAsync(std::move(decode_sync_callback), decode_config));
-  ABSL_RETURN_IF_ERROR(task_controller->WaitUntilDone(Engine::kDefaultTimeout));
+  ABSL_RETURN_IF_ERROR(
+      RunDecodeAsync(std::move(decode_sync_callback), decode_config).status());
+  ABSL_RETURN_IF_ERROR(WaitUntilDone());
   return collected_responses;
 }
 
@@ -366,11 +366,11 @@ absl::StatusOr<Responses> SessionAdvanced::RunTextScoring(
         collected_responses = std::move(responses);
       };
 
-  ABSL_ASSIGN_OR_RETURN(
-      auto task_controller,
-      RunTextScoringAsync(target_text, std::move(scoring_sync_callback),
-                          store_token_lengths));
-  ABSL_RETURN_IF_ERROR(task_controller->WaitUntilDone(Engine::kDefaultTimeout));
+  ABSL_RETURN_IF_ERROR(RunTextScoringAsync(target_text,
+                                           std::move(scoring_sync_callback),
+                                           store_token_lengths)
+                           .status());
+  ABSL_RETURN_IF_ERROR(WaitUntilDone());
   return collected_responses;
 }
 

@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -689,7 +690,14 @@ absl::Status ThreadedExecutionManager::UpdateTaskState(TaskId task_id,
     }
   }
   task_lookup_.at(task_id).task_state = task_state;
+  if (IsTaskEndState(task_state)) {
+    progress_count_.fetch_add(1, std::memory_order_relaxed);
+  }
   return absl::OkStatus();
+}
+
+void ThreadedExecutionManager::RecordProgress() {
+  progress_count_.fetch_add(1, std::memory_order_relaxed);
 }
 
 absl::StatusOr<std::vector<
@@ -929,7 +937,7 @@ absl::Status ThreadedExecutionManager::WaitUntilDone(TaskId task_id,
 }
 
 absl::Status ThreadedExecutionManager::WaitUntilSessionDone(
-    SessionId session_id, absl::Duration timeout) {
+    SessionId session_id, absl::Duration stall_timeout) {
   const bool is_callback_thread = (active_callback_context.runner == this);
   const bool is_reentrant_session_callback =
       is_callback_thread && active_callback_context.session_ids != nullptr &&
@@ -951,17 +959,33 @@ absl::Status ThreadedExecutionManager::WaitUntilSessionDone(
   if (is_callback_thread) {
     active_callback_waiting_for_execution_ = true;
   }
-  bool completed = session_and_task_lookup_mutex_.AwaitWithTimeout(
-      absl::Condition(&session_done), timeout);
+  // Wait in rounds of `stall_timeout`, and fail only if a whole round made no
+  // progress. Since `progress_count_` is not updated under the mutex, a round
+  // may only notice progress when it times out, so a stall is detected after
+  // between `stall_timeout` and twice that.
+  bool completed = true;
+  while (!session_done()) {
+    const uint64_t seen_progress_count =
+        progress_count_.load(std::memory_order_relaxed);
+    auto done_or_progressed = [this, &session_done, seen_progress_count]() {
+      session_and_task_lookup_mutex_.AssertReaderHeld();
+      return session_done() ||
+             progress_count_.load(std::memory_order_relaxed) !=
+                 seen_progress_count;
+    };
+    if (!session_and_task_lookup_mutex_.AwaitWithTimeout(
+            absl::Condition(&done_or_progressed), stall_timeout)) {
+      completed = false;
+      break;
+    }
+  }
   if (is_callback_thread) {
     active_callback_waiting_for_execution_ = false;
   }
-  return completed
-             ? absl::OkStatus()
-             : absl::DeadlineExceededError(
-                   absl::StrCat("Session ", session_id,
-                                " did not complete within the timeout of ",
-                                absl::FormatDuration(timeout), "."));
+  return completed ? absl::OkStatus()
+                   : absl::DeadlineExceededError(absl::StrCat(
+                         "Session ", session_id, " made no progress for ",
+                         absl::FormatDuration(stall_timeout), "."));
 }
 
 absl::Status ThreadedExecutionManager::WaitUntilAllDone(
@@ -1210,14 +1234,22 @@ absl::Status ThreadedExecutionManager::AddDecodeTask(
     // the two snapshots holds this turn's steps only.
     const std::optional<ExecutorStats> stats_before_decode =
         llm_executor.value()->GetCumulativeExecutorStats();
+    // Records each decode step as progress for WaitUntilSessionDone.
+    absl::AnyInvocable<void(absl::StatusOr<Responses>)> decode_callback;
+    if (callback != nullptr) {
+      decode_callback = [this, &callback](absl::StatusOr<Responses> responses) {
+        RecordProgress();
+        callback(std::move(responses));
+      };
+    }
     auto responses = Tasks::Decode(
         *llm_executor.value(), *tokenizer_, *session_info->stop_token_detector,
         num_output_candidates, session_info->benchmark_info, external_sampler,
         session_info->random_state, std::move(repetition_penalty_config),
         std::move(no_repeat_ngram_config), std::move(suppress_tokens_config),
-        constraint, std::move(decoded_ids_buffer), callback, cancelled.get(),
-        max_output_tokens, thinking_token_budget, thinking_end_token_ids,
-        thinking_start_token_ids,
+        constraint, std::move(decoded_ids_buffer), decode_callback,
+        cancelled.get(), max_output_tokens, thinking_token_budget,
+        thinking_end_token_ids, thinking_start_token_ids,
         session_info->session_config.GetSpeculativeDecodingConfig(),
         draft_token_ids);
     if (!responses.ok() && absl::IsCancelled(responses.status())) {

@@ -92,9 +92,10 @@ class SerialExecutionManager : public ExecutionManager {
   // - Other errors if the task is failed.
   absl::Status WaitUntilDone(TaskId task_id, absl::Duration timeout) override;
 
-  // Waits until all tasks in the session are done or the timeout is reached.
+  // Waits until all tasks in the session are done, or until no task finished
+  // for `stall_timeout`.
   absl::Status WaitUntilSessionDone(SessionId session_id,
-                                    absl::Duration timeout) override;
+                                    absl::Duration stall_timeout) override;
 
   // Waits until all tasks are done or the timeout is reached.
   // Returns:

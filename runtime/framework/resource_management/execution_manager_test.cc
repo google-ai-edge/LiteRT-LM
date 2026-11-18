@@ -75,6 +75,7 @@ namespace {
 
 using ::testing::Each;
 using ::testing::ElementsAre;
+using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::Not;
 using ::testing::Return;
@@ -299,6 +300,28 @@ class RandomStateRecordingFakeLlmExecutor : public FakeLlmExecutor {
   std::vector<RandomState*> verify_draft_random_states_;
 };
 
+// A fake LLM executor that sleeps before every decode step, simulating a slow
+// but steadily progressing decode.
+class SlowDecodeStepFakeLlmExecutor : public ContextSwitchingFakeLlmExecutor {
+ public:
+  SlowDecodeStepFakeLlmExecutor(int vocab_size,
+                                std::vector<std::vector<int>> prefill_tokens,
+                                std::vector<std::vector<int>> decode_tokens,
+                                absl::Duration step_delay)
+      : ContextSwitchingFakeLlmExecutor(vocab_size, std::move(prefill_tokens),
+                                        std::move(decode_tokens)),
+        step_delay_(step_delay) {}
+
+  absl::StatusOr<std::vector<std::vector<int>>> Decode(
+      const ExecutorDecodeParams& decode_params) override {
+    absl::SleepFor(step_delay_);
+    return ContextSwitchingFakeLlmExecutor::Decode(decode_params);
+  }
+
+ private:
+  absl::Duration step_delay_;
+};
+
 // Returns a callback that records the terminal status of a task.
 absl::AnyInvocable<void(absl::StatusOr<Responses>)>
 CaptureTerminalStatusCallback(absl::Status* status) {
@@ -444,6 +467,36 @@ class ExecutionManagerTest
         kVocabSize,
         /*prefill_tokens=*/std::move(prefill_tokens),
         /*decode_tokens=*/std::move(decode_tokens));
+  }
+
+  // Adds a prefill of {1, 2, 3} to `session_id`, followed by a decode if
+  // `with_decode` is true.
+  absl::Status AddPrefillAndDecodeTasks(SessionId session_id,
+                                        bool with_decode = true) {
+    std::vector<InputData> inputs;
+    ABSL_ASSIGN_OR_RETURN(auto input_text,
+                          tokenizer_->TokenIdsToTensorBuffer({1, 2, 3}));
+    inputs.push_back(InputText(std::move(input_text)));
+    ABSL_ASSIGN_OR_RETURN(const TaskId prefill_task_id,
+                          execution_manager_->GetNewTaskId());
+    ABSL_RETURN_IF_ERROR(execution_manager_->AddPrefillTask(
+        session_id, prefill_task_id, std::move(inputs),
+        /*dependency_task_ids=*/{},
+        /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
+        /*callback=*/[](absl::StatusOr<Responses> responses) {}));
+    if (!with_decode) {
+      return absl::OkStatus();
+    }
+    ABSL_ASSIGN_OR_RETURN(const TaskId decode_task_id,
+                          execution_manager_->GetNewTaskId());
+    return execution_manager_->AddDecodeTask(
+        session_id, decode_task_id,
+        /*dependency_task_ids=*/{prefill_task_id},
+        RepetitionPenaltyConfig::Default(), NoRepeatNgramConfig::Default(),
+        SuppressTokensConfig::Default(),
+        /*constraint=*/nullptr,
+        /*cancelled=*/std::make_shared<std::atomic<bool>>(false),
+        /*callback=*/[](absl::StatusOr<Responses> responses) {});
   }
 
   std::unique_ptr<MockTokenizer> tokenizer_;
@@ -1417,6 +1470,80 @@ TEST_P(ExecutionManagerTest, WaitUntilAllDoneTimeout) {
 
   // Wait for the task to actually finish to avoid use after free.
   EXPECT_OK(execution_manager_->WaitUntilDone(task_id, absl::Seconds(3)));
+}
+
+TEST_P(ExecutionManagerTest,
+       WaitUntilSessionDoneDoesNotTimeOutWhileDecodeMakesProgress) {
+  if (GetParam() == ExecutionManagerType::kSerial) {
+    GTEST_SKIP() << "SerialExecutionManager runs the decode task inline.";
+  }
+  // The decode takes about 1s in total, longer than the 500ms stall timeout,
+  // but every 200ms step restarts the stall timeout.
+  CreateExecutionManager(std::make_unique<SlowDecodeStepFakeLlmExecutor>(
+      kVocabSize, /*prefill_tokens=*/std::vector<std::vector<int>>{{1, 2, 3}},
+      /*decode_tokens=*/std::vector<std::vector<int>>{{4}, {5}, {7}, {8}, {6}},
+      /*step_delay=*/absl::Milliseconds(200)));
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK(AddPrefillAndDecodeTasks(session_id));
+
+  EXPECT_OK(execution_manager_->WaitUntilSessionDone(session_id,
+                                                     absl::Milliseconds(500)));
+}
+
+TEST_P(ExecutionManagerTest,
+       WaitUntilSessionDoneDoesNotTimeOutWhileQueuedBehindAnotherSession) {
+  if (GetParam() == ExecutionManagerType::kSerial) {
+    GTEST_SKIP() << "SerialExecutionManager runs the tasks inline.";
+  }
+  // The prefill of `waiting_session_id` is queued behind the decode of
+  // `decoding_session_id`, which takes about 1s but progresses every 200ms.
+  CreateExecutionManager(std::make_unique<SlowDecodeStepFakeLlmExecutor>(
+      kVocabSize,
+      /*prefill_tokens=*/std::vector<std::vector<int>>{{1, 2, 3}, {1, 2, 3}},
+      /*decode_tokens=*/std::vector<std::vector<int>>{{4}, {5}, {7}, {8}, {6}},
+      /*step_delay=*/absl::Milliseconds(200)));
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId decoding_session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK_AND_ASSIGN(const SessionId waiting_session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK(AddPrefillAndDecodeTasks(decoding_session_id));
+  // Let the decode start, after the prefill that the fake executor delays by
+  // 100ms, so that the prefill below waits about 700ms behind it.
+  absl::SleepFor(absl::Milliseconds(400));
+  ASSERT_OK(
+      AddPrefillAndDecodeTasks(waiting_session_id, /*with_decode=*/false));
+
+  EXPECT_OK(execution_manager_->WaitUntilSessionDone(waiting_session_id,
+                                                     absl::Milliseconds(500)));
+  EXPECT_OK(execution_manager_->WaitUntilSessionDone(decoding_session_id,
+                                                     absl::Seconds(3)));
+}
+
+TEST_P(ExecutionManagerTest, WaitUntilSessionDoneTimesOutWhenStalled) {
+  if (GetParam() == ExecutionManagerType::kSerial) {
+    GTEST_SKIP() << "SerialExecutionManager runs the decode task inline.";
+  }
+  auto fake_llm_executor = CreateDefaultFakeLlmExecutor();
+  // A single decode step that blocks for longer than the stall timeout.
+  fake_llm_executor->SetDecodeDelay(absl::Seconds(1));
+  CreateExecutionManager(std::move(fake_llm_executor));
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK(AddPrefillAndDecodeTasks(session_id));
+
+  EXPECT_THAT(
+      execution_manager_->WaitUntilSessionDone(session_id,
+                                               absl::Milliseconds(200)),
+      testing::status::StatusIs(absl::StatusCode::kDeadlineExceeded,
+                                HasSubstr("made no progress for 200ms")));
+
+  // Wait for the decode to actually finish to avoid use after free.
+  EXPECT_OK(
+      execution_manager_->WaitUntilSessionDone(session_id, absl::Seconds(3)));
 }
 
 TEST_P(ExecutionManagerTest, TaskReturnsError) {

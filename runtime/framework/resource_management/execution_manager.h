@@ -106,8 +106,16 @@ class ExecutionManager {
   virtual absl::Status WaitUntilDone(TaskId task_id,
                                      absl::Duration timeout) = 0;
 
+  // Waits until all tasks of the session are done.
+  // `stall_timeout` is not a total deadline: it restarts whenever any task of
+  // the execution manager makes progress (e.g. a decode step or a finished
+  // task), so a long but progressing session never times out.
+  // Returns:
+  // - OK if all tasks of the session are done.
+  // - DEADLINE_EXCEEDED if no task made progress for at least `stall_timeout`
+  //   (implementations may take up to twice that to notice).
   virtual absl::Status WaitUntilSessionDone(SessionId session_id,
-                                            absl::Duration timeout) = 0;
+                                            absl::Duration stall_timeout) = 0;
 
   // Updates whether to enable Metal residency set on GPU at runtime.
   virtual absl::Status UpdateGpuEnableMetalResidencySet(

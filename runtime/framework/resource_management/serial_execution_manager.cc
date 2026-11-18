@@ -148,8 +148,10 @@ absl::Status SerialExecutionManager::WaitUntilDone(TaskId task_id,
 }
 
 absl::Status SerialExecutionManager::WaitUntilSessionDone(
-    SessionId session_id, absl::Duration timeout) {
-  absl::Time start_time = absl::Now();
+    SessionId session_id, absl::Duration stall_timeout) {
+  // Tasks run inline on this thread, so the elapsed time is measured from the
+  // last finished task: each finished task counts as progress.
+  absl::Time last_progress_time = absl::Now();
   while (true) {
     if (!session_lookup_.contains(session_id)) {
       return absl::InvalidArgumentError(
@@ -162,12 +164,13 @@ absl::Status SerialExecutionManager::WaitUntilSessionDone(
       return absl::InternalError(absl::StrCat(
           "Session ", session_id, " not finished but ready queue is empty."));
     }
-    if (absl::Now() - start_time >= timeout) {
+    if (absl::Now() - last_progress_time >= stall_timeout) {
       return absl::DeadlineExceededError(
-          absl::StrCat("WaitUntilSessionDone timed out for session ",
-                       session_id, " after ", absl::FormatDuration(timeout)));
+          absl::StrCat("Session ", session_id, " made no progress for ",
+                       absl::FormatDuration(stall_timeout), "."));
     }
     ABSL_RETURN_IF_ERROR(RunNextTask());
+    last_progress_time = absl::Now();
   }
 }
 

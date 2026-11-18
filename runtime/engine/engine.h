@@ -278,7 +278,9 @@ class SessionInterface {
     ABSL_LOG(FATAL) << "CancelProcess is not implemented.";
   }
 
-  // Waits until all the tasks are done or the default timeout is reached.
+  // Waits until all the tasks of the session are done. Fails with
+  // DEADLINE_EXCEEDED only if no task made progress (e.g. a decode step) for
+  // `Engine::kDefaultTimeout`, so long but progressing generations finish.
   virtual absl::Status WaitUntilDone() = 0;
 
   // Clones the session.
@@ -458,7 +460,10 @@ class EngineT {
     return absl::UnimplementedError("GetEnvironment is not implemented.");
   }
 
-  // Default timeout duration for the engine/session processes.
+  // Default timeout duration for the engine/session processes. For
+  // `Session::WaitUntilDone()`, it is a stall timeout that restarts whenever a
+  // task makes progress; explicit `WaitUntilDone(timeout)` overloads treat
+  // their argument as a total deadline.
   static constexpr absl::Duration kDefaultTimeout = absl::Minutes(10);
 };
 

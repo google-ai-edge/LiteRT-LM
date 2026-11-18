@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_FRAMEWORK_RESOURCE_MANAGEMENT_THREADED_EXECUTION_MANAGER_H_
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -97,9 +98,12 @@ class ThreadedExecutionManager : public ExecutionManager {
   absl::Status WaitUntilDone(TaskId task_id, absl::Duration timeout) override
       ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
 
-  // Waits until all tasks in the session are done or the timeout is reached.
+  // Waits until all tasks in the session are done, or until no task of this
+  // execution manager made progress for `stall_timeout`. Tasks of every
+  // session count as progress, since a session may be queued behind another
+  // session's tasks.
   absl::Status WaitUntilSessionDone(SessionId session_id,
-                                    absl::Duration timeout) override
+                                    absl::Duration stall_timeout) override
       ABSL_LOCKS_EXCLUDED(session_and_task_lookup_mutex_);
 
   // Waits until all tasks are done or the timeout is reached.
@@ -363,6 +367,10 @@ class ThreadedExecutionManager : public ExecutionManager {
   absl::Status UpdateTaskState(TaskId task_id, TaskState task_state)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(session_and_task_lookup_mutex_);
 
+  // Records that a task made progress, which restarts the stall timeout of
+  // WaitUntilSessionDone.
+  void RecordProgress();
+
   // Updates all tasks to the given state and returns their callbacks to be
   // invoked after state updates complete.
   // - task_ids: The task IDs of the tasks.
@@ -412,6 +420,12 @@ class ThreadedExecutionManager : public ExecutionManager {
       ABSL_GUARDED_BY(session_and_task_lookup_mutex_) = {};
   bool active_callback_waiting_for_execution_
       ABSL_GUARDED_BY(session_and_task_lookup_mutex_) = false;
+  // Incremented on every decode step and every task end state. Restarts the
+  // stall timeout of WaitUntilSessionDone. Atomic rather than guarded by
+  // `session_and_task_lookup_mutex_`, because decode steps record progress
+  // while holding the executor lock, which ReleaseSession() acquires after
+  // `session_and_task_lookup_mutex_`.
+  std::atomic<uint64_t> progress_count_ = 0;
   // The last prefill token ID.
   int last_prefill_token_id_ = 0;
   // Tokenizer used for tokenization and detokenization.

@@ -222,6 +222,9 @@ class SessionAdvanced : public SessionInterface {
   // if available.
   absl::StatusOr<const ::litert::Environment*> GetEnvironment() const override;
 
+  // Waits until all tasks of the session are done. Fails only if no task made
+  // progress (e.g. decoded a token or finished a prefill) for
+  // `Engine::kDefaultTimeout`, so long generations can finish.
   absl::Status WaitUntilDone() override {
     auto execution_manager_lock = execution_manager_.lock();
     if (execution_manager_lock == nullptr) {
