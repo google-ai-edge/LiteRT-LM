@@ -18,6 +18,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/flags/flag.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -59,6 +60,13 @@ TEST(ParseSpeculativeDecodingFlagTest, RejectsOtherValues) {
                 StatusIs(absl::StatusCode::kInvalidArgument))
         << value;
   }
+}
+
+TEST(BenchmarkAppendChunksFlagTest, DefaultsToZeroAndSupportsOverride) {
+  EXPECT_EQ(absl::GetFlag(FLAGS_benchmark_append_chunks), 0);
+  absl::SetFlag(&FLAGS_benchmark_append_chunks, 4);
+  EXPECT_EQ(absl::GetFlag(FLAGS_benchmark_append_chunks), 4);
+  absl::SetFlag(&FLAGS_benchmark_append_chunks, 0);
 }
 
 }  // namespace

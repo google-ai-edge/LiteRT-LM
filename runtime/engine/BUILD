@@ -266,6 +266,7 @@ cc_test(
     deps = [
         ":shared_flags",
         "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/status",
         "//runtime/executor:speculative_decoding_mode",
         "//runtime/util:test_utils",
