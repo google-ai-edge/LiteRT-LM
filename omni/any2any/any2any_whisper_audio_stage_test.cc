@@ -1,0 +1,400 @@
+// Copyright 2026 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "omni/any2any/any2any_whisper_audio_stage.h"
+
+#include <cmath>
+#include <cstddef>
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/base/fan_out_stage.h"
+#include "omni/base/io_types.h"
+#include "omni/base/mock_litert_runner.h"
+#include "omni/omni_session.h"
+#include "support/util/convert_tensor_buffer.h"
+#include "support/util/test_utils.h"  // IWYU pragma: keep
+
+namespace litert::omni::any2any {
+namespace {
+
+using ::absl_testing::StatusIs;
+using ::testing::_;
+using ::testing::ElementsAre;
+using ::testing::NiceMock;
+
+std::unique_ptr<NiceMock<MockLiteRtRunner>> MakeMockRunner(
+    int hidden_dim, int num_mel_bins = 80, int chunk_frames = 10,
+    int out_tokens = 4,
+    std::vector<std::vector<float>>* captured_mels = nullptr) {
+  auto runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
+  ON_CALL(*runner, CreateInputBuffers(absl::string_view("")))
+      .WillByDefault([num_mel_bins, chunk_frames](absl::string_view)
+                         -> absl::StatusOr<std::vector<TensorBuffer>> {
+        LITERT_ASSIGN_OR_RETURN(auto buf, support::CreateTensorBuffer<float>(
+                                              {1, num_mel_bins, chunk_frames}));
+        std::vector<TensorBuffer> bufs;
+        bufs.push_back(std::move(buf));
+        return bufs;
+      });
+  ON_CALL(*runner, CreateOutputBuffers(absl::string_view("")))
+      .WillByDefault([out_tokens, hidden_dim](absl::string_view)
+                         -> absl::StatusOr<std::vector<TensorBuffer>> {
+        LITERT_ASSIGN_OR_RETURN(auto buf, support::CreateTensorBuffer<float>(
+                                              {1, out_tokens, hidden_dim}));
+        std::vector<TensorBuffer> bufs;
+        bufs.push_back(std::move(buf));
+        return bufs;
+      });
+  ON_CALL(*runner, Run(absl::string_view(""), _, _))
+      .WillByDefault(
+          [out_tokens, hidden_dim, captured_mels](
+              absl::string_view, absl::Span<const TensorBuffer> inputs,
+              absl::Span<const TensorBuffer> outputs) -> absl::Status {
+            if (captured_mels != nullptr) {
+              LITERT_ASSIGN_OR_RETURN(
+                  std::vector<float> mel,
+                  support::CopyFromTensorBuffer<float>(inputs[0]));
+              captured_mels->push_back(std::move(mel));
+            }
+            std::vector<float> out(static_cast<size_t>(out_tokens) *
+                                   hidden_dim);
+            for (int t = 0; t < out_tokens; ++t) {
+              for (int d = 0; d < hidden_dim; ++d) {
+                out[t * hidden_dim + d] = static_cast<float>(t * 10 + d + 1);
+              }
+            }
+            auto& out_buf = const_cast<TensorBuffer&>(outputs[0]);
+            LITERT_RETURN_IF_ERROR(
+                out_buf.Write<float>(absl::MakeConstSpan(out)));
+            return absl::OkStatus();
+          });
+  return runner;
+}
+
+// Non-constant waveform whose length (not a multiple of 3) and strong trailing
+// DC step leave non-trivial fractional phase and low-pass filter history in a
+// 24 kHz -> 16 kHz resampler unless `AudioResampler::Reset()` is invoked.
+std::vector<float> MakeNonConstantAudioClip(size_t num_samples) {
+  std::vector<float> pcm(num_samples);
+  for (size_t i = 0; i < num_samples; ++i) {
+    const float wave = 0.4f * std::sin(0.07f * static_cast<float>(i));
+    const float tail_step = (i + 200 >= num_samples) ? 0.5f : 0.0f;
+    pcm[i] = wave + tail_step;
+  }
+  return pcm;
+}
+
+TEST(Any2AnyWhisperAudioStageTest, CreateValidatesOptionsAndBuffers) {
+  SequencedVariantQueue<OmniSession::Input, AudioInput> audio_queue;
+  SequencedVariantQueue<OmniSession::Input, AudioInputMetadata> meta_queue;
+
+  Any2AnyWhisperAudioStage::Options opts{
+      .llm_hidden_size = 4,
+      .initial_input_sample_rate_hz = 16000,
+      .target_sample_rate_hz = 16000,
+      .num_mel_bins = 80,
+  };
+
+  auto bad_hidden = opts;
+  bad_hidden.llm_hidden_size = 0;
+  EXPECT_THAT(Any2AnyWhisperAudioStage::Create(&audio_queue, &meta_queue,
+                                               MakeMockRunner(4), bad_hidden),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  auto bad_init_sr = opts;
+  bad_init_sr.initial_input_sample_rate_hz = 0;
+  EXPECT_THAT(Any2AnyWhisperAudioStage::Create(&audio_queue, &meta_queue,
+                                               MakeMockRunner(4), bad_init_sr),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  auto bad_target_sr = opts;
+  bad_target_sr.target_sample_rate_hz = 0;
+  EXPECT_THAT(Any2AnyWhisperAudioStage::Create(
+                  &audio_queue, &meta_queue, MakeMockRunner(4), bad_target_sr),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  auto bad_mels = opts;
+  bad_mels.num_mel_bins = 0;
+  EXPECT_THAT(Any2AnyWhisperAudioStage::Create(&audio_queue, &meta_queue,
+                                               MakeMockRunner(4), bad_mels),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  auto empty_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
+  ON_CALL(*empty_runner, CreateInputBuffers(absl::string_view("")))
+      .WillByDefault(
+          [](absl::string_view) { return std::vector<TensorBuffer>{}; });
+  ON_CALL(*empty_runner, CreateOutputBuffers(absl::string_view("")))
+      .WillByDefault(
+          [](absl::string_view) { return std::vector<TensorBuffer>{}; });
+  EXPECT_THAT(Any2AnyWhisperAudioStage::Create(&audio_queue, &meta_queue,
+                                               std::move(empty_runner), opts),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  EXPECT_THAT(Any2AnyWhisperAudioStage::Create(
+                  &audio_queue, &meta_queue,
+                  MakeMockRunner(/*hidden_dim=*/3, /*num_mel_bins=*/80,
+                                 /*chunk_frames=*/10, /*out_tokens=*/1),
+                  opts),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  auto bad_in_runner = MakeMockRunner(4);
+  ON_CALL(*bad_in_runner, CreateInputBuffers(absl::string_view("")))
+      .WillByDefault(
+          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
+            LITERT_ASSIGN_OR_RETURN(auto buf,
+                                    support::CreateTensorBuffer<float>({1, 7}));
+            std::vector<TensorBuffer> bufs;
+            bufs.push_back(std::move(buf));
+            return bufs;
+          });
+  EXPECT_THAT(Any2AnyWhisperAudioStage::Create(&audio_queue, &meta_queue,
+                                               std::move(bad_in_runner), opts),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(Any2AnyWhisperAudioStageTest,
+     OrdersMetadataAndAudioResamplesResetsAndClampsTokens) {
+  SequencedVariantQueue<OmniSession::Input, AudioInput> audio_queue;
+  SequencedVariantQueue<OmniSession::Input, AudioInputMetadata> meta_queue;
+  Any2AnyWhisperAudioStage::Options opts{
+      .llm_hidden_size = 4,
+      .initial_input_sample_rate_hz = 16000,
+      .target_sample_rate_hz = 16000,
+      .num_mel_bins = 80,
+  };
+  ASSERT_OK_AND_ASSIGN(
+      auto stage, Any2AnyWhisperAudioStage::Create(
+                      &audio_queue, &meta_queue,
+                      MakeMockRunner(/*hidden_dim=*/4, /*num_mel_bins=*/80,
+                                     /*chunk_frames=*/10, /*out_tokens=*/4),
+                      opts));
+
+  EXPECT_FALSE(stage->NeedSchedule());
+  EXPECT_THAT(stage->Schedule(), StatusIs(absl::StatusCode::kNotFound));
+
+  // Push audio at seqnum 0 (16 kHz, 15 mel frames -> 4 + 2 tokens), metadata at
+  // seqnum 1 (24 kHz), and 24 kHz audio at seqnum 2 (2400 samples -> 10 mel
+  // frames -> 4 tokens), plus empty audio at seqnum 3.
+  ASSERT_OK(audio_queue.PushBack(
+      0, AudioInput{.pcm_samples = std::vector<float>(2400, 0.1f)}));
+  ASSERT_OK(meta_queue.PushBack(
+      1, AudioInputMetadata{.sample_rate_hz = 24000, .num_channels = 1}));
+  ASSERT_OK(audio_queue.PushBack(
+      2, AudioInput{.pcm_samples = std::vector<float>(2400, 0.2f)}));
+  ASSERT_OK(audio_queue.PushBack(3, AudioInput{}));
+
+  EXPECT_TRUE(stage->NeedSchedule());
+  ASSERT_OK(stage->Schedule());
+
+  ASSERT_OK_AND_ASSIGN(auto seg0, stage->GetOutput());
+  EXPECT_EQ(seg0.seqnum, 0);
+  ASSERT_EQ(seg0.item.size(), 2);
+  EXPECT_EQ(seg0.item[0].valid_tokens, 4);
+  EXPECT_EQ(seg0.item[0].embeddings.size(), 16);
+  EXPECT_EQ(seg0.item[1].valid_tokens, 2);
+  EXPECT_EQ(seg0.item[1].embeddings.size(), 8);
+  EXPECT_THAT(seg0.item[1].embeddings, ElementsAre(1, 2, 3, 4, 11, 12, 13, 14));
+
+  ASSERT_OK_AND_ASSIGN(auto seg1, stage->GetOutput());
+  EXPECT_EQ(seg1.seqnum, 1);
+  EXPECT_TRUE(seg1.item.empty());
+
+  ASSERT_OK_AND_ASSIGN(auto seg2, stage->GetOutput());
+  EXPECT_EQ(seg2.seqnum, 2);
+  ASSERT_EQ(seg2.item.size(), 1);
+  EXPECT_EQ(seg2.item[0].valid_tokens, 4);
+  EXPECT_EQ(seg2.item[0].embeddings.size(), 16);
+
+  ASSERT_OK_AND_ASSIGN(auto seg3, stage->GetOutput());
+  EXPECT_EQ(seg3.seqnum, 3);
+  EXPECT_TRUE(seg3.item.empty());
+
+  // Reset restores initial sample rate (16 kHz) and clears resampler/mel state.
+  stage->Reset();
+  ASSERT_OK(audio_queue.PushBack(
+      4, AudioInput{.pcm_samples = std::vector<float>(1600, 0.1f)}));
+  ASSERT_OK(stage->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto seg4, stage->GetOutput());
+  EXPECT_EQ(seg4.seqnum, 4);
+  ASSERT_EQ(seg4.item.size(), 1);
+  EXPECT_EQ(seg4.item[0].valid_tokens, 4);
+
+  // Invalid metadata stays queued until popped; too-short audio fails.
+  ASSERT_OK(meta_queue.PushBack(
+      5, AudioInputMetadata{.sample_rate_hz = 0, .num_channels = 1}));
+  EXPECT_THAT(stage->Schedule(), StatusIs(absl::StatusCode::kInvalidArgument));
+  ASSERT_OK(meta_queue.PopFront());
+
+  ASSERT_OK(meta_queue.PushBack(
+      6, AudioInputMetadata{.sample_rate_hz = 16000, .num_channels = 2}));
+  EXPECT_THAT(stage->Schedule(), StatusIs(absl::StatusCode::kInvalidArgument));
+  ASSERT_OK(meta_queue.PopFront());
+
+  ASSERT_OK(audio_queue.PushBack(
+      7, AudioInput{.pcm_samples = std::vector<float>(50, 0.1f)}));
+  EXPECT_THAT(stage->Schedule(), StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(Any2AnyWhisperAudioStageTest, ClampsOutOfRangeCustomTokenCounts) {
+  SequencedVariantQueue<OmniSession::Input, AudioInput> audio_queue;
+  SequencedVariantQueue<OmniSession::Input, AudioInputMetadata> meta_queue;
+  Any2AnyWhisperAudioStage::Options high_opts{
+      .llm_hidden_size = 4,
+      .initial_input_sample_rate_hz = 16000,
+      .target_sample_rate_hz = 16000,
+      .num_mel_bins = 80,
+      .compute_valid_tokens = [](int, int, int) { return 99; },
+  };
+  ASSERT_OK_AND_ASSIGN(
+      auto high_stage,
+      Any2AnyWhisperAudioStage::Create(
+          &audio_queue, &meta_queue,
+          MakeMockRunner(/*hidden_dim=*/4, /*num_mel_bins=*/80,
+                         /*chunk_frames=*/10, /*out_tokens=*/4),
+          std::move(high_opts)));
+
+  ASSERT_OK(audio_queue.PushBack(
+      0, AudioInput{.pcm_samples = std::vector<float>(1600, 0.1f)}));
+  ASSERT_OK(high_stage->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto high_seg, high_stage->GetOutput());
+  ASSERT_EQ(high_seg.item.size(), 1);
+  EXPECT_EQ(high_seg.item[0].valid_tokens, 4);
+  EXPECT_EQ(high_seg.item[0].embeddings.size(), 16);
+
+  Any2AnyWhisperAudioStage::Options low_opts{
+      .llm_hidden_size = 4,
+      .initial_input_sample_rate_hz = 16000,
+      .target_sample_rate_hz = 16000,
+      .num_mel_bins = 80,
+      .compute_valid_tokens = [](int, int, int) { return 0; },
+  };
+  ASSERT_OK_AND_ASSIGN(
+      auto low_stage, Any2AnyWhisperAudioStage::Create(
+                          &audio_queue, &meta_queue,
+                          MakeMockRunner(/*hidden_dim=*/4, /*num_mel_bins=*/80,
+                                         /*chunk_frames=*/10, /*out_tokens=*/4),
+                          std::move(low_opts)));
+
+  ASSERT_OK(audio_queue.PushBack(
+      1, AudioInput{.pcm_samples = std::vector<float>(1600, 0.1f)}));
+  ASSERT_OK(low_stage->Schedule());
+  ASSERT_OK_AND_ASSIGN(auto low_seg, low_stage->GetOutput());
+  ASSERT_EQ(low_seg.item.size(), 1);
+  EXPECT_EQ(low_seg.item[0].valid_tokens, 1);
+  EXPECT_EQ(low_seg.item[0].embeddings.size(), 4);
+}
+
+TEST(Any2AnyWhisperAudioStageTest, ResetsResamplerStateOnSameRateMetadata) {
+  SequencedVariantQueue<OmniSession::Input, AudioInput> audio_queue;
+  SequencedVariantQueue<OmniSession::Input, AudioInputMetadata> meta_queue;
+  Any2AnyWhisperAudioStage::Options opts{
+      .llm_hidden_size = 4,
+      .initial_input_sample_rate_hz = 16000,
+      .target_sample_rate_hz = 16000,
+      .num_mel_bins = 80,
+  };
+  std::vector<std::vector<float>> captured_mels;
+  ASSERT_OK_AND_ASSIGN(
+      auto stage,
+      Any2AnyWhisperAudioStage::Create(
+          &audio_queue, &meta_queue,
+          MakeMockRunner(/*hidden_dim=*/4, /*num_mel_bins=*/80,
+                         /*chunk_frames=*/10, /*out_tokens=*/4, &captured_mels),
+          opts));
+
+  const std::vector<float> clip = MakeNonConstantAudioClip(2401);
+
+  // Clip 1 at 24 kHz -> 16 kHz from clean resampler state.
+  ASSERT_OK(meta_queue.PushBack(
+      0, AudioInputMetadata{.sample_rate_hz = 24000, .num_channels = 1}));
+  ASSERT_OK(audio_queue.PushBack(1, AudioInput{.pcm_samples = clip}));
+  ASSERT_OK(stage->Schedule());
+  ASSERT_OK(stage->GetOutput());  // metadata
+  ASSERT_OK(stage->GetOutput());  // clip 1
+  ASSERT_EQ(captured_mels.size(), 1);
+
+  // Clip 2 without intervening metadata: leftover resampler filter/phase state
+  // must visibly alter the extracted mel spectrogram (negative control).
+  ASSERT_OK(audio_queue.PushBack(2, AudioInput{.pcm_samples = clip}));
+  ASSERT_OK(stage->Schedule());
+  ASSERT_OK(stage->GetOutput());  // clip 2
+  ASSERT_EQ(captured_mels.size(), 2);
+  EXPECT_NE(captured_mels[1], captured_mels[0]);
+
+  // Clip 3 preceded by same-rate AudioInputMetadata{24000}: resampler resets
+  // unconditionally and reproduces the exact clean-state mel spectrogram.
+  ASSERT_OK(meta_queue.PushBack(
+      3, AudioInputMetadata{.sample_rate_hz = 24000, .num_channels = 1}));
+  ASSERT_OK(audio_queue.PushBack(4, AudioInput{.pcm_samples = clip}));
+  ASSERT_OK(stage->Schedule());
+  ASSERT_OK(stage->GetOutput());  // metadata
+  ASSERT_OK(stage->GetOutput());  // clip 3
+  ASSERT_EQ(captured_mels.size(), 3);
+  EXPECT_EQ(captured_mels[2], captured_mels[0]);
+}
+
+TEST(Any2AnyWhisperAudioStageTest, ResetsResamplerStateOnStageReset) {
+  SequencedVariantQueue<OmniSession::Input, AudioInput> audio_queue;
+  SequencedVariantQueue<OmniSession::Input, AudioInputMetadata> meta_queue;
+  Any2AnyWhisperAudioStage::Options opts{
+      .llm_hidden_size = 4,
+      .initial_input_sample_rate_hz = 24000,
+      .target_sample_rate_hz = 16000,
+      .num_mel_bins = 80,
+  };
+  std::vector<std::vector<float>> captured_mels;
+  ASSERT_OK_AND_ASSIGN(
+      auto stage,
+      Any2AnyWhisperAudioStage::Create(
+          &audio_queue, &meta_queue,
+          MakeMockRunner(/*hidden_dim=*/4, /*num_mel_bins=*/80,
+                         /*chunk_frames=*/10, /*out_tokens=*/4, &captured_mels),
+          opts));
+
+  const std::vector<float> clip = MakeNonConstantAudioClip(2401);
+
+  ASSERT_OK(audio_queue.PushBack(0, AudioInput{.pcm_samples = clip}));
+  ASSERT_OK(stage->Schedule());
+  ASSERT_OK(stage->GetOutput());
+  ASSERT_EQ(captured_mels.size(), 1);
+
+  // Consecutive clip without Reset() sees leftover resampler state.
+  ASSERT_OK(audio_queue.PushBack(1, AudioInput{.pcm_samples = clip}));
+  ASSERT_OK(stage->Schedule());
+  ASSERT_OK(stage->GetOutput());
+  ASSERT_EQ(captured_mels.size(), 2);
+  EXPECT_NE(captured_mels[1], captured_mels[0]);
+
+  // Reset() clears resampler state so the same clip reproduces clean-state mel.
+  stage->Reset();
+  ASSERT_OK(audio_queue.PushBack(2, AudioInput{.pcm_samples = clip}));
+  ASSERT_OK(stage->Schedule());
+  ASSERT_OK(stage->GetOutput());
+  ASSERT_EQ(captured_mels.size(), 3);
+  EXPECT_EQ(captured_mels[2], captured_mels[0]);
+}
+
+}  // namespace
+}  // namespace litert::omni::any2any

@@ -16,12 +16,11 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_MINICPM_O_MINICPM_O_AUDIO_STAGE_H_
 
 #include <memory>
-#include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/any2any/any2any_whisper_audio_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
 #include "omni/base/fan_out_stage.h"
@@ -30,24 +29,17 @@
 #include "omni/base/sequenced.h"
 #include "omni/base/stage.h"
 #include "omni/omni_session.h"
-#include "omni/utils/audio_resampler.h"
-#include "omni/utils/whisper_log_mel_extractor.h"
 
 namespace litert::omni::any2any {
 
 // Audio input processing stage for MiniCPM-o:
-// - Consumes `Sequenced<AudioInput>` and `Sequenced<AudioInputMetadata>` from
-//   `Any2AnyInputFanOutStage` in ascending `seqnum` order.
-// - Updates the input sample rate and resets the resampler when
-//   `AudioInputMetadata` is received.
-// - Resamples mono PCM audio to 16 kHz via `AudioResampler`.
-// - Computes 80-bin Whisper-compatible log-mel spectrogram features via
-//   `WhisperLogMelExtractor`.
-// - Runs the neural audio encoder model per chunk.
-// - Outputs `Sequenced<MiniCpmOEmbeddingSegment>` containing the continuous
-//   audio embeddings and `<|audio_start|>`, placeholder (`-2`), and
-//   `<|audio_end|>` token IDs for downstream reordering and chat-template
-//   framing in `MiniCpmOFrontendStage`.
+// - Wraps `Any2AnyWhisperAudioStage` to consume `Sequenced<AudioInput>` and
+//   `Sequenced<AudioInputMetadata>` in ascending `seqnum` order, resample mono
+//   PCM audio to 16 kHz, compute 80-bin Whisper log-mel spectrogram features,
+//   and run the neural audio encoder model per chunk.
+// - Frames each encoded chunk into `Sequenced<MiniCpmOEmbeddingSegment>` with
+//   `<|audio_start|>`, placeholder (`-2`), and `<|audio_end|>` token IDs for
+//   downstream reordering and chat-template framing in `MiniCpmOFrontendStage`.
 class MiniCpmOAudioStage
     : public SingleThreadedStageWithDeque<Sequenced<MiniCpmOEmbeddingSegment>> {
  public:
@@ -92,45 +84,10 @@ class MiniCpmOAudioStage
   void ResetInternal() override;
 
  private:
-  MiniCpmOAudioStage(
-      FanOutOutputQueue<OmniSession::Input, AudioInput>* absl_nonnull
-          audio_queue,
-      FanOutOutputQueue<OmniSession::Input, AudioInputMetadata>* absl_nonnull
-          audio_input_metadata_queue,
-      int chunk_frames,
-      std::unique_ptr<WhisperLogMelExtractor> absl_nonnull log_mel_extractor,
-      std::unique_ptr<LiteRtRunner> absl_nonnull audio_encoder_runner,
-      std::vector<TensorBuffer> audio_enc_input_buffers,
-      std::vector<TensorBuffer> audio_enc_output_buffers,
-      const MiniCpmOModelConfig& config);
+  explicit MiniCpmOAudioStage(
+      std::unique_ptr<Any2AnyWhisperAudioStage> absl_nonnull audio_stage);
 
-  // Processes raw audio PCM samples into continuous audio encoder embeddings
-  // and `<|audio_start|>`, placeholder (`-2`), and `<|audio_end|>` token IDs.
-  //
-  // Args:
-  //   audio: Input audio waveform containing mono PCM samples at
-  //     `input_sample_rate_hz_`.
-  //
-  // Returns:
-  //   A `MiniCpmOEmbeddingSegment` containing the continuous audio embeddings
-  //   and unembedded audio boundary/placeholder token IDs, or an error status
-  //   if resampling, preprocessing, or runner execution fails.
-  absl::StatusOr<MiniCpmOEmbeddingSegment> ProcessAudio(
-      const AudioInput& audio);
-
-  FanOutOutputQueue<OmniSession::Input, AudioInput>& audio_queue_;
-  FanOutOutputQueue<OmniSession::Input, AudioInputMetadata>&
-      audio_input_metadata_queue_;
-  MiniCpmOModelConfig config_;
-  int hidden_dim_;
-  int chunk_frames_;
-  int input_sample_rate_hz_;
-
-  AudioResampler resampler_;
-  std::unique_ptr<WhisperLogMelExtractor> log_mel_extractor_;
-  std::unique_ptr<LiteRtRunner> audio_encoder_runner_;
-  std::vector<TensorBuffer> audio_enc_input_buffers_;
-  std::vector<TensorBuffer> audio_enc_output_buffers_;
+  std::unique_ptr<Any2AnyWhisperAudioStage> audio_stage_;
 };
 
 }  // namespace litert::omni::any2any
