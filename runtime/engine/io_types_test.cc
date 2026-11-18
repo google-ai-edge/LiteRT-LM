@@ -395,19 +395,23 @@ TEST(BenchmarkInfoTests, AddMarks) {
   BenchmarkInfo benchmark_info(GetBenchmarkParams());
   EXPECT_OK(benchmark_info.TimeMarkDelta("sampling"));
   absl::SleepFor(absl::Milliseconds(200));
+  const absl::Time before_second_mark = absl::Now();
   EXPECT_OK(benchmark_info.TimeMarkDelta("sampling"));
   absl::SleepFor(absl::Milliseconds(200));
   EXPECT_OK(benchmark_info.TimeMarkDelta("sampling"));
+  const absl::Duration since_second_mark = absl::Now() - before_second_mark;
   EXPECT_EQ(benchmark_info.GetMarkDurations().size(), 1);
 
   // The time should record the duration between the 2nd and 3rd calls, which
   // should be slightly more than 200ms.
   EXPECT_GT(benchmark_info.GetMarkDurations().at("sampling"),
             absl::Milliseconds(200));
-  // Verify that the time doesn't record the duration between the 1st and 3nd
-  // calls, which is less than 200ms + 200ms = 400ms.
-  EXPECT_LT(benchmark_info.GetMarkDurations().at("sampling"),
-            absl::Milliseconds(400));
+  // Verify that the time doesn't record the duration since the 1st call. That
+  // would also include the first 200ms sleep. The slack absorbs differences
+  // between `absl::Now()` and the steady clock used by `BenchmarkInfo`. Avoid
+  // a fixed upper bound, since sleeps can overshoot on loaded machines.
+  EXPECT_LE(benchmark_info.GetMarkDurations().at("sampling"),
+            since_second_mark + absl::Milliseconds(50));
 }
 
 TEST(BenchmarkInfoTests, AddTwoMarks) {
