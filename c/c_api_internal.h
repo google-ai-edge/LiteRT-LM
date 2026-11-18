@@ -23,7 +23,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "c/engine.h"
-#include "c/engine_internal.h"
+#include "c/engine_internal.h"  // IWYU pragma: keep
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
@@ -71,8 +71,10 @@ void SetExecutorCacheDirs(
 // Invokes a C streaming callback with a single `LiteRtLmStreamChunk`.
 ABSL_ATTRIBUTE_NO_SANITIZE_CFI inline void EmitStreamChunk(
     LiteRtLmStreamCallback callback, void* callback_data, const char* text,
-    bool is_final, const char* error_msg) {
-  LiteRtLmStreamChunk chunk{text, is_final, error_msg};
+    bool is_final, const char* error_msg, const char* finish_reason = nullptr,
+    const char* executor_stats_json = nullptr) {
+  LiteRtLmStreamChunk chunk{text, is_final, error_msg, finish_reason,
+                            executor_stats_json};
   callback(callback_data, &chunk);
 }
 

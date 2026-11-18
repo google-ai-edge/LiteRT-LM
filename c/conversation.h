@@ -533,7 +533,11 @@ LiteRtLmStatusCode litert_lm_conversation_clone(
 // @param extra_context A JSON string representing the extra context to use.
 // @param optional_args A pointer to the optional arguments to use.
 // @param out_response On success, receives the JSON response, owned by the
-//   caller; release with `litert_lm_json_response_delete`. Set to NULL on
+//   caller; release with `litert_lm_json_response_delete`. Besides the
+//   message, the response holds why the turn ended as `finish_reason` and its
+//   executor stats as `executor_stats` (null if it has none), the values that
+//   `litert_lm_stream_chunk_get_finish_reason` and
+//   `litert_lm_stream_chunk_get_executor_stats_json` describe. Set to NULL on
 //   failure.
 // @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
 //   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
@@ -544,6 +548,8 @@ LiteRtLmStatusCode litert_lm_conversation_clone(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns a status code; the response is returned
 // through out_response.
+// Changed in version 1.1.0: the response also holds `finish_reason` and
+// `executor_stats`.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_conversation_send_message(
     LiteRtLmConversation* conversation, const char* message_json,
@@ -580,6 +586,12 @@ LiteRtLmStatusCode litert_lm_json_response_get_string(
 // callback. This is a non-blocking call that will invoke the callback from a
 // background thread for each chunk (see "Threading model" in engine.h).
 //
+// Each non-final chunk carries a message JSON as its text. The final chunk has
+// no text: if the turn failed, `litert_lm_stream_chunk_get_error` returns the
+// error; otherwise `litert_lm_stream_chunk_get_finish_reason` and
+// `litert_lm_stream_chunk_get_executor_stats_json` return why the turn ended
+// and its executor stats.
+//
 // @param conversation The conversation to use.
 // @param message_json A JSON string representing the message to send.
 // @param extra_context A JSON string representing the extra context to use.
@@ -597,12 +609,73 @@ LiteRtLmStatusCode litert_lm_json_response_get_string(
 // Added in version 0.1.0.
 // Changed in version 1.0.0: returns LiteRtLmStatusCode and failures return a
 // canonical LiteRtLmStatusCode instead of -1.
+// Changed in version 1.1.0: the final chunk of a turn carries its finish reason
+// and executor stats.
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_conversation_send_message_stream(
     LiteRtLmConversation* conversation, const char* message_json,
     const char* extra_context,
     const LiteRtLmConversationOptionalArgs* optional_args,
     LiteRtLmStreamCallback callback, void* callback_data);
+
+// Gets why the turn of a final chunk of
+// `litert_lm_conversation_send_message_stream` ended:
+//
+// - "stop": the model finished its response, or the response reached the
+//   maximum number of output tokens
+//   (`litert_lm_conversation_optional_args_set_max_output_tokens` or
+//   `litert_lm_session_config_set_max_output_tokens`).
+// - "max_tokens": the conversation filled the engine's context window
+//   (`litert_lm_engine_settings_set_max_num_tokens`), which cut the response
+//   off.
+//
+// More values may be added; treat any value you don't know as the end of the
+// turn too.
+//
+// Only final chunks that end a turn have a finish reason. Final chunks that
+// carry an error may have one in a later version (e.g. for a cancelled turn).
+//
+// @param chunk The stream chunk.
+// @param out_finish_reason On success, receives the finish reason, or NULL if
+//   the chunk has none. The string is owned by the chunk and is only valid as
+//   long as the chunk is valid. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success (including when the chunk has no finish
+//   reason), or another LiteRtLmStatusCode on failure (see error_reporter.h).
+//   kLiteRtLmStatusInvalidArgument if `chunk` or `out_finish_reason` is NULL.
+//
+// Added in version 1.1.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_stream_chunk_get_finish_reason(
+    const LiteRtLmStreamChunk* chunk, const char** out_finish_reason);
+
+// Gets the executor stats of the turn that a final chunk of
+// `litert_lm_conversation_send_message_stream` ended, as JSON:
+//
+//   {"module_name": "LLM", "metrics": {"plain_steps": 1, ...},
+//    "latencies_us": {"plain_step_time": 51234, ...}, "substats": [...]}
+//
+// `metrics` values are JSON integers or floats, `latencies_us` values are whole
+// microseconds, and `substats` holds objects of the same shape. Metric and
+// latency names depend on the executor and may change, and keys may be added;
+// ignore the ones you don't know.
+//
+// Only final chunks that end a turn have executor stats, and only if the
+// executor reports them. Final chunks that carry an error may have them in a
+// later version (e.g. for a cancelled turn).
+//
+// @param chunk The stream chunk.
+// @param out_executor_stats_json On success, receives the executor stats, or
+//   NULL if the chunk has none. The string is owned by the chunk and is only
+//   valid as long as the chunk is valid. Set to NULL on failure.
+// @return kLiteRtLmStatusOk on success (including when the chunk has no
+//   executor stats), or another LiteRtLmStatusCode on failure (see
+//   error_reporter.h). kLiteRtLmStatusInvalidArgument if `chunk` or
+//   `out_executor_stats_json` is NULL.
+//
+// Added in version 1.1.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_stream_chunk_get_executor_stats_json(
+    const LiteRtLmStreamChunk* chunk, const char** out_executor_stats_json);
 
 // Renders the message into a string according to the template.
 //

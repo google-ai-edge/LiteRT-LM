@@ -48,6 +48,8 @@ struct LiteRtLmStreamChunk {
   const char* text = nullptr;
   bool is_final = false;
   const char* error_msg = nullptr;
+  const char* finish_reason = nullptr;
+  const char* executor_stats_json = nullptr;
 };
 
 struct LiteRtLmRepetitionPenaltyConfig {

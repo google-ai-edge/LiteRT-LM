@@ -64,6 +64,7 @@ using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::Not;
+using ::testing::Optional;
 
 std::string GetTestdataPath(const std::string& filename) {
   std::string srcdir = ::testing::SrcDir();
@@ -1725,6 +1726,14 @@ TEST(EngineCTest, ConversationSendMessage) {
   const char* response_str = GetResponseString(response.get());
   ASSERT_NE(response_str, nullptr);
   EXPECT_GT(strlen(response_str), 0);
+  // The response also holds the end-of-turn fields of the turn.
+  nlohmann::ordered_json response_json = nlohmann::ordered_json::parse(
+      response_str, /*cb=*/nullptr, /*allow_exceptions=*/false);
+  ASSERT_TRUE(response_json.is_object()) << response_str;
+  ASSERT_TRUE(response_json["finish_reason"].is_string());
+  EXPECT_THAT(response_json["finish_reason"].get<std::string>(),
+              AnyOf("stop", "max_tokens"));
+  EXPECT_TRUE(response_json["executor_stats"].is_object());
 }
 
 TEST(EngineCTest, ConversationRenderPreface) {
@@ -2190,6 +2199,12 @@ TEST(EngineCTest, SessionCloneSuccess) {
 
 struct StreamCallbackData {
   std::string response;
+  std::optional<std::string> finish_reason;
+  std::optional<std::string> executor_stats_json;
+  // Whether a non-final chunk carried a finish reason or executor stats.
+  bool non_final_end_of_turn = false;
+  // Whether the final chunk carried text.
+  bool final_chunk_has_text = false;
   absl::Notification done;
   absl::Status status;
 };
@@ -2205,7 +2220,22 @@ void StreamCallback(void* callback_data, const LiteRtLmStreamChunk* chunk) {
   if (text) {
     data->response.append(text);
   }
-  if (GetOk<bool>(litert_lm_stream_chunk_is_final, chunk)) {
+  const bool is_final = GetOk<bool>(litert_lm_stream_chunk_is_final, chunk);
+  const char* finish_reason =
+      GetOk<const char*>(litert_lm_stream_chunk_get_finish_reason, chunk);
+  if (finish_reason) {
+    data->finish_reason = finish_reason;
+  }
+  const char* executor_stats_json =
+      GetOk<const char*>(litert_lm_stream_chunk_get_executor_stats_json, chunk);
+  if (executor_stats_json) {
+    data->executor_stats_json = executor_stats_json;
+  }
+  if (finish_reason || executor_stats_json) {
+    data->non_final_end_of_turn |= !is_final;
+  }
+  if (is_final) {
+    data->final_chunk_has_text = text != nullptr;
     data->done.Notify();
   }
 }
@@ -2249,6 +2279,9 @@ TEST(EngineCTest, GenerateContentStream) {
       AnyOf(IsOk(), StatusIs(absl::StatusCode::kInternal,
                              HasSubstr("Max number of tokens reached."))));
   EXPECT_GT(callback_data.response.length(), 0);
+  // Session streams carry no finish reason or executor stats.
+  EXPECT_EQ(callback_data.finish_reason, std::nullopt);
+  EXPECT_EQ(callback_data.executor_stats_json, std::nullopt);
 }
 
 TEST(EngineCTest, SessionGenerateContentStreamAndCancel) {
@@ -2319,7 +2352,21 @@ TEST(EngineCTest, ConversationSendMessageStream) {
   ASSERT_EQ(result, kLiteRtLmStatusOk);
 
   callback_data.done.WaitForNotification();
+  ASSERT_THAT(callback_data.status, IsOk());
   EXPECT_GT(callback_data.response.length(), 0);
+  // Only the final chunk carries the finish reason and executor stats, and it
+  // has no text.
+  EXPECT_FALSE(callback_data.non_final_end_of_turn);
+  EXPECT_FALSE(callback_data.final_chunk_has_text);
+  // The test model may run out of tokens before it stops.
+  EXPECT_THAT(callback_data.finish_reason,
+              Optional(AnyOf("stop", "max_tokens")));
+  ASSERT_TRUE(callback_data.executor_stats_json.has_value());
+  nlohmann::ordered_json executor_stats = nlohmann::ordered_json::parse(
+      *callback_data.executor_stats_json, /*cb=*/nullptr,
+      /*allow_exceptions=*/false);
+  ASSERT_TRUE(executor_stats.is_object()) << *callback_data.executor_stats_json;
+  EXPECT_TRUE(executor_stats["metrics"].is_object());
 }
 
 TEST(EngineCTest, ConversationSendMessageStreamWithExtraContext) {
@@ -3891,6 +3938,15 @@ TEST(EngineCErrorTest, AccessorsWithNullOutParamReturnInvalidArgument) {
            [&] { return litert_lm_stream_chunk_is_final(&chunk, nullptr); }},
           {"stream_chunk_get_error",
            [&] { return litert_lm_stream_chunk_get_error(&chunk, nullptr); }},
+          {"stream_chunk_get_finish_reason",
+           [&] {
+             return litert_lm_stream_chunk_get_finish_reason(&chunk, nullptr);
+           }},
+          {"stream_chunk_get_executor_stats_json",
+           [&] {
+             return litert_lm_stream_chunk_get_executor_stats_json(&chunk,
+                                                                   nullptr);
+           }},
           {"tokenize_result_get_tokens",
            [&] {
              return litert_lm_tokenize_result_get_tokens(&tokenize_result,
@@ -4048,6 +4104,16 @@ TEST(EngineCErrorTest, AccessorsWithNullHandleReturnInvalidArgument) {
           {"stream_chunk_get_error",
            [&] {
              return litert_lm_stream_chunk_get_error(nullptr, &out_text);
+           }},
+          {"stream_chunk_get_finish_reason",
+           [&] {
+             return litert_lm_stream_chunk_get_finish_reason(nullptr,
+                                                             &out_text);
+           }},
+          {"stream_chunk_get_executor_stats_json",
+           [&] {
+             return litert_lm_stream_chunk_get_executor_stats_json(nullptr,
+                                                                   &out_text);
            }},
           {"tokenize_result_get_tokens",
            [&] {
@@ -4246,8 +4312,8 @@ TEST(EngineCErrorTest, ResponsesAccessorsWithAbsentValueReturnNotFound) {
 TEST(EngineCErrorTest, StreamChunkAccessorsReturnAbsentValuesAsNull) {
   LiteRtLmStreamChunk final_chunk;
   final_chunk.is_final = true;
-  // Absent text / error are successes with a NULL result, even if the
-  // out-parameter held a stale value.
+  // Absent text / error / finish reason / executor stats are successes with a
+  // NULL result, even if the out-parameter held a stale value.
   const char* text = "sentinel";
   EXPECT_EQ(litert_lm_stream_chunk_get_text(&final_chunk, &text),
             kLiteRtLmStatusOk);
@@ -4256,15 +4322,33 @@ TEST(EngineCErrorTest, StreamChunkAccessorsReturnAbsentValuesAsNull) {
   EXPECT_EQ(litert_lm_stream_chunk_get_error(&final_chunk, &error),
             kLiteRtLmStatusOk);
   EXPECT_EQ(error, nullptr);
+  const char* finish_reason = "sentinel";
+  EXPECT_EQ(
+      litert_lm_stream_chunk_get_finish_reason(&final_chunk, &finish_reason),
+      kLiteRtLmStatusOk);
+  EXPECT_EQ(finish_reason, nullptr);
+  const char* executor_stats_json = "sentinel";
+  EXPECT_EQ(litert_lm_stream_chunk_get_executor_stats_json(
+                &final_chunk, &executor_stats_json),
+            kLiteRtLmStatusOk);
+  EXPECT_EQ(executor_stats_json, nullptr);
   EXPECT_TRUE(GetOk<bool>(litert_lm_stream_chunk_is_final, &final_chunk));
 
   LiteRtLmStreamChunk chunk;
   chunk.text = "hello";
   chunk.error_msg = "boom";
+  chunk.finish_reason = "stop";
+  chunk.executor_stats_json = R"({"module_name": "LLM"})";
   EXPECT_STREQ(GetOk<const char*>(litert_lm_stream_chunk_get_text, &chunk),
                "hello");
   EXPECT_STREQ(GetOk<const char*>(litert_lm_stream_chunk_get_error, &chunk),
                "boom");
+  EXPECT_STREQ(
+      GetOk<const char*>(litert_lm_stream_chunk_get_finish_reason, &chunk),
+      "stop");
+  EXPECT_STREQ(GetOk<const char*>(
+                   litert_lm_stream_chunk_get_executor_stats_json, &chunk),
+               R"({"module_name": "LLM"})");
   EXPECT_FALSE(GetOk<bool>(litert_lm_stream_chunk_is_final, &chunk));
 }
 
@@ -5097,6 +5181,14 @@ TEST(EngineCErrorTest, ConversationFunctionsWithNullHandleResetOutParam) {
   ExpectInvalidArgumentResetsOut<const char>(
       "conversation_render_preface_to_string", [](const char** out) {
         return litert_lm_conversation_render_preface_to_string(nullptr, out);
+      });
+  ExpectInvalidArgumentResetsOut<const char>(
+      "stream_chunk_get_finish_reason", [](const char** out) {
+        return litert_lm_stream_chunk_get_finish_reason(nullptr, out);
+      });
+  ExpectInvalidArgumentResetsOut<const char>(
+      "stream_chunk_get_executor_stats_json", [](const char** out) {
+        return litert_lm_stream_chunk_get_executor_stats_json(nullptr, out);
       });
   ExpectInvalidArgumentResetsOut<LiteRtLmBenchmarkInfo>(
       "conversation_get_benchmark_info", [](LiteRtLmBenchmarkInfo** out) {

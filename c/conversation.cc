@@ -64,8 +64,25 @@ CreateConversationCallback(LiteRtLmStreamCallback callback, void* user_data) {
       return;
     }
     if (litert::lm::IsEndOfTurnMessage(*message)) {
-      EmitStreamChunk(callback, user_data, /*text=*/nullptr, /*is_final=*/true,
-                      /*error_msg=*/nullptr);
+      // The legacy end-of-turn marker is a null message, which has neither
+      // field.
+      std::string finish_reason;
+      std::string executor_stats_json;
+      if (message->is_object()) {
+        auto it = message->find(std::string(litert::lm::kFinishReasonKey));
+        if (it != message->end() && it->is_string()) {
+          finish_reason = it->get<std::string>();
+        }
+        it = message->find(std::string(litert::lm::kExecutorStatsKey));
+        if (it != message->end() && it->is_object()) {
+          executor_stats_json = it->dump();
+        }
+      }
+      EmitStreamChunk(
+          callback, user_data, /*text=*/nullptr, /*is_final=*/true,
+          /*error_msg=*/nullptr,
+          finish_reason.empty() ? nullptr : finish_reason.c_str(),
+          executor_stats_json.empty() ? nullptr : executor_stats_json.c_str());
     } else {
       std::string json_str = message->dump();
       EmitStreamChunk(callback, user_data, json_str.c_str(), /*is_final=*/false,
@@ -734,6 +751,26 @@ LiteRtLmStatusCode litert_lm_conversation_send_message_stream(
   LITERT_LM_C_RETURN_IF_ERROR(conversation->conversation->SendMessageAsync(
       json_message, CreateConversationCallback(callback, callback_data),
       std::move(litert_lm_optional_args)));
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode litert_lm_stream_chunk_get_finish_reason(
+    const LiteRtLmStreamChunk* chunk, const char** out_finish_reason) {
+  LITERT_LM_C_RETURN_IF_NULL(out_finish_reason);
+  *out_finish_reason = nullptr;
+  LITERT_LM_C_RETURN_IF_NULL(chunk);
+  // A chunk without a finish reason yields success with a NULL result.
+  *out_finish_reason = chunk->finish_reason;
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode litert_lm_stream_chunk_get_executor_stats_json(
+    const LiteRtLmStreamChunk* chunk, const char** out_executor_stats_json) {
+  LITERT_LM_C_RETURN_IF_NULL(out_executor_stats_json);
+  *out_executor_stats_json = nullptr;
+  LITERT_LM_C_RETURN_IF_NULL(chunk);
+  // A chunk without executor stats yields success with a NULL result.
+  *out_executor_stats_json = chunk->executor_stats_json;
   return kLiteRtLmStatusOk;
 }
 
