@@ -417,6 +417,15 @@ public struct SessionConfig {
   /// parameters when present, or greedy decoding otherwise.
   public let samplerConfig: SamplerConfig?
 
+  /// The maximum number of tokens to generate per decode. For thinking models, both thinking
+  /// (reasoning) tokens and the final response tokens count towards this limit. If `nil`, uses the
+  /// runtime default.
+  public let maxOutputTokens: Int?
+
+  /// Whether to apply the model's prompt template to the inputs. If `nil`, uses the runtime
+  /// default (`true`).
+  public let applyPromptTemplate: Bool?
+
   /// The file path to the text LoRA weights file. Requires `EngineConfig.loraRank`. If `nil`, no
   /// text LoRA is used.
   public let loraPath: String?
@@ -433,17 +442,30 @@ public struct SessionConfig {
   /// - Parameters:
   ///   - samplerConfig: Configuration for the sampling process. If `nil`, uses the model's
   ///     default sampler parameters when present, or greedy decoding otherwise.
+  ///   - maxOutputTokens: The maximum number of tokens to generate per decode. If `nil`, uses the
+  ///     runtime default.
+  ///   - applyPromptTemplate: Whether to apply the model's prompt template to the inputs. If
+  ///     `nil`, uses the runtime default (`true`).
   ///   - loraPath: The file path to the text LoRA weights file.
   ///   - audioLoraPath: The file path to the audio LoRA weights file.
   ///   - speculativeDecodingConfig: The speculative decoding configuration of this session.
   ///     Fields left `nil` (or a `nil` config) inherit the engine's configuration.
+  /// - Throws: `LiteRTLMError.config(.invalidMaxOutputTokens)` if `maxOutputTokens` is less than
+  ///   or equal to 0, or greater than `Int32.max`, the largest value the runtime accepts.
   public init(
     samplerConfig: SamplerConfig? = nil,
+    maxOutputTokens: Int? = nil,
+    applyPromptTemplate: Bool? = nil,
     loraPath: String? = nil,
     audioLoraPath: String? = nil,
     speculativeDecodingConfig: SpeculativeDecodingConfig? = nil
-  ) {
+  ) throws {
+    if let maxOutputTokens, maxOutputTokens <= 0 || Int32(exactly: maxOutputTokens) == nil {
+      throw LiteRTLMError.config(.invalidMaxOutputTokens)
+    }
     self.samplerConfig = samplerConfig
+    self.maxOutputTokens = maxOutputTokens
+    self.applyPromptTemplate = applyPromptTemplate
     self.loraPath = loraPath
     self.audioLoraPath = audioLoraPath
     self.speculativeDecodingConfig = speculativeDecodingConfig

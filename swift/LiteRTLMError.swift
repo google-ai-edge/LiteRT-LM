@@ -422,6 +422,11 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
     case streamFailed(String)
     /// A stream was cancelled with `Session.cancel()` or `Session.close()`.
     case cancelled
+    /// `Session.getBenchmarkInfo()` was called without enabling
+    /// `ExperimentalFlags.enableBenchmark` before initializing the engine.
+    case benchmarkNotEnabled
+    /// The benchmark info couldn't be read.
+    case benchmarkInfoUnavailable
 
     public var errorDescription: String? {
       switch self {
@@ -439,6 +444,13 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
         return "Stream failed: \(details)"
       case .cancelled:
         return "The session operation was cancelled."
+      case .benchmarkNotEnabled:
+        return """
+          Benchmark flag is not enabled. Please enable the flag by setting \
+          ExperimentalFlags.enableBenchmark to true before initializing the Engine.
+          """
+      case .benchmarkInfoUnavailable:
+        return "Failed to get benchmark info."
       }
     }
   }
@@ -446,6 +458,7 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
   public enum ConfigError: Error, LocalizedError, Equatable {
     case invalidMaxNumTokens
     case invalidMaxNumImages(count: Int)
+    case invalidMaxOutputTokens
     case invalidTopK
     case invalidTopP
     case invalidTemperature
@@ -458,6 +471,8 @@ public enum LiteRTLMError: Error, LocalizedError, Equatable {
         return "maxNumTokens must be positive or nil (use the default from model or engine)."
       case .invalidMaxNumImages:
         return "maxNumImages must be non-negative or nil (use the default from model or engine)."
+      case .invalidMaxOutputTokens:
+        return "maxOutputTokens must be in 1...Int32.max, or nil (use the runtime default)."
       case .invalidTopK:
         return "topK should be positive."
       case .invalidTopP:

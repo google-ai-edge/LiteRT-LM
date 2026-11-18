@@ -84,15 +84,18 @@ class SessionTests: XCTestCase {
 
   override func setUp() async throws {
     try await super.setUp()
+    ExperimentalFlags.optIntoExperimentalAPIs()
+    ExperimentalFlags.enableBenchmark = true
     let engineConfig = try EngineConfig(
       modelPath: testModelPath(), maxNumTokens: 32, cacheDir: NSTemporaryDirectory())
     engine = Engine(engineConfig: engineConfig)
     try await engine.initialize()
   }
 
-  /// Creates a session with the greedy sampler.
-  private func makeSession() async throws -> Session {
-    return try await engine.createSession(with: SessionConfig(samplerConfig: greedySampler))
+  /// Creates a session with the greedy sampler and the given output budget.
+  private func makeSession(maxOutputTokens: Int? = nil) async throws -> Session {
+    return try await engine.createSession(
+      with: try SessionConfig(samplerConfig: greedySampler, maxOutputTokens: maxOutputTokens))
   }
 
   /// Asserts that `session` was cancelled by terminating one of its streams early, or, if the
@@ -111,25 +114,45 @@ class SessionTests: XCTestCase {
 
   // MARK: - SessionConfig
 
-  func testSessionConfigDefaultsAreUnset() {
-    let config = SessionConfig()
+  func testSessionConfigDefaultsAreUnset() throws {
+    let config = try SessionConfig()
     XCTAssertNil(config.samplerConfig)
+    XCTAssertNil(config.maxOutputTokens)
+    XCTAssertNil(config.applyPromptTemplate)
     XCTAssertNil(config.loraPath)
     XCTAssertNil(config.audioLoraPath)
     XCTAssertNil(config.speculativeDecodingConfig)
   }
 
-  func testSessionConfigStoresValues() {
-    let config = SessionConfig(
+  func testSessionConfigStoresValues() throws {
+    let config = try SessionConfig(
       samplerConfig: greedySampler,
+      maxOutputTokens: 8,
+      applyPromptTemplate: false,
       loraPath: "lora.tflite",
       audioLoraPath: "audio_lora.tflite",
       speculativeDecodingConfig: SpeculativeDecodingConfig(mode: .off, lenience: 0.5))
     XCTAssertEqual(config.samplerConfig?.topK, 1)
+    XCTAssertEqual(config.maxOutputTokens, 8)
+    XCTAssertEqual(config.applyPromptTemplate, false)
     XCTAssertEqual(config.loraPath, "lora.tflite")
     XCTAssertEqual(config.audioLoraPath, "audio_lora.tflite")
     XCTAssertEqual(
       config.speculativeDecodingConfig, SpeculativeDecodingConfig(mode: .off, lenience: 0.5))
+  }
+
+  func testSessionConfigRejectsOutOfRangeMaxOutputTokens() {
+    for maxOutputTokens in [0, -1, Int(Int32.max) + 1, Int.max] {
+      XCTAssertThrowsError(try SessionConfig(maxOutputTokens: maxOutputTokens)) { error in
+        XCTAssertEqual(error as? LiteRTLMError, .config(.invalidMaxOutputTokens))
+      }
+    }
+  }
+
+  func testSessionConfigAcceptsMaxOutputTokensUpToInt32Max() throws {
+    XCTAssertEqual(try SessionConfig(maxOutputTokens: 1).maxOutputTokens, 1)
+    XCTAssertEqual(
+      try SessionConfig(maxOutputTokens: Int(Int32.max)).maxOutputTokens, Int(Int32.max))
   }
 
   // MARK: - Engine.createSession
@@ -151,16 +174,39 @@ class SessionTests: XCTestCase {
 
   func testCreateSessionWithAllConfigFields() async throws {
     let session = try await engine.createSession(
-      with: SessionConfig(
+      with: try SessionConfig(
         samplerConfig: try SamplerConfig(topK: 10, topP: 0.5, temperature: 0.5, seed: 123),
+        maxOutputTokens: 2,
+        applyPromptTemplate: false,
         speculativeDecodingConfig: SpeculativeDecodingConfig(mode: .off)))
     XCTAssertTrue(session.isAlive)
     let response = try await session.generateContent([.text("Hello")])
     XCTAssertFalse(response.isEmpty)
   }
 
+  func testMaxOutputTokensLimitsTheResponse() async throws {
+    let shortSession = try await makeSession(maxOutputTokens: 1)
+    let longSession = try await makeSession(maxOutputTokens: 4)
+    let shortResponse = try await shortSession.generateContent([.text("Hello")])
+    let longResponse = try await longSession.generateContent([.text("Hello")])
+    XCTAssertFalse(shortResponse.isEmpty)
+    XCTAssertTrue(
+      longResponse.hasPrefix(shortResponse),
+      "Expected '\(longResponse)' to start with '\(shortResponse)'")
+    XCTAssertGreaterThan(longResponse.count, shortResponse.count)
+  }
+
+  func testMaxOutputTokensAllowsSeveralGenerations() async throws {
+    let session = try await makeSession(maxOutputTokens: 4)
+    let first = try await session.generateContent([.text("Hello")])
+    let second = try await session.generateContent([.text(" world!")])
+    XCTAssertFalse(first.isEmpty)
+    XCTAssertFalse(second.isEmpty)
+  }
+
   func testCreateSessionRejectsInvalidSpeculativeLenience() async throws {
-    let config = SessionConfig(speculativeDecodingConfig: SpeculativeDecodingConfig(lenience: 1.5))
+    let config = try SessionConfig(
+      speculativeDecodingConfig: SpeculativeDecodingConfig(lenience: 1.5))
     await assertThrowsAsync(try await engine.createSession(with: config)) { error in
       guard case .engine(.failedToCreateSessionConfig) = error as? LiteRTLMError else {
         return XCTFail("Unexpected error: \(error)")
@@ -169,7 +215,7 @@ class SessionTests: XCTestCase {
   }
 
   func testCreateSessionWithMissingLoraFileThrows() async throws {
-    let config = SessionConfig(loraPath: "/nonexistent/lora.tflite")
+    let config = try SessionConfig(loraPath: "/nonexistent/lora.tflite")
     await assertThrowsAsync(try await engine.createSession(with: config)) { error in
       guard case .engine(.failedToSetLoraPath) = error as? LiteRTLMError else {
         return XCTFail("Unexpected error: \(error)")
@@ -178,7 +224,7 @@ class SessionTests: XCTestCase {
   }
 
   func testCreateSessionWithMissingAudioLoraFileThrows() async throws {
-    let config = SessionConfig(audioLoraPath: "/nonexistent/audio_lora.tflite")
+    let config = try SessionConfig(audioLoraPath: "/nonexistent/audio_lora.tflite")
     await assertThrowsAsync(try await engine.createSession(with: config)) { error in
       guard case .engine(.failedToSetAudioLoraPath) = error as? LiteRTLMError else {
         return XCTFail("Unexpected error: \(error)")
@@ -284,6 +330,17 @@ class SessionTests: XCTestCase {
 
   // MARK: - Streams
 
+  func testRunDecodeStreamYieldsTheDecodedText() async throws {
+    let session = try await makeSession(maxOutputTokens: 4)
+    try await session.runPrefill([.text("Hello")])
+    let clone = try session.clone()
+
+    let chunks = try await collect(session.runDecodeStream())
+    XCTAssertFalse(chunks.isEmpty)
+    let decoded = try await clone.runDecode()
+    XCTAssertEqual(chunks.joined(), decoded)
+  }
+
   func testGenerateContentStreamYieldsTheGeneratedText() async throws {
     let session = try await makeSession()
     let chunks = try await collect(session.generateContentStream([.text("Hello")]))
@@ -317,6 +374,9 @@ class SessionTests: XCTestCase {
   func testStreamOnClosedSessionThrows() async throws {
     let session = try await makeSession()
     session.close()
+    await assertThrowsAsync(try await collect(session.runDecodeStream())) { error in
+      XCTAssertEqual(error as? LiteRTLMError, .session(.notAlive))
+    }
     await assertThrowsAsync(try await collect(session.generateContentStream([.text("Hello")]))) {
       error in
       XCTAssertEqual(error as? LiteRTLMError, .session(.notAlive))
@@ -326,6 +386,14 @@ class SessionTests: XCTestCase {
   func testReleasingStreamEarlyCancelsTheSession() async throws {
     let session = try await makeSession()
     let chunk = try await firstChunk { session.generateContentStream([.text("Hello")]) }
+    XCTAssertNotNil(chunk)
+    assertCancelledOrUsable(session)
+  }
+
+  func testReleasingRunDecodeStreamEarlyCancelsTheSession() async throws {
+    let session = try await makeSession()
+    try await session.runPrefill([.text("Hello")])
+    let chunk = try await firstChunk { session.runDecodeStream() }
     XCTAssertNotNil(chunk)
     assertCancelledOrUsable(session)
   }
@@ -357,6 +425,27 @@ class SessionTests: XCTestCase {
     var chunkCount = 0
     do {
       for try await _ in session.generateContentStream([.text("Hello")]) {
+        chunkCount += 1
+        if chunkCount == 1 {
+          try session.cancel()
+        }
+      }
+      // The stream may have finished before `cancel()` ran on a fast machine.
+    } catch where isMaxNumTokensReached(error) {
+      // The stream finished before `cancel()` ran on a fast machine.
+    } catch {
+      XCTAssertEqual(error as? LiteRTLMError, .session(.cancelled))
+    }
+    XCTAssertGreaterThanOrEqual(chunkCount, 1)
+    XCTAssertFalse(session.isAlive)
+  }
+
+  func testCancelDuringRunDecodeStream() async throws {
+    let session = try await makeSession()
+    try await session.runPrefill([.text("Hello")])
+    var chunkCount = 0
+    do {
+      for try await _ in session.runDecodeStream() {
         chunkCount += 1
         if chunkCount == 1 {
           try session.cancel()
@@ -411,6 +500,82 @@ class SessionTests: XCTestCase {
     }
   }
 
+  // MARK: - Text scoring
+
+  func testRunTextScoringWithTokenLengths() async throws {
+    let session = try await makeSession()
+    try await session.runPrefill([.text("Hello")])
+    let scores = try await session.runTextScoring([" world"], storeTokenLengths: true)
+    XCTAssertEqual(scores.count, 1)
+    XCTAssertEqual(scores[0].text, " world")
+    XCTAssertLessThanOrEqual(scores[0].score, 0, "A log likelihood is at most 0.")
+    let tokenLength = try XCTUnwrap(scores[0].tokenLength)
+    XCTAssertGreaterThan(tokenLength, 0)
+    XCTAssertEqual(scores[0].tokenScores.count, tokenLength)
+  }
+
+  func testRunTextScoringWithoutTokenLengths() async throws {
+    let session = try await makeSession()
+    try await session.runPrefill([.text("Hello")])
+    let scores = try await session.runTextScoring([" world"])
+    XCTAssertEqual(scores.count, 1)
+    XCTAssertEqual(scores[0].text, " world")
+    XCTAssertNil(scores[0].tokenLength)
+  }
+
+  func testRunTextScoringIsDeterministic() async throws {
+    let session1 = try await makeSession()
+    try await session1.runPrefill([.text("Hello")])
+    let session2 = try await makeSession()
+    try await session2.runPrefill([.text("Hello")])
+    let score1 = try await session1.runTextScoring([" world"])[0].score
+    let score2 = try await session2.runTextScoring([" world"])[0].score
+    XCTAssertEqual(score1, score2, accuracy: 1e-4)
+  }
+
+  func testRunTextScoringInCloneMatchesTheOriginal() async throws {
+    let session = try await makeSession()
+    try await session.runPrefill([.text("Hello")])
+    let clone = try session.clone()
+    let score = try await session.runTextScoring([" world"])[0].score
+    let cloneScore = try await clone.runTextScoring([" world"])[0].score
+    XCTAssertEqual(score, cloneScore, accuracy: 1e-4)
+  }
+
+  func testRunTextScoringWithEmptyTargetsThrows() async throws {
+    let session = try await makeSession()
+    try await session.runPrefill([.text("Hello")])
+    await assertThrowsAsync(try await session.runTextScoring([])) { error in
+      guard case .session(.invalidInput) = error as? LiteRTLMError else {
+        return XCTFail("Unexpected error: \(error)")
+      }
+    }
+  }
+
+  // MARK: - Benchmark info
+
+  func testGetBenchmarkInfo() async throws {
+    let session = try await makeSession(maxOutputTokens: 4)
+    let emptyInfo = try session.getBenchmarkInfo()
+    XCTAssertEqual(emptyInfo.lastPrefillTokenCount, 0)
+    XCTAssertEqual(emptyInfo.lastDecodeTokenCount, 0)
+
+    _ = try await session.generateContent([.text("Hello")])
+    let info = try session.getBenchmarkInfo()
+    XCTAssertGreaterThan(info.lastPrefillTokenCount, 0)
+    XCTAssertGreaterThan(info.lastDecodeTokenCount, 0)
+    XCTAssertGreaterThan(info.lastDecodeTokensPerSecond, 0)
+  }
+
+  func testGetBenchmarkInfoWithoutBenchmarkFlagThrows() async throws {
+    let session = try await makeSession()
+    ExperimentalFlags.enableBenchmark = false
+    defer { ExperimentalFlags.enableBenchmark = true }
+    XCTAssertThrowsError(try session.getBenchmarkInfo()) { error in
+      XCTAssertEqual(error as? LiteRTLMError, .session(.benchmarkNotEnabled))
+    }
+  }
+
   // MARK: - close
 
   func testCloseIsIdempotent() async throws {
@@ -435,7 +600,13 @@ class SessionTests: XCTestCase {
     await assertThrowsAsync(try await session.generateContent([.text("Hello")])) {
       XCTAssertEqual($0 as? LiteRTLMError, notAlive)
     }
+    await assertThrowsAsync(try await session.runTextScoring(["Hello"])) {
+      XCTAssertEqual($0 as? LiteRTLMError, notAlive)
+    }
     XCTAssertThrowsError(try session.cancel()) { XCTAssertEqual($0 as? LiteRTLMError, notAlive) }
+    XCTAssertThrowsError(try session.getBenchmarkInfo()) {
+      XCTAssertEqual($0 as? LiteRTLMError, notAlive)
+    }
   }
 
   func testCloseDuringStreamEndsTheStream() async throws {
@@ -472,6 +643,7 @@ class SessionTests: XCTestCase {
     let errors: [LiteRTLMError.SessionError] = [
       .notAlive, .streamInProgress, .invalidInput("x"), .operationFailed("x"),
       .failedToStartStream(status: 3, message: "x"), .streamFailed("x"), .cancelled,
+      .benchmarkNotEnabled, .benchmarkInfoUnavailable,
     ]
     for error in errors {
       XCTAssertFalse(LiteRTLMError.session(error).errorDescription?.isEmpty ?? true)
@@ -481,5 +653,6 @@ class SessionTests: XCTestCase {
       LiteRTLMError.EngineError.failedToCreateSession("details"), .failedToCreateSession)
     XCTAssertFalse(
       LiteRTLMError.engine(.failedToCreateSession("x")).errorDescription?.isEmpty ?? true)
+    XCTAssertFalse(LiteRTLMError.config(.invalidMaxOutputTokens).errorDescription?.isEmpty ?? true)
   }
 }

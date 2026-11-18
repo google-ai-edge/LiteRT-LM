@@ -374,7 +374,9 @@ public actor Engine {
       samplerConfig: config?.samplerConfig,
       loraPath: config?.loraPath,
       audioLoraPath: config?.audioLoraPath,
-      speculativeDecodingConfig: config?.speculativeDecodingConfig)
+      speculativeDecodingConfig: config?.speculativeDecodingConfig,
+      maxOutputTokens: config?.maxOutputTokens,
+      applyPromptTemplate: config?.applyPromptTemplate)
     defer { litert_lm_session_config_delete(cSessionConfig) }
 
     let sessionHandle = try LiteRTLMError.create(
@@ -424,7 +426,9 @@ private func makeCSessionConfig(
   samplerConfig: SamplerConfig?,
   loraPath: String?,
   audioLoraPath: String?,
-  speculativeDecodingConfig: SpeculativeDecodingConfig?
+  speculativeDecodingConfig: SpeculativeDecodingConfig?,
+  maxOutputTokens: Int? = nil,
+  applyPromptTemplate: Bool? = nil
 ) throws -> OpaquePointer {
   let sessionConfigError: (String) -> LiteRTLMError = {
     .engine(.failedToCreateSessionConfig($0))
@@ -486,6 +490,19 @@ private func makeCSessionConfig(
         litert_lm_session_config_set_speculative_decoding_config(
           cSessionConfig, cSpeculativeDecodingConfig),
         "litert_lm_session_config_set_speculative_decoding_config", sessionConfigError)
+    }
+
+    if let maxOutputTokens = maxOutputTokens {
+      // `SessionConfig.init` ensures that `maxOutputTokens` fits in an `Int32`.
+      try LiteRTLMError.check(
+        litert_lm_session_config_set_max_output_tokens(cSessionConfig, Int32(maxOutputTokens)),
+        "litert_lm_session_config_set_max_output_tokens", sessionConfigError)
+    }
+
+    if let applyPromptTemplate = applyPromptTemplate {
+      try LiteRTLMError.check(
+        litert_lm_session_config_set_apply_prompt_template(cSessionConfig, applyPromptTemplate),
+        "litert_lm_session_config_set_apply_prompt_template", sessionConfigError)
     }
   } catch {
     litert_lm_session_config_delete(cSessionConfig)

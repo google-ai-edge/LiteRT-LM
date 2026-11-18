@@ -53,6 +53,22 @@ public enum InputData: Equatable, Hashable, Sendable {
   }
 }
 
+/// The score of one target text, returned by `Session.runTextScoring(_:storeTokenLengths:)`.
+public struct TextScore: Equatable, Sendable {
+  /// The scored target text.
+  public let text: String
+
+  /// The log likelihood of `text` given the prefilled context.
+  public let score: Float
+
+  /// The number of tokens of `text`, or `nil` unless `storeTokenLengths` was `true`.
+  public let tokenLength: Int?
+
+  /// The log likelihood of each token of `text`, or an empty array if the runtime didn't report
+  /// them.
+  public let tokenScores: [Float]
+}
+
 /// A session with a LiteRT-LM model, for raw text, image and audio inputs and raw text outputs.
 ///
 /// A session is the lower-level alternative to a `Conversation`: it doesn't apply a chat
@@ -82,8 +98,9 @@ public enum InputData: Equatable, Hashable, Sendable {
 /// A session keeps its engine alive until it is closed or deallocated. Its operations must not
 /// overlap: while a stream is running, only `cancel()` and `close()` can be called, and other
 /// operations throw `LiteRTLMError.session(.streamInProgress)`. The blocking operations
-/// (`runPrefill(_:)`, `runDecode()` and `generateContent(_:)`) are `async` so that they don't
-/// run on the caller's actor, e.g. the main actor.
+/// (`runPrefill(_:)`, `runDecode()`, `generateContent(_:)` and
+/// `runTextScoring(_:storeTokenLengths:)`) are `async` so that they don't run on the caller's
+/// actor, e.g. the main actor.
 public final class Session: @unchecked Sendable {
   private let engine: Engine
 
@@ -156,8 +173,8 @@ public final class Session: @unchecked Sendable {
 
   /// Adds inputs to the session and runs the prefill step on them.
   ///
-  /// It can be called several times to add the inputs in chunks before calling `runDecode()`. It
-  /// returns when the prefill step is done.
+  /// It can be called several times to add the inputs in chunks before calling `runDecode()` or
+  /// `runDecodeStream()`. It returns when the prefill step is done.
   ///
   /// - Parameter inputs: The inputs to prefill. Must not be empty: the native session rejects
   ///   empty inputs.
@@ -193,6 +210,22 @@ public final class Session: @unchecked Sendable {
     }
   }
 
+  /// Runs the decode step to generate a response to the inputs added by `runPrefill(_:)`, and
+  /// streams the response.
+  ///
+  /// If the consuming task is cancelled, or the stream is released before it finishes, e.g.
+  /// because the consumer breaks out of its `for try await` loop, the decoding is cancelled like
+  /// with `cancel()`, so the session can't be used anymore.
+  ///
+  /// - Returns: A stream of the generated text chunks. It finishes after the last chunk, or throws
+  ///   `LiteRTLMError.session(.cancelled)` if it is cancelled with `cancel()` or `close()`, or
+  ///   another `LiteRTLMError` if the stream can't be started or fails.
+  public func runDecodeStream() -> AsyncThrowingStream<String, Error> {
+    return startStream("litert_lm_session_run_decode_async") { handle, contextPointer in
+      litert_lm_session_run_decode_async(handle, sessionStreamCallback, contextPointer)
+    }
+  }
+
   /// Adds inputs to the session and generates a response, running both the prefill and the
   /// decode steps.
   ///
@@ -200,8 +233,8 @@ public final class Session: @unchecked Sendable {
   ///
   /// - Parameter inputs: The inputs to prefill. They are added after the inputs added by
   ///   `runPrefill(_:)`, if any. Must not be empty: the native session rejects empty inputs. To
-  ///   only run the decode step on the inputs added by `runPrefill(_:)`, call `runDecode()`
-  ///   instead.
+  ///   only run the decode step on the inputs added by `runPrefill(_:)`, call `runDecode()` or
+  ///   `runDecodeStream()` instead.
   /// - Returns: The generated text.
   /// - Throws: A `LiteRTLMError` if the session is not alive, `inputs` is empty or invalid, or
   ///   generation fails.
@@ -231,8 +264,8 @@ public final class Session: @unchecked Sendable {
   ///
   /// - Parameter inputs: The inputs to prefill. They are added after the inputs added by
   ///   `runPrefill(_:)`, if any. Must not be empty: the native session rejects empty inputs. To
-  ///   only run the decode step on the inputs added by `runPrefill(_:)`, call `runDecode()`
-  ///   instead.
+  ///   only run the decode step on the inputs added by `runPrefill(_:)`, call `runDecode()` or
+  ///   `runDecodeStream()` instead.
   /// - Returns: A stream of the generated text chunks. It finishes after the last chunk, or throws
   ///   `LiteRTLMError.session(.cancelled)` if it is cancelled with `cancel()` or `close()`, or
   ///   another `LiteRTLMError` if `inputs` is empty or the stream can't be started or fails.
@@ -248,6 +281,44 @@ public final class Session: @unchecked Sendable {
         litert_lm_session_generate_content_stream(
           handle, cInputs, count, sessionStreamCallback, contextPointer)
       }
+    }
+  }
+
+  /// Scores target texts given the inputs added by `runPrefill(_:)`.
+  ///
+  /// Pass one target text, or several target texts that are each a single token: several targets
+  /// are all scored from the logits of one decode step.
+  ///
+  /// Every call changes the session's state: to score targets one by one from the same prefilled
+  /// inputs, score each of them in a clone of the session made with `clone()` before scoring.
+  ///
+  /// - Parameters:
+  ///   - targets: The target texts to score. Must not be empty.
+  ///   - storeTokenLengths: Whether to return the number of tokens of each target text in
+  ///     `TextScore.tokenLength`.
+  /// - Returns: The scores of the target texts, in the order of `targets`.
+  /// - Throws: A `LiteRTLMError` if the session is not alive, `targets` is empty or invalid, or
+  ///   scoring fails.
+  public func runTextScoring(
+    _ targets: [String], storeTokenLengths: Bool = false
+  ) async throws -> [TextScore] {
+    guard !targets.isEmpty else {
+      throw LiteRTLMError.session(.invalidInput("targets must not be empty"))
+    }
+    return try withOperation { handle in
+      let cTargets = targets.map { strdup($0) }
+      defer { cTargets.forEach { free($0) } }
+      var cTargetPointers = cTargets.map { $0.map { UnsafePointer($0) } }
+      let responses = try LiteRTLMError.create(
+        "litert_lm_session_run_text_scoring", operationError
+      ) { out in
+        cTargetPointers.withUnsafeMutableBufferPointer { buffer in
+          litert_lm_session_run_text_scoring(
+            handle, buffer.baseAddress, buffer.count, storeTokenLengths, out)
+        }
+      }
+      defer { litert_lm_responses_delete(responses) }
+      return try textScores(responses, targets: targets)
     }
   }
 
@@ -286,6 +357,30 @@ public final class Session: @unchecked Sendable {
         litert_lm_session_clone(handle, out)
       }
       return Session(handle: clonedHandle, engine: engine)
+    }
+  }
+
+  /// Retrieves the benchmark information of the session.
+  ///
+  /// Note: This is an experimental API. It requires setting `ExperimentalFlags.enableBenchmark`
+  /// to `true` before initializing the engine.
+  ///
+  /// - Returns: The benchmark information.
+  /// - Throws: `LiteRTLMError.session(.benchmarkNotEnabled)` if the benchmark flag is not enabled,
+  ///   or a `LiteRTLMError` if the session is not alive or the info is unavailable.
+  public func getBenchmarkInfo() throws -> BenchmarkInfo {
+    if !ExperimentalFlags.enableBenchmark {
+      throw LiteRTLMError.session(.benchmarkNotEnabled)
+    }
+    return try withOperation { handle in
+      let makeError: (String) -> LiteRTLMError = { _ in .session(.benchmarkInfoUnavailable) }
+      let benchmarkInfo = try LiteRTLMError.create(
+        "litert_lm_session_get_benchmark_info", makeError
+      ) { out in
+        litert_lm_session_get_benchmark_info(handle, out)
+      }
+      defer { litert_lm_benchmark_info_delete(benchmarkInfo) }
+      return try BenchmarkInfo(cBenchmarkInfo: benchmarkInfo, makeError: makeError)
     }
   }
 
@@ -489,6 +584,58 @@ private func responseText(_ responses: OpaquePointer) throws -> String {
   }
   try LiteRTLMError.check(status, "litert_lm_responses_get_response_text_at", makeError)
   return text.map { String(cString: $0) } ?? ""
+}
+
+/// Reads the text scores of `targets` out of the native responses `responses`, which are not
+/// consumed.
+private func textScores(_ responses: OpaquePointer, targets: [String]) throws -> [TextScore] {
+  let makeError: (String) -> LiteRTLMError = { .session(.operationFailed($0)) }
+  let numCandidates = try LiteRTLMError.get(
+    0, "litert_lm_responses_get_num_candidates", makeError
+  ) { litert_lm_responses_get_num_candidates(responses, $0) }
+  guard numCandidates == targets.count else {
+    throw makeError("expected \(targets.count) scores but got \(numCandidates)")
+  }
+  return try targets.enumerated().map { index, target in
+    let hasScore = try LiteRTLMError.get(false, "litert_lm_responses_has_score_at", makeError) {
+      litert_lm_responses_has_score_at(responses, index, $0)
+    }
+    guard hasScore else {
+      throw makeError("no score for target \(index)")
+    }
+    let score = try LiteRTLMError.get(Float(0), "litert_lm_responses_get_score_at", makeError) {
+      litert_lm_responses_get_score_at(responses, index, $0)
+    }
+
+    var tokenLength: Int? = nil
+    let hasTokenLength = try LiteRTLMError.get(
+      false, "litert_lm_responses_has_token_length_at", makeError
+    ) { litert_lm_responses_has_token_length_at(responses, index, $0) }
+    if hasTokenLength {
+      tokenLength = try LiteRTLMError.get(
+        0, "litert_lm_responses_get_token_length_at", makeError
+      ) { litert_lm_responses_get_token_length_at(responses, index, $0) }
+    }
+
+    var tokenScores: [Float] = []
+    let hasTokenScores = try LiteRTLMError.get(
+      false, "litert_lm_responses_has_token_scores_at", makeError
+    ) { litert_lm_responses_has_token_scores_at(responses, index, $0) }
+    if hasTokenScores {
+      let numTokenScores = try LiteRTLMError.get(
+        0, "litert_lm_responses_get_num_token_scores_at", makeError
+      ) { litert_lm_responses_get_num_token_scores_at(responses, index, $0) }
+      let cTokenScores: UnsafePointer<Float>? = try LiteRTLMError.get(
+        nil, "litert_lm_responses_get_token_scores_at", makeError
+      ) { litert_lm_responses_get_token_scores_at(responses, index, $0) }
+      if let cTokenScores {
+        tokenScores = Array(UnsafeBufferPointer(start: cTokenScores, count: numTokenScores))
+      }
+    }
+
+    return TextScore(
+      text: target, score: score, tokenLength: tokenLength, tokenScores: tokenScores)
+  }
 }
 
 /// Creates the native input data of `inputs` and calls `body` with them, then releases them.
