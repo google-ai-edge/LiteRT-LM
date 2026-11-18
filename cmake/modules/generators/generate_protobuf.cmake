@@ -23,6 +23,16 @@ function(generate_protobuf TARGET_NAME _root_path)
         ARGS --version
     )
 
+    set(_proto_include_args -I "${_root_path}")
+    if(DEFINED LITERTLM_PROTOBUF_INSTALL_PREFIX)
+        list(APPEND _proto_include_args -I "${LITERTLM_PROTOBUF_INSTALL_PREFIX}/include")
+    endif()
+
+    set(_proto_deps protobuf::protoc)
+    if(TARGET protobuf_external)
+        list(APPEND _proto_deps protobuf_external)
+    endif()
+
     foreach(PROTO_FILE ${LITERTLM_PROTO_FILES})
         file(RELATIVE_PATH REL_PROTO_PATH "${_root_path}" "${PROTO_FILE}")
 
@@ -39,9 +49,9 @@ function(generate_protobuf TARGET_NAME _root_path)
             OUTPUT "${SRC_FILE}" "${HDR_FILE}"
             COMMAND ${LITERTLM_HOST_PROTOC}
             ARGS --cpp_out "${CMAKE_CURRENT_BINARY_DIR}"
-                 -I "${_root_path}"
+                 ${_proto_include_args}
                  "${PROTO_FILE}"
-            DEPENDS "${PROTO_FILE}" protobuf::protoc
+            DEPENDS "${PROTO_FILE}" ${_proto_deps}
             COMMENT "Generating C++ from ${REL_PROTO_PATH}"
             VERBATIM
         )

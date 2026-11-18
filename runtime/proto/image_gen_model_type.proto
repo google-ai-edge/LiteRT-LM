@@ -16,6 +16,8 @@ syntax = "proto3";
 
 package litert.lm.proto;
 
+import "google/protobuf/any.proto";
+
 option java_multiple_files = true;
 option java_outer_classname = "ImageGenModelTypeOuterClass";
 
@@ -47,5 +49,9 @@ message ImageGenModelType {
   oneof model_type {
     BonsaiFlux2 bonsai_flux2 = 1;
     Flux2Klein flux2_klein = 2;
+    // Custom architecture-specific parameters for out-of-tree models. The
+    // runtime does not interpret this payload; only the factory registered for
+    // the model name unpacks it.
+    google.protobuf.Any custom_model = 100;
   }
 }

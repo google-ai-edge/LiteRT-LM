@@ -216,6 +216,7 @@ alias(
 tf_proto_library(
     name = "text2speech_model_type",
     srcs = ["text2speech_model_type.proto"],
+    deps = ["@com_google_protobuf//:any_proto"],
 )
 
 alias(
@@ -277,6 +278,7 @@ alias(
 tf_proto_library(
     name = "speech2text_model_type",
     srcs = ["speech2text_model_type.proto"],
+    deps = ["@com_google_protobuf//:any_proto"],
 )
 
 alias(
@@ -338,6 +340,7 @@ alias(
 tf_proto_library(
     name = "image_gen_model_type",
     srcs = ["image_gen_model_type.proto"],
+    deps = ["@com_google_protobuf//:any_proto"],
 )
 
 alias(
@@ -399,6 +402,7 @@ alias(
 tf_proto_library(
     name = "any2any_model_type",
     srcs = ["any2any_model_type.proto"],
+    deps = ["@com_google_protobuf//:any_proto"],
 )
 
 alias(

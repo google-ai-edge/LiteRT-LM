@@ -16,6 +16,8 @@ syntax = "proto3";
 
 package litert.lm.proto;
 
+import "google/protobuf/any.proto";
+
 option java_multiple_files = true;
 option java_outer_classname = "Any2AnyModelTypeOuterClass";
 
@@ -107,5 +109,9 @@ message Any2AnyModelType {
   oneof model_type {
     MiniCpmO minicpm_o = 1;
     QwenOmni qwen_omni = 2;
+    // Custom architecture-specific parameters for out-of-tree models. The
+    // runtime does not interpret this payload; only the factory registered for
+    // the model name unpacks it.
+    google.protobuf.Any custom_model = 100;
   }
 }

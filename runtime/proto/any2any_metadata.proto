@@ -65,6 +65,19 @@ message Any2AnyMetadata {
     // Audio codec decoder / vocoder converting discrete audio codes or mel
     // frames to waveform (e.g., DVAE + Vocos 24 kHz in MiniCPM-o 2.6).
     TF_LITE_AUDIO_VOCODER = 202;
+
+    // -------------------------------------------------------------------------
+    // Visual / Image Generation (VQ Embedder / GenHead / VQ Decoder) (300..399)
+    // -------------------------------------------------------------------------
+    // Discrete VQ image token embedder + projector mapping VQ token IDs into
+    // LLM hidden space (e.g., gen_embed + gen_aligner in Janus-Pro).
+    TF_LITE_VQ_IMAGE_EMBEDDER = 300;
+    // Autoregressive visual token head projecting LLM hidden states to VQ
+    // codebook logits (e.g., gen_head in Janus-Pro).
+    TF_LITE_GEN_HEAD = 301;
+    // Discrete VQ image decoder reconstructing RGB pixel values from a grid of
+    // VQ token IDs (e.g., gen_vision_model decode_code in Janus-Pro).
+    TF_LITE_VQ_IMAGE_DECODER = 302;
   }
 
   // Any2Any model architecture type and parameters.

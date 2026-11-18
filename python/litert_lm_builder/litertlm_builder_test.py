@@ -26,12 +26,17 @@ from litert_lm_builder import litertlm_core
 from litert_lm_builder import litertlm_header_schema_py_generated as schema
 from litert_lm_builder import litertlm_peek
 from runtime.proto import any2any_metadata_pb2
+from runtime.proto import any2any_model_type_pb2
+from runtime.proto import any2any_session_config_pb2
 from runtime.proto import embedding_metadata_pb2
 from runtime.proto import executor_metadata_pb2
+from runtime.proto import image_gen_model_type_pb2
 from runtime.proto import llm_metadata_pb2
 from runtime.proto import speech2text_metadata_pb2
+from runtime.proto import speech2text_model_type_pb2
 from runtime.proto import text2image_metadata_pb2
 from runtime.proto import text2speech_metadata_pb2
+from runtime.proto import text2speech_model_type_pb2
 
 _TOML_TEMPLATE = """
 # A template for testing the TOML parser.
@@ -2554,6 +2559,233 @@ data_path = "{vocoder_path}"
     self.assertEqual(
         litertlm_builder._version_less_than(version, other_version), expected
     )
+
+  def test_any2any_visual_gen_tflite_model_types_and_closed_enum(self):
+    """Tests Janus-Pro Any2Any TfLiteModelType values and closed enum enforcement."""
+    all_types = litertlm_builder.get_all_tflite_model_types()
+    self.assertIn("vq_image_embedder", all_types)
+    self.assertIn("gen_head", all_types)
+    self.assertIn("vq_image_decoder", all_types)
+
+    tflite_path = self._create_dummy_file("visual_gen.tflite", b"dummy")
+    any2any_path = self._create_dummy_file(
+        "any2any_vg.pb",
+        any2any_metadata_pb2.Any2AnyMetadata().SerializeToString(),
+    )
+
+    # Resolve via capability-scoped proto enum ints.
+    builder_ints = litertlm_builder.LitertLmFileBuilder()
+    builder_ints.add_any2any_metadata(any2any_path)
+    builder_ints.add_tflite_model(
+        tflite_path,
+        any2any_metadata_pb2.Any2AnyMetadata.TF_LITE_VQ_IMAGE_EMBEDDER,
+    )
+    builder_ints.add_tflite_model(
+        tflite_path,
+        any2any_metadata_pb2.Any2AnyMetadata.TF_LITE_GEN_HEAD,
+    )
+    builder_ints.add_tflite_model(
+        tflite_path,
+        any2any_metadata_pb2.Any2AnyMetadata.TF_LITE_VQ_IMAGE_DECODER,
+    )
+    ss_ints = self._build_and_read_litertlm(builder_ints)
+    self.assertIn(
+        "Key: model_type, Value (String): tf_lite_vq_image_embedder", ss_ints
+    )
+    self.assertIn("Key: model_type, Value (String): tf_lite_gen_head", ss_ints)
+    self.assertIn(
+        "Key: model_type, Value (String): tf_lite_vq_image_decoder", ss_ints
+    )
+
+    # Resolve via TF-free string names.
+    builder_strs = litertlm_builder.LitertLmFileBuilder()
+    builder_strs.add_any2any_metadata(any2any_path)
+    builder_strs.add_tflite_model(tflite_path, "vq_image_embedder")
+    builder_strs.add_tflite_model(tflite_path, "gen_head")
+    builder_strs.add_tflite_model(tflite_path, "vq_image_decoder")
+    ss_strs = self._build_and_read_litertlm(builder_strs)
+    self.assertIn(
+        "Key: model_type, Value (String): tf_lite_vq_image_embedder", ss_strs
+    )
+    self.assertIn("Key: model_type, Value (String): tf_lite_gen_head", ss_strs)
+    self.assertIn(
+        "Key: model_type, Value (String): tf_lite_vq_image_decoder", ss_strs
+    )
+
+    # Arbitrary/custom TFLite subgraph keys remain strictly rejected.
+    builder_invalid = litertlm_builder.LitertLmFileBuilder()
+    builder_invalid.add_any2any_metadata(any2any_path)
+    with self.assertRaisesRegex(ValueError, "Unknown TfLiteModelType"):
+      builder_invalid.add_tflite_model(tflite_path, "custom_subgraph")
+    with self.assertRaises(ValueError):
+      builder_invalid.add_tflite_model(tflite_path, 9999)
+
+  def test_any2any_session_config_visual_gen_fields(self):
+    """Tests Janus-Pro visual generation fields on Any2AnySessionConfig."""
+    cfg = any2any_session_config_pb2.Any2AnySessionConfig(
+        generate_image=True,
+        cfg_weight=5.0,
+        image_temperature=0.85,
+        seed=123456789,
+    )
+    parsed = any2any_session_config_pb2.Any2AnySessionConfig()
+    parsed.ParseFromString(cfg.SerializeToString())
+    self.assertTrue(parsed.generate_image)
+    self.assertAlmostEqual(parsed.cfg_weight, 5.0, places=5)
+    self.assertAlmostEqual(parsed.image_temperature, 0.85, places=5)
+    self.assertEqual(parsed.seed, 123456789)
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="any2any",
+          proto_cls=any2any_metadata_pb2.Any2AnyMetadata,
+          model_type_field="any2any_model_type",
+          add_method="add_any2any_metadata",
+          section_data_type=schema.AnySectionDataType.Any2AnyMetadataProto,
+          known_payload_cls=any2any_model_type_pb2.MiniCpmO,
+          known_payload_kwargs={"llm_hidden_size": 4096, "voice": "custom"},
+      ),
+      dict(
+          testcase_name="speech2text",
+          proto_cls=speech2text_metadata_pb2.Speech2TextMetadata,
+          model_type_field="asr_model_type",
+          add_method="add_speech2text_metadata",
+          section_data_type=schema.AnySectionDataType.Speech2TextMetadataProto,
+          known_payload_cls=speech2text_model_type_pb2.Whisper,
+          known_payload_kwargs={},
+      ),
+      dict(
+          testcase_name="text2speech",
+          proto_cls=text2speech_metadata_pb2.Text2SpeechMetadata,
+          model_type_field="tts_model_type",
+          add_method="add_text2speech_metadata",
+          section_data_type=schema.AnySectionDataType.Text2SpeechMetadataProto,
+          known_payload_cls=text2speech_model_type_pb2.Kokoro,
+          known_payload_kwargs={"voice_name": "custom_kokoro"},
+      ),
+      dict(
+          testcase_name="text2image",
+          proto_cls=text2image_metadata_pb2.Text2ImageMetadata,
+          model_type_field="image_gen_model_type",
+          add_method="add_text2image_metadata",
+          section_data_type=schema.AnySectionDataType.Text2ImageMetadataProto,
+          known_payload_cls=image_gen_model_type_pb2.Flux2Klein,
+          known_payload_kwargs={"text_embed_table_key": "custom_embed"},
+      ),
+  )
+  def test_omni_custom_model_any_roundtrip_and_peek(
+      self,
+      proto_cls,
+      model_type_field,
+      add_method,
+      section_data_type,
+      known_payload_cls,
+      known_payload_kwargs,
+  ):
+    """Tests google.protobuf.Any custom_model build, peek, dump, and rebuild."""
+    # 1. Registered proto payload packed via Any.Pack().
+    known_msg = proto_cls()
+    known_payload = known_payload_cls(**known_payload_kwargs)
+    getattr(known_msg, model_type_field).custom_model.Pack(known_payload)
+    known_pb_path = self._create_dummy_file(
+        f"{model_type_field}_known.pb", known_msg.SerializeToString()
+    )
+    builder = litertlm_builder.LitertLmFileBuilder()
+    getattr(builder, add_method)(known_pb_path)
+    known_litertlm = os.path.join(
+        self.temp_dir, f"{model_type_field}_k.litertlm"
+    )
+    with litertlm_core.open_file(known_litertlm, "wb") as f:
+      builder.build(f)
+
+    known_dump = os.path.join(self.temp_dir, f"{model_type_field}_known_dump")
+    known_stream = io.StringIO()
+    litertlm_peek.peek_litertlm_file(known_litertlm, known_dump, known_stream)
+    known_peek_out = known_stream.getvalue()
+    self.assertIn(known_payload_cls.DESCRIPTOR.full_name, known_peek_out)
+
+    # Rebuild from dumped model.toml + .pbtext and verify Any unpacks cleanly.
+    rebuilt_known = os.path.join(
+        self.temp_dir, f"{model_type_field}_k_rebuilt.litertlm"
+    )
+    rebuilt_builder = litertlm_builder.LitertLmFileBuilder.from_toml_file(
+        os.path.join(known_dump, "model.toml")
+    )
+    with litertlm_core.open_file(rebuilt_known, "wb") as f:
+      rebuilt_builder.build(f)
+    rebuilt_msg = self._read_proto_section(
+        rebuilt_known, section_data_type, proto_cls
+    )
+    rebuilt_model_type = getattr(rebuilt_msg, model_type_field)
+    self.assertEqual(
+        rebuilt_model_type.WhichOneof("model_type"), "custom_model"
+    )
+    unpacked = known_payload_cls()
+    self.assertTrue(rebuilt_model_type.custom_model.Unpack(unpacked))
+    self.assertEqual(unpacked, known_payload)
+
+    # 2. Unregistered custom type_url with opaque wire bytes (binary and
+    # textproto).
+    custom_type_url = "type.googleapis.com/example.custom.JanusPro"
+    custom_bytes = b"\x08\x2a\x12\x03abc"
+    unreg_msg = proto_cls()
+    unreg_any = getattr(unreg_msg, model_type_field).custom_model
+    unreg_any.type_url = custom_type_url
+    unreg_any.value = custom_bytes
+
+    for fmt_name, content in (
+        ("bin", unreg_msg.SerializeToString()),
+        ("txt", text_format.MessageToString(unreg_msg).encode("utf-8")),
+    ):
+      in_path = self._create_dummy_file(
+          f"{model_type_field}_unreg_{fmt_name}.proto", content
+      )
+      b = litertlm_builder.LitertLmFileBuilder()
+      getattr(b, add_method)(in_path)
+      out_path = os.path.join(
+          self.temp_dir, f"{model_type_field}_unreg_{fmt_name}.litertlm"
+      )
+      with litertlm_core.open_file(out_path, "wb") as f:
+        b.build(f)
+
+      dump_dir = os.path.join(
+          self.temp_dir, f"{model_type_field}_unreg_{fmt_name}_dump"
+      )
+      peek_stream = io.StringIO()
+      litertlm_peek.peek_litertlm_file(out_path, dump_dir, peek_stream)
+      peek_out = peek_stream.getvalue()
+      self.assertIn(custom_type_url, peek_out)
+
+      # Rebuild from dumped model.toml + .pbtext and verify exact preservation.
+      rebuilt_path = os.path.join(
+          self.temp_dir, f"{model_type_field}_unreg_{fmt_name}_rebuilt.litertlm"
+      )
+      rb = litertlm_builder.LitertLmFileBuilder.from_toml_file(
+          os.path.join(dump_dir, "model.toml")
+      )
+      with litertlm_core.open_file(rebuilt_path, "wb") as f:
+        rb.build(f)
+      parsed = self._read_proto_section(
+          rebuilt_path, section_data_type, proto_cls
+      )
+      parsed_mt = getattr(parsed, model_type_field)
+      self.assertEqual(parsed_mt.WhichOneof("model_type"), "custom_model")
+      self.assertEqual(parsed_mt.custom_model.type_url, custom_type_url)
+      self.assertEqual(parsed_mt.custom_model.value, custom_bytes)
+
+  def _read_proto_section(self, litertlm_path, section_data_type, proto_cls):
+    metadata = litertlm_peek.read_litertlm_header(litertlm_path, io.StringIO())
+    sec_meta = metadata.SectionMetadata()
+    for i in range(sec_meta.ObjectsLength()):
+      sec = sec_meta.Objects(i)
+      if sec.DataType() == section_data_type:
+        with litertlm_core.open_file(litertlm_path, "rb") as f:
+          f.seek(sec.BeginOffset())
+          raw = f.read(sec.EndOffset() - sec.BeginOffset())
+        msg = proto_cls()
+        msg.ParseFromString(raw)
+        return msg
+    self.fail(f"Section {section_data_type} not found in {litertlm_path}")
 
 
 class ResolveWeightExternalizationTest(parameterized.TestCase):

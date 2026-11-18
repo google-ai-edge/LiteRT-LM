@@ -16,6 +16,8 @@ syntax = "proto3";
 
 package litert.lm.proto;
 
+import "google/protobuf/any.proto";
+
 option java_multiple_files = true;
 option java_outer_classname = "Text2SpeechModelTypeOuterClass";
 
@@ -49,5 +51,9 @@ message Text2SpeechModelType {
   oneof model_type {
     Kokoro kokoro = 1;
     Qwen3Tts qwen3_tts = 2;
+    // Custom architecture-specific parameters for out-of-tree models. The
+    // runtime does not interpret this payload; only the factory registered for
+    // the model name unpacks it.
+    google.protobuf.Any custom_model = 100;
   }
 }

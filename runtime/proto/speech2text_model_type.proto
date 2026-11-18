@@ -16,6 +16,8 @@ syntax = "proto3";
 
 package litert.lm.proto;
 
+import "google/protobuf/any.proto";
+
 option java_multiple_files = true;
 option java_outer_classname = "Speech2TextModelTypeOuterClass";
 
@@ -37,6 +39,10 @@ message Speech2TextModelType {
     Parakeet parakeet = 2;
     Moonshine moonshine = 3;
     Qwen3Asr qwen3_asr = 4;
+    // Custom architecture-specific parameters for out-of-tree models. The
+    // runtime does not interpret this payload; only the factory registered for
+    // the model name unpacks it.
+    google.protobuf.Any custom_model = 100;
   }
   reserved 5;
 }

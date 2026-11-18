@@ -55,4 +55,13 @@ message Any2AnySessionConfig {
   optional int32 tts_top_k = 11;
   // Optional system prompt override.
   optional string system_prompt = 12;
+  // Whether to generate an output image instead of text (for models supporting
+  // autoregressive visual generation such as Janus-Pro).
+  optional bool generate_image = 13;
+  // Optional classifier-free guidance weight for visual generation (e.g., 5.0).
+  optional float cfg_weight = 14;
+  // Optional sampling temperature for visual generation (e.g., 1.0).
+  optional float image_temperature = 15;
+  // Optional random seed for visual/text generation sampling.
+  optional int64 seed = 16;
 }

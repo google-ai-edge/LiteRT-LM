@@ -23,6 +23,7 @@
 #include <variant>
 #include <vector>
 
+#include "google/protobuf/any.pb.h"
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -50,9 +51,15 @@
 #include "omni/omni_session.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/proto/any2any_metadata.pb.h"
+#include "runtime/proto/any2any_model_type.pb.h"
 #include "runtime/proto/any2any_session_config.pb.h"
+#include "runtime/proto/image_gen_model_type.pb.h"
 #include "runtime/proto/speech2text_metadata.pb.h"
+#include "runtime/proto/speech2text_model_type.pb.h"
 #include "runtime/proto/speech2text_session_config.pb.h"
+#include "runtime/proto/text2image_metadata.pb.h"
+#include "runtime/proto/text2speech_metadata.pb.h"
+#include "runtime/proto/text2speech_model_type.pb.h"
 #include "runtime/proto/text2speech_session_config.pb.h"
 #include "runtime/util/file_util.h"
 #include "schema/core/litertlm_header_schema_generated.h"
@@ -121,6 +128,22 @@ void WriteTestLitertLmWithAny2AnyMetadata(
     const lm::proto::Any2AnyMetadata& embedded_metadata) {
   WriteTestLitertLmWithMetadataSection(
       path, lm::schema::AnySectionDataType_Any2AnyMetadataProto,
+      embedded_metadata);
+}
+
+void WriteTestLitertLmWithText2SpeechMetadata(
+    const std::string& path,
+    const lm::proto::Text2SpeechMetadata& embedded_metadata) {
+  WriteTestLitertLmWithMetadataSection(
+      path, lm::schema::AnySectionDataType_Text2SpeechMetadataProto,
+      embedded_metadata);
+}
+
+void WriteTestLitertLmWithText2ImageMetadata(
+    const std::string& path,
+    const lm::proto::Text2ImageMetadata& embedded_metadata) {
+  WriteTestLitertLmWithMetadataSection(
+      path, lm::schema::AnySectionDataType_Text2ImageMetadataProto,
       embedded_metadata);
 }
 
@@ -772,6 +795,241 @@ TEST(OmniRegistryTest, ConfiguresNpuEnvironmentAndCompilationOptions) {
   EXPECT_THAT(factory2, NotNull());
   EXPECT_EQ(captured_dispatch_dir, "/custom/dispatch/libs");
   EXPECT_EQ(captured_compiler_plugin_dir, "/custom/dispatch/libs");
+}
+
+TEST(OmniRegistryTest, MergesEmbeddedCustomModelAnyAcrossAllOmniMetadataTypes) {
+  auto& registry = OmniRegistry::Get();
+
+  lm::proto::Any2AnySessionConfig embedded_payload;
+  embedded_payload.set_max_new_tokens(321);
+  embedded_payload.set_system_prompt("embedded-custom-config");
+  lm::proto::Any2AnySessionConfig override_payload;
+  override_payload.set_max_new_tokens(999);
+
+  // 1. Any2AnyMetadata: preserve embedded custom_model when caller omits
+  // any2any_model_type, and overwrite it when caller supplies custom_model.
+  {
+    lm::proto::Any2AnyMetadata captured;
+    ASSERT_OK(registry.RegisterSessionFactory(RegistrySpec{
+        .model_names = {"custom-any-a2a-model"},
+        .get_session_factory =
+            [&](absl::string_view, const OmniEngine::Settings&,
+                const MessageLite*, const MessageLite* absl_nullable metadata,
+                ::litert::Environment&, ::litert::Options&,
+                std::shared_ptr<lm::ModelResources>)
+            -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+          captured.Clear();
+          if (metadata != nullptr) {
+            captured.CheckTypeAndMergeFrom(*metadata);
+          }
+          return std::make_unique<FakeSessionFactory>();
+        },
+        .session_config_type_id = "Any2Any",
+    }));
+    absl::Cleanup c = [&] { registry.UnregisterModel("custom-any-a2a-model"); };
+
+    const std::string path =
+        absl::StrCat(::testing::TempDir(), "/custom_any_a2a.litertlm");
+    lm::proto::Any2AnyMetadata embedded;
+    embedded.set_input_sample_rate_hz(16000);
+    ASSERT_TRUE(
+        embedded.mutable_any2any_model_type()->mutable_custom_model()->PackFrom(
+            embedded_payload));
+    WriteTestLitertLmWithAny2AnyMetadata(path, embedded);
+    const OmniEngine::Settings settings{.cache_dir = ":nocache",
+                                        .model_path = path};
+
+    lm::proto::Any2AnyMetadata scalar_override;
+    scalar_override.set_system_prompt("caller-prompt");
+    ASSERT_OK(registry.CreateSessionFactory("custom-any-a2a-model", settings,
+                                            /*session_config=*/nullptr,
+                                            &scalar_override));
+    EXPECT_EQ(captured.input_sample_rate_hz(), 16000);
+    EXPECT_EQ(captured.system_prompt(), "caller-prompt");
+    ASSERT_TRUE(captured.any2any_model_type().has_custom_model());
+    EXPECT_TRUE(captured.any2any_model_type()
+                    .custom_model()
+                    .Is<lm::proto::Any2AnySessionConfig>());
+    lm::proto::Any2AnySessionConfig unpacked;
+    ASSERT_TRUE(
+        captured.any2any_model_type().custom_model().UnpackTo(&unpacked));
+    EXPECT_EQ(unpacked.max_new_tokens(), 321);
+    EXPECT_EQ(unpacked.system_prompt(), "embedded-custom-config");
+
+    lm::proto::Any2AnyMetadata custom_override;
+    ASSERT_TRUE(custom_override.mutable_any2any_model_type()
+                    ->mutable_custom_model()
+                    ->PackFrom(override_payload));
+    ASSERT_OK(registry.CreateSessionFactory("custom-any-a2a-model", settings,
+                                            /*session_config=*/nullptr,
+                                            &custom_override));
+    ASSERT_TRUE(captured.any2any_model_type().has_custom_model());
+    lm::proto::Any2AnySessionConfig unpacked_override;
+    ASSERT_TRUE(captured.any2any_model_type().custom_model().UnpackTo(
+        &unpacked_override));
+    EXPECT_EQ(unpacked_override.max_new_tokens(), 999);
+    EXPECT_FALSE(unpacked_override.has_system_prompt());
+  }
+
+  // 2. Speech2TextMetadata: preserve and replace custom_model.
+  {
+    lm::proto::Speech2TextMetadata captured;
+    ASSERT_OK(registry.RegisterSessionFactory(RegistrySpec{
+        .model_names = {"custom-any-asr-model"},
+        .get_session_factory =
+            [&](absl::string_view, const OmniEngine::Settings&,
+                const MessageLite*, const MessageLite* absl_nullable metadata,
+                ::litert::Environment&, ::litert::Options&,
+                std::shared_ptr<lm::ModelResources>)
+            -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+          captured.Clear();
+          if (metadata != nullptr) {
+            captured.CheckTypeAndMergeFrom(*metadata);
+          }
+          return std::make_unique<FakeSessionFactory>();
+        },
+        .session_config_type_id = "Speech2Text",
+    }));
+    absl::Cleanup c = [&] { registry.UnregisterModel("custom-any-asr-model"); };
+
+    const std::string path =
+        absl::StrCat(::testing::TempDir(), "/custom_any_asr.litertlm");
+    lm::proto::Speech2TextMetadata embedded;
+    embedded.set_sample_rate_hz(16000);
+    ASSERT_TRUE(
+        embedded.mutable_asr_model_type()->mutable_custom_model()->PackFrom(
+            embedded_payload));
+    WriteTestLitertLmWithSpeech2TextMetadata(path, embedded);
+    const OmniEngine::Settings settings{.cache_dir = ":nocache",
+                                        .model_path = path};
+
+    lm::proto::Speech2TextMetadata scalar_override;
+    scalar_override.set_input_milliseconds(5000);
+    ASSERT_OK(registry.CreateSessionFactory("custom-any-asr-model", settings,
+                                            /*session_config=*/nullptr,
+                                            &scalar_override));
+    ASSERT_TRUE(captured.asr_model_type().has_custom_model());
+    lm::proto::Any2AnySessionConfig unpacked;
+    ASSERT_TRUE(captured.asr_model_type().custom_model().UnpackTo(&unpacked));
+    EXPECT_EQ(unpacked.max_new_tokens(), 321);
+
+    lm::proto::Speech2TextMetadata custom_override;
+    ASSERT_TRUE(custom_override.mutable_asr_model_type()
+                    ->mutable_custom_model()
+                    ->PackFrom(override_payload));
+    ASSERT_OK(registry.CreateSessionFactory("custom-any-asr-model", settings,
+                                            /*session_config=*/nullptr,
+                                            &custom_override));
+    lm::proto::Any2AnySessionConfig unpacked_override;
+    ASSERT_TRUE(
+        captured.asr_model_type().custom_model().UnpackTo(&unpacked_override));
+    EXPECT_EQ(unpacked_override.max_new_tokens(), 999);
+    EXPECT_FALSE(unpacked_override.has_system_prompt());
+  }
+
+  // 3. Text2SpeechMetadata: preserve and replace custom_model.
+  {
+    lm::proto::Text2SpeechMetadata captured;
+    ASSERT_OK(registry.RegisterSessionFactory(RegistrySpec{
+        .model_names = {"custom-any-tts-model"},
+        .get_session_factory =
+            [&](absl::string_view, const OmniEngine::Settings&,
+                const MessageLite*, const MessageLite* absl_nullable metadata,
+                ::litert::Environment&, ::litert::Options&,
+                std::shared_ptr<lm::ModelResources>)
+            -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+          captured.Clear();
+          if (metadata != nullptr) {
+            captured.CheckTypeAndMergeFrom(*metadata);
+          }
+          return std::make_unique<FakeSessionFactory>();
+        },
+        .session_config_type_id = "Text2Speech",
+    }));
+    absl::Cleanup c = [&] { registry.UnregisterModel("custom-any-tts-model"); };
+
+    const std::string path =
+        absl::StrCat(::testing::TempDir(), "/custom_any_tts.litertlm");
+    lm::proto::Text2SpeechMetadata embedded;
+    embedded.set_output_sample_rate(24000);
+    ASSERT_TRUE(
+        embedded.mutable_tts_model_type()->mutable_custom_model()->PackFrom(
+            embedded_payload));
+    WriteTestLitertLmWithText2SpeechMetadata(path, embedded);
+    const OmniEngine::Settings settings{.cache_dir = ":nocache",
+                                        .model_path = path};
+
+    ASSERT_OK(registry.CreateSessionFactory("custom-any-tts-model", settings));
+    ASSERT_TRUE(captured.tts_model_type().has_custom_model());
+    lm::proto::Any2AnySessionConfig unpacked;
+    ASSERT_TRUE(captured.tts_model_type().custom_model().UnpackTo(&unpacked));
+    EXPECT_EQ(unpacked.max_new_tokens(), 321);
+
+    lm::proto::Text2SpeechMetadata custom_override;
+    ASSERT_TRUE(custom_override.mutable_tts_model_type()
+                    ->mutable_custom_model()
+                    ->PackFrom(override_payload));
+    ASSERT_OK(registry.CreateSessionFactory("custom-any-tts-model", settings,
+                                            /*session_config=*/nullptr,
+                                            &custom_override));
+    lm::proto::Any2AnySessionConfig unpacked_override;
+    ASSERT_TRUE(
+        captured.tts_model_type().custom_model().UnpackTo(&unpacked_override));
+    EXPECT_EQ(unpacked_override.max_new_tokens(), 999);
+    EXPECT_FALSE(unpacked_override.has_system_prompt());
+  }
+
+  // 4. Text2ImageMetadata: preserve and replace custom_model.
+  {
+    lm::proto::Text2ImageMetadata captured;
+    ASSERT_OK(registry.RegisterSessionFactory(RegistrySpec{
+        .model_names = {"custom-any-t2i-model"},
+        .get_session_factory =
+            [&](absl::string_view, const OmniEngine::Settings&,
+                const MessageLite*, const MessageLite* absl_nullable metadata,
+                ::litert::Environment&, ::litert::Options&,
+                std::shared_ptr<lm::ModelResources>)
+            -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+          captured.Clear();
+          if (metadata != nullptr) {
+            captured.CheckTypeAndMergeFrom(*metadata);
+          }
+          return std::make_unique<FakeSessionFactory>();
+        },
+        .session_config_type_id = "Text2Image",
+    }));
+    absl::Cleanup c = [&] { registry.UnregisterModel("custom-any-t2i-model"); };
+
+    const std::string path =
+        absl::StrCat(::testing::TempDir(), "/custom_any_t2i.litertlm");
+    lm::proto::Text2ImageMetadata embedded;
+    ASSERT_TRUE(embedded.mutable_image_gen_model_type()
+                    ->mutable_custom_model()
+                    ->PackFrom(embedded_payload));
+    WriteTestLitertLmWithText2ImageMetadata(path, embedded);
+    const OmniEngine::Settings settings{.cache_dir = ":nocache",
+                                        .model_path = path};
+
+    ASSERT_OK(registry.CreateSessionFactory("custom-any-t2i-model", settings));
+    ASSERT_TRUE(captured.image_gen_model_type().has_custom_model());
+    lm::proto::Any2AnySessionConfig unpacked;
+    ASSERT_TRUE(
+        captured.image_gen_model_type().custom_model().UnpackTo(&unpacked));
+    EXPECT_EQ(unpacked.max_new_tokens(), 321);
+
+    lm::proto::Text2ImageMetadata custom_override;
+    ASSERT_TRUE(custom_override.mutable_image_gen_model_type()
+                    ->mutable_custom_model()
+                    ->PackFrom(override_payload));
+    ASSERT_OK(registry.CreateSessionFactory("custom-any-t2i-model", settings,
+                                            /*session_config=*/nullptr,
+                                            &custom_override));
+    lm::proto::Any2AnySessionConfig unpacked_override;
+    ASSERT_TRUE(captured.image_gen_model_type().custom_model().UnpackTo(
+        &unpacked_override));
+    EXPECT_EQ(unpacked_override.max_new_tokens(), 999);
+    EXPECT_FALSE(unpacked_override.has_system_prompt());
+  }
 }
 
 }  // namespace
