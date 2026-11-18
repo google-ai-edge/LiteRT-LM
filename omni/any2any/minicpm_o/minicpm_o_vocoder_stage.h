@@ -23,8 +23,8 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/any2any/io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
-#include "omni/any2any/minicpm_o/minicpm_o_tts_stage.h"
 #include "omni/base/io_types.h"
 #include "omni/base/litert_runner.h"
 #include "omni/base/stage.h"
@@ -42,7 +42,7 @@ namespace litert::omni::any2any {
 class MiniCpmOVocoderStage : public SingleThreadedStageWithDeque<Output> {
  public:
   static absl::StatusOr<std::unique_ptr<MiniCpmOVocoderStage>> Create(
-      Stage<MiniCpmOTtsOutput>* absl_nonnull tts_stage,
+      Stage<Any2AnyTtsOutput>* absl_nonnull tts_stage,
       const MiniCpmOModelConfig& config,
       std::unique_ptr<LiteRtRunner> absl_nullable vocoder_runner = nullptr);
 
@@ -57,19 +57,19 @@ class MiniCpmOVocoderStage : public SingleThreadedStageWithDeque<Output> {
 
  private:
   MiniCpmOVocoderStage(
-      Stage<MiniCpmOTtsOutput>* absl_nonnull tts_stage,
+      Stage<Any2AnyTtsOutput>* absl_nonnull tts_stage,
       MiniCpmOModelConfig config,
       std::unique_ptr<LiteRtRunner> absl_nullable vocoder_runner)
       : tts_stage_(*tts_stage),
         config_(std::move(config)),
         vocoder_runner_(std::move(vocoder_runner)) {}
 
-  absl::Status ProcessTtsOutput(const MiniCpmOTtsOutput& tts_out);
+  absl::Status ProcessTtsOutput(const Any2AnyTtsOutput& tts_out);
 
   absl::StatusOr<std::vector<float>> SynthesizeWaveform(
-      const MiniCpmOTtsOutput& tts_out);
+      const Any2AnyTtsOutput& tts_out);
 
-  Stage<MiniCpmOTtsOutput>& tts_stage_;
+  Stage<Any2AnyTtsOutput>& tts_stage_;
   MiniCpmOModelConfig config_;
 
   std::unique_ptr<LiteRtRunner> vocoder_runner_;

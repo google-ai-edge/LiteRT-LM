@@ -165,6 +165,29 @@ cc_library(
 )
 
 cc_library(
+    name = "qwen_omni_tts_stage",
+    srcs = ["qwen_omni_tts_stage.cc"],
+    hdrs = ["qwen_omni_tts_stage.h"],
+    deps = [
+        ":qwen_omni_model_config",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "//omni/any2any:any2any_tts_decoder",
+        "//omni/any2any:io_types",
+        "//omni/base:litert_runner",
+        "//omni/base:stage",
+    ],
+)
+
+cc_library(
     name = "qwen_omni_test_utils",
     testonly = True,
     srcs = ["qwen_omni_test_utils.cc"],
@@ -304,5 +327,34 @@ cc_test(
         "//support/util:convert_tensor_buffer",
         "//support/util:test_utils",
         "@litert//tflite/types:half",
+    ],
+)
+
+cc_test(
+    name = "qwen_omni_tts_stage_test",
+    srcs = ["qwen_omni_tts_stage_test.cc"],
+    deps = [
+        ":qwen_omni_model_config",
+        ":qwen_omni_test_utils",
+        ":qwen_omni_tts_stage",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/any2any:any2any_test_utils",
+        "//omni/any2any:io_types",
+        "//omni/base:litert_runner",
+        "//omni/base:mock_litert_runner",
+        "//omni/base:model_utils",
+        "//omni/base:stage",
+        "//runtime/executor:executor_settings_base",
+        "//support/util:convert_tensor_buffer",
+        "//support/util:test_utils",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )

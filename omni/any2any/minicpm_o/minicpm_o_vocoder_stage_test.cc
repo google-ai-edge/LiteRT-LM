@@ -29,8 +29,8 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/any2any/io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
-#include "omni/any2any/minicpm_o/minicpm_o_tts_stage.h"
 #include "omni/base/io_types.h"
 #include "omni/base/mock_litert_runner.h"
 #include "omni/base/stage.h"
@@ -47,9 +47,9 @@ using ::testing::FloatNear;
 using ::testing::NiceMock;
 using ::testing::Return;
 
-class FakeTtsStage : public SingleThreadedStageWithDeque<MiniCpmOTtsOutput> {
+class FakeTtsStage : public SingleThreadedStageWithDeque<Any2AnyTtsOutput> {
  public:
-  void Push(MiniCpmOTtsOutput out) { PushOutput(std::move(out)); }
+  void Push(Any2AnyTtsOutput out) { PushOutput(std::move(out)); }
 
  protected:
   bool NeedScheduleInternal() const override { return false; }
@@ -164,7 +164,7 @@ TEST(MiniCpmOVocoderStageTest,
   ASSERT_OK_AND_ASSIGN(auto vocoder_stage,
                        MiniCpmOVocoderStage::Create(&tts_stage, config));
 
-  tts_stage.Push(MiniCpmOTtsOutput{
+  tts_stage.Push(Any2AnyTtsOutput{
       .text = "Hello world",
       .has_text = true,
       .is_text_final = true,
@@ -256,7 +256,7 @@ TEST(MiniCpmOVocoderStageTest,
   // Chunk 0 (emitted=0, valid=2): history={4218}, chunk={1, 2}, lookahead={3}.
   // Chunk 1 (emitted=2, valid=1): history={2}, chunk={3, 4218},
   // lookahead={4218}.
-  tts_stage.Push(MiniCpmOTtsOutput{
+  tts_stage.Push(Any2AnyTtsOutput{
       .text = "Audio",
       .has_text = true,
       .is_text_final = true,
@@ -337,7 +337,7 @@ TEST(MiniCpmOVocoderStageTest,
                        MiniCpmOVocoderStage::Create(&tts_stage, config,
                                                     std::move(vocoder_runner)));
 
-  tts_stage.Push(MiniCpmOTtsOutput{
+  tts_stage.Push(Any2AnyTtsOutput{
       .text = "Hello",
       .has_text = true,
       .is_text_final = true,
@@ -395,7 +395,7 @@ TEST(MiniCpmOVocoderStageTest, PropagatesVocoderRunnerError) {
                        MiniCpmOVocoderStage::Create(&tts_stage, config,
                                                     std::move(vocoder_runner)));
 
-  tts_stage.Push(MiniCpmOTtsOutput{
+  tts_stage.Push(Any2AnyTtsOutput{
       .audio_codes = {42},
   });
 
@@ -451,7 +451,7 @@ TEST(MiniCpmOVocoderStageTest, CapsSeamCrossfadeTo48SamplesOnLongHistory) {
                        MiniCpmOVocoderStage::Create(&tts_stage, config,
                                                     std::move(vocoder_runner)));
 
-  tts_stage.Push(MiniCpmOTtsOutput{
+  tts_stage.Push(Any2AnyTtsOutput{
       .is_text_final = true,
       .audio_codes = {10, 20},
   });

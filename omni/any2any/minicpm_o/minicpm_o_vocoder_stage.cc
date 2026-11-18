@@ -29,8 +29,8 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "omni/any2any/io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
-#include "omni/any2any/minicpm_o/minicpm_o_tts_stage.h"
 #include "omni/base/io_types.h"
 #include "omni/base/litert_runner.h"
 #include "omni/base/stage.h"
@@ -40,7 +40,7 @@ namespace litert::omni::any2any {
 
 absl::StatusOr<std::unique_ptr<MiniCpmOVocoderStage>>
 MiniCpmOVocoderStage::Create(
-    Stage<MiniCpmOTtsOutput>* absl_nonnull tts_stage,
+    Stage<Any2AnyTtsOutput>* absl_nonnull tts_stage,
     const MiniCpmOModelConfig& config,
     std::unique_ptr<LiteRtRunner> absl_nullable vocoder_runner) {
   if (config.vocoder_history_tokens < 0 || config.vocoder_chunk_tokens <= 0 ||
@@ -94,7 +94,7 @@ MiniCpmOVocoderStage::Create(
 }
 
 absl::StatusOr<std::vector<float>> MiniCpmOVocoderStage::SynthesizeWaveform(
-    const MiniCpmOTtsOutput& tts_out) {
+    const Any2AnyTtsOutput& tts_out) {
   if (vocoder_runner_ == nullptr || tts_out.audio_codes.empty()) {
     return std::vector<float>{};
   }
@@ -171,7 +171,7 @@ absl::StatusOr<std::vector<float>> MiniCpmOVocoderStage::SynthesizeWaveform(
 }
 
 absl::Status MiniCpmOVocoderStage::ProcessTtsOutput(
-    const MiniCpmOTtsOutput& tts_out) {
+    const Any2AnyTtsOutput& tts_out) {
   if (tts_out.has_text && !tts_out.text.empty()) {
     PushOutput(TextOutput{.confirmed_text = tts_out.text});
   }

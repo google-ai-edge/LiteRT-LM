@@ -321,7 +321,7 @@ class FakeLlmStage : public SingleThreadedStageWithDeque<MiniCpmOLlmOutput> {
   absl::Status ScheduleInternal() override { return absl::OkStatus(); }
 };
 
-class FakeTtsStage : public SingleThreadedStageWithDeque<MiniCpmOTtsOutput> {
+class FakeTtsStage : public SingleThreadedStageWithDeque<Any2AnyTtsOutput> {
  protected:
   bool NeedScheduleInternal() const override { return false; }
   absl::Status ScheduleInternal() override { return absl::OkStatus(); }

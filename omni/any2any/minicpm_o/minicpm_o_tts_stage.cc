@@ -15,17 +15,13 @@
 #include "omni/any2any/minicpm_o/minicpm_o_tts_stage.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <iterator>
 #include <memory>
-#include <random>
-#include <tuple>
+#include <optional>
 #include <utility>
 #include <vector>
 
-#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
@@ -34,7 +30,8 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "litert/cc/litert_macros.h"  // from @litert
+#include "omni/any2any/any2any_tts_decoder.h"
+#include "omni/any2any/io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_llm_stage.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
 #include "omni/base/litert_runner.h"
@@ -43,12 +40,6 @@
 namespace litert::omni::any2any {
 namespace {
 
-// Threshold at or above which `config.max_tts_tokens` is treated as the default
-// turn cap and scaled up for long text responses.
-constexpr int kDefaultMaxTtsTokensThreshold = 1024;
-// Upper-bound acoustic token budget per spoken LLM text token (~0.8s of 25 Hz
-// speech per text token) when scaling `max_tts_tokens` for long responses.
-constexpr int kMaxAudioCodesPerTextToken = 20;
 // Minimum `tts_max_cache_len` at which dynamic KV-headroom text chunk sizing is
 // enabled (smaller cache lengths are used in unit tests with explicit chunk
 // sizes).
@@ -67,121 +58,6 @@ constexpr int kRemainderSplitMarginTokens = 6;
 // tokens (`4 + 2 = 6` steps), and decode speech tokens (`~58` steps).
 constexpr int kMinNextChunkReservedSteps = 64;
 
-// Applies CosyVoice2 / MiniCPM-o frequency-based repetition penalty
-// (`CustomRepetitionPenaltyLogitsProcessorRepeat`, `penalty > 1.0f`) over all
-// speech token occurrences in the last `window_size` elements of `history`,
-// scaling repeated token logits by `pow(penalty, freq)`.
-void ApplyRepetitionPenalty(absl::Span<float> logits,
-                            absl::Span<const int> history, float penalty,
-                            int window_size) {
-  if (penalty <= 1.0f || window_size <= 0) {
-    return;
-  }
-  const size_t start = (history.size() > static_cast<size_t>(window_size))
-                           ? (history.size() - static_cast<size_t>(window_size))
-                           : 0;
-  for (size_t i = start; i < history.size(); ++i) {
-    const int code = history[i];
-    if (code < 0 || static_cast<size_t>(code) >= logits.size()) {
-      continue;
-    }
-    if (logits[code] < 0.0f) {
-      logits[code] *= penalty;
-    } else {
-      logits[code] /= penalty;
-    }
-  }
-}
-
-// Selects the next speech token ID from `logits` using greedy argmax when
-// `!config.do_sample || config.tts_temperature <= 0.0f`, or temperature-scaled
-// top-k (`config.tts_top_k`) and nucleus (`config.tts_top_p`) sampling
-// otherwise.
-int SampleAudioCode(absl::Span<const float> logits,
-                    const MiniCpmOModelConfig& config, std::mt19937_64& rng) {
-  if (logits.empty()) {
-    return 0;
-  }
-  if (!config.do_sample || config.tts_temperature <= 0.0f) {
-    return static_cast<int>(std::distance(
-        logits.begin(), std::max_element(logits.begin(), logits.end())));
-  }
-
-  const double temp = std::max<double>(config.tts_temperature, 1e-6);
-  const float max_logit = *std::max_element(logits.begin(), logits.end());
-
-  std::vector<std::pair<double, int>> candidates;
-  candidates.reserve(logits.size());
-  for (size_t i = 0; i < logits.size(); ++i) {
-    const double p = std::exp((logits[i] - max_logit) / temp);
-    candidates.push_back({p, static_cast<int>(i)});
-  }
-
-  const int k =
-      (config.tts_top_k > 0)
-          ? std::min(config.tts_top_k, static_cast<int>(candidates.size()))
-          : static_cast<int>(candidates.size());
-  absl::c_partial_sort(
-      candidates, candidates.begin() + k,
-      [](const auto& a, const auto& b) { return a.first > b.first; });
-  candidates.resize(k);
-
-  double sum = 0.0;
-  for (const auto& c : candidates) {
-    sum += c.first;
-  }
-  if (sum <= 0.0) {
-    return candidates.front().second;
-  }
-
-  if (config.tts_top_p > 0.0f && config.tts_top_p < 1.0f &&
-      candidates.size() > 1) {
-    double cumulative = 0.0;
-    size_t keep = 0;
-    for (; keep < candidates.size(); ++keep) {
-      cumulative += candidates[keep].first / sum;
-      if (cumulative >= config.tts_top_p) {
-        ++keep;
-        break;
-      }
-    }
-    candidates.resize(std::max<size_t>(1, keep));
-  }
-
-  std::vector<double> weights;
-  weights.reserve(candidates.size());
-  for (const auto& c : candidates) {
-    weights.push_back(c.first);
-  }
-  std::discrete_distribution<int> dist(weights.begin(), weights.end());
-  return candidates[dist(rng)].second;
-}
-
-// Validates that `llm_out.llm_hidden_states` and `llm_out.generated_token_ids`
-// match `llm_out.num_tokens` and `llm_hidden_size`.
-absl::Status ValidateLlmAudioInputs(const MiniCpmOLlmOutput& llm_out,
-                                    int llm_hidden_size) {
-  const int raw_num_tokens = llm_out.num_tokens;
-  const size_t expected_hidden_size =
-      static_cast<size_t>(raw_num_tokens) *
-      static_cast<size_t>(llm_hidden_size);
-  if (llm_out.llm_hidden_states.size() != expected_hidden_size) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("MiniCpmOLlmOutput llm_hidden_states size (",
-                     llm_out.llm_hidden_states.size(),
-                     ") does not match num_tokens * llm_hidden_size (",
-                     expected_hidden_size, ")."));
-  }
-  if (!llm_out.generated_token_ids.empty() &&
-      static_cast<int>(llm_out.generated_token_ids.size()) != raw_num_tokens) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("MiniCpmOLlmOutput generated_token_ids size (",
-                     llm_out.generated_token_ids.size(),
-                     ") does not match num_tokens (", raw_num_tokens, ")."));
-  }
-  return absl::OkStatus();
-}
-
 // Computes the number of spoken LLM text tokens to group into the current TTS
 // chunk based on remaining KV-cache headroom after `prev_chunk_steps` and
 // near-end remainder balancing.
@@ -192,10 +68,9 @@ int ComputeTextChunkTokens(int remaining_tokens, int chunk_size,
       std::min(kMinDynamicChunkTokens, chunk_size);
   const int max_safe_tokens =
       (max_cache_len >= kMinDynamicChunkingCacheLen && has_prev_chunk)
-          ? std::clamp(
-                (max_cache_len - prev_chunk_steps) /
-                    kEstimatedKvStepsPerTextToken,
-                min_dynamic_chunk_tokens, chunk_size)
+          ? std::clamp((max_cache_len - prev_chunk_steps) /
+                           kEstimatedKvStepsPerTextToken,
+                       min_dynamic_chunk_tokens, chunk_size)
           : chunk_size;
   int chunk_tokens = std::min(max_safe_tokens, remaining_tokens);
   if (max_cache_len >= kMinDynamicChunkingCacheLen &&
@@ -211,172 +86,43 @@ int ComputeTextChunkTokens(int remaining_tokens, int chunk_size,
 MiniCpmOTtsStage::MiniCpmOTtsStage(
     Stage<MiniCpmOLlmOutput>* absl_nonnull llm_stage,
     MiniCpmOModelConfig config,
-    std::unique_ptr<LiteRtRunner> absl_nullable tts_projector_runner,
-    std::unique_ptr<LiteRtRunner> absl_nullable tts_decoder_runner)
+    std::unique_ptr<Any2AnyTtsDecoder> absl_nonnull tts_decoder)
     : llm_stage_(*llm_stage),
       config_(std::move(config)),
-      tts_projector_runner_(std::move(tts_projector_runner)),
-      tts_decoder_runner_(std::move(tts_decoder_runner)) {
-  rng_.seed(config_.seed.value_or(42));
-}
+      tts_decoder_(std::move(tts_decoder)) {}
 
 absl::StatusOr<std::unique_ptr<MiniCpmOTtsStage>> MiniCpmOTtsStage::Create(
     Stage<MiniCpmOLlmOutput>* absl_nonnull llm_stage,
     const MiniCpmOModelConfig& config,
     std::unique_ptr<LiteRtRunner> absl_nullable tts_projector_runner,
     std::unique_ptr<LiteRtRunner> absl_nullable tts_decoder_runner) {
-  if (config.llm_hidden_size <= 0 || config.tts_hidden_size <= 0 ||
-      config.tts_vocab_size <= 0 || config.tts_num_layers <= 0 ||
-      config.tts_max_cache_len <= 0) {
-    return absl::InvalidArgumentError(
-        "MiniCpmOTtsStage dimensions (llm_hidden_size, tts_hidden_size, "
-        "tts_vocab_size, tts_num_layers, tts_max_cache_len) must be positive.");
-  }
+  Any2AnyTtsDecoder::Options decoder_options;
+  decoder_options.llm_hidden_size = config.llm_hidden_size;
+  // Intentionally 0 (unbounded) to preserve parity with MiniCPM-o's original
+  // projector behavior, which did not bounds-check text token IDs.
+  decoder_options.llm_vocab_size = 0;
+  decoder_options.tts_hidden_size = config.tts_hidden_size;
+  decoder_options.tts_vocab_size = config.tts_vocab_size;
+  decoder_options.tts_num_layers = config.tts_num_layers;
+  decoder_options.tts_max_cache_len = config.tts_max_cache_len;
+  decoder_options.generate_audio = config.generate_audio;
+  decoder_options.allow_inferred_kv_shape = false;
+  decoder_options.do_sample = config.do_sample;
+  decoder_options.temperature = config.tts_temperature;
+  decoder_options.top_p = config.tts_top_p;
+  decoder_options.top_k = config.tts_top_k;
+  decoder_options.repetition_penalty = config.tts_repetition_penalty;
+  decoder_options.repetition_window = config.tts_repetition_window;
+  decoder_options.repetition_penalty_mode =
+      Any2AnyTtsDecoder::RepetitionPenaltyMode::kFrequencyWindow;
+  decoder_options.seed = config.seed;
 
-  auto stage = absl::WrapUnique(
-      new MiniCpmOTtsStage(llm_stage, config, std::move(tts_projector_runner),
-                           std::move(tts_decoder_runner)));
-
-  if (stage->tts_projector_runner_ != nullptr) {
-    ABSL_ASSIGN_OR_RETURN(
-        stage->proj_input_buffers_,
-        stage->tts_projector_runner_->CreateInputBuffers(""));
-    ABSL_ASSIGN_OR_RETURN(
-        stage->proj_output_buffers_,
-        stage->tts_projector_runner_->CreateOutputBuffers(""));
-
-    if (stage->proj_input_buffers_.size() != 2 ||
-        stage->proj_output_buffers_.size() != 1) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "tts_projector model must have 2 inputs (llm_hidden, token_id) and 1 "
-          "output buffer; got ",
-          stage->proj_input_buffers_.size(), " inputs and ",
-          stage->proj_output_buffers_.size(), " outputs."));
-    }
-    LITERT_ASSIGN_OR_RETURN(size_t hidden_in_bytes,
-                            stage->proj_input_buffers_[0].Size());
-    LITERT_ASSIGN_OR_RETURN(size_t token_in_bytes,
-                            stage->proj_input_buffers_[1].Size());
-    LITERT_ASSIGN_OR_RETURN(size_t out_bytes,
-                            stage->proj_output_buffers_[0].Size());
-    const size_t expected_hidden_in_bytes =
-        static_cast<size_t>(stage->config_.llm_hidden_size) * sizeof(float);
-    const size_t expected_out_bytes =
-        static_cast<size_t>(stage->config_.tts_hidden_size) * sizeof(float);
-    if (hidden_in_bytes != expected_hidden_in_bytes ||
-        token_in_bytes != sizeof(int32_t) || out_bytes != expected_out_bytes) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "tts_projector buffer sizes ((", hidden_in_bytes, ", ",
-          token_in_bytes, ") -> ", out_bytes,
-          " bytes) do not match configured (llm_hidden_size, int32) -> "
-          "tts_hidden_size ((",
-          expected_hidden_in_bytes, ", ", sizeof(int32_t), ") -> ",
-          expected_out_bytes, " bytes)."));
-    }
-  } else if (stage->config_.generate_audio) {
-    return absl::NotFoundError(
-        "MiniCpmOTtsStage requires tts_projector_runner when generate_audio is "
-        "enabled.");
-  }
-
-  if (stage->tts_decoder_runner_ != nullptr) {
-    ABSL_ASSIGN_OR_RETURN(
-        stage->decoder_input_buffers_,
-        stage->tts_decoder_runner_->CreateInputBuffers(""));
-    ABSL_ASSIGN_OR_RETURN(
-        stage->decoder_output_buffers_,
-        stage->tts_decoder_runner_->CreateOutputBuffers(""));
-    if (stage->decoder_input_buffers_.size() != 4 ||
-        stage->decoder_output_buffers_.size() != 2) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "tts_decoder model must have 4 inputs (cond_emb, prev_audio_code, "
-          "step_idx, kv_cache) and 2 outputs (code_logits, new_kv_cache); got ",
-          stage->decoder_input_buffers_.size(), " inputs and ",
-          stage->decoder_output_buffers_.size(), " outputs."));
-    }
-
-    LITERT_ASSIGN_OR_RETURN(size_t cond_bytes,
-                            stage->decoder_input_buffers_[0].Size());
-    LITERT_ASSIGN_OR_RETURN(size_t code_bytes,
-                            stage->decoder_input_buffers_[1].Size());
-    LITERT_ASSIGN_OR_RETURN(size_t step_bytes,
-                            stage->decoder_input_buffers_[2].Size());
-    LITERT_ASSIGN_OR_RETURN(size_t kv_in_bytes,
-                            stage->decoder_input_buffers_[3].Size());
-    LITERT_ASSIGN_OR_RETURN(size_t logits_bytes,
-                            stage->decoder_output_buffers_[0].Size());
-    LITERT_ASSIGN_OR_RETURN(size_t kv_out_bytes,
-                            stage->decoder_output_buffers_[1].Size());
-
-    const size_t expected_cond_bytes =
-        static_cast<size_t>(stage->config_.tts_hidden_size) * sizeof(float);
-    const size_t expected_int32_bytes = sizeof(int32_t);
-    const size_t expected_logits_bytes =
-        static_cast<size_t>(stage->config_.tts_vocab_size) * sizeof(float);
-    const size_t expected_kv_floats =
-        static_cast<size_t>(2) * stage->config_.tts_num_layers *
-        stage->config_.tts_max_cache_len * stage->config_.tts_hidden_size;
-    const size_t expected_kv_bytes = expected_kv_floats * sizeof(float);
-
-    if (std::tie(cond_bytes, code_bytes, step_bytes, kv_in_bytes, logits_bytes,
-                 kv_out_bytes) !=
-        std::tie(expected_cond_bytes, expected_int32_bytes,
-                 expected_int32_bytes, expected_kv_bytes, expected_logits_bytes,
-                 expected_kv_bytes)) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "tts_decoder buffer sizes do not match configured TTS dimensions: "
-          "inputs=(",
-          cond_bytes, ", ", code_bytes, ", ", step_bytes, ", ", kv_in_bytes,
-          ") bytes vs expected (", expected_cond_bytes, ", ", sizeof(int32_t),
-          ", ", sizeof(int32_t), ", ", expected_kv_bytes, ") bytes; outputs=(",
-          logits_bytes, ", ", kv_out_bytes, ") bytes vs expected (",
-          expected_logits_bytes, ", ", expected_kv_bytes, ") bytes."));
-    }
-  } else if (stage->config_.generate_audio) {
-    return absl::NotFoundError(
-        "MiniCpmOTtsStage requires tts_decoder_runner when generate_audio is "
-        "enabled.");
-  }
-
-  return stage;
-}
-
-absl::Status MiniCpmOTtsStage::ProjectTokenConditioning(
-    absl::Span<const float> token_hidden, int32_t token_id,
-    absl::Span<float> out_cond) {
-  if (tts_projector_runner_ == nullptr) {
-    return absl::FailedPreconditionError(
-        "MiniCpmOTtsStage requires tts_projector_runner to project token "
-        "conditioning.");
-  }
-  LITERT_RETURN_IF_ERROR(proj_input_buffers_[0].Write<float>(token_hidden));
-  LITERT_RETURN_IF_ERROR(
-      proj_input_buffers_[1].Write<int32_t>(absl::MakeConstSpan(&token_id, 1)));
-  ABSL_RETURN_IF_ERROR(tts_projector_runner_->Run("", proj_input_buffers_,
-                                                  proj_output_buffers_));
-  LITERT_RETURN_IF_ERROR(proj_output_buffers_[0].Read<float>(out_cond));
-  return absl::OkStatus();
-}
-
-absl::Status MiniCpmOTtsStage::RunDecoderStep(absl::Span<const float> cond_emb,
-                                              int32_t prev_audio_code,
-                                              int32_t step_idx,
-                                              absl::Span<float> out_logits) {
-  if (tts_decoder_runner_ == nullptr) {
-    return absl::FailedPreconditionError(
-        "MiniCpmOTtsStage requires tts_decoder_runner to decode speech "
-        "tokens.");
-  }
-  LITERT_RETURN_IF_ERROR(decoder_input_buffers_[0].Write<float>(cond_emb));
-  LITERT_RETURN_IF_ERROR(decoder_input_buffers_[1].Write<int32_t>(
-      absl::MakeConstSpan(&prev_audio_code, 1)));
-  LITERT_RETURN_IF_ERROR(decoder_input_buffers_[2].Write<int32_t>(
-      absl::MakeConstSpan(&step_idx, 1)));
-  ABSL_RETURN_IF_ERROR(tts_decoder_runner_->Run("", decoder_input_buffers_,
-                                                decoder_output_buffers_));
-  LITERT_RETURN_IF_ERROR(decoder_output_buffers_[0].Read<float>(out_logits));
-  std::swap(decoder_input_buffers_[3], decoder_output_buffers_[1]);
-  return absl::OkStatus();
+  ABSL_ASSIGN_OR_RETURN(std::unique_ptr<Any2AnyTtsDecoder> tts_decoder,
+                        Any2AnyTtsDecoder::Create(
+                            decoder_options, std::move(tts_projector_runner),
+                            std::move(tts_decoder_runner)));
+  return absl::WrapUnique(
+      new MiniCpmOTtsStage(llm_stage, config, std::move(tts_decoder)));
 }
 
 absl::StatusOr<std::vector<float>> MiniCpmOTtsStage::BuildChunkConditioning(
@@ -407,7 +153,8 @@ absl::StatusOr<std::vector<float>> MiniCpmOTtsStage::BuildChunkConditioning(
     absl::Span<float> dst =
         absl::MakeSpan(cur_chunk_cond)
             .subspan(static_cast<size_t>(i) * tts_dim, tts_dim);
-    ABSL_RETURN_IF_ERROR(ProjectTokenConditioning(token_hidden, token_id, dst));
+    ABSL_RETURN_IF_ERROR(
+        tts_decoder_->ProjectTokenConditioning(token_hidden, token_id, dst));
   }
 
   const std::vector<float> zero_llm_hidden(llm_dim, 0.0f);
@@ -416,14 +163,14 @@ absl::StatusOr<std::vector<float>> MiniCpmOTtsStage::BuildChunkConditioning(
     absl::Span<float> text_eos_dst =
         absl::MakeSpan(cur_chunk_cond)
             .subspan(static_cast<size_t>(cond_offset) * tts_dim, tts_dim);
-    ABSL_RETURN_IF_ERROR(ProjectTokenConditioning(
+    ABSL_RETURN_IF_ERROR(tts_decoder_->ProjectTokenConditioning(
         zero_llm_hidden, minicpm_o::kTtsTextEosTokenId, text_eos_dst));
     ++cond_offset;
   }
   absl::Span<float> audio_bos_dst =
       absl::MakeSpan(cur_chunk_cond)
           .subspan(static_cast<size_t>(cond_offset) * tts_dim, tts_dim);
-  ABSL_RETURN_IF_ERROR(ProjectTokenConditioning(
+  ABSL_RETURN_IF_ERROR(tts_decoder_->ProjectTokenConditioning(
       zero_llm_hidden, minicpm_o::kTtsAudioBosTokenId, audio_bos_dst));
   return cur_chunk_cond;
 }
@@ -434,7 +181,7 @@ absl::StatusOr<std::vector<int>> MiniCpmOTtsStage::DecodeChunkSpeechCodes(
     absl::Span<const float> cur_chunk_cond, bool is_last_text_chunk,
     int max_total_codes, std::vector<int>& all_audio_codes) {
   const size_t tts_dim = static_cast<size_t>(config_.tts_hidden_size);
-  const int max_cache_len = std::max(1, config_.tts_max_cache_len);
+  const int max_cache_len = std::max(1, tts_decoder_->tts_max_cache_len());
   const int prev_cond_len = static_cast<int>(prev_chunk_cond.size() / tts_dim);
   const int cur_cond_len = static_cast<int>(cur_chunk_cond.size() / tts_dim);
   const int required_steps =
@@ -451,25 +198,29 @@ absl::StatusOr<std::vector<int>> MiniCpmOTtsStage::DecodeChunkSpeechCodes(
   // `sliding_recompute` (`window_size = 2`): reset the KV cache and replay
   // `[prev_chunk, cur_chunk]` so the 20-layer CosyVoice2 causal decoder has
   // contiguous rotary position indices without cache overflow.
-  LITERT_RETURN_IF_ERROR(decoder_input_buffers_[3].Clear());
+  ABSL_RETURN_IF_ERROR(tts_decoder_->ClearKvCache());
   int32_t step_idx = 0;
 
   for (int i = 0; i < prev_cond_len; ++i) {
     absl::Span<const float> cond_vec =
         prev_chunk_cond.subspan(static_cast<size_t>(i) * tts_dim, tts_dim);
-    ABSL_RETURN_IF_ERROR(RunDecoderStep(cond_vec, /*prev_audio_code=*/-1,
-                                        step_idx++, absl::MakeSpan(logits)));
+    ABSL_RETURN_IF_ERROR(tts_decoder_->RunDecoderStep(
+        cond_vec, /*prev_audio_code=*/-1, step_idx++,
+        /*out_logits=*/std::nullopt));
   }
   for (int code : prev_chunk_codes) {
-    ABSL_RETURN_IF_ERROR(RunDecoderStep(zero_tts_hidden,
-                                        static_cast<int32_t>(code), step_idx++,
-                                        absl::MakeSpan(logits)));
+    ABSL_RETURN_IF_ERROR(tts_decoder_->RunDecoderStep(
+        zero_tts_hidden, static_cast<int32_t>(code), step_idx++,
+        /*out_logits=*/std::nullopt));
   }
   for (int i = 0; i < cur_cond_len; ++i) {
     absl::Span<const float> cond_vec =
         cur_chunk_cond.subspan(static_cast<size_t>(i) * tts_dim, tts_dim);
-    ABSL_RETURN_IF_ERROR(RunDecoderStep(cond_vec, /*prev_audio_code=*/-1,
-                                        step_idx++, absl::MakeSpan(logits)));
+    const std::optional<absl::Span<float>> out_logits =
+        (i + 1 == cur_cond_len) ? std::make_optional(absl::MakeSpan(logits))
+                                : std::nullopt;
+    ABSL_RETURN_IF_ERROR(tts_decoder_->RunDecoderStep(
+        cond_vec, /*prev_audio_code=*/-1, step_idx++, out_logits));
   }
 
   const int remaining_turn_codes =
@@ -487,14 +238,13 @@ absl::StatusOr<std::vector<int>> MiniCpmOTtsStage::DecodeChunkSpeechCodes(
   std::vector<int> cur_chunk_codes;
   for (int code_step = 0; code_step < max_cur_chunk_codes; ++code_step) {
     if (code_step > 0) {
-      ABSL_RETURN_IF_ERROR(RunDecoderStep(
+      ABSL_RETURN_IF_ERROR(tts_decoder_->RunDecoderStep(
           zero_tts_hidden, static_cast<int32_t>(cur_chunk_codes.back()),
           step_idx++, absl::MakeSpan(logits)));
     }
-    ApplyRepetitionPenalty(absl::MakeSpan(logits), all_audio_codes,
-                           config_.tts_repetition_penalty,
-                           config_.tts_repetition_window);
-    const int code_id = SampleAudioCode(logits, config_, rng_);
+    tts_decoder_->ApplyRepetitionPenalty(absl::MakeSpan(logits),
+                                         all_audio_codes);
+    const int code_id = tts_decoder_->SampleAudioCode(logits);
     if (code_id == minicpm_o::kTtsEosTokenId) {
       break;
     }
@@ -505,19 +255,20 @@ absl::StatusOr<std::vector<int>> MiniCpmOTtsStage::DecodeChunkSpeechCodes(
   return cur_chunk_codes;
 }
 
-absl::StatusOr<MiniCpmOTtsOutput> MiniCpmOTtsStage::GenerateSpeechCodes(
+absl::StatusOr<Any2AnyTtsOutput> MiniCpmOTtsStage::GenerateSpeechCodes(
     const MiniCpmOLlmOutput& llm_out) {
-  MiniCpmOTtsOutput out;
+  Any2AnyTtsOutput out;
   out.text = llm_out.text;
   out.has_text = !llm_out.text.empty();
   out.is_text_final = llm_out.is_final;
 
   if (!llm_out.generate_audio || !config_.generate_audio ||
-      llm_out.num_tokens <= 0 || llm_out.llm_hidden_states.empty()) {
+      llm_out.num_tokens <= 0) {
     return out;
   }
-  ABSL_RETURN_IF_ERROR(
-      ValidateLlmAudioInputs(llm_out, config_.llm_hidden_size));
+  ABSL_RETURN_IF_ERROR(Any2AnyTtsDecoder::ValidateLlmAudioInputs(
+      llm_out.num_tokens, config_.llm_hidden_size, llm_out.generated_token_ids,
+      llm_out.llm_hidden_states));
 
   // In live `MiniCpmOLlmStage` execution, Qwen3 emits `<think>\n\n</think>\n\n`
   // before assistant text; after `<think>...</think>` is stripped, token 0 is
@@ -535,12 +286,9 @@ absl::StatusOr<MiniCpmOTtsOutput> MiniCpmOTtsStage::GenerateSpeechCodes(
   const int token_offset = has_leading_post_think_newline ? 1 : 0;
   const int num_tokens = llm_out.num_tokens - token_offset;
 
-  const int max_total_codes =
-      (config_.max_tts_tokens >= kDefaultMaxTtsTokensThreshold)
-          ? std::max(config_.max_tts_tokens,
-                     num_tokens * kMaxAudioCodesPerTextToken)
-          : std::max(1, config_.max_tts_tokens);
-  const int max_cache_len = std::max(1, config_.tts_max_cache_len);
+  const int max_total_codes = Any2AnyTtsDecoder::ComputeMaxTotalCodes(
+      num_tokens, config_.max_tts_tokens);
+  const int max_cache_len = std::max(1, tts_decoder_->tts_max_cache_len());
   const int chunk_size = std::max(1, config_.tts_text_chunk_size);
   const size_t tts_dim = static_cast<size_t>(config_.tts_hidden_size);
 
@@ -553,13 +301,12 @@ absl::StatusOr<MiniCpmOTtsOutput> MiniCpmOTtsStage::GenerateSpeechCodes(
        static_cast<int>(out.audio_codes.size()) < max_total_codes;
        chunk_start += chunk_tokens) {
     const int prev_chunk_steps =
-        has_prev_chunk
-            ? static_cast<int>(prev_chunk_cond.size() / tts_dim +
-                               prev_chunk_codes.size())
-            : 0;
-    chunk_tokens = ComputeTextChunkTokens(num_tokens - chunk_start, chunk_size,
-                                          max_cache_len, has_prev_chunk,
-                                          prev_chunk_steps);
+        has_prev_chunk ? static_cast<int>(prev_chunk_cond.size() / tts_dim +
+                                          prev_chunk_codes.size())
+                       : 0;
+    chunk_tokens =
+        ComputeTextChunkTokens(num_tokens - chunk_start, chunk_size,
+                               max_cache_len, has_prev_chunk, prev_chunk_steps);
     const bool is_last_text_chunk = (chunk_start + chunk_tokens == num_tokens);
 
     ABSL_ASSIGN_OR_RETURN(
@@ -583,7 +330,7 @@ absl::StatusOr<MiniCpmOTtsOutput> MiniCpmOTtsStage::GenerateSpeechCodes(
 
 absl::Status MiniCpmOTtsStage::ScheduleInternal() {
   absl::Cleanup cleanup = [this] { SetState(State::kIdle); };
-  auto llm_out = llm_stage_.GetOutput();
+  absl::StatusOr<MiniCpmOLlmOutput> llm_out = llm_stage_.GetOutput();
   if (absl::IsNotFound(llm_out.status())) {
     return absl::OkStatus();
   }
@@ -591,7 +338,7 @@ absl::Status MiniCpmOTtsStage::ScheduleInternal() {
     return llm_out.status();
   }
 
-  ABSL_ASSIGN_OR_RETURN(MiniCpmOTtsOutput tts_out,
+  ABSL_ASSIGN_OR_RETURN(Any2AnyTtsOutput tts_out,
                         GenerateSpeechCodes(*llm_out));
   PushOutput(std::move(tts_out));
   return absl::OkStatus();
@@ -599,7 +346,7 @@ absl::Status MiniCpmOTtsStage::ScheduleInternal() {
 
 void MiniCpmOTtsStage::ResetInternal() {
   SingleThreadedStageWithDeque::ResetInternal();
-  rng_.seed(config_.seed.value_or(42));
+  tts_decoder_->Reset();
 }
 
 }  // namespace litert::omni::any2any

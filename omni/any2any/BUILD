@@ -96,12 +96,31 @@ cc_test(
 )
 
 cc_library(
+    name = "any2any_sampler",
+    srcs = ["any2any_sampler.cc"],
+    hdrs = ["any2any_sampler.h"],
+    deps = [
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_test(
+    name = "any2any_sampler_test",
+    srcs = ["any2any_sampler_test.cc"],
+    deps = [
+        ":any2any_sampler",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "any2any_llm_stage",
     srcs = ["any2any_llm_stage.cc"],
     hdrs = ["any2any_llm_stage.h"],
     deps = [
+        ":any2any_sampler",
         ":io_types",
-        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -150,6 +169,49 @@ cc_test(
         "//omni/base:stage",
         "//runtime/executor:llm_executor_io_types",
         "//support/tokenizer",
+        "//support/util:convert_tensor_buffer",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
+    name = "any2any_tts_decoder",
+    srcs = ["any2any_tts_decoder.cc"],
+    hdrs = ["any2any_tts_decoder.h"],
+    deps = [
+        ":any2any_sampler",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_element_type",
+        "@litert//litert/cc:litert_expected",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/base:litert_runner",
+    ],
+)
+
+cc_test(
+    name = "any2any_tts_decoder_test",
+    srcs = ["any2any_tts_decoder_test.cc"],
+    deps = [
+        ":any2any_tts_decoder",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/base:mock_litert_runner",
         "//support/util:convert_tensor_buffer",
         "//support/util:test_utils",
     ],

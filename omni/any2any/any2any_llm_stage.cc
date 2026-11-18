@@ -15,17 +15,13 @@
 #include "omni/any2any/any2any_llm_stage.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
-#include <random>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
@@ -40,6 +36,7 @@
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/any2any/any2any_sampler.h"
 #include "omni/any2any/io_types.h"
 #include "omni/base/litert_lm_runner.h"
 #include "omni/base/model_utils.h"
@@ -138,104 +135,6 @@ absl::Status DecodeTokenDiscardOutput(LiteRtLmRunner& llm_runner,
   ABSL_ASSIGN_OR_RETURN(lm::ExecutorInputs decode_inputs,
                         CreateExecutorInputsWithText(token_buf));
   return llm_runner.Decode(decode_inputs).status();
-}
-
-bool CompareCandidateWeightDesc(const std::pair<double, int>& a,
-                                const std::pair<double, int>& b) {
-  return a.first > b.first;
-}
-
-// Selects the first `+Inf` logit if present, else the argmax among finite
-// logits, or `0` if all logits are `NaN` or `-Inf`.
-int SelectGreedyToken(absl::Span<const float> logits) {
-  int best_idx = 0;
-  float best_val = -std::numeric_limits<float>::infinity();
-  bool found_finite = false;
-  for (size_t i = 0; i < logits.size(); ++i) {
-    const float v = logits[i];
-    if (std::isinf(v) && v > 0.0f) {
-      return static_cast<int>(i);
-    }
-    if (std::isfinite(v) && (!found_finite || v > best_val)) {
-      best_val = v;
-      best_idx = static_cast<int>(i);
-      found_finite = true;
-    }
-  }
-  return best_idx;
-}
-
-// Selects the next token ID from `logits` using greedy argmax when
-// `!options.do_sample || options.temperature <= 0.0f`, or temperature-scaled
-// top-k and nucleus (top-p) sampling otherwise, guarding against `NaN`/`±Inf`.
-int SampleToken(absl::Span<const float> logits,
-                const Any2AnyLlmStage::Options& options, std::mt19937_64& rng) {
-  if (!options.do_sample || options.temperature <= 0.0f) {
-    return SelectGreedyToken(logits);
-  }
-
-  float max_logit = -std::numeric_limits<float>::infinity();
-  bool found_finite = false;
-  for (size_t i = 0; i < logits.size(); ++i) {
-    const float v = logits[i];
-    if (std::isinf(v) && v > 0.0f) {
-      return static_cast<int>(i);
-    }
-    if (std::isfinite(v) && (!found_finite || v > max_logit)) {
-      max_logit = v;
-      found_finite = true;
-    }
-  }
-  if (!found_finite) {
-    return 0;
-  }
-
-  const double temp = std::max<double>(options.temperature, 1e-6);
-  std::vector<std::pair<double, int>> candidates;
-  candidates.reserve(logits.size());
-  for (size_t i = 0; i < logits.size(); ++i) {
-    const double p = std::isfinite(logits[i])
-                         ? std::exp((logits[i] - max_logit) / temp)
-                         : 0.0;
-    candidates.push_back({p, static_cast<int>(i)});
-  }
-
-  const int k =
-      (options.top_k > 0)
-          ? std::min(options.top_k, static_cast<int>(candidates.size()))
-          : static_cast<int>(candidates.size());
-  absl::c_partial_sort(candidates, candidates.begin() + k,
-                       CompareCandidateWeightDesc);
-  candidates.resize(k);
-
-  double sum = 0.0;
-  for (const auto& c : candidates) {
-    sum += c.first;
-  }
-  if (!std::isfinite(sum) || sum <= 0.0) {
-    return candidates.front().second;
-  }
-
-  if (options.top_p > 0.0f && options.top_p < 1.0f && candidates.size() > 1) {
-    double cumulative = 0.0;
-    size_t keep = 0;
-    for (; keep < candidates.size(); ++keep) {
-      cumulative += candidates[keep].first / sum;
-      if (cumulative >= options.top_p) {
-        ++keep;
-        break;
-      }
-    }
-    candidates.resize(std::max<size_t>(1, keep));
-  }
-
-  std::vector<double> weights;
-  weights.reserve(candidates.size());
-  for (const auto& c : candidates) {
-    weights.push_back(c.first);
-  }
-  std::discrete_distribution<int> dist(weights.begin(), weights.end());
-  return candidates[dist(rng)].second;
 }
 
 absl::Status ValidateFrontendPrompt(const Any2AnyFrontendOutput& prompt,
@@ -354,7 +253,7 @@ absl::Status DecodePreTokenLoop(LiteRtLmRunner& llm_runner,
                                 const Any2AnyLlmStage::Options& options,
                                 const absl::flat_hash_set<int>& stop_token_ids,
                                 absl::Span<const int> turn_end_token_ids,
-                                bool generate_audio, std::mt19937_64& rng,
+                                bool generate_audio, Any2AnySampler& sampler,
                                 Any2AnyLlmOutput& out) {
   int32_t current_token = -1;
   const int max_steps = std::max(1, options.max_new_tokens);
@@ -364,7 +263,7 @@ absl::Status DecodePreTokenLoop(LiteRtLmRunner& llm_runner,
         DecodeStepOutput step_out,
         RunDecodeWithToken(llm_runner, token_buf, current_token,
                            options.llm_vocab_size, options.llm_hidden_size));
-    const int token_id = SampleToken(step_out.logits, options, rng);
+    const int token_id = sampler.Sample(step_out.logits);
     if (stop_token_ids.contains(token_id)) {
       stopped_on_eos = true;
       break;
@@ -390,11 +289,11 @@ absl::Status DecodePostTokenLoop(LiteRtLmRunner& llm_runner,
                                  const Any2AnyLlmStage::Options& options,
                                  const absl::flat_hash_set<int>& stop_token_ids,
                                  absl::Span<const int> turn_end_token_ids,
-                                 bool generate_audio, std::mt19937_64& rng,
+                                 bool generate_audio, Any2AnySampler& sampler,
                                  Any2AnyLlmOutput& out) {
   const int max_steps = std::max(1, options.max_new_tokens);
   for (int step = 0; step < max_steps; ++step) {
-    const int token_id = SampleToken(last_logits, options, rng);
+    const int token_id = sampler.Sample(last_logits);
     if (stop_token_ids.contains(token_id)) {
       break;
     }
@@ -425,9 +324,14 @@ Any2AnyLlmStage::Any2AnyLlmStage(
       options_(std::move(options)),
       tokenizer_(std::move(tokenizer)),
       llm_runner_(std::move(llm_runner)),
-      hidden_dim_(options_.llm_hidden_size) {
-  rng_.seed(options_.seed.value_or(42));
-}
+      hidden_dim_(options_.llm_hidden_size),
+      sampler_({
+          .do_sample = options_.do_sample,
+          .temperature = options_.temperature,
+          .top_k = options_.top_k,
+          .top_p = options_.top_p,
+          .seed = options_.seed,
+      }) {}
 
 Any2AnyLlmStage::~Any2AnyLlmStage() = default;
 
@@ -491,7 +395,7 @@ absl::Status Any2AnyLlmStage::ScheduleInternal() {
     ABSL_RETURN_IF_ERROR(PrefillPromptBatch(*llm_runner_, prompt, hidden_dim_));
     ABSL_RETURN_IF_ERROR(
         DecodePreTokenLoop(*llm_runner_, token_buf, options_, stop_token_ids_,
-                           turn_end_token_ids_, generate_audio, rng_, out));
+                           turn_end_token_ids_, generate_audio, sampler_, out));
   } else {
     std::vector<float> last_logits;
     if (generate_audio) {
@@ -512,7 +416,7 @@ absl::Status Any2AnyLlmStage::ScheduleInternal() {
     }
     ABSL_RETURN_IF_ERROR(DecodePostTokenLoop(
         *llm_runner_, token_buf, std::move(last_logits), options_,
-        stop_token_ids_, turn_end_token_ids_, generate_audio, rng_, out));
+        stop_token_ids_, turn_end_token_ids_, generate_audio, sampler_, out));
   }
 
   if (options_.detokenize_output && !out.generated_token_ids.empty()) {
@@ -526,7 +430,7 @@ absl::Status Any2AnyLlmStage::ScheduleInternal() {
 
 void Any2AnyLlmStage::ResetInternal() {
   SingleThreadedStageWithDeque::ResetInternal();
-  rng_.seed(options_.seed.value_or(42));
+  sampler_.Reset();
   (void)llm_runner_->Reset();
 }
 

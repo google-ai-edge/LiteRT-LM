@@ -18,7 +18,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <random>
 #include <string>
 #include <vector>
 
@@ -26,6 +25,7 @@
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "omni/any2any/any2any_sampler.h"
 #include "omni/any2any/io_types.h"
 #include "omni/base/litert_lm_runner.h"
 #include "omni/base/stage.h"
@@ -135,7 +135,7 @@ class Any2AnyLlmStage : public SingleThreadedStageWithDeque<Any2AnyLlmOutput> {
   int hidden_dim_;
   absl::flat_hash_set<int> stop_token_ids_;
   std::vector<int> turn_end_token_ids_;
-  std::mt19937_64 rng_;
+  Any2AnySampler sampler_;
 };
 
 }  // namespace litert::omni::any2any

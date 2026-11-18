@@ -93,6 +93,20 @@ struct Any2AnyLlmOutput {
   bool is_final = true;
 };
 
+// Output of an Any2Any TTS stage: generated assistant text passthrough and
+// discrete speech codec token IDs for a downstream neural vocoder stage.
+struct Any2AnyTtsOutput {
+  // Generated assistant text forwarded from the upstream LLM stage.
+  std::string text;
+  // True when `text` contains non-empty assistant text to emit.
+  bool has_text = false;
+  // True when this output marks the end of the current assistant turn.
+  bool is_text_final = true;
+  // Discrete speech codec token IDs sampled by the TTS decoder for the
+  // downstream neural vocoder stage.
+  std::vector<int> audio_codes;
+};
+
 }  // namespace litert::omni::any2any
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_IO_TYPES_H_
