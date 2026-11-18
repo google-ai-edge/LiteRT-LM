@@ -70,21 +70,25 @@ litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
 
 // Sets whether to enable the AI Edge Debugger. Defaults to false.
 //
-// When enabled, the engine captures per-token traces (JSONL) and, on CPU/GPU
-// backends, intermediate activations (Safetensors) under
+// When enabled on supported CPU/GPU backends, the engine captures per-token
+// traces (JSONL) and intermediate activations (Safetensors) under
 // `<cache_dir>/litert_lm_debugger/<session_id>/`. A cache directory must be set
 // with `litert_lm_engine_settings_set_cache_dir` (not ":memory" or
 // ":nocache") and must be a writable directory; otherwise engine creation
-// fails. When weights are streamed, the setting is ignored with a warning and
-// nothing is captured. Use
+// fails. On unsupported engines or backends (or when weights are streamed), the
+// setting is ignored with a warning and nothing is captured. Use
 // `litert_lm_experimental_session_get_debug_info` to find the captures.
 //
-// Captures can grow large over long sessions.
+// Creating a session with the debugger enabled deletes captures left under its
+// `<session_id>/` directory by earlier runs. Captures can grow large over long
+// sessions.
 //
 // WARNING: The captures contain user-derived data (decoded generated text and
-// activations computed from the prompt), stored unencrypted and never deleted
-// by the engine. Enable only for development or diagnostics, not for
-// production end-user traffic; the caller must delete the capture directory.
+// activations computed from the prompt), stored unencrypted and kept until
+// deleted. Enable only for development or diagnostics, not for production
+// end-user traffic; delete them with
+// `litert_lm_experimental_session_delete_debug_captures` or
+// `litert_lm_experimental_conversation_delete_debug_captures`.
 //
 // @param settings The engine settings.
 // @param enable_debugger Whether to enable the AI Edge Debugger.
@@ -95,6 +99,40 @@ litert_lm_experimental_engine_update_gpu_enable_metal_residency_set(
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_enable_debugger(
     LiteRtLmEngineSettings* settings, bool enable_debugger);
+
+// Deletes all AI Edge Debugger captures of `session` (i.e. files under
+// `<cache_dir>/litert_lm_debugger/<session_id>/`) while keeping the session
+// open for subsequent turns. Succeeds without doing anything when the debugger
+// is not enabled for the session. Must not be called from inside a stream
+// callback.
+//
+// @param session The session whose captures to delete.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if `session`
+//   is NULL. kLiteRtLmStatusFailedPrecondition if `session` has active tasks.
+//
+// Added in version 1.1.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_experimental_session_delete_debug_captures(
+    LiteRtLmSession* session);
+
+// Deletes all AI Edge Debugger captures of `conversation`'s underlying session
+// (i.e. files under `<cache_dir>/litert_lm_debugger/<session_id>/`) while
+// keeping the conversation open for subsequent turns. Waits for in-flight tasks
+// of the conversation (including a background KV-cache refill) to finish
+// before deleting. Succeeds without doing anything when the debugger is not
+// enabled for the conversation. Must not be called from inside a stream
+// callback.
+//
+// @param conversation The conversation whose captures to delete.
+// @return kLiteRtLmStatusOk on success, or another LiteRtLmStatusCode on
+//   failure (see error_reporter.h). kLiteRtLmStatusInvalidArgument if
+//   `conversation` is NULL.
+//
+// Added in version 1.1.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_experimental_conversation_delete_debug_captures(
+    LiteRtLmConversation* conversation);
 
 // Opaque pointer for session debug info.
 // Use `litert_lm_experimental_session_debug_info_delete` to free memory.
