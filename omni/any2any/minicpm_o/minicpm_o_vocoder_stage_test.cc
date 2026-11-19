@@ -29,12 +29,11 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/any2any/any2any_vocoder_test_utils.h"
 #include "omni/any2any/io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
 #include "omni/base/io_types.h"
 #include "omni/base/mock_litert_runner.h"
-#include "omni/base/stage.h"
-#include "support/util/convert_tensor_buffer.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep
 
 namespace litert::omni::any2any {
@@ -46,15 +45,6 @@ using ::testing::ElementsAre;
 using ::testing::FloatNear;
 using ::testing::NiceMock;
 using ::testing::Return;
-
-class FakeTtsStage : public SingleThreadedStageWithDeque<Any2AnyTtsOutput> {
- public:
-  void Push(Any2AnyTtsOutput out) { PushOutput(std::move(out)); }
-
- protected:
-  bool NeedScheduleInternal() const override { return false; }
-  absl::Status ScheduleInternal() override { return absl::OkStatus(); }
-};
 
 TEST(MiniCpmOVocoderStageTest,
      CreateRejectsMissingVocoderWhenAudioGenerationEnabled) {
@@ -99,56 +89,18 @@ TEST(MiniCpmOVocoderStageTest,
               StatusIs(absl::StatusCode::kInternal));
 
   // Mismatched input buffer size only (valid output buffer size).
-  auto mismatched_in_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
-  ON_CALL(*mismatched_in_runner, CreateInputBuffers(absl::string_view("")))
-      .WillByDefault(
-          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
-            LITERT_ASSIGN_OR_RETURN(
-                auto in_buf, support::CreateTensorBuffer<int32_t>({1, 4}));
-            std::vector<TensorBuffer> bufs;
-            bufs.push_back(std::move(in_buf));
-            return bufs;
-          });
-  ON_CALL(*mismatched_in_runner, CreateOutputBuffers(absl::string_view("")))
-      .WillByDefault(
-          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
-            LITERT_ASSIGN_OR_RETURN(
-                auto out_buf,
-                support::CreateTensorBuffer<float>(
-                    {1, minicpm_o::kVocoderOutputSamples}));
-            std::vector<TensorBuffer> bufs;
-            bufs.push_back(std::move(out_buf));
-            return bufs;
-          });
-
+  std::unique_ptr<NiceMock<MockLiteRtRunner>> mismatched_in_runner =
+      MakeMockVocoderRunner(/*input_tokens=*/4,
+                            minicpm_o::kVocoderOutputSamples);
   EXPECT_THAT(MiniCpmOVocoderStage::Create(&tts_stage, config,
                                            std::move(mismatched_in_runner))
                   .status(),
               StatusIs(absl::StatusCode::kInvalidArgument));
 
   // Mismatched output buffer size only (valid input buffer size).
-  auto mismatched_out_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
-  ON_CALL(*mismatched_out_runner, CreateInputBuffers(absl::string_view("")))
-      .WillByDefault(
-          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
-            LITERT_ASSIGN_OR_RETURN(
-                auto in_buf,
-                support::CreateTensorBuffer<int32_t>(
-                    {1, minicpm_o::kVocoderInputTokens}));
-            std::vector<TensorBuffer> bufs;
-            bufs.push_back(std::move(in_buf));
-            return bufs;
-          });
-  ON_CALL(*mismatched_out_runner, CreateOutputBuffers(absl::string_view("")))
-      .WillByDefault(
-          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
-            LITERT_ASSIGN_OR_RETURN(auto out_buf,
-                                    support::CreateTensorBuffer<float>({1, 6}));
-            std::vector<TensorBuffer> bufs;
-            bufs.push_back(std::move(out_buf));
-            return bufs;
-          });
-
+  std::unique_ptr<NiceMock<MockLiteRtRunner>> mismatched_out_runner =
+      MakeMockVocoderRunner(minicpm_o::kVocoderInputTokens,
+                            /*output_samples=*/6);
   EXPECT_THAT(MiniCpmOVocoderStage::Create(&tts_stage, config,
                                            std::move(mismatched_out_runner))
                   .status(),
@@ -161,7 +113,7 @@ TEST(MiniCpmOVocoderStageTest,
   config.generate_audio = false;
   FakeTtsStage tts_stage;
 
-  ASSERT_OK_AND_ASSIGN(auto vocoder_stage,
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MiniCpmOVocoderStage> vocoder_stage,
                        MiniCpmOVocoderStage::Create(&tts_stage, config));
 
   tts_stage.Push(Any2AnyTtsOutput{
@@ -193,25 +145,8 @@ TEST(MiniCpmOVocoderStageTest,
 
   // Input buffer: int32[1, 4] (1 history + 2 chunk + 1 lookahead).
   // Output buffer: float[1, 6] ((1 history + 2 chunk) * 2 samples/token).
-  auto vocoder_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
-  ON_CALL(*vocoder_runner, CreateInputBuffers(absl::string_view("")))
-      .WillByDefault(
-          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
-            LITERT_ASSIGN_OR_RETURN(
-                auto in_buf, support::CreateTensorBuffer<int32_t>({1, 4}));
-            std::vector<TensorBuffer> bufs;
-            bufs.push_back(std::move(in_buf));
-            return bufs;
-          });
-  ON_CALL(*vocoder_runner, CreateOutputBuffers(absl::string_view("")))
-      .WillByDefault(
-          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
-            LITERT_ASSIGN_OR_RETURN(auto out_buf,
-                                    support::CreateTensorBuffer<float>({1, 6}));
-            std::vector<TensorBuffer> bufs;
-            bufs.push_back(std::move(out_buf));
-            return bufs;
-          });
+  std::unique_ptr<NiceMock<MockLiteRtRunner>> vocoder_runner =
+      MakeMockVocoderRunner(/*input_tokens=*/4, /*output_samples=*/6);
 
   std::vector<std::vector<int32_t>> captured_windows;
   int call_idx = 0;
@@ -222,7 +157,7 @@ TEST(MiniCpmOVocoderStageTest,
               absl::string_view, absl::Span<const TensorBuffer> inputs,
               absl::Span<const TensorBuffer> outputs) -> absl::Status {
             std::vector<int32_t> window_in(4, 0);
-            auto& in_buf = const_cast<TensorBuffer&>(inputs[0]);
+            TensorBuffer& in_buf = const_cast<TensorBuffer&>(inputs[0]);
             LITERT_RETURN_IF_ERROR(
                 in_buf.Read<int32_t>(absl::MakeSpan(window_in)));
             captured_windows.push_back(window_in);
@@ -242,13 +177,13 @@ TEST(MiniCpmOVocoderStageTest,
                 static_cast<float>(window_in[2]) + bias,
                 static_cast<float>(window_in[2] * 10) + bias,
             };
-            auto& out_buf = const_cast<TensorBuffer&>(outputs[0]);
+            TensorBuffer& out_buf = const_cast<TensorBuffer&>(outputs[0]);
             LITERT_RETURN_IF_ERROR(
                 out_buf.Write<float>(absl::MakeConstSpan(pcm)));
             return absl::OkStatus();
           });
 
-  ASSERT_OK_AND_ASSIGN(auto vocoder_stage,
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MiniCpmOVocoderStage> vocoder_stage,
                        MiniCpmOVocoderStage::Create(&tts_stage, config,
                                                     std::move(vocoder_runner)));
 
@@ -278,7 +213,7 @@ TEST(MiniCpmOVocoderStageTest,
 
   ASSERT_OK_AND_ASSIGN(Output audio_out, vocoder_stage->GetOutput());
   ASSERT_TRUE(std::holds_alternative<AudioOutput>(audio_out));
-  const auto& audio = std::get<AudioOutput>(audio_out);
+  const AudioOutput& audio = std::get<AudioOutput>(audio_out);
   EXPECT_EQ(audio.sample_rate_hz, 24000);
   // 3 valid tokens * 2 samples/token = 6 valid PCM samples.
   // Token 0: {1.0, 10.0}.
@@ -305,35 +240,18 @@ TEST(MiniCpmOVocoderStageTest,
   config.audio_output_sample_rate_hz = 24000;
   FakeTtsStage tts_stage;
 
-  auto vocoder_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
-  ON_CALL(*vocoder_runner, CreateInputBuffers(absl::string_view("")))
-      .WillByDefault(
-          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
-            LITERT_ASSIGN_OR_RETURN(
-                auto in_buf, support::CreateTensorBuffer<int32_t>({1, 1}));
-            std::vector<TensorBuffer> bufs;
-            bufs.push_back(std::move(in_buf));
-            return bufs;
-          });
-  ON_CALL(*vocoder_runner, CreateOutputBuffers(absl::string_view("")))
-      .WillByDefault(
-          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
-            LITERT_ASSIGN_OR_RETURN(auto out_buf,
-                                    support::CreateTensorBuffer<float>({1, 2}));
-            std::vector<TensorBuffer> bufs;
-            bufs.push_back(std::move(out_buf));
-            return bufs;
-          });
+  std::unique_ptr<NiceMock<MockLiteRtRunner>> vocoder_runner =
+      MakeMockVocoderRunner(/*input_tokens=*/1, /*output_samples=*/2);
   EXPECT_CALL(*vocoder_runner, Run(absl::string_view(""), _, _))
       .WillOnce([](absl::string_view, absl::Span<const TensorBuffer> /*inputs*/,
                    absl::Span<const TensorBuffer> outputs) -> absl::Status {
         std::vector<float> pcm = {0.25f, -0.25f};
-        auto& out_buf = const_cast<TensorBuffer&>(outputs[0]);
+        TensorBuffer& out_buf = const_cast<TensorBuffer&>(outputs[0]);
         LITERT_RETURN_IF_ERROR(out_buf.Write<float>(absl::MakeConstSpan(pcm)));
         return absl::OkStatus();
       });
 
-  ASSERT_OK_AND_ASSIGN(auto vocoder_stage,
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MiniCpmOVocoderStage> vocoder_stage,
                        MiniCpmOVocoderStage::Create(&tts_stage, config,
                                                     std::move(vocoder_runner)));
 
@@ -358,6 +276,16 @@ TEST(MiniCpmOVocoderStageTest,
   ASSERT_OK_AND_ASSIGN(Output eot_out, vocoder_stage->GetOutput());
   EXPECT_TRUE(std::holds_alternative<EndOfOutputTurn>(eot_out));
   EXPECT_FALSE(vocoder_stage->HasOutput());
+
+  tts_stage.Push(Any2AnyTtsOutput{
+      .text = "Pending",
+      .has_text = true,
+      .is_text_final = true,
+  });
+  ASSERT_OK(vocoder_stage->Schedule());
+  ASSERT_TRUE(vocoder_stage->HasOutput());
+  vocoder_stage->Reset();
+  EXPECT_FALSE(vocoder_stage->HasOutput());
 }
 
 TEST(MiniCpmOVocoderStageTest, PropagatesVocoderRunnerError) {
@@ -369,29 +297,12 @@ TEST(MiniCpmOVocoderStageTest, PropagatesVocoderRunnerError) {
   config.vocoder_samples_per_token = 2;
   FakeTtsStage tts_stage;
 
-  auto vocoder_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
-  ON_CALL(*vocoder_runner, CreateInputBuffers(absl::string_view("")))
-      .WillByDefault(
-          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
-            LITERT_ASSIGN_OR_RETURN(
-                auto in_buf, support::CreateTensorBuffer<int32_t>({1, 1}));
-            std::vector<TensorBuffer> bufs;
-            bufs.push_back(std::move(in_buf));
-            return bufs;
-          });
-  ON_CALL(*vocoder_runner, CreateOutputBuffers(absl::string_view("")))
-      .WillByDefault(
-          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
-            LITERT_ASSIGN_OR_RETURN(auto out_buf,
-                                    support::CreateTensorBuffer<float>({1, 2}));
-            std::vector<TensorBuffer> bufs;
-            bufs.push_back(std::move(out_buf));
-            return bufs;
-          });
+  std::unique_ptr<NiceMock<MockLiteRtRunner>> vocoder_runner =
+      MakeMockVocoderRunner(/*input_tokens=*/1, /*output_samples=*/2);
   EXPECT_CALL(*vocoder_runner, Run(absl::string_view(""), _, _))
       .WillOnce(Return(absl::InternalError("vocoder execution failed")));
 
-  ASSERT_OK_AND_ASSIGN(auto vocoder_stage,
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MiniCpmOVocoderStage> vocoder_stage,
                        MiniCpmOVocoderStage::Create(&tts_stage, config,
                                                     std::move(vocoder_runner)));
 
@@ -412,42 +323,26 @@ TEST(MiniCpmOVocoderStageTest, CapsSeamCrossfadeTo48SamplesOnLongHistory) {
   config.audio_output_sample_rate_hz = 24000;
   FakeTtsStage tts_stage;
 
-  auto vocoder_runner = std::make_unique<NiceMock<MockLiteRtRunner>>();
-  ON_CALL(*vocoder_runner, CreateInputBuffers(absl::string_view("")))
-      .WillByDefault(
-          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
-            LITERT_ASSIGN_OR_RETURN(
-                auto in_buf, support::CreateTensorBuffer<int32_t>({1, 2}));
-            std::vector<TensorBuffer> bufs;
-            bufs.push_back(std::move(in_buf));
-            return bufs;
-          });
-  ON_CALL(*vocoder_runner, CreateOutputBuffers(absl::string_view("")))
-      .WillByDefault(
-          [](absl::string_view) -> absl::StatusOr<std::vector<TensorBuffer>> {
-            LITERT_ASSIGN_OR_RETURN(
-                auto out_buf, support::CreateTensorBuffer<float>({1, 128}));
-            std::vector<TensorBuffer> bufs;
-            bufs.push_back(std::move(out_buf));
-            return bufs;
-          });
+  std::unique_ptr<NiceMock<MockLiteRtRunner>> vocoder_runner =
+      MakeMockVocoderRunner(/*input_tokens=*/2, /*output_samples=*/128);
 
   int call_idx = 0;
   EXPECT_CALL(*vocoder_runner, Run(absl::string_view(""), _, _))
       .Times(2)
-      .WillRepeatedly([&call_idx](absl::string_view,
-                                  absl::Span<const TensorBuffer> /*inputs*/,
-                                  absl::Span<const TensorBuffer> outputs)
-                          -> absl::Status {
-        const float val = (call_idx == 0) ? 1.0f : 2.0f;
-        ++call_idx;
-        std::vector<float> pcm(128, val);
-        auto& out_buf = const_cast<TensorBuffer&>(outputs[0]);
-        LITERT_RETURN_IF_ERROR(out_buf.Write<float>(absl::MakeConstSpan(pcm)));
-        return absl::OkStatus();
-      });
+      .WillRepeatedly(
+          [&call_idx](absl::string_view,
+                      absl::Span<const TensorBuffer> /*inputs*/,
+                      absl::Span<const TensorBuffer> outputs) -> absl::Status {
+            const float val = (call_idx == 0) ? 1.0f : 2.0f;
+            ++call_idx;
+            std::vector<float> pcm(128, val);
+            TensorBuffer& out_buf = const_cast<TensorBuffer&>(outputs[0]);
+            LITERT_RETURN_IF_ERROR(
+                out_buf.Write<float>(absl::MakeConstSpan(pcm)));
+            return absl::OkStatus();
+          });
 
-  ASSERT_OK_AND_ASSIGN(auto vocoder_stage,
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<MiniCpmOVocoderStage> vocoder_stage,
                        MiniCpmOVocoderStage::Create(&tts_stage, config,
                                                     std::move(vocoder_runner)));
 
@@ -459,7 +354,7 @@ TEST(MiniCpmOVocoderStageTest, CapsSeamCrossfadeTo48SamplesOnLongHistory) {
   ASSERT_OK(vocoder_stage->Schedule());
   ASSERT_OK_AND_ASSIGN(Output audio_out, vocoder_stage->GetOutput());
   ASSERT_TRUE(std::holds_alternative<AudioOutput>(audio_out));
-  const auto& pcm = std::get<AudioOutput>(audio_out).pcm_samples;
+  const std::vector<float>& pcm = std::get<AudioOutput>(audio_out).pcm_samples;
   ASSERT_EQ(pcm.size(), 128);
   // First 16 samples (64 - 48) of chunk 0 must remain untouched (1.0f), while
   // samples 16..63 are crossfaded between 1.0f and 2.0f.

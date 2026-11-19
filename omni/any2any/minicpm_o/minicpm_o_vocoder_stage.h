@@ -16,13 +16,11 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_MINICPM_O_MINICPM_O_VOCODER_STAGE_H_
 
 #include <memory>
-#include <utility>
-#include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "omni/any2any/any2any_vocoder_stage.h"
 #include "omni/any2any/io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
 #include "omni/base/io_types.h"
@@ -33,12 +31,11 @@ namespace litert::omni::any2any {
 
 // Stage 4: Neural Speech-Token-to-Waveform Vocoder & Output Stage for
 // MiniCPM-o 4.5.
-// Emits `TextOutput` for the generated assistant text and, when audio
-// generation is enabled, runs `audio_vocoder.tflite` (the 24 kHz CosyVoice2
-// Token2Wav CausalMaskedDiffWithXvec + HiFTGenerator vocoder) over windows of
-// `history + chunk + lookahead` discrete 25 Hz speech tokens (`int32[1, 32]`)
-// to synthesize 24 kHz `AudioOutput` PCM waveforms (`float[1, 27840]`) with
-// short seam de-clicking crossfade at each chunk boundary.
+// Wraps `Any2AnyVocoderStage` with constant silence-token padding
+// (`kTtsSilenceTokenId`), strict trimmed buffer validation, and a 48-sample
+// seam de-clicking crossfade over 25 Hz CosyVoice2 speech tokens to synthesize
+// 24 kHz `AudioOutput` PCM waveforms alongside `TextOutput` and
+// `EndOfOutputTurn`.
 class MiniCpmOVocoderStage : public SingleThreadedStageWithDeque<Output> {
  public:
   static absl::StatusOr<std::unique_ptr<MiniCpmOVocoderStage>> Create(
@@ -51,35 +48,17 @@ class MiniCpmOVocoderStage : public SingleThreadedStageWithDeque<Output> {
  protected:
   absl::Status FlushInternal() override;
 
-  bool NeedScheduleInternal() const override { return tts_stage_.HasOutput(); }
+  bool NeedScheduleInternal() const override;
+
+  void ResetInternal() override;
 
   absl::Status ScheduleInternal() override;
 
  private:
-  MiniCpmOVocoderStage(
-      Stage<Any2AnyTtsOutput>* absl_nonnull tts_stage,
-      MiniCpmOModelConfig config,
-      std::unique_ptr<LiteRtRunner> absl_nullable vocoder_runner)
-      : tts_stage_(*tts_stage),
-        config_(std::move(config)),
-        vocoder_runner_(std::move(vocoder_runner)) {}
+  explicit MiniCpmOVocoderStage(
+      std::unique_ptr<Any2AnyVocoderStage> absl_nonnull vocoder_stage);
 
-  absl::Status ProcessTtsOutput(const Any2AnyTtsOutput& tts_out);
-
-  absl::StatusOr<std::vector<float>> SynthesizeWaveform(
-      const Any2AnyTtsOutput& tts_out);
-
-  Stage<Any2AnyTtsOutput>& tts_stage_;
-  MiniCpmOModelConfig config_;
-
-  std::unique_ptr<LiteRtRunner> vocoder_runner_;
-  std::vector<TensorBuffer> input_buffers_;
-  std::vector<TensorBuffer> output_buffers_;
-
-  int history_tokens_ = minicpm_o::kVocoderHistoryTokens;
-  int chunk_tokens_ = minicpm_o::kVocoderChunkTokens;
-  int lookahead_tokens_ = minicpm_o::kVocoderLookaheadTokens;
-  int samples_per_token_ = minicpm_o::kVocoderSamplesPerToken;
+  std::unique_ptr<Any2AnyVocoderStage> vocoder_stage_;
 };
 
 }  // namespace litert::omni::any2any

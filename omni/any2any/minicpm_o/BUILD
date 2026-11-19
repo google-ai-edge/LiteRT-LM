@@ -196,14 +196,11 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/types:span",
-        "@litert//litert/cc:litert_macros",
-        "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/any2any:any2any_vocoder_stage",
         "//omni/any2any:io_types",
         "//omni/base:io_types",
         "//omni/base:litert_runner",
         "//omni/base:stage",
-        "//support/util:convert_tensor_buffer",
     ],
 )
 
@@ -288,11 +285,10 @@ cc_test(
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
+        "//omni/any2any:any2any_vocoder_test_utils",
         "//omni/any2any:io_types",
         "//omni/base:io_types",
         "//omni/base:mock_litert_runner",
-        "//omni/base:stage",
-        "//support/util:convert_tensor_buffer",
         "//support/util:test_utils",
     ],
 )
