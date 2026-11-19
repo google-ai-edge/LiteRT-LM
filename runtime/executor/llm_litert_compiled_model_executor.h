@@ -774,6 +774,8 @@ class LlmLiteRtCompiledModelExecutorDynamic
   absl::Status Prefill(const ExecutorInputs& inputs,
                        const ExecutorPrefillParams& params) override;
 
+  absl::Status Reset() override;
+
  private:
   LlmLiteRtCompiledModelExecutorDynamic(
       LlmExecutorSettings executor_settings, Environment& env,
