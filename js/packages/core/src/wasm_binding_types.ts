@@ -275,8 +275,8 @@ export declare interface GpuArtisanConfig {
   // Maximum top k, which is the max Top-K value supported for all
   // sessions created with the engine, used by GPU only. If a session with
   // Top-K value larger than this is being asked to be created, it will be
-  // rejected(throw error). The max top k will be 1, which means only greedy
-  // decoding is supported for any sessions created with this engine.
+  // rejected(throw error). The max top k will be 64, which means limited
+  // sampling is supported by default.
   max_top_k: number;
 
   // Enables decode logits.

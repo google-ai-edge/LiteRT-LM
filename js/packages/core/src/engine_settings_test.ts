@@ -46,80 +46,177 @@ describe('EngineSettings', () => {
     engineSettings.delete();
   });
 
-  it('fills partial CPU backendConfig with defaults', async () => {
+  async function resolveWith(
+      wasmBackend: Wasm.EmscriptenEnumElement<Backend>, backend: Backend,
+      mainExecutorSettings?:
+          Parameters<typeof fillWasmEngineSettingsFromEngineSettings>[
+            1
+          ]['mainExecutorSettings']) {
     const wasmSettings = unwrapWasmResult(
         await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.CPU));
-    fillWasmEngineSettingsFromEngineSettings(
-        wasmSettings, {
-          model: '/path/to/model',
-          backend: Backend.CPU,
-          mainExecutorSettings: {
-            backendConfig: {number_of_threads: 4},
+            modelAssets, wasmBackend));
+    try {
+      fillWasmEngineSettingsFromEngineSettings(
+          wasmSettings, {
+            model: '/path/to/model',
+            backend,
+            ...(mainExecutorSettings !== undefined ? {mainExecutorSettings} :
+                                                     {}),
           },
-        },
-        Backend.CPU, liteRtLm.liteRtLmWasm);
-    const cpuConfig = unwrapWasmResult(
-        wasmSettings.getMutableMainExecutorSettings().getBackendConfigCpu());
-    expect(cpuConfig).toEqual({
-      kv_increment_size: jasmine.any(Number),
-      prefill_chunk_size: jasmine.any(Number),
-      number_of_threads: 4,
-    });
-    wasmSettings.delete();
-  });
+          backend, liteRtLm.liteRtLmWasm);
+      return wasmEngineSettingsToEngineSettings(
+          wasmSettings, liteRtLm.liteRtLmWasm);
+    } finally {
+      wasmSettings.delete();
+    }
+  }
 
-  it('fills partial GPU backendConfig with defaults', async () => {
-    const wasmSettings = unwrapWasmResult(
-        await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU));
-    fillWasmEngineSettingsFromEngineSettings(
-        wasmSettings, {
-          model: '/path/to/model',
-          backend: Backend.GPU,
-          mainExecutorSettings: {
-            backendConfig: {max_top_k: 3},
-          },
-        },
-        Backend.GPU, liteRtLm.liteRtLmWasm);
-    const gpuConfig = unwrapWasmResult(
-        wasmSettings.getMutableMainExecutorSettings().getBackendConfigGpu());
-    expect(gpuConfig).toEqual({
-      max_top_k: 3,
-      external_tensor_mode: jasmine.any(Boolean),
-    });
-    wasmSettings.delete();
-  });
+  it('produces identical CPU backendConfig defaults when omitted, empty, or partial',
+     async () => {
+       const wasmCpu = liteRtLm.liteRtLmWasm.Backend.CPU;
+       const omittedMain = await resolveWith(wasmCpu, Backend.CPU);
+       const omittedBackendConfig = await resolveWith(wasmCpu, Backend.CPU, {});
+       const emptyBackendConfig =
+           await resolveWith(wasmCpu, Backend.CPU, {backendConfig: {}});
+       const undefinedFieldConfig = await resolveWith(wasmCpu, Backend.CPU, {
+         backendConfig: {number_of_threads: undefined},
+       });
 
-  it('fills partial GPU_ARTISAN backendConfig with defaults', async () => {
-    const wasmSettings = unwrapWasmResult(
-        await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
-            modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU_ARTISAN));
-    fillWasmEngineSettingsFromEngineSettings(
-        wasmSettings, {
-          model: '/path/to/model',
-          backend: Backend.GPU_ARTISAN,
-          mainExecutorSettings: {
-            backendConfig: {max_top_k: 5},
-          },
-        },
-        Backend.GPU_ARTISAN, liteRtLm.liteRtLmWasm);
-    const gpuArtisanConfig = wasmEngineSettingsToEngineSettings(wasmSettings)
-                                 .mainExecutorSettings.backendConfig;
-    expect(gpuArtisanConfig).toEqual({
-      num_output_candidates: jasmine.any(Number),
-      wait_for_weight_uploads: jasmine.any(Boolean),
-      num_decode_steps_per_sync: jasmine.any(Number),
-      sequence_batch_size: jasmine.any(Number),
-      supported_lora_ranks: jasmine.any(Array),
-      max_top_k: 5,
-      enable_decode_logits: jasmine.any(Boolean),
-      enable_external_embeddings: jasmine.any(Boolean),
-      use_submodel: jasmine.any(Boolean),
-      use_autosized_ringbuffers: jasmine.any(Boolean),
-    });
-    wasmSettings.delete();
-  });
+       expect(omittedMain.mainExecutorSettings.backendConfig).toEqual({
+         kv_increment_size: 16,
+         prefill_chunk_size: -1,
+         number_of_threads: 4,
+       });
+       expect(omittedBackendConfig).toEqual(omittedMain);
+       expect(emptyBackendConfig).toEqual(omittedMain);
+       expect(undefinedFieldConfig).toEqual(omittedMain);
+
+       const partial = await resolveWith(wasmCpu, Backend.CPU, {
+         backendConfig: {number_of_threads: 2},
+       });
+       expect(partial.mainExecutorSettings.backendConfig).toEqual({
+         ...omittedMain.mainExecutorSettings.backendConfig,
+         number_of_threads: 2,
+       });
+     });
+
+  it('produces identical GPU backendConfig defaults when omitted, empty, or partial',
+     async () => {
+       const wasmGpu = liteRtLm.liteRtLmWasm.Backend.GPU;
+       const omittedMain = await resolveWith(wasmGpu, Backend.GPU);
+       const omittedBackendConfig = await resolveWith(wasmGpu, Backend.GPU, {});
+       const emptyBackendConfig =
+           await resolveWith(wasmGpu, Backend.GPU, {backendConfig: {}});
+       const undefinedFieldConfig = await resolveWith(wasmGpu, Backend.GPU, {
+         backendConfig: {max_top_k: undefined},
+       });
+
+       expect(omittedMain.mainExecutorSettings.backendConfig).toEqual({
+         max_top_k: 64,
+         external_tensor_mode: false,
+       });
+       expect(omittedBackendConfig).toEqual(omittedMain);
+       expect(emptyBackendConfig).toEqual(omittedMain);
+       expect(undefinedFieldConfig).toEqual(omittedMain);
+
+       const partial = await resolveWith(wasmGpu, Backend.GPU, {
+         backendConfig: {max_top_k: 3},
+       });
+       expect(partial.mainExecutorSettings.backendConfig).toEqual({
+         ...omittedMain.mainExecutorSettings.backendConfig,
+         max_top_k: 3,
+       });
+     });
+
+  it('produces identical GPU_ARTISAN backendConfig defaults when omitted, empty, or partial',
+     async () => {
+       const wasmGpuArtisan = liteRtLm.liteRtLmWasm.Backend.GPU_ARTISAN;
+       const omittedMain =
+           await resolveWith(wasmGpuArtisan, Backend.GPU_ARTISAN);
+       const omittedBackendConfig =
+           await resolveWith(wasmGpuArtisan, Backend.GPU_ARTISAN, {});
+       const emptyBackendConfig = await resolveWith(
+           wasmGpuArtisan, Backend.GPU_ARTISAN, {backendConfig: {}});
+       const undefinedFieldConfig =
+           await resolveWith(wasmGpuArtisan, Backend.GPU_ARTISAN, {
+             backendConfig: {
+               max_top_k: undefined,
+               use_autosized_ringbuffers: undefined,
+               supported_lora_ranks: undefined,
+             },
+           });
+
+       expect(omittedMain.mainExecutorSettings.backendConfig).toEqual({
+         num_output_candidates: 1,
+         wait_for_weight_uploads: false,
+         num_decode_steps_per_sync: 1,
+         sequence_batch_size: 0,
+         supported_lora_ranks: [],
+         max_top_k: 64,
+         enable_decode_logits: false,
+         enable_external_embeddings: false,
+         use_submodel: false,
+         use_autosized_ringbuffers: false,
+       });
+       expect(omittedBackendConfig).toEqual(omittedMain);
+       expect(emptyBackendConfig).toEqual(omittedMain);
+       expect(undefinedFieldConfig).toEqual(omittedMain);
+
+       const partialTopK =
+           await resolveWith(wasmGpuArtisan, Backend.GPU_ARTISAN, {
+             backendConfig: {max_top_k: 5},
+           });
+       expect(partialTopK.mainExecutorSettings.backendConfig).toEqual({
+         ...omittedMain.mainExecutorSettings.backendConfig,
+         max_top_k: 5,
+       });
+
+       const partialLoraAndRingbuffers =
+           await resolveWith(wasmGpuArtisan, Backend.GPU_ARTISAN, {
+             backendConfig: {
+               supported_lora_ranks: [4, 8],
+               use_autosized_ringbuffers: true,
+             },
+           });
+       expect(partialLoraAndRingbuffers.mainExecutorSettings.backendConfig)
+           .toEqual({
+             ...omittedMain.mainExecutorSettings.backendConfig,
+             supported_lora_ranks: [4, 8],
+             use_autosized_ringbuffers: true,
+           });
+     });
+
+  it('propagates VectorUint32 allocation errors without double-deleting base supported_lora_ranks',
+     async () => {
+       const wasmSettings = unwrapWasmResult(
+           await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+               modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU_ARTISAN));
+       const allocError = new Error('WASM VectorUint32 out of memory');
+       const throwingWasm: Wasm.LiteRtLmWasm = {
+         ...liteRtLm.liteRtLmWasm,
+         VectorUint32: class {
+           constructor() {
+             throw allocError;
+           }
+         } as unknown as Wasm.LiteRtLmWasm['VectorUint32'],
+       };
+
+       try {
+         expect(
+             () => fillWasmEngineSettingsFromEngineSettings(
+                 wasmSettings, {
+                   model: '/path/to/model',
+                   backend: Backend.GPU_ARTISAN,
+                   mainExecutorSettings: {
+                     backendConfig: {supported_lora_ranks: [4, 8]},
+                   },
+                 },
+                 Backend.GPU_ARTISAN, throwingWasm))
+             .toThrow(allocError);
+       } finally {
+         wasmSettings.delete();
+       }
+     });
 
   it('round-trips maxNumImages', async () => {
     const wasmSettings = unwrapWasmResult(
@@ -308,10 +405,26 @@ describe('EngineSettings', () => {
             modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU));
     expect(wasmSettings.getMutableMainExecutorSettings().getAdvancedSettings())
         .toBeUndefined();
-    expect(wasmEngineSettingsToEngineSettings(
-               wasmSettings, liteRtLm.liteRtLmWasm)
-               .mainExecutorSettings.advancedSettings)
-        .toEqual(liteRtLm.liteRtLmWasm.createDefaultAdvancedSettings());
+    const defaultAdvanced =
+        liteRtLm.liteRtLmWasm.createDefaultAdvancedSettings();
+    expect(
+        wasmEngineSettingsToEngineSettings(wasmSettings, liteRtLm.liteRtLmWasm)
+            .mainExecutorSettings.advancedSettings)
+        .toEqual(defaultAdvanced);
+
+    fillWasmEngineSettingsFromEngineSettings(
+        wasmSettings, {
+          model: '/path/to/model',
+          backend: Backend.GPU,
+          mainExecutorSettings: {
+            advancedSettings: {num_threads_to_upload: undefined},
+          },
+        },
+        Backend.GPU, liteRtLm.liteRtLmWasm);
+    expect(
+        wasmEngineSettingsToEngineSettings(wasmSettings, liteRtLm.liteRtLmWasm)
+            .mainExecutorSettings.advancedSettings)
+        .toEqual(defaultAdvanced);
     wasmSettings.delete();
   });
 
@@ -377,4 +490,3 @@ describe('EngineSettings', () => {
     wasmSettings.delete();
   });
 });
-

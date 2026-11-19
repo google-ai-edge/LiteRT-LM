@@ -18,7 +18,7 @@ import {getGlobalLiteRtLm} from './global_litertlm.js';
 import {ModelInput} from './model_input.js';
 import {SpeculativeDecodingConfig, speculativeDecodingConfigToWasm, wasmSpeculativeDecodingConfigToConfig} from './speculative_decoding_config.js';
 import {RecursiveRequired} from './types.js';
-import {ActivationDataType, type AdvancedSettings, Backend, type CpuConfig, EngineSettings as WasmEngineSettings, GpuArtisanConfig as WasmGpuArtisanConfig, type GpuConfig} from './wasm_binding_types.js';
+import {ActivationDataType, type AdvancedSettings, Backend, type CpuConfig, EngineSettings as WasmEngineSettings, GpuArtisanConfig as WasmGpuArtisanConfig, type GpuConfig, unwrapWasmResult} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray, fillEmscriptenVector} from './wasm_utils.js';
 
 // Re-export these types since they're already compatible with JS.
@@ -146,6 +146,17 @@ export type ResolvedEngineSettings =
     RecursiveRequired<Omit<EngineSettings, OptionalEngineSettingsKeys|'model'>>&
     Pick<EngineSettings, OptionalEngineSettingsKeys|'model'>;
 
+function overlayDefined<T extends object>(base: T, overrides: Partial<T>): T {
+  const result = {...base};
+  for (const key of Object.keys(overrides) as Array<keyof T>) {
+    const value = overrides[key];
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 /**
  * Fills a WasmEngineSettings with the values from a EngineSettings.
  */
@@ -174,9 +185,8 @@ export function fillWasmEngineSettingsFromEngineSettings(
             {value: engineSettings.visionActivationDataType});
   }
   if (engineSettings.audioActivationDataType !== undefined) {
-    wasmEngineSettings.getMutableAudioExecutorSettings()
-        ?.setActivationDataType(
-            {value: engineSettings.audioActivationDataType});
+    wasmEngineSettings.getMutableAudioExecutorSettings()?.setActivationDataType(
+        {value: engineSettings.audioActivationDataType});
   }
 
   if (engineSettings.maxVisionTokensPerImage !== undefined) {
@@ -202,49 +212,45 @@ export function fillWasmEngineSettingsFromEngineSettings(
           {value: mainExecutorSettings.samplerBackend});
     }
     if (mainExecutorSettings.backendConfig !== undefined) {
+      // Overlay only caller-defined fields onto the C++ default backend config
+      // already initialized on `wasmExecutorSettings`, keeping C++ as the
+      // single source of truth for unset fields.
       const backendConfig = mainExecutorSettings.backendConfig;
       if (backend === Backend.CPU) {
-        const partialCpuConfig = backendConfig as Partial<CpuConfig>;
-        const cpuConfig: CpuConfig = {
-          kv_increment_size: partialCpuConfig.kv_increment_size ?? 0,
-          prefill_chunk_size: partialCpuConfig.prefill_chunk_size ?? 0,
-          number_of_threads: partialCpuConfig.number_of_threads ?? 0,
-        };
-        wasmExecutorSettings.setBackendConfigCpu(cpuConfig);
+        const baseCpuConfig =
+            unwrapWasmResult(wasmExecutorSettings.getBackendConfigCpu());
+        wasmExecutorSettings.setBackendConfigCpu(
+            overlayDefined(baseCpuConfig, backendConfig as Partial<CpuConfig>));
       } else if (backend === Backend.GPU) {
-        const partialGpuConfig = backendConfig as Partial<GpuConfig>;
-        const gpuConfig: GpuConfig = {
-          max_top_k: partialGpuConfig.max_top_k ?? 1,
-          external_tensor_mode: partialGpuConfig.external_tensor_mode ?? false,
-        };
-        wasmExecutorSettings.setBackendConfigGpu(gpuConfig);
+        const baseGpuConfig =
+            unwrapWasmResult(wasmExecutorSettings.getBackendConfigGpu());
+        wasmExecutorSettings.setBackendConfigGpu(
+            overlayDefined(baseGpuConfig, backendConfig as Partial<GpuConfig>));
       } else if (backend === Backend.GPU_ARTISAN) {
         const partialGpuArtisanConfig =
             backendConfig as Partial<GpuArtisanConfig>;
-        const loraRanksVec = new wasm.VectorUint32();
-        fillEmscriptenVector(
-            partialGpuArtisanConfig.supported_lora_ranks ?? [], loraRanksVec);
-        const wasmGpuArtisanConfig: WasmGpuArtisanConfig = {
-          num_output_candidates:
-              partialGpuArtisanConfig.num_output_candidates ?? 1,
-          wait_for_weight_uploads:
-              partialGpuArtisanConfig.wait_for_weight_uploads ?? true,
-          num_decode_steps_per_sync:
-              partialGpuArtisanConfig.num_decode_steps_per_sync ?? 1,
-          sequence_batch_size:
-              partialGpuArtisanConfig.sequence_batch_size ?? 0,
-          supported_lora_ranks: loraRanksVec,
-          max_top_k: partialGpuArtisanConfig.max_top_k ?? 1,
-          enable_decode_logits:
-              partialGpuArtisanConfig.enable_decode_logits ?? false,
-          enable_external_embeddings:
-              partialGpuArtisanConfig.enable_external_embeddings ?? false,
-          use_submodel: partialGpuArtisanConfig.use_submodel ?? true,
-          use_autosized_ringbuffers:
-              partialGpuArtisanConfig.use_autosized_ringbuffers ?? true,
-        };
-        wasmExecutorSettings.setBackendConfigGpuArtisan(wasmGpuArtisanConfig);
-        loraRanksVec.delete();
+        const baseGpuArtisanConfig =
+            unwrapWasmResult(wasmExecutorSettings.getBackendConfigGpuArtisan());
+        let loraRanksVec = baseGpuArtisanConfig.supported_lora_ranks;
+        try {
+          if (partialGpuArtisanConfig.supported_lora_ranks !== undefined) {
+            const replacement = new wasm.VectorUint32();
+            const previous = loraRanksVec;
+            loraRanksVec = replacement;
+            previous.delete();
+            fillEmscriptenVector(
+                partialGpuArtisanConfig.supported_lora_ranks, loraRanksVec);
+          }
+          const {supported_lora_ranks: _, ...scalarOverrides} =
+              partialGpuArtisanConfig;
+          const wasmGpuArtisanConfig: WasmGpuArtisanConfig = {
+            ...overlayDefined(baseGpuArtisanConfig, scalarOverrides),
+            supported_lora_ranks: loraRanksVec,
+          };
+          wasmExecutorSettings.setBackendConfigGpuArtisan(wasmGpuArtisanConfig);
+        } finally {
+          loraRanksVec.delete();
+        }
       }
     }
     if (mainExecutorSettings.advancedSettings !== undefined) {
@@ -252,8 +258,8 @@ export function fillWasmEngineSettingsFromEngineSettings(
       // back to the C++ defaults.
       const defaultAdv = wasmExecutorSettings.getAdvancedSettings() ??
           wasm.createDefaultAdvancedSettings();
-      const newAdv = {...defaultAdv, ...mainExecutorSettings.advancedSettings};
-      wasmExecutorSettings.setAdvancedSettings(newAdv);
+      wasmExecutorSettings.setAdvancedSettings(
+          overlayDefined(defaultAdv, mainExecutorSettings.advancedSettings));
     }
   }
 
