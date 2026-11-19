@@ -15,7 +15,7 @@
  */
 
 import {Cleanup} from './cleanup.js';
-import {Conversation} from './conversation.js';
+import {Conversation, withoutEndOfTurnFields} from './conversation.js';
 import {ConversationConfig} from './conversation_config.js';
 import {runExclusiveEngineCreation} from './engine_creation.js';
 import {EngineSettings, fillWasmEngineSettingsFromEngineSettings, GpuArtisanConfig, ResolvedEngineSettings, wasmEngineSettingsToEngineSettings} from './engine_settings.js';
@@ -185,8 +185,11 @@ export class Engine implements Deletable {
       if (config) {
         wasmSessionConfig = sessionConfigToWasmSessionConfig(
             this.withDefaultModalities(config.sessionConfig || {}), this.wasm);
-        const prefaceJson =
-            config.preface ? JSON.stringify(config.preface) : '';
+        const preface = config.preface && {
+          ...config.preface,
+          messages: config.preface.messages?.map(withoutEndOfTurnFields),
+        };
+        const prefaceJson = preface ? JSON.stringify(preface) : '';
         const usesAutosizedRingbuffers =
             this.settings.backend === Backend.GPU_ARTISAN &&
             Boolean(
