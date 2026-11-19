@@ -38,6 +38,7 @@
 #include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "third_party/gloop/util/gtl/c_memcpy.h"
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/litert_custom_tensor_buffer.h"  // from @litert
 #include "litert/c/litert_tensor_buffer_types.h"  // from @litert
@@ -912,17 +913,17 @@ absl::StatusOr<std::vector<uint8_t>> CopyRawBytesFromTensorBuffer(
   if (tensor_type.ElementType() == ::litert::ElementType::Float32) {
     LITERT_ASSIGN_OR_RETURN(auto buf, CopyFromTensorBuffer<float>(buffer));
     std::vector<uint8_t> res(num_bytes);
-    std::memcpy(res.data(), buf.data(), num_bytes);
+    gtl::c_memcpy(res, buf, num_bytes);
     return res;
   } else if (tensor_type.ElementType() == ::litert::ElementType::Int16) {
     LITERT_ASSIGN_OR_RETURN(auto buf, CopyFromTensorBuffer<int16_t>(buffer));
     std::vector<uint8_t> res(num_bytes);
-    std::memcpy(res.data(), buf.data(), num_bytes);
+    gtl::c_memcpy(res, buf, num_bytes);
     return res;
   } else if (tensor_type.ElementType() == ::litert::ElementType::Int8) {
     LITERT_ASSIGN_OR_RETURN(auto buf, CopyFromTensorBuffer<int8_t>(buffer));
     std::vector<uint8_t> res(num_bytes);
-    std::memcpy(res.data(), buf.data(), num_bytes);
+    gtl::c_memcpy(res, buf, num_bytes);
     return res;
   } else {
     return absl::InvalidArgumentError(

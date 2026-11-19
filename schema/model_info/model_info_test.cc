@@ -34,6 +34,7 @@
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "flatbuffers/flexbuffers.h"  // from @flatbuffers
+#include "third_party/gloop/util/gtl/c_memcpy.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/embedding_model_type.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -1049,8 +1050,8 @@ std::string CreateMockNpuTfliteModelWithStamp(
 
   // LiteRtStamp: 125 bytes manufacturer, 125 bytes model
   std::vector<uint8_t> stamp_data(250, 0);
-  std::memcpy(stamp_data.data(), soc_manufacturer.data(),
-              std::min(soc_manufacturer.size(), size_t{124}));
+  gtl::c_memcpy(stamp_data, soc_manufacturer,
+                std::min(soc_manufacturer.size(), size_t{124}));
   std::memcpy(stamp_data.data() + 125, soc_name.data(),
               std::min(soc_name.size(), size_t{124}));
   auto stamp_vec = fbb.CreateVector(stamp_data);
@@ -1729,7 +1730,7 @@ TEST(ModelInfoFileTest, GetModelInfo_DetectsNpuFromRawBufferFallbackScan) {
   std::vector<char> stamp_data(250, 0);
   std::string mfg = "Qualcomm";
   std::string model = "SM8850";
-  std::memcpy(stamp_data.data(), mfg.data(), mfg.size());
+  gtl::c_memcpy(stamp_data, mfg);
   std::memcpy(stamp_data.data() + 125, model.data(), model.size());
   std::memcpy(&raw_payload[prefix_pos + 4], stamp_data.data(), 250);
 
