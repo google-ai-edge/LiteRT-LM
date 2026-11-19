@@ -164,6 +164,16 @@ TEST(DataUtilsTest, LoadItemData_ImageItemWithInvalidBase64Blob) {
               testing::HasSubstr("Failed to decode base64 blob."));
 }
 
+TEST(DataUtilsTest, LoadMediaBytes_RejectsNonStringPathOrBlob) {
+  for (const ordered_json& item :
+       {ordered_json{{"path", 3}}, ordered_json{{"blob", 3}},
+        ordered_json{{"blob", {{"x", 1}}}}}) {
+    EXPECT_THAT(LoadMediaBytes(item),
+                testing::status::StatusIs(absl::StatusCode::kInvalidArgument))
+        << item.dump();
+  }
+}
+
 TEST(DataUtilsTest, LoadItemData_ToolResponseItem) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> memory_mapped_file,
                        LoadItemData({{"type", "tool_response"},

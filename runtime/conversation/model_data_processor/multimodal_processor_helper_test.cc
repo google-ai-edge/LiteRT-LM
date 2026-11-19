@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "absl/strings/escaping.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -620,6 +621,151 @@ TEST_F(MultimodalProcessorHelperTest, DryRunAudioFallsBackToFullPreprocessing) {
       audio_preprocessor_->Preprocess(InputAudio(ReadFile(audio_path))));
   EXPECT_THAT(dry_run,
               ElementsAre(HasInputAudio(&expected_audio), HasInputAudioEnd()));
+}
+
+// Returns a raw RGB888 video frame item of `width` x `height`.
+json RawFrame(int width, int height) {
+  return {{"pixels", absl::Base64Escape(std::string(width * height * 3, 7))},
+          {"width", width},
+          {"height", height}};
+}
+
+ImagePreprocessParameter PatchifyParams() {
+  ImagePreprocessParameter params;
+  params.SetPatchifyConfig(ImagePreprocessParameter::PatchifyConfig{
+      .patch_width = 16,
+      .patch_height = 16,
+      .max_num_patches = 64,
+      .pooling_kernel_size = 2,
+      .emit_positions = true,
+      .merge_patches = true,
+  });
+  return params;
+}
+
+TEST_F(MultimodalProcessorHelperTest, LoadVideoFramesTimestamps) {
+  const std::string image_path = GetImageTestdataPath("apple.bmp");
+  const json video = {
+      {"type", "video"},
+      {"fps", 4.0},
+      {"frames", json::array({{{"path", image_path}},
+                              RawFrame(32, 16),
+                              {{"path", image_path}, {"timestamp", 3.5}}})},
+  };
+
+  ASSERT_OK_AND_ASSIGN(std::vector<VideoFrame> frames,
+                       LoadVideoFrames(video, /*default_fps=*/2.0));
+
+  ASSERT_EQ(frames.size(), 3);
+  EXPECT_FALSE(frames[0].is_raw);
+  EXPECT_EQ(frames[0].item, &video["frames"][0]);
+  EXPECT_TRUE(frames[1].is_raw);
+  EXPECT_EQ(frames[1].width, 32);
+  EXPECT_EQ(frames[1].height, 16);
+  // `index / fps` without a timestamp (item fps 4 overrides the default 2).
+  EXPECT_DOUBLE_EQ(frames[0].timestamp, 0.0);
+  EXPECT_DOUBLE_EQ(frames[1].timestamp, 0.25);
+  EXPECT_DOUBLE_EQ(frames[2].timestamp, 3.5);
+}
+
+TEST_F(MultimodalProcessorHelperTest, LoadVideoFramesRejectsMalformedItems) {
+  for (const json& video : {
+           json{{"type", "video"}},
+           json{{"type", "video"}, {"frames", json::array()}},
+           json{{"type", "video"},
+                {"fps", 0},
+                {"frames", json::array({RawFrame(2, 2)})}},
+           json{{"type", "video"},
+                {"frames", json::array({{{"pixels", "AAAA"}}})}},
+           json{{"type", "video"}, {"frames", json::array({{{"x", 1}}})}},
+           json{{"type", "video"},
+                {"frames",
+                 json::array(
+                     {{{"pixels", "AAAA"}, {"width", -2}, {"height", 2}}})}},
+           json{{"type", "video"},
+                {"frames", json::array({{{"pixels", "AAAA"},
+                                         {"width", 100000},
+                                         {"height", 100000}}})}},
+           json{{"type", "video"},
+                {"frames",
+                 json::array({{{"pixels", 3}, {"width", 1}, {"height", 1}}})}},
+       }) {
+    EXPECT_THAT(LoadVideoFrames(video, 2.0),
+                testing::status::StatusIs(absl::StatusCode::kInvalidArgument))
+        << video.dump();
+  }
+}
+
+TEST_F(MultimodalProcessorHelperTest, PreprocessVideoFramesChecksSizes) {
+  const json video = {
+      {"frames", json::array({RawFrame(64, 32), RawFrame(64, 32)})}};
+  ASSERT_OK_AND_ASSIGN(std::vector<VideoFrame> frames,
+                       LoadVideoFrames(video, 2.0));
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<InputImage> images,
+      PreprocessVideoFrames(*image_preprocessor_, frames, PatchifyParams()));
+  EXPECT_EQ(images.size(), 2);
+
+  const json mixed_video = {
+      {"frames", json::array({RawFrame(64, 32), RawFrame(64, 64)})}};
+  ASSERT_OK_AND_ASSIGN(std::vector<VideoFrame> mixed,
+                       LoadVideoFrames(mixed_video, 2.0));
+  EXPECT_THAT(
+      PreprocessVideoFrames(*image_preprocessor_, mixed, PatchifyParams()),
+      testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(MultimodalProcessorHelperTest, PreprocessVideoFramesRejectsBadPixels) {
+  ImagePreprocessParameter dry_run_params = PatchifyParams();
+  dry_run_params.SetDryRun(true);
+  for (const json& frame : {
+           json{{"pixels", "not base64!"}, {"width", 2}, {"height", 2}},
+           // 2x2 RGB needs 12 bytes, not 3.
+           json{{"pixels", "AAAA"}, {"width", 2}, {"height", 2}},
+           // Binary payload with wrong byte count (3 instead of 12).
+           json{{"pixels", json::binary({1, 2, 3})},
+                {"width", 2},
+                {"height", 2}},
+       }) {
+    const json video = {{"frames", json::array({frame})}};
+    ASSERT_OK_AND_ASSIGN(std::vector<VideoFrame> frames,
+                         LoadVideoFrames(video, 2.0));
+    EXPECT_THAT(
+        PreprocessVideoFrames(*image_preprocessor_, frames, PatchifyParams()),
+        testing::status::StatusIs(absl::StatusCode::kInvalidArgument))
+        << frame.dump();
+    EXPECT_THAT(
+        PreprocessVideoFrames(*image_preprocessor_, frames, dry_run_params),
+        testing::status::StatusIs(absl::StatusCode::kInvalidArgument))
+        << frame.dump();
+  }
+}
+
+TEST_F(MultimodalProcessorHelperTest, TemporalPairAndRepeatedFrame) {
+  const json video = {
+      {"frames", json::array({RawFrame(64, 32), RawFrame(64, 32)})}};
+  ASSERT_OK_AND_ASSIGN(std::vector<VideoFrame> frames,
+                       LoadVideoFrames(video, 2.0));
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<InputImage> images,
+      PreprocessVideoFrames(*image_preprocessor_, frames, PatchifyParams()));
+
+  ASSERT_OK_AND_ASSIGN(InputImage pair,
+                       CreateTemporalPairImage(images[0], images[1]));
+  ASSERT_OK_AND_ASSIGN(const auto* pair_tensors,
+                       pair.GetPreprocessedImageTensorMap());
+  EXPECT_TRUE(pair_tensors->contains("images"));
+  EXPECT_TRUE(pair_tensors->contains("images_t1"));
+  EXPECT_TRUE(pair_tensors->contains("positions_xy"));
+
+  std::vector<InputData> input_data;
+  input_data.emplace_back(InputText("text"));
+  input_data.emplace_back(std::move(images[0]));
+  ASSERT_OK(AddRepeatedTemporalFrame(input_data));
+  ASSERT_OK_AND_ASSIGN(
+      const auto* still_tensors,
+      std::get<InputImage>(input_data[1]).GetPreprocessedImageTensorMap());
+  EXPECT_TRUE(still_tensors->contains("images_t1"));
 }
 
 }  // namespace

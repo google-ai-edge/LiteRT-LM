@@ -51,8 +51,14 @@ namespace {
 // channels.
 constexpr int kDesiredChannels = 3;
 
-absl::Status MaybeResizeImageWithSameAspectRatio(
-    std::vector<unsigned char>& image_data,
+// Resizes `image_data` (an HWC uint8 image of the size in the target
+// dimensions of `parameter`) so it fits the patchify constraints, preserving
+// the aspect ratio, and writes the new size back into `parameter`.
+//
+// Returns whether the image was resized into `resized_image_data`; if not,
+// `image_data` already has the right size and is left as is (no copy).
+absl::StatusOr<bool> MaybeResizeImageWithSameAspectRatio(
+    const unsigned char* image_data,
     std::vector<unsigned char>& resized_image_data,
     ImagePreprocessParameter& parameter) {
   const Dimensions& target_dimensions = parameter.GetTargetDimensions();
@@ -69,8 +75,7 @@ absl::Status MaybeResizeImageWithSameAspectRatio(
   int new_width = size.second;
 
   if (new_height == height && new_width == width) {
-    resized_image_data = std::move(image_data);
-    return absl::OkStatus();
+    return false;
   }
   ABSL_LOG(INFO) << "Resize image from " << width << "x" << height << " to "
                  << new_width << "x" << new_height << " which will result in "
@@ -88,8 +93,8 @@ absl::Status MaybeResizeImageWithSameAspectRatio(
   const int channels = target_dimensions[3];
 
   for (int i = 0; i < batch_size; ++i) {
-    unsigned char* input_data =
-        image_data.data() + i * height * width * channels;
+    const unsigned char* input_data =
+        image_data + static_cast<size_t>(i) * height * width * channels;
     unsigned char* output_data =
         resized_image_data.data() + i * new_height * new_width * channels;
 
@@ -97,7 +102,7 @@ absl::Status MaybeResizeImageWithSameAspectRatio(
                                          new_width, new_height, channels));
   }
 
-  return absl::OkStatus();
+  return true;
 }
 
 // Applies the per-channel affine transform `x * scale[c] + offset[c]` to rows
@@ -132,17 +137,24 @@ absl::StatusOr<InputImage> PreprocessDecodedPixels(
   const Dimensions& target_dimensions = parameter.GetTargetDimensions();
 
   std::vector<unsigned char> resized_image;
+  // The pixels to convert: `resized_image`, or the input if it needs no resize.
+  absl::Span<const unsigned char> resized_pixels;
   ImagePreprocessParameter updated_parameter = parameter;
   if (target_dimensions.empty()) {
     // No fixed target dimensions: resize while preserving the aspect ratio so
     // the image fits the patchify constraints (used by patchifying encoders).
     // The helper reads the current size off the target dimensions and writes
     // the size it settled on back into them, so seed them with the input size.
-    const size_t num_elements = static_cast<size_t>(width) * height * channels;
     updated_parameter.SetTargetDimensions({1, height, width, channels});
-    std::vector<unsigned char> image_data(pixels, pixels + num_elements);
-    ABSL_RETURN_IF_ERROR(MaybeResizeImageWithSameAspectRatio(
-        image_data, resized_image, updated_parameter));
+    ABSL_ASSIGN_OR_RETURN(const bool resized,
+                          MaybeResizeImageWithSameAspectRatio(
+                              pixels, resized_image, updated_parameter));
+    if (resized) {
+      resized_pixels = absl::MakeConstSpan(resized_image);
+    } else {
+      resized_pixels = absl::MakeConstSpan(
+          pixels, static_cast<size_t>(width) * height * channels);
+    }
   } else {
     // Fixed target dimensions: resize directly to the requested size.
     const int target_height = target_dimensions.at(1);
@@ -155,6 +167,7 @@ absl::StatusOr<InputImage> PreprocessDecodedPixels(
     ABSL_RETURN_IF_ERROR(ResizeSrgbUint8(pixels, width, height,
                                          resized_image.data(), target_width,
                                          target_height, target_channels));
+    resized_pixels = absl::MakeConstSpan(resized_image);
   }
 
   const Dimensions& final_dimensions = updated_parameter.GetTargetDimensions();
@@ -191,7 +204,7 @@ absl::StatusOr<InputImage> PreprocessDecodedPixels(
   }
 
   if (updated_parameter.GetPatchifyConfig().has_value()) {
-    return PatchifyImage(absl::MakeConstSpan(resized_image), updated_parameter,
+    return PatchifyImage(resized_pixels, updated_parameter,
                          AffinePixelConverter(target_channels, scale, offset));
   }
 
@@ -211,7 +224,7 @@ absl::StatusOr<InputImage> PreprocessDecodedPixels(
   float* float_buffer_ptr =
       reinterpret_cast<float*>(processed_tensor_lock_and_addr.second);
   ConvertUint8ToFloat(
-      resized_image.data(), float_buffer_ptr,
+      resized_pixels.data(), float_buffer_ptr,
       static_cast<size_t>(batch_size) * target_height * target_width,
       target_channels, scale, offset);
   InputImage processed_image(std::move(processed_tensor_buffer));

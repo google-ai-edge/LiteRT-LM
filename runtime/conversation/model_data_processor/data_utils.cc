@@ -17,6 +17,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 
 #include "absl/functional/function_ref.h"  // from @com_google_absl
@@ -24,6 +25,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/components/tool_use/parser_utils.h"
@@ -35,6 +37,34 @@ namespace litert::lm {
 
 using ::nlohmann::ordered_json;
 
+absl::StatusOr<std::unique_ptr<MemoryMappedFile>> LoadMediaBytes(
+    const ordered_json& item) {
+  if (item.contains("path")) {
+    if (!item["path"].is_string()) {
+      return absl::InvalidArgumentError("Media `path` must be a string.");
+    }
+    return MemoryMappedFile::Create(item["path"].get<std::string>());
+  }
+  if (item.contains("blob")) {
+    if (item["blob"].is_binary()) {
+      const auto& blob = item["blob"].get_binary();
+      return InMemoryFile::Create(
+          std::string(reinterpret_cast<const char*>(blob.data()), blob.size()));
+    }
+    if (!item["blob"].is_string()) {
+      return absl::InvalidArgumentError(
+          "Media `blob` must be a base64 string or binary value.");
+    }
+    std::string blob;
+    if (!absl::Base64Unescape(item["blob"].get_ref<const std::string&>(),
+                              &blob)) {
+      return absl::InvalidArgumentError("Failed to decode base64 blob.");
+    }
+    return InMemoryFile::Create(std::move(blob));
+  }
+  return absl::InvalidArgumentError("Media item must contain a path or blob.");
+}
+
 absl::StatusOr<std::unique_ptr<MemoryMappedFile>> LoadItemData(
     const ordered_json& item) {
   if (!item.contains("type")) {
@@ -44,29 +74,18 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> LoadItemData(
   if (item["type"] == "text") {
     return InMemoryFile::Create(item["text"]);
   } else if (item["type"] == "image" || item["type"] == "audio") {
-    if (item.contains("path")) {
-      return MemoryMappedFile::Create(item["path"].get<std::string>());
+    if (!item.contains("path") && !item.contains("blob")) {
+      return absl::InvalidArgumentError(
+          "Audio or image item must contain a path or blob.");
     }
-    if (item.contains("blob")) {
-      if (item["blob"].is_binary()) {
-        const auto& blob = item["blob"].get_binary();
-        return InMemoryFile::Create(std::string(
-            reinterpret_cast<const char*>(blob.data()), blob.size()));
-      }
-      std::string blob_b64 = item["blob"].get<std::string>();
-      std::string blob;
-      if (!absl::Base64Unescape(blob_b64, &blob)) {
-        return absl::InvalidArgumentError("Failed to decode base64 blob.");
-      }
-      return InMemoryFile::Create(blob);
-    }
-    return absl::InvalidArgumentError(
-        "Audio or image item must contain a path or blob.");
+    return LoadMediaBytes(item);
   } else if (item["type"] == "tool_response") {
     return nullptr;
   }
-  return absl::UnimplementedError("Unsupported item type: " +
-                                  item["type"].get<std::string>());
+  return absl::UnimplementedError(absl::StrCat(
+      "Unsupported item type: ",
+      item["type"].is_string() ? item["type"].get_ref<const std::string&>()
+                               : item["type"].dump()));
 }
 
 ordered_json NormalizeContent(const ordered_json& content) {

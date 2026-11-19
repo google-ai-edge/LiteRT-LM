@@ -59,7 +59,23 @@ namespace litert::lm {
 //
 // Note: though we support loading image and audio data from blob, this format
 // is less efficient and less favorable.
+//
+// `"type": "video"` items are not loaded here: they hold a list of frames that
+// model data processors with video support expand themselves (see
+// `LoadMediaBytes()` for loading one frame).
 absl::StatusOr<std::unique_ptr<MemoryMappedFile>> LoadItemData(
+    const nlohmann::ordered_json& item);
+
+// Loads the media bytes of `item` from its `"path"` (memory mapped) or
+// `"blob"` (base64 string or binary JSON value) field.
+//
+// args:
+//   item: JSON object with a `"path"` or `"blob"` field, e.g. an image or
+//     audio content item, or one frame of a `"type": "video"` item.
+// returns:
+//   The loaded bytes, or an InvalidArgumentError if neither field is present
+//   or the blob is not valid base64.
+absl::StatusOr<std::unique_ptr<MemoryMappedFile>> LoadMediaBytes(
     const nlohmann::ordered_json& item);
 
 // Normalizes a message's "content" value into a list of multimodal parts.
