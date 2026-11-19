@@ -101,6 +101,22 @@ public struct Message {
   /// The tool calls in the message.
   public let toolCalls: [ToolCall]
 
+  /// Why the turn ended, set only on the message that ends a turn: the response of
+  /// `Conversation.sendMessage`, and the last element of `Conversation.sendMessageStream`, which
+  /// has no content. A non-nil value is how to detect the end of a turn.
+  ///
+  /// - "stop": the model finished its response, or the response reached `maxOutputTokens`.
+  /// - "max_tokens": the conversation filled the engine's context window
+  ///   (`EngineConfig.maxNumTokens`), which cut the response off.
+  ///
+  /// More values may come; treat unknown values as the end of the turn too. It's never sent back to
+  /// the model.
+  public let finishReason: String?
+
+  /// The executor stats of the turn, set only with `finishReason`, or `nil` if the turn has none.
+  /// It's never sent back to the model.
+  public let executorStats: ExecutorStats?
+
   // TODO: (b/459796564): Update constructor to `Message.role("messageTextHere")`
   /// Creates a `Message` from a text string.
   /// - Parameter text: The text content of the message.
@@ -113,10 +129,9 @@ public struct Message {
   /// - Parameter contents: The list of contents for this message.
   public init(of contents: Content..., role: Role = .user) {
     precondition(!contents.isEmpty, "Contents should not be empty.")
-    self.contents = Contents(contents: contents)
-    self.role = role
-    self.channels = [:]
-    self.toolCalls = []
+    self.init(
+      contents: Contents(contents: contents), role: role, channels: [:], toolCalls: [],
+      finishReason: nil, executorStats: nil)
   }
 
   /// Creates a `Message` from a list of `Content`s.
@@ -125,13 +140,8 @@ public struct Message {
     contents: [Content], role: Role = .user, channels: [String: String] = [:],
     toolCalls: [ToolCall] = []
   ) {
-    precondition(
-      !contents.isEmpty || !channels.isEmpty || !toolCalls.isEmpty,
-      "Contents, channels and toolCalls should not all be empty.")
-    self.contents = Contents(contents: contents)
-    self.role = role
-    self.channels = channels
-    self.toolCalls = toolCalls
+    self.init(
+      contents: Contents(contents: contents), role: role, channels: channels, toolCalls: toolCalls)
   }
 
   /// Creates a `Message` from a `Contents` object.
@@ -143,10 +153,30 @@ public struct Message {
     precondition(
       !contents.isEmpty || !channels.isEmpty || !toolCalls.isEmpty,
       "Contents, channels and toolCalls should not all be empty.")
+    self.init(
+      contents: contents, role: role, channels: channels, toolCalls: toolCalls,
+      finishReason: nil, executorStats: nil)
+  }
+
+  /// Creates the content-less model message that ends a streamed turn.
+  init(finishReason: String, executorStats: ExecutorStats?) {
+    self.init(
+      contents: .empty(), role: .model, channels: [:], toolCalls: [],
+      finishReason: finishReason, executorStats: executorStats)
+  }
+
+  /// Creates a `Message` without checking its content, as the runtime's messages that end a turn
+  /// may have none.
+  init(
+    contents: Contents, role: Role, channels: [String: String], toolCalls: [ToolCall],
+    finishReason: String?, executorStats: ExecutorStats?
+  ) {
     self.contents = contents
     self.role = role
     self.channels = channels
     self.toolCalls = toolCalls
+    self.finishReason = finishReason
+    self.executorStats = executorStats
   }
 
   /// Convert to JSON format. Used internally.
