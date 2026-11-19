@@ -128,10 +128,15 @@ adb shell $DEVICE_DIR/omni_runner \
 | `--audio_path` | `""` | Input WAV file for ASR or Any-to-Any. |
 | `--image_path` | `""` | Input PNG/JPEG/BMP image file for Any-to-Any. |
 | `--text` | `""` | Input text prompt for TTS, Text-to-Image, or Any-to-Any. |
-| `--output_path` | `""` | Output file path (`.wav` for TTS/Any-to-Any audio, `.png` for Text-to-Image, or optional `.txt` for ASR/Any-to-Any text). |
+| `--output_path` | `""` | Output file path (`.wav` for TTS/Any-to-Any audio, `.png` for Text-to-Image/Any-to-Any image, or optional `.txt` for ASR/Any-to-Any text). |
 | `--generate_audio` | `false` | Synthesize speech audio output in addition to text for Any-to-Any models. |
+| `--generate_image` | `false` | Generate an output image instead of text for Any-to-Any models. |
+| `--max_new_tokens` | *(model default)* | Optional maximum number of text tokens to generate for Any-to-Any models. |
+| `--temperature` | *(model default)* | Optional sampling temperature for Any-to-Any text generation. |
+| `--cfg_weight` | *(model default)* | Optional classifier-free guidance weight for Any-to-Any image generation. |
+| `--image_temperature` | *(model default)* | Optional sampling temperature for Any-to-Any image token generation. |
 | `--language` / `--voice` | `"en-US"` / `""` | TTS language code (BCP-47) and optional voice ID (e.g., `af_heart`). |
-| `--img_size` / `--steps` / `--seed` | `0` / `4` / `42` | Text-to-Image resolution, denoising steps, and random seed. |
+| `--img_size` / `--steps` / `--seed` | `0` / `4` / `42` | Text-to-Image resolution, denoising steps, and random seed (`--seed` is also used for Any-to-Any image generation). |
 
 <!-- mdformat on -->
 
@@ -210,6 +215,26 @@ cc_binary(
     ],
 )
 ```
+
+To build a standalone CLI runner that reuses `omni_runner`'s flags and workflow
+while linking **only** your selected or out-of-tree `alwayslink = 1` model
+libraries (without pulling in built-in Omni models), use the
+`omni_runner_binary` macro (replace `//omni:omni_runner.bzl` with
+`@litert_lm//omni:omni_runner.bzl` from an external repository):
+
+```python
+load("//omni:omni_runner.bzl", "omni_runner_binary")
+
+omni_runner_binary(
+    name = "my_custom_runner",
+    models = [":my_custom_model"],  # alwayslink = 1 registering via OmniRegistry
+)
+```
+
+Out-of-tree models can also store architecture-specific parameters in the
+`google.protobuf.Any custom_model` field of `Speech2TextModelType`,
+`Text2SpeechModelType`, `ImageGenModelType`, or `Any2AnyModelType` without
+modifying LiteRT-LM's core metadata protos.
 
 --------------------------------------------------------------------------------
 

@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# [Google-internal load of `cc_binary`]
 # [Google-internal load of `cc_library`]
 # [Google-internal load of `cc_test`]
+load(":omni_runner.bzl", "omni_runner_binary")
 
 package(default_visibility = ["//visibility:public"])
+
+exports_files(["omni_runner.bzl"])
 
 cc_library(
     name = "omni_session",
@@ -232,36 +234,27 @@ cc_test(
     ],
 )
 
-cc_binary(
-    name = "omni_runner",
-    srcs = ["omni_runner.cc"],
+cc_library(
+    name = "omni_runner_lib",
+    srcs = ["omni_runner_lib.cc"],
+    hdrs = ["omni_runner_lib.h"],
     deps = [
         ":omni_engine",
         ":omni_registry",
         ":omni_session",
         "@com_google_absl//absl/cleanup",
-        "@com_google_absl//absl/flags:flag",
-        "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
-        "//omni/any2any:minicpm_o",  # build_cleaner: keep
+        "@com_google_absl//absl/types:span",
         "//omni/base:io_types",
+        "//omni/base:model_cache",
         "//omni/base:model_utils",
-        "//omni/speech2text:moonshine",  # build_cleaner: keep
-        "//omni/speech2text:parakeet_ctc",  # build_cleaner: keep
-        "//omni/speech2text:parakeet_tdt",  # build_cleaner: keep
-        "//omni/speech2text:qwen3_asr",  # build_cleaner: keep
-        "//omni/speech2text:whisper",  # build_cleaner: keep
-        "//omni/text2image:bonsai_flux2",  # build_cleaner: keep
-        "//omni/text2image:flux2_klein",  # build_cleaner: keep
-        "//omni/text2speech:kokoro",  # build_cleaner: keep
-        "//omni/text2speech:qwen3_tts",  # build_cleaner: keep
-        "//runtime/executor:default_gpu_accelerator",
         "//runtime/proto:any2any_session_config_cc_proto",
         "//runtime/proto:speech2text_session_config_cc_proto",
         "//runtime/proto:text2image_session_config_cc_proto",
@@ -272,4 +265,80 @@ cc_binary(
         "@platforms//os:macos": ["@miniaudio//:miniaudio_objc"],
         "//conditions:default": ["@miniaudio"],
     }),
+)
+
+cc_library(
+    name = "omni_runner_flags",
+    srcs = ["omni_runner_flags.cc"],
+    hdrs = ["omni_runner_flags.h"],
+    deps = [
+        ":omni_runner_lib",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/status",
+    ],
+)
+
+cc_library(
+    name = "omni_runner_main",
+    srcs = ["omni_runner.cc"],
+    deps = [
+        ":omni_runner_flags",
+        "@com_google_absl//absl/flags:parse",
+        "//runtime/executor:default_gpu_accelerator",  # build_cleaner: keep
+    ],
+    alwayslink = 1,
+)
+
+cc_test(
+    name = "omni_runner_lib_test",
+    srcs = ["omni_runner_lib_test.cc"],
+    deps = [
+        ":omni_engine_header",
+        ":omni_registry",
+        ":omni_runner_flags",
+        ":omni_runner_lib",
+        ":omni_session",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:reflection",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_options",
+        "//omni/base:io_types",
+        "//omni/base:model_utils",
+        "//runtime/components:model_resources",
+        "//runtime/proto:any2any_session_config_cc_proto",
+        "//runtime/proto:speech2text_session_config_cc_proto",
+        "//runtime/proto:text2image_session_config_cc_proto",
+        "//runtime/proto:text2speech_session_config_cc_proto",
+        "//support/util:test_utils",
+    ],
+)
+
+omni_runner_binary(
+    name = "omni_runner",
+    models = [
+        "//omni/any2any:minicpm_o",  # build_cleaner: keep
+        "//omni/speech2text:moonshine",  # build_cleaner: keep
+        "//omni/speech2text:parakeet_ctc",  # build_cleaner: keep
+        "//omni/speech2text:parakeet_tdt",  # build_cleaner: keep
+        "//omni/speech2text:qwen3_asr",  # build_cleaner: keep
+        "//omni/speech2text:whisper",  # build_cleaner: keep
+        "//omni/text2image:bonsai_flux2",  # build_cleaner: keep
+        "//omni/text2image:flux2_klein",  # build_cleaner: keep
+        "//omni/text2speech:kokoro",  # build_cleaner: keep
+        "//omni/text2speech:qwen3_tts",  # build_cleaner: keep
+    ],
+)
+
+omni_runner_binary(
+    name = "omni_runner_minimal_test_bin",
+    testonly = True,
 )
