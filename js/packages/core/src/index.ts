@@ -28,7 +28,7 @@ export {type HuggingFaceModelRef, type HuggingFaceUri, type ModelSource, parseHu
 export * from './engine_settings.js';
 export * from './engine.js';
 export * from './session.js';
-export * from './conversation.js';
+export {Conversation} from './conversation.js';
 export * from './session_config.js';
 export * from './conversation_config.js';
 export * from './embedding_engine_settings.js';

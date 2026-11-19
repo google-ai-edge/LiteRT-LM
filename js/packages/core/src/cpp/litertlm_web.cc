@@ -879,8 +879,13 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                     return;
                   }
                   if (litert::lm::IsEndOfTurnMessage(*result)) {
-                    callback(emscripten::val::null(), true,
-                             emscripten::val::null());
+                    // The final chunk is the end-of-turn message, with
+                    // `finish_reason` and `executor_stats` (or null for the
+                    // legacy null marker).
+                    callback(result->is_object()
+                                 ? emscripten::val(result->dump())
+                                 : emscripten::val::null(),
+                             true, emscripten::val::null());
                   } else {
                     callback(result->dump(), false, emscripten::val::null());
                   }

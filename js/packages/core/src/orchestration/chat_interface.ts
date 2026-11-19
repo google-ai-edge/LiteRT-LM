@@ -22,6 +22,10 @@ import {BenchmarkInfo} from '../wasm_binding_types.js';
  */
 export interface ChatInterface {
   sendMessage(message: MessageLike): Promise<Message>;
+  /**
+   * Streams the response. Chats that report how a turn ended do so in a last
+   * element with `finish_reason` set and no content.
+   */
   sendMessageStreaming(message: MessageLike):
       ReadableStream<Message>;
   cancel(): void;

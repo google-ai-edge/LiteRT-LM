@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {AudioContentPart, ContentPart, ImageContentPart, Message, MessageLike} from './conversation_config.js';
+import {AudioContentPart, ContentPart, ExecutorStats, ImageContentPart, Message, MessageLike} from './conversation_config.js';
 import {Mutex} from './mutex.js';
 import {ChatInterface} from './orchestration/chat_interface.js';
 import {BenchmarkInfo, Conversation as WasmConversation, Engine as WasmEngine, unwrapWasmResult} from './wasm_binding_types.js';
@@ -39,6 +39,10 @@ export class Conversation implements ChatInterface {
        */
       private readonly visualTokenBudget = 0) {}
 
+  /**
+   * Sends a message to the LLM and returns its response, which also has the
+   * turn's `finish_reason` and `executor_stats`.
+   */
   async sendMessage(message: MessageLike): Promise<Message> {
     if (this.isBusy) {
       throw new Error(BUSY_MESSAGE);
@@ -58,10 +62,10 @@ export class Conversation implements ChatInterface {
 
   /**
    * Sends a message to the LLM and returns a ReadableStream that yields
-   * message chunks as they are generated.
+   * message chunks as they are generated. The last element of a turn that
+   * ends has no content, only the turn's `finish_reason` and `executor_stats`.
    */
-  sendMessageStreaming(message: MessageLike):
-      ReadableStream<Message> {
+  sendMessageStreaming(message: MessageLike): ReadableStream<Message> {
     if (this.isBusy) {
       throw new Error(BUSY_MESSAGE);
     }
@@ -69,6 +73,10 @@ export class Conversation implements ChatInterface {
 
     let isCancelled = false;
     let hasErrored = false;
+    // Keep the final chunk as a variable rather than emitting it
+    // immediately. Otherwise, the `engine.waitUntilDone()` call that drives
+    // execution could throw an error after the last chunk is enqueued.
+    let endOfTurn: Message|undefined;
     return new ReadableStream<Message>({
       start: (controller) => {
         const executeGeneration = async(): Promise<void> => {
@@ -84,15 +92,17 @@ export class Conversation implements ChatInterface {
                     controller.error(new Error(error));
                     return;
                   }
-                  if (chunk) {
-                    try {
-                      const msg = JSON.parse(chunk) as Message;
-                      controller.enqueue(msg);
-                    } catch (e) {
-                      hasErrored = true;
-                      this.isBusy = false;
-                      controller.error(e);
-                    }
+                  if (!chunk) return;
+                  if (isDone) {
+                    endOfTurn = parseEndOfTurn(chunk);
+                    return;
+                  }
+                  try {
+                    controller.enqueue(JSON.parse(chunk) as Message);
+                  } catch (e) {
+                    hasErrored = true;
+                    this.isBusy = false;
+                    controller.error(e);
                   }
                 },
                 this.visualTokenBudget);
@@ -105,6 +115,9 @@ export class Conversation implements ChatInterface {
 
           if (isCancelled || hasErrored) return;
           this.isBusy = false;
+          if (endOfTurn) {
+            controller.enqueue(endOfTurn);
+          }
           controller.close();
         };
 
@@ -182,6 +195,34 @@ interface SerializedMessage {
   blobs: Uint8Array[];
 }
 
+/**
+ * Parses the final chunk of a turn into the stream's last element. A malformed
+ * one is dropped rather than failing a turn that already completed.
+ */
+function parseEndOfTurn(json: string): Message|undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (e) {
+    parsed = undefined;
+  }
+  if (!isJsonObject(parsed) || typeof parsed['finish_reason'] !== 'string') {
+    console.warn('Invalid end-of-turn message:', json);
+    return undefined;
+  }
+  const executorStats = parsed['executor_stats'];
+  return {
+    ...parsed,
+    role: typeof parsed['role'] === 'string' ? parsed['role'] : 'assistant',
+    executor_stats:
+        isJsonObject(executorStats) ? executorStats as ExecutorStats : null,
+  } as Message;
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 async function serializeMessage(messageLike: MessageLike):
     Promise<SerializedMessage> {
   const blobs: Uint8Array[] = [];
@@ -197,6 +238,20 @@ function toMessage(messageLike: MessageLike): Message {
 }
 
 /**
+ * Returns `message` without `finish_reason` and `executor_stats`, which
+ * describe a response and are never sent back to the model.
+ */
+export function withoutEndOfTurnFields(message: Message): Message {
+  if (!('finish_reason' in message) && !('executor_stats' in message)) {
+    return message;
+  }
+  const result = {...message};
+  delete result.finish_reason;
+  delete result.executor_stats;
+  return result;
+}
+
+/**
  * Converts a message to the JSON-serializable form expected by the C++
  * Conversation. Binary image and audio `data` is extracted into `blobs` and
  * referenced by `blob_index`, while string `data` (already base64-encoded) is
@@ -204,14 +259,14 @@ function toMessage(messageLike: MessageLike): Message {
  */
 async function toWireMessage(
     messageLike: MessageLike, blobs: Uint8Array[]): Promise<Message> {
-  const message = toMessage(messageLike);
+  const message = withoutEndOfTurnFields(toMessage(messageLike));
   if (!Array.isArray(message.content)) {
     return message;
   }
   const content: ContentPart[] = [];
   for (const part of message.content) {
-    if ((part.type !== 'image' && part.type !== 'audio') ||
-        !('data' in part) || part.data === undefined) {
+    if ((part.type !== 'image' && part.type !== 'audio') || !('data' in part) ||
+        part.data === undefined) {
       content.push(part);
       continue;
     }
@@ -228,8 +283,8 @@ async function toWireMessage(
   return {...message, content};
 }
 
-async function toUint8Array(data: Uint8Array|ArrayBuffer|
-                            Blob): Promise<Uint8Array> {
+async function toUint8Array(data: Uint8Array|ArrayBuffer|Blob):
+    Promise<Uint8Array> {
   if (data instanceof Blob) {
     return new Uint8Array(await data.arrayBuffer());
   }

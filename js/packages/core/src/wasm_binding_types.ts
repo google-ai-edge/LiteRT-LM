@@ -567,6 +567,11 @@ export declare interface Conversation extends Deletable {
   sendMessage(
       messageJson: string, blobs: Uint8Array[],
       visualTokenBudget: number): Promise<WasmResult<string>>;
+  /**
+   * @param callback Called with each message chunk as JSON. The final call
+   *     has `isDone` set and the end-of-turn message as `chunk` (with
+   *     `finish_reason` and `executor_stats`), or an error.
+   */
   sendMessageAsync(
       messageJson: string, blobs: Uint8Array[],
       callback:
