@@ -210,6 +210,15 @@ export const LEGACY_MODEL_PATHS = new Map(
       ];
     }));
 
+/** Returns a model path's normalized URL key, or `path` when not a URL. */
+export function getModelKey(path: string): string {
+  try {
+    return new URL(path).href;
+  } catch {
+    return path;
+  }
+}
+
 /** Returns the path that replaced a default model's old path, if it is one. */
 export function migrateModelPath(path: string): string {
   return LEGACY_MODEL_PATHS.get(path) ?? path;
@@ -218,11 +227,12 @@ export function migrateModelPath(path: string): string {
 /** Finds a built-in, custom, or local-directory model by path. */
 export function findModel(
     models: ModelLists, path: string): CustomModel|undefined {
+  const targetKey = getModelKey(path);
   return [
     ...MODELS,
     ...(models.customModels ?? []),
     ...(models.localDirModels ?? []),
-  ].find(m => m.path === path);
+  ].find(m => m.path === path || getModelKey(m.path) === targetKey);
 }
 
 /**
@@ -577,6 +587,57 @@ export function getMediaUiCopy(
   return MEDIA_UI_COPY[key];
 }
 
+function parseCustomModelList(raw: unknown): CustomModel[]|undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const valid: CustomModel[] = [];
+  for (const item of raw) {
+    const parsed = CustomModelSchema.safeParse(item);
+    if (parsed.success) {
+      valid.push(parsed.data);
+    }
+  }
+  return valid;
+}
+
+function isRecord(val: unknown): val is Record<string, unknown> {
+  return typeof val === 'object' && val !== null && !Array.isArray(val);
+}
+
+function parseField<T>(schema: z.ZodType<T>, val: unknown): T|undefined {
+  if (val === undefined) return undefined;
+  const res = schema.safeParse(val);
+  return res.success ? res.data : undefined;
+}
+
+function salvagePartialSettings(raw: unknown): Partial<Settings>|null {
+  if (!isRecord(raw)) return null;
+  const {shape} = SettingsSchema;
+  return {
+    selectedModelPath: parseField(shape.selectedModelPath, raw['selectedModelPath']),
+    contextLength: parseField(shape.contextLength, raw['contextLength']),
+    maxOutputTokens: parseField(shape.maxOutputTokens, raw['maxOutputTokens']),
+    samplerType: parseField(shape.samplerType, raw['samplerType']),
+    temperature: parseField(shape.temperature, raw['temperature']),
+    topP: parseField(shape.topP, raw['topP']),
+    topK: parseField(shape.topK, raw['topK']),
+    enableThinking: parseField(shape.enableThinking, raw['enableThinking']),
+    enableSpeculativeDecoding:
+        parseField(shape.enableSpeculativeDecoding, raw['enableSpeculativeDecoding']),
+    systemPrompt: parseField(shape.systemPrompt, raw['systemPrompt']),
+    disabledTools: parseField(shape.disabledTools, raw['disabledTools']),
+    textBackend: parseField(shape.textBackend, raw['textBackend']),
+    visionBackend: parseField(shape.visionBackend, raw['visionBackend']),
+    audioBackend: parseField(shape.audioBackend, raw['audioBackend']),
+    textPrecision: parseField(shape.textPrecision, raw['textPrecision']),
+    visionPrecision: parseField(shape.visionPrecision, raw['visionPrecision']),
+    audioPrecision: parseField(shape.audioPrecision, raw['audioPrecision']),
+    useAutosizedRingbuffers:
+        parseField(shape.useAutosizedRingbuffers, raw['useAutosizedRingbuffers']),
+    customModels: parseCustomModelList(raw['customModels']),
+    localDirModels: parseCustomModelList(raw['localDirModels']),
+  };
+}
+
 /** Store for managing inference configuration and persistence. */
 export class SettingsStore implements Settings {
   // Active model configuration parameters
@@ -644,8 +705,16 @@ export class SettingsStore implements Settings {
       if (data) {
         const parsed = JSON.parse(data);
         const result = PartialSettingsSchema.safeParse(parsed);
+        let validated: Partial<Settings>|null = null;
         if (result.success) {
-          const validated = result.data;
+          validated = result.data;
+        } else {
+          console.warn(
+              '[LiteRT-LM] Invalid fields in LocalStorage settings; salvaging valid entries:',
+              result.error);
+          validated = salvagePartialSettings(parsed);
+        }
+        if (validated) {
           this.selectedModelPath = migrateModelPath(
               validated.selectedModelPath ?? this.selectedModelPath);
           this.contextLength = validated.contextLength ?? this.contextLength;
@@ -672,10 +741,6 @@ export class SettingsStore implements Settings {
           this.customModels = validated.customModels ?? [];
           this.localDirModels = validated.localDirModels ?? [];
           coerceGpuOnlyTextBackend(this);
-        } else {
-          console.warn(
-              '[LiteRT-LM] Invalid settings in LocalStorage, using defaults:',
-              result.error);
         }
       }
     } catch (e) {
@@ -750,8 +815,9 @@ export function selectCustomModel(
         'customModels'|'selectedModelPath'|'saveSettings'|'textBackend'>&
     Partial<Pick<SettingsStore, 'localDirModels'>>,
     model: CustomModel) {
-  if (!MODELS.some(m => m.path === model.path) &&
-      !settings.customModels.some(m => m.path === model.path)) {
+  const modelKey = getModelKey(model.path);
+  if (!MODELS.some(m => getModelKey(m.path) === modelKey) &&
+      !settings.customModels.some(m => getModelKey(m.path) === modelKey)) {
     settings.customModels = [...settings.customModels, model];
   }
   settings.selectedModelPath = model.path;

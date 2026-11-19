@@ -17,7 +17,7 @@
 import {ActivationDataType, Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, LiteRtLm, ResolvedModelInput, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
 import {EngineFake} from '@litert-lm/core/testing';
 
-import {buildGpuBackendConfig, CORE_GPU_ARTISAN_DEFAULTS, formatModelLoadError, getModelKey, ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
+import {buildGpuBackendConfig, CORE_GPU_ARTISAN_DEFAULTS, formatModelLoadError, getModelKey, inferCustomModelFromCacheKey, ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
 import {SettingsStore} from './settings_store.js';
 
 /** Returns a fake cache that has a 3-byte model. */
@@ -481,7 +481,91 @@ describe('ModelLoaderService', () => {
               jasmine.objectContaining({url: oldDefault}));
       expect(modelLoader.cachedModels.size).toBe(0);
     });
+
+    it('restores built-in hf:// cache mappings when localStorage URL map is missing and prunes superseded revisions',
+       async () => {
+         // 1. Missing localStorage map: cached built-in resolve URL maps back
+         // to its hf:// URI instead of becoming an unmapped orphan.
+         window.localStorage.removeItem('litertlm-hf-model-urls');
+         mockCache.keys.and.resolveTo([new Request(NEW_URL)]);
+         mockCache.match.and.callFake(async () => modelResponse());
+
+         await modelLoader.updateCacheSize();
+
+         expect(modelLoader.cachedModels).toEqual(new Map([[HF_URI, 3]]));
+         const restoredHfUrls = JSON.parse(
+                                    window.localStorage.getItem(
+                                        'litertlm-hf-model-urls') ??
+                                    '{}') as Record<string, string>;
+         expect(restoredHfUrls[HF_URI]).toBe(NEW_URL);
+
+         // 2. Both OLD_URL and NEW_URL in cache while NEW_URL is active:
+         // OLD_URL is pruned unless explicitly pinned as a custom model.
+         mockCache.delete.calls.reset();
+         mockCache.keys.and.resolveTo(
+             [new Request(OLD_URL), new Request(NEW_URL)]);
+
+         await modelLoader.updateCacheSize();
+
+         expect(mockCache.delete)
+             .toHaveBeenCalledOnceWith(
+                 jasmine.objectContaining({url: OLD_URL}));
+         expect(modelLoader.cachedModels).toEqual(new Map([[HF_URI, 3]]));
+
+         // 3. When OLD_URL is explicitly pinned in customModels, keep it.
+         mockCache.delete.calls.reset();
+         modelLoader.isPinnedCustomUrl = (url: string) => url === OLD_URL;
+         mockCache.keys.and.resolveTo(
+             [new Request(OLD_URL), new Request(NEW_URL)]);
+
+         await modelLoader.updateCacheSize();
+
+         expect(mockCache.delete).not.toHaveBeenCalled();
+         expect(modelLoader.cachedModels).toEqual(new Map([
+           [OLD_URL, 3],
+           [HF_URI, 3],
+         ]));
+       });
   });
+
+  it('encodes special characters in uploaded filenames and infers display metadata from cache keys',
+     async () => {
+       const mockCache = {
+         put: jasmine.createSpy().and.resolveTo(undefined),
+       };
+       spyOn(window.caches, 'open').and.resolveTo(mockCache as unknown as Cache);
+       spyOn(modelLoader, 'updateCacheSize').and.resolveTo();
+
+       const file = new File(
+           ['weights'], 'my model #1?.litertlm',
+           {type: 'application/octet-stream'});
+       const imported = await modelLoader.importCustomModel(file);
+
+       expect(imported.path)
+           .toBe('https://local-model/my%20model%20%231%3F.litertlm');
+       expect(imported.filename).toBe('my model #1?.litertlm');
+       expect(imported.name).toBe('my model #1?');
+       expect(mockCache.put)
+           .toHaveBeenCalledOnceWith(imported.path, jasmine.any(Response));
+
+       expect(inferCustomModelFromCacheKey(imported.path, 6_910_000_000))
+           .toEqual({
+             name: 'my model #1?',
+             filename: 'my model #1?.litertlm',
+             path: imported.path,
+             size: '6.91 GB',
+           });
+       expect(inferCustomModelFromCacheKey(
+                  'https://huggingface.co/litert-community/SmolLM3-3B/resolve/c0ffee/SmolLM3-3B.litertlm',
+                  2_500_000_000))
+           .toEqual({
+             name: 'SmolLM3-3B',
+             filename: 'SmolLM3-3B.litertlm',
+             path:
+                 'https://huggingface.co/litert-community/SmolLM3-3B/resolve/c0ffee/SmolLM3-3B.litertlm',
+             size: '2.50 GB',
+           });
+     });
 
   it('imports custom model correctly', async () => {
     const mockCache = {

@@ -17,11 +17,12 @@
 import {css, html, nothing, TemplateResult} from 'lit';
 
 import {LlmChatStateController} from '../state_controller.js';
-import {getModelKey} from '../stores/model_loader_service.js';
+import {getModelKey, inferCustomModelFromCacheKey} from '../stores/model_loader_service.js';
 import {parseModelReference} from '../stores/model_reference.js';
 import {coerceGpuOnlyTextBackend, CustomModel, findModel, getNonDefaultBackendSummary, MODELS, NonDefaultBackendSummary, selectCustomModel} from '../stores/settings_store.js';
 
 const LARGE_MODEL_WARNING_KEY = 'litertlm-large-model-warning-dismissed';
+let pendingUploadInput: HTMLInputElement|null = null;
 
 /** Shared CSS styles for model dropdown rows, badges, and inline URL forms. */
 export const modelSelectorStyles = css`
@@ -281,24 +282,59 @@ export function getModelDownloadLabel(model: CustomModel): string {
   return model.size ? `↓ ${model.size}` : '↓ Download';
 }
 
-/** Returns all built-in, custom, and mounted local-directory models. */
+/**
+ * Formats cached weight byte counts consistently across per-row size badges
+ * and the dropdown footer total.
+ */
+export function formatCachedBytes(bytes: number): string {
+  if (bytes <= 0) return '0.00 GB';
+  if (bytes >= 1e7) return `${(bytes / 1e9).toFixed(2)} GB`;
+  if (bytes >= 1e4) return `${(bytes / 1e6).toFixed(2)} MB`;
+  if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
+/**
+ * Returns all built-in, custom, mounted local-directory, and cached models
+ * (including any uploaded or orphaned cache entries missing from settings),
+ * deduplicated by cache key.
+ */
 export function getAllAvailableModels(
     state: LlmChatStateController): CustomModel[] {
-  return [
-    ...MODELS,
-    ...(state.settings.customModels ?? []),
-    ...(state.settings.localDirModels ?? []),
-  ];
+  const seenKeys = new Set<string>();
+  const models: CustomModel[] = [];
+  for (const model of [
+           ...MODELS,
+           ...(state.settings.customModels ?? []),
+           ...(state.settings.localDirModels ?? []),
+  ]) {
+    const key = getModelKey(model.path);
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    models.push(model);
+  }
+  for (const [cacheKey, sizeBytes] of state.modelLoader.cachedModels ?? []) {
+    if (seenKeys.has(cacheKey)) continue;
+    seenKeys.add(cacheKey);
+    models.push(inferCustomModelFromCacheKey(cacheKey, sizeBytes));
+  }
+  return models;
+}
+
+/** Returns total cached weight bytes across all cached models. */
+export function getTotalCachedWeightsBytes(
+    state: LlmChatStateController): number {
+  let totalBytes = 0;
+  for (const [_, size] of state.modelLoader.cachedModels ?? []) {
+    totalBytes += size;
+  }
+  return totalBytes;
 }
 
 /** Formatted total cached weights size across all cached models. */
 export function getTotalCachedWeightsLabel(
     state: LlmChatStateController): string {
-  let totalBytes = 0;
-  for (const [_, size] of state.modelLoader.cachedModels ?? []) {
-    totalBytes += size;
-  }
-  return `${(totalBytes / 1e9).toFixed(2)} GB`;
+  return formatCachedBytes(getTotalCachedWeightsBytes(state));
 }
 
 /** Compact summary of the currently selected model and its runtime status. */
@@ -355,15 +391,19 @@ export function getActiveModelSummary(
 /** Returns true if `modelPath` belongs to a user-added custom model. */
 export function isCustomModelPath(
     state: LlmChatStateController, modelPath: string): boolean {
-  return state.settings.customModels.some(m => m.path === modelPath);
+  const targetKey = getModelKey(modelPath);
+  return state.settings.customModels.some(
+      m => m.path === modelPath || getModelKey(m.path) === targetKey);
 }
 
 /** Removes a custom model from settings and falls back to default if active. */
 export function removeCustomModelFromSettings(
-    state: LlmChatStateController, modelPath: string) {
-  state.settings.customModels =
-      state.settings.customModels.filter(m => m.path !== modelPath);
-  if (state.settings.selectedModelPath === modelPath) {
+    state: LlmChatStateController, modelPath: string): void {
+  const targetKey = getModelKey(modelPath);
+  state.settings.customModels = state.settings.customModels.filter(
+      m => m.path !== modelPath && getModelKey(m.path) !== targetKey);
+  if (state.settings.selectedModelPath === modelPath ||
+      getModelKey(state.settings.selectedModelPath) === targetKey) {
     state.settings.selectedModelPath = MODELS[0]!.path;
     coerceGpuOnlyTextBackend(state.settings);
   }
@@ -371,7 +411,11 @@ export function removeCustomModelFromSettings(
 
 /** Confirms and removes an uncached custom model from the model list. */
 export async function confirmAndRemoveCustomModel(
-    state: LlmChatStateController, modelPath: string) {
+    state: LlmChatStateController, modelPath: string): Promise<void> {
+  if (state.modelLoader.cachedModels?.has(getModelKey(modelPath))) {
+    await deleteCachedModelAndSyncSettings(state, modelPath);
+    return;
+  }
   const confirmed = await state.requestConfirm({
     title: 'Remove custom model?',
     message: 'Remove this custom model from your model list?',
@@ -385,16 +429,18 @@ export async function confirmAndRemoveCustomModel(
 
 /** Deletes cached weights for `modelPath` and resets selection if needed. */
 export async function deleteCachedModelAndSyncSettings(
-    state: LlmChatStateController, modelPath: string) {
+    state: LlmChatStateController, modelPath: string): Promise<void> {
   const deleted = await state.modelLoader.deleteModelFromCache(modelPath);
   if (!deleted) return;
 
+  const targetKey = getModelKey(modelPath);
   let settingsChanged = false;
   if (isCustomModelPath(state, modelPath)) {
     removeCustomModelFromSettings(state, modelPath);
     settingsChanged = true;
   }
-  if (state.settings.selectedModelPath === modelPath) {
+  if (state.settings.selectedModelPath === modelPath ||
+      getModelKey(state.settings.selectedModelPath) === targetKey) {
     state.settings.selectedModelPath = MODELS[0]!.path;
     coerceGpuOnlyTextBackend(state.settings);
     settingsChanged = true;
@@ -402,6 +448,31 @@ export async function deleteCachedModelAndSyncSettings(
   if (settingsChanged) {
     state.settings.saveSettings();
   }
+}
+
+/**
+ * Clears all cached weights and removes cache-only uploaded (`local-model`)
+ * entries from settings.
+ */
+export async function clearAllCachedModelsAndSyncSettings(
+    state: LlmChatStateController): Promise<void> {
+  await state.modelLoader.clearAllCache?.(() => {
+    let settingsChanged = false;
+    const remaining = state.settings.customModels.filter(
+        m => !m.path.startsWith('https://local-model/'));
+    if (remaining.length !== state.settings.customModels.length) {
+      state.settings.customModels = remaining;
+      settingsChanged = true;
+    }
+    if (state.settings.selectedModelPath.startsWith('https://local-model/')) {
+      state.settings.selectedModelPath = MODELS[0]!.path;
+      coerceGpuOnlyTextBackend(state.settings);
+      settingsChanged = true;
+    }
+    if (settingsChanged) {
+      state.settings.saveSettings();
+    }
+  });
 }
 
 function isLargeModel(path: string): boolean {
@@ -451,11 +522,19 @@ export async function selectModelWithLargeModelCheck(
 
 /** Opens a native file picker to import and load a local `.litertlm` file. */
 export function triggerLitertModelUpload(
-    state: LlmChatStateController, onSelected?: () => void) {
+    state: LlmChatStateController, onSelected?: () => void): void {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.litertlm';
+  pendingUploadInput = input;
+  const clearPendingInput = () => {
+    if (pendingUploadInput === input) {
+      pendingUploadInput = null;
+    }
+  };
+  input.addEventListener('cancel', clearPendingInput, {once: true});
   input.onchange = async () => {
+    clearPendingInput();
     const file = input.files?.[0];
     if (!file) return;
     try {
@@ -552,9 +631,9 @@ export function renderModelDropdownItems(
                 ${model.size ? html`<span class="download-badge">${model.size}</span>` : nothing}
                 <span class="local-badge">Local Dir</span>
               </span>
-            ` : cachedSizeBytes ? html`
+            ` : cachedSizeBytes !== undefined ? html`
               <span class="item-meta">
-                <span class="size-badge">${(cachedSizeBytes / 1e9).toFixed(1)} GB</span>
+                <span class="size-badge">${formatCachedBytes(cachedSizeBytes)}</span>
               </span>
             ` : downloadProgress !== undefined ? html`
               <span class="downloading-info">${downloadProgress}%</span>
@@ -564,7 +643,7 @@ export function renderModelDropdownItems(
               </span>
             `}
           </div>
-          ${!isLocalDir && cachedSizeBytes ? html`
+          ${!isLocalDir && cachedSizeBytes !== undefined ? html`
             <button
               type="button"
               class="delete-cache-btn"
@@ -575,7 +654,7 @@ export function renderModelDropdownItems(
                 void deleteCachedModelAndSyncSettings(state, model.path);
               }}
             >✕</button>
-          ` : !isLocalDir && !cachedSizeBytes &&
+          ` : !isLocalDir && cachedSizeBytes === undefined &&
                   downloadProgress === undefined &&
                   isCustomModelPath(state, model.path) ? html`
             <button
@@ -683,7 +762,7 @@ export function renderModelDropdownItems(
           ?disabled=${!hasCachedWeights || state.modelLoader.isModelLoading}
           @click=${(e: Event) => {
             e.stopPropagation();
-            void state.modelLoader.clearAllCache?.();
+            void clearAllCachedModelsAndSyncSettings(state);
           }}
         >Clear All</button>
       </div>
