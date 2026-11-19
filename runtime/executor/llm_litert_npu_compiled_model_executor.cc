@@ -3398,7 +3398,8 @@ LlmLiteRtNpuCompiledModelExecutor::Create(
       // for all of them and starts out bound to the same (smallest) one.
       LITERT_ASSIGN_OR_RETURN(
           drafter_context,
-          DrafterContext::Create(env, **mtp_drafter_model, context_groups));
+          DrafterContext::Create(env, **mtp_drafter_model, context_groups,
+                                 mutable_settings, is_dynamic_model));
       MaskUpdateMethod mtp_mask_update_method = MaskUpdateMethod::kModel;
       if (npu_config_status.ok() &&
           npu_config_status->use_hw_masking_for_npu.value_or(false)) {

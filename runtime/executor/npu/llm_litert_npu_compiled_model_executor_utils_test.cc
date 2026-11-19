@@ -969,6 +969,57 @@ TEST_F(DrafterContextTest, CreateSingleContextDrafter) {
       drafter_context.mtp_output_buffers));
 }
 
+// The overload with executor settings compiles the drafter with the NPU
+// options of `settings` (`CreateLiteRtNpuOptions`, whose vendor options are
+// covered by its own tests) and binds the drafter like the CPU overload. On
+// hosts without an NPU, the drafter runs on the CPU fallback.
+TEST_F(DrafterContextTest, CreateWithExecutorSettingsBindsContextGroups) {
+  ::litert::Model model = LoadModel(BuildDrafterModelBuffer(
+      {{"mtp_drafter_cache_640", 640}, {"mtp_drafter_cache_1024", 1024}}));
+  std::vector<NpuContextGroup> groups;
+  groups.push_back(MakeContextGroup(640));
+  groups.push_back(MakeContextGroup(1024));
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create("dummy_model"));
+  ASSERT_OK_AND_ASSIGN(
+      auto settings, LlmExecutorSettings::CreateDefault(std::move(model_assets),
+                                                        Backend::NPU));
+
+  ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
+                       DrafterContext::Create(*env_, model, groups, settings,
+                                              /*is_dynamic_model=*/false));
+
+  ASSERT_EQ(drafter_context.context_bindings.size(), 2);
+  EXPECT_EQ(drafter_context.signature, "mtp_drafter_cache_640");
+  EXPECT_TRUE(
+      SharesMemory(drafter_context.mtp_input_buffers.at("kv_cache_k_0"),
+                   groups[0].input_kv_cache_buffers.at("kv_cache_k_0")));
+  LITERT_EXPECT_OK(drafter_context.mtp_compiled_model.Run(
+      drafter_context.signature, drafter_context.mtp_input_buffers,
+      drafter_context.mtp_output_buffers));
+
+  ASSERT_OK(drafter_context.BindContextGroup(1, groups[1]));
+  EXPECT_EQ(drafter_context.signature, "mtp_drafter_cache_1024");
+  EXPECT_TRUE(
+      SharesMemory(drafter_context.mtp_input_buffers.at("kv_cache_v_0"),
+                   groups[1].input_kv_cache_buffers.at("kv_cache_v_0")));
+  LITERT_EXPECT_OK(drafter_context.mtp_compiled_model.Run(
+      drafter_context.signature, drafter_context.mtp_input_buffers,
+      drafter_context.mtp_output_buffers));
+}
+
+TEST_F(DrafterContextTest, CreateWithExecutorSettingsRejectsNoContextGroups) {
+  ::litert::Model model =
+      LoadModel(BuildDrafterModelBuffer({{"mtp_drafter", 640}}));
+  ASSERT_OK_AND_ASSIGN(auto model_assets, ModelAssets::Create("dummy_model"));
+  ASSERT_OK_AND_ASSIGN(
+      auto settings, LlmExecutorSettings::CreateDefault(std::move(model_assets),
+                                                        Backend::NPU));
+  EXPECT_THAT(DrafterContext::Create(*env_, model, /*context_groups=*/{},
+                                     settings, /*is_dynamic_model=*/false),
+              StatusIs(absl::StatusCode::kInternal,
+                       HasSubstr("At least one text decoder context group")));
+}
+
 TEST_F(DrafterContextTest, SetInputPosWritesPositionWhenInputExists) {
   ::litert::Model model =
       LoadModel(BuildDrafterModelBuffer({{"mtp_drafter", 640}}));

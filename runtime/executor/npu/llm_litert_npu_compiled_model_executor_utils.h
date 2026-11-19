@@ -611,6 +611,21 @@ struct DrafterContext {
   static absl::StatusOr<DrafterContext> Create(
       ::litert::Environment& env, const litert::Model& mtp_drafter_model,
       absl::Span<const NpuContextGroup> context_groups);
+
+  // As above, but compiles the drafter with the NPU options of `settings`
+  // (hardware accelerators and vendor options), like the text decoder. The
+  // overload above compiles it for the CPU accelerator only, so a pre-compiled
+  // drafter would not get the vendor options.
+  static absl::StatusOr<DrafterContext> Create(
+      ::litert::Environment& env, const litert::Model& mtp_drafter_model,
+      absl::Span<const NpuContextGroup> context_groups,
+      const LlmExecutorSettings& settings, bool is_dynamic_model);
+
+ private:
+  static absl::StatusOr<DrafterContext> CreateWithCompiledModel(
+      ::litert::CompiledModel mtp_compiled_model,
+      const litert::Model& mtp_drafter_model,
+      absl::Span<const NpuContextGroup> context_groups);
 };
 
 // Dequantize logits to float32.

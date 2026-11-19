@@ -718,7 +718,29 @@ absl::StatusOr<DrafterContext> DrafterContext::Create(
       auto mtp_compiled_model,
       CompiledModelWrapper::Create(env, mtp_drafter_model.Get(),
                                    litert::HwAccelerators::kCpu));
+  return CreateWithCompiledModel(std::move(mtp_compiled_model),
+                                 mtp_drafter_model, context_groups);
+}
 
+absl::StatusOr<DrafterContext> DrafterContext::Create(
+    ::litert::Environment& env, const litert::Model& mtp_drafter_model,
+    absl::Span<const NpuContextGroup> context_groups,
+    const LlmExecutorSettings& settings, bool is_dynamic_model) {
+  RET_CHECK(!context_groups.empty())
+      << "At least one text decoder context group is required.";
+  LITERT_ASSIGN_OR_RETURN(auto options,
+                          CreateLiteRtNpuOptions(settings, is_dynamic_model));
+  LITERT_ASSIGN_OR_RETURN(
+      auto mtp_compiled_model,
+      CompiledModelWrapper::Create(env, mtp_drafter_model.Get(), options));
+  return CreateWithCompiledModel(std::move(mtp_compiled_model),
+                                 mtp_drafter_model, context_groups);
+}
+
+absl::StatusOr<DrafterContext> DrafterContext::CreateWithCompiledModel(
+    ::litert::CompiledModel mtp_compiled_model,
+    const litert::Model& mtp_drafter_model,
+    absl::Span<const NpuContextGroup> context_groups) {
   // Input buffers are shared between context groups whenever the input has
   // the same tensor type in every drafter signature (activations, position,
   // RoPE embeddings). Inputs whose shape depends on the context size (the
