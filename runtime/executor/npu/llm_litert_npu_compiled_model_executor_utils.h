@@ -374,7 +374,7 @@ T Quantize(float value, float scale, int32_t zero_point) {
       std::clamp(qval, static_cast<int32_t>(std::numeric_limits<T>::min()),
                  static_cast<int32_t>(std::numeric_limits<T>::max())));
 }
-#if defined(__ANDROID__) && defined(__ARM_NEON)
+#if defined(__ARM_NEON)
 int FindMaxIndexFloatNeon(const float* data, int size);
 int FindMaxIndexInt16Neon(const int16_t* data, int size);
 int FindMaxIndexInt8Neon(const int8_t* data, int size);
@@ -409,7 +409,7 @@ absl::StatusOr<int> FindMaxIndex(::litert::TensorBuffer& decoded_logits,
     return absl::InvalidArgumentError("Logits buffer is empty.");
   }
 
-#if defined(__ANDROID__) && defined(__ARM_NEON)
+#if defined(__ARM_NEON)
   if (use_neon_sampling) {
     if constexpr (std::is_same_v<T, float>) {
       return FindMaxIndexFloatNeon(data, static_cast<int>(size));

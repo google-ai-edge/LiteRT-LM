@@ -2215,7 +2215,7 @@ absl::StatusOr<int> SampleLogitsSliceFromLockedPtr(
   };
 
   if (element_type == ::litert::ElementType::Float32) {
-#if defined(__ANDROID__) && defined(__ARM_NEON)
+#if defined(__ARM_NEON)
     if (enable_neon_sampling) {
       return FindMaxIndexFloatNeon(reinterpret_cast<const float*>(logits_ptr),
                                    vocab_size);
@@ -2229,7 +2229,7 @@ absl::StatusOr<int> SampleLogitsSliceFromLockedPtr(
 #endif
     return find_max_index_plain(reinterpret_cast<const float*>(logits_ptr));
   } else if (element_type == ::litert::ElementType::Int16) {
-#if defined(__ANDROID__) && defined(__ARM_NEON)
+#if defined(__ARM_NEON)
     if (enable_neon_sampling) {
       return FindMaxIndexInt16Neon(reinterpret_cast<const int16_t*>(logits_ptr),
                                    vocab_size);
@@ -2243,7 +2243,7 @@ absl::StatusOr<int> SampleLogitsSliceFromLockedPtr(
 #endif
     return find_max_index_plain(reinterpret_cast<const int16_t*>(logits_ptr));
   } else if (element_type == ::litert::ElementType::Int8) {
-#if defined(__ANDROID__) && defined(__ARM_NEON)
+#if defined(__ARM_NEON)
     if (enable_neon_sampling) {
       return FindMaxIndexInt8Neon(reinterpret_cast<const int8_t*>(logits_ptr),
                                   vocab_size);

@@ -59,7 +59,7 @@
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep NOLINT
 
-#if defined(__ANDROID__) && defined(__ARM_NEON)
+#if defined(__ARM_NEON)
 #include <arm_neon.h>
 
 #include <limits>  // IWYU pragma: keep
@@ -90,7 +90,7 @@ class CompiledModelWrapper : public ::litert::CompiledModel {
 };
 }  // namespace
 
-#if defined(__ANDROID__) && defined(__ARM_NEON)
+#if defined(__ARM_NEON)
 int FindMaxIndexFloatNeon(const float* data, int size) {
   if (size <= 0) return 0;
 
