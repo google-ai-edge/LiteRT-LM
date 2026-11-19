@@ -19,7 +19,7 @@ import {customElement, property, state} from 'lit/decorators.js';
 
 import {LlmChatStateController} from '../state_controller.js';
 import {getModelKey} from '../stores/model_loader_service.js';
-import {getModalityConfigs, getNonDefaultBackendSummary, isGpuOnlyTextModel, Modality, MODALITIES, PartialSettingsSchema, Settings, SettingsGroup} from '../stores/settings_store.js';
+import {getCpuTextMemoryWarning, getExperimentalNote, getModalityConfigs, getNonDefaultBackendSummary, isGpuOnlyTextModel, Modality, MODALITIES, PartialSettingsSchema, Settings, SettingsGroup} from '../stores/settings_store.js';
 import {CHAT_TOOLS} from '../stores/tools.js';
 import {sharedStyles} from '../styles/shared_styles.js';
 
@@ -649,9 +649,7 @@ export class LitertSidebar extends LitElement {
       }
 
       .experimental-note {
-        height: 36px;
         min-height: 36px;
-        max-height: 36px;
         box-sizing: border-box;
         padding: 5px 8px;
         border-radius: 7px;
@@ -662,11 +660,12 @@ export class LitertSidebar extends LitElement {
         color: var(--text-muted, #94a3b8);
         display: flex;
         align-items: center;
-        overflow: hidden;
       }
 
-      .experimental-note .nowrap {
-        white-space: nowrap;
+      .experimental-note.warning {
+        background-color: color-mix(in srgb, var(--warning, #fbbf24) 10%, var(--bg-card, #171c26));
+        border-color: color-mix(in srgb, var(--warning, #fbbf24) 45%, var(--border, #262f40));
+        color: var(--warning-text, #fbbf24);
       }
 
       /* Compact Runtime Status Footer */
@@ -1553,27 +1552,26 @@ export class LitertSidebar extends LitElement {
     const gpuOnlyText =
         isGpuOnlyTextModel(settings.selectedModelPath, settings);
     const configs = getModalityConfigs(settings);
+    const cachedSizeBytes = this.state.modelLoader.cachedModels?.get(
+        getModelKey(settings.selectedModelPath));
+    const cpuMemoryWarning = getCpuTextMemoryWarning(
+        settings.selectedModelPath, settings, cachedSizeBytes);
+    const experimentalNote = getExperimentalNote(settings, cachedSizeBytes);
 
     const textBackendReason =
-        'This model\'s text decoder is WebGPU-only (-gpu.litertlm). Load a standard .litertlm (<1.5 GB) to run Text on CPU.';
+        'This model uses a WebGPU-only text decoder (-gpu.litertlm). Choose a standard .litertlm model to try CPU.';
     const cpuPrecisionReason =
         'CPU backend always executes in FP32 / native graph precision.';
-
-    const noteContent = gpuOnlyText ? html`
-          <span>This model's text is <span class="nowrap">WebGPU-only</span>. CPU text needs a standard <span class="nowrap">.litertlm</span> (<span class="nowrap">&lt;1.5 GB</span>).</span>
-        ` : configs.text.backend === 'cpu' ? html`
-          <span>Text CPU runs in WASM (FP32) for standard <span class="nowrap">.litertlm</span> models (<span class="nowrap">&lt;1.5 GB</span>).</span>
-        ` : (configs.vision.backend === 'cpu' || configs.audio.backend === 'cpu') ? html`
-          <span>CPU modalities run in WASM (FP32). GPU defaults: Text FP16, Vision/Audio FP32.</span>
-        ` : html`
-          <span>Experimental overrides. GPU defaults: Text FP16, Vision &amp; Audio FP32.</span>
-        `;
 
     const renderRow = (modality: Modality, label: string,
                        defaultPrecision: string) => {
       const {backend, precision} = configs[modality];
       const backendLocked = modality === 'text' && gpuOnlyText;
       const onCpu = backend === 'cpu';
+      const backendTitle = backendLocked ?
+          textBackendReason :
+          (modality === 'text' && cpuMemoryWarning ? cpuMemoryWarning :
+                                                     nothing);
       return html`
           <div class="exp-row">
             <span class="exp-modality-label">${label}</span>
@@ -1582,7 +1580,7 @@ export class LitertSidebar extends LitElement {
               aria-label="${label} backend"
               .value=${backend}
               ?disabled=${backendLocked}
-              title=${backendLocked ? textBackendReason : nothing}
+              title=${backendTitle}
               aria-describedby=${
           modality === 'text' ? 'experimental-note' : nothing}
               @change=${(e: Event) =>
@@ -1633,8 +1631,11 @@ export class LitertSidebar extends LitElement {
           ${renderRow('audio', 'Audio', 'FP32')}
         </div>
 
-        <div id="experimental-note" class="experimental-note">
-          ${noteContent}
+        <div
+          id="experimental-note"
+          class="experimental-note ${experimentalNote.warning ? 'warning' : ''}"
+        >
+          <span>${experimentalNote.text}</span>
         </div>
 
         <div class="tuning-footer">

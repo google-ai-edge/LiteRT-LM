@@ -81,6 +81,12 @@ export type ModelSettings = Pick<
     'enableSpeculativeDecoding' | 'systemPrompt' | 'disabledTools' |
     ExperimentalSettingKey>;
 
+/**
+ * Optional custom and local-directory model lists for resolving model metadata.
+ */
+export type ModelLists =
+    Partial<Pick<Settings, 'customModels'|'localDirModels'>>;
+
 /** The settings in the "Model Config" tab, which can be reset together. */
 const DEFAULT_MODEL_CONFIG = {
   contextLength: 4096,
@@ -185,8 +191,7 @@ export function migrateModelPath(path: string): string {
 
 /** Finds a built-in, custom, or local-directory model by path. */
 export function findModel(
-    models: Partial<Pick<Settings, 'customModels'|'localDirModels'>>,
-    path: string): CustomModel|undefined {
+    models: ModelLists, path: string): CustomModel|undefined {
   return [
     ...MODELS,
     ...(models.customModels ?? []),
@@ -199,15 +204,88 @@ export function findModel(
  * package, which cannot execute its text decoder on `Backend.CPU`.
  */
 export function isGpuOnlyTextModel(
-    modelPath: string,
-    models?: Partial<Pick<Settings, 'customModels'|'localDirModels'>>):
-    boolean {
+    modelPath: string, models?: ModelLists): boolean {
   const matched = findModel(models ?? {}, modelPath);
   if (matched && /-gpu\.litertlm$/i.test(matched.filename)) {
     return true;
   }
   const cleanPath = modelPath.split(/[?#]/)[0] ?? modelPath;
   return /-gpu\.litertlm$/i.test(cleanPath);
+}
+
+/**
+ * Practical model size threshold (1.5 GB decimal) at or above which loading
+ * text weights into 32-bit WASM linear memory on CPU is likely to fail.
+ */
+export const CPU_TEXT_WASM_WARNING_BYTES = 1.5e9;
+
+/** Formats a byte threshold as a compact `~X.Y GB` WASM limit label. */
+export function formatCpuTextWasmLimitLabel(
+    bytes: number = CPU_TEXT_WASM_WARNING_BYTES): string {
+  const formatted =
+      (bytes / 1e9).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  return `~${formatted} GB`;
+}
+
+/** Human-readable label for `CPU_TEXT_WASM_WARNING_BYTES` (`'~1.5 GB'`). */
+export const CPU_TEXT_WASM_WARNING_LABEL = formatCpuTextWasmLimitLabel();
+
+const SIZE_UNIT_MULTIPLIERS: Readonly<Record<string, number>> = {
+  'B': 1,
+  'KB': 1e3,
+  'MB': 1e6,
+  'GB': 1e9,
+  'TB': 1e12,
+  'KIB': 1024,
+  'MIB': 1024 ** 2,
+  'GIB': 1024 ** 3,
+};
+
+/** Parses a human-readable model size (e.g. `'2.3 GB'`, `'850 MB'`) to bytes. */
+export function parseModelSizeBytes(sizeLabel: string|undefined): number|null {
+  if (!sizeLabel) return null;
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB)\s*$/i.exec(
+      sizeLabel);
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value < 0) return null;
+  const mult = SIZE_UNIT_MULTIPLIERS[match[2]!.toUpperCase()];
+  return mult ? Math.round(value * mult) : null;
+}
+
+/**
+ * Returns the known byte size of `modelPath` from `cachedSizeBytes` or its
+ * `CustomModel.size` metadata, or `null` when unknown.
+ */
+export function getKnownModelSizeBytes(
+    modelPath: string, models?: ModelLists,
+    cachedSizeBytes?: number): number|null {
+  if (cachedSizeBytes !== undefined && Number.isFinite(cachedSizeBytes) &&
+      cachedSizeBytes > 0) {
+    return cachedSizeBytes;
+  }
+  const matched = findModel(models ?? {}, modelPath);
+  return parseModelSizeBytes(matched?.size);
+}
+
+/**
+ * Returns a non-blocking warning message when a non-`-gpu.litertlm` model's
+ * known size is at or above `CPU_TEXT_WASM_WARNING_BYTES`, or `null` when
+ * smaller, unknown, or WebGPU-only (`-gpu.litertlm`).
+ */
+export function getCpuTextMemoryWarning(
+    modelPath: string, models?: ModelLists,
+    cachedSizeBytes?: number): string|null {
+  if (isGpuOnlyTextModel(modelPath, models)) {
+    return null;
+  }
+  const bytes = getKnownModelSizeBytes(modelPath, models, cachedSizeBytes);
+  if (bytes === null || bytes < CPU_TEXT_WASM_WARNING_BYTES) {
+    return null;
+  }
+  const sizeLabel = `${(bytes / 1e9).toFixed(2)} GB`;
+  return `${sizeLabel} may not fit in WASM memory (${
+      CPU_TEXT_WASM_WARNING_LABEL} practical limit); loading may fail.`;
 }
 
 /** Modalities with their own experimental backend and precision settings. */
@@ -222,13 +300,15 @@ export interface ModalityConfig {
   precision: ActivationPrecision;
 }
 
+/** Settings subset used to resolve per-modality backends and notes. */
+export type ExperimentalSettingsInput =
+    Pick<Settings, 'selectedModelPath'|ExperimentalSettingKey>&ModelLists;
+
 /**
  * Returns the backend and precision each modality runs with. Text always runs
  * on GPU for WebGPU-only (`-gpu.litertlm`) models.
  */
-export function getModalityConfigs(
-    settings: Pick<Settings, 'selectedModelPath'|ExperimentalSettingKey>&
-    Partial<Pick<Settings, 'customModels'|'localDirModels'>>):
+export function getModalityConfigs(settings: ExperimentalSettingsInput):
     Record<Modality, ModalityConfig> {
   const gpuOnlyText = isGpuOnlyTextModel(settings.selectedModelPath, settings);
   return {
@@ -243,12 +323,67 @@ export function getModalityConfigs(
 
 /** Switches text back to GPU if the selected model can't run it on CPU. */
 export function coerceGpuOnlyTextBackend(
-    settings: Pick<Settings, 'selectedModelPath'|'textBackend'>&
-    Partial<Pick<Settings, 'customModels'|'localDirModels'>>) {
+    settings: Pick<Settings, 'selectedModelPath'|'textBackend'>&ModelLists):
+    void {
   if (settings.textBackend === 'cpu' &&
       isGpuOnlyTextModel(settings.selectedModelPath, settings)) {
     settings.textBackend = 'gpu';
   }
+}
+
+/** Status note displayed at the bottom of the Experimental settings panel. */
+export interface ExperimentalNote {
+  text: string;
+  warning: boolean;
+}
+
+/**
+ * Returns the explanatory or warning note for the Experimental settings panel
+ * based on the selected model and modality backend configuration.
+ */
+export function getExperimentalNote(
+    settings: ExperimentalSettingsInput,
+    cachedSizeBytes?: number): ExperimentalNote {
+  if (isGpuOnlyTextModel(settings.selectedModelPath, settings)) {
+    return {
+      text:
+          'This model\'s text is WebGPU-only (-gpu.litertlm). Use a standard .litertlm for CPU.',
+      warning: false,
+    };
+  }
+  const configs = getModalityConfigs(settings);
+  if (configs.text.backend === 'cpu') {
+    const cpuMemoryWarning = getCpuTextMemoryWarning(
+        settings.selectedModelPath, settings, cachedSizeBytes);
+    if (cpuMemoryWarning !== null) {
+      return {text: cpuMemoryWarning, warning: true};
+    }
+    if (getKnownModelSizeBytes(
+            settings.selectedModelPath, settings, cachedSizeBytes) === null) {
+      return {
+        text: `Text CPU runs in WASM (FP32). May not fit in WASM memory (${
+            CPU_TEXT_WASM_WARNING_LABEL} practical limit); loading may fail.`,
+        warning: false,
+      };
+    }
+    return {
+      text: `Text CPU runs in WASM (FP32; ${
+          CPU_TEXT_WASM_WARNING_LABEL} practical WASM memory limit).`,
+      warning: false,
+    };
+  }
+  if (configs.vision.backend === 'cpu' || configs.audio.backend === 'cpu') {
+    return {
+      text:
+          'CPU modalities run in WASM (FP32). GPU defaults: Text FP16, Vision/Audio FP32.',
+      warning: false,
+    };
+  }
+  return {
+    text:
+        'Experimental overrides. GPU defaults: Text FP16, Vision & Audio FP32.',
+    warning: false,
+  };
 }
 
 /** Summary of non-default modality backend overrides (`WebGPU · CPU` / `CPU`). */

@@ -17,7 +17,7 @@
 import {ActivationDataType, Backend, Engine, getOrLoadGlobalLiteRtLm, LiteRtLm, ResolvedModelInput, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
 import {EngineFake} from '@litert-lm/core/testing';
 
-import {getModelKey, ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
+import {formatModelLoadError, getModelKey, ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
 import {SettingsStore} from './settings_store.js';
 
 /** Returns a fake cache that has a 3-byte model. */
@@ -896,5 +896,47 @@ describe('ModelLoaderService', () => {
       expect(warnSpy).toHaveBeenCalledTimes(1);
       expect(warnSpy).toHaveBeenCalledWith('Some legitimate warning message');
     });
+  });
+
+  describe('formatModelLoadError', () => {
+    it('surfaces actionable WebGPU / smaller-model guidance on CPU OOM or WASM trap without raw stack traces',
+       () => {
+         settingsStore.selectedModelPath =
+             'https://example.com/large-standard.litertlm';
+         settingsStore.textBackend = 'cpu';
+
+         const oomErr = new Error(
+             'RuntimeError: Aborted(OOM)\n    at wasm://wasm/00a1b2:0x1234\n    at Engine.create');
+         expect(formatModelLoadError(oomErr, settingsStore))
+             .toBe(
+                 'Failed to load model: out of WASM memory on CPU. Switch backend to GPU in Experimental settings or try a smaller model (~1.5 GB or less).');
+
+         // Plain Error (non-RuntimeError `name`) with Aborted(...) message.
+         const abortedAssertionErr = new Error(
+             'RuntimeError: Aborted(Assertion failed)\n    at wasm://wasm/00a1b2:0x5678\n    at Engine.create');
+         expect(abortedAssertionErr.name).toBe('Error');
+         expect(formatModelLoadError(abortedAssertionErr, settingsStore))
+             .toBe(
+                 'Failed to load model: WASM aborted while loading on CPU (likely out of WASM memory). Switch backend to GPU in Experimental settings or try a smaller model (~1.5 GB or less).');
+
+         // Plain Error with word-ending WASM trap message.
+         const boundsErr = new Error(
+             'memory access out of bounds\n    at wasm://wasm/00a1b2:0x7777');
+         expect(formatModelLoadError(boundsErr, settingsStore))
+             .toContain('WASM aborted while loading on CPU');
+
+         const trapErr = new Error(
+             'unreachable\n    at wasm://wasm/00a1b2:0x9999');
+         trapErr.name = 'RuntimeError';
+         const trapMsg = formatModelLoadError(trapErr, settingsStore);
+         expect(trapMsg).toContain('WASM aborted while loading on CPU');
+         expect(trapMsg).toContain('Switch backend to GPU');
+         expect(trapMsg).not.toContain('wasm://');
+
+         // Non-OOM errors keep their concise first-line reason.
+         const otherErr = new Error('HTTP 403 Forbidden\n    at fetch');
+         expect(formatModelLoadError(otherErr, settingsStore))
+             .toBe('Failed to load model: HTTP 403 Forbidden');
+       });
   });
 });
