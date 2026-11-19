@@ -14,8 +14,10 @@
 
 #include "runtime/components/model_resources_streaming.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -26,6 +28,7 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "litert/c/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/executor_metadata.pb.h"
@@ -38,6 +41,8 @@
 namespace litert::lm {
 namespace {
 
+using ::testing::AllOf;
+using ::testing::HasSubstr;
 using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
@@ -383,6 +388,105 @@ TEST(ModelResourcesStreamingTest, GetTFLiteModelFailsOnInvalidModelBuffer) {
   EXPECT_THAT(model_resources.GetTFLiteModel(
                   proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
               StatusIs(absl::StatusCode::kInternal));
+}
+
+TEST(ModelResourcesStreamingTest,
+     ResolveHostMemorySectionSizeRejectsInvertedOffsets) {
+  EXPECT_THAT(
+      ResolveHostMemorySectionSize(/*begin_offset=*/256, /*end_offset=*/128,
+                                   "tf_lite_prefill_decode"),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("tf_lite_prefill_decode")));
+}
+
+TEST(ModelResourcesStreamingTest,
+     ResolveHostMemorySectionSizeEnforcesWasmHostLimit) {
+  constexpr uint64_t kMaxWasmBuffer = kWasmMaxHostSectionBytes - 1;
+  EXPECT_THAT(
+      ResolveHostMemorySectionSize(
+          /*begin_offset=*/1024, /*end_offset=*/1024 + kMaxWasmBuffer,
+          "tf_lite_prefill_decode", /*alignment_padding=*/0,
+          kWasmMaxHostSectionBytes),
+      IsOkAndHolds(static_cast<size_t>(kMaxWasmBuffer)));
+
+  EXPECT_THAT(
+      ResolveHostMemorySectionSize(
+          /*begin_offset=*/1024,
+          /*end_offset=*/1024 + kWasmMaxHostSectionBytes,
+          "tf_lite_prefill_decode", /*alignment_padding=*/0,
+          kWasmMaxHostSectionBytes,
+          /*max_size=*/std::numeric_limits<uint32_t>::max()),
+      StatusIs(absl::StatusCode::kResourceExhausted,
+               AllOf(HasSubstr("tf_lite_prefill_decode"),
+                     HasSubstr(std::to_string(kWasmMaxHostSectionBytes)),
+                     HasSubstr("GPU"), HasSubstr("smaller model"))));
+
+  EXPECT_THAT(
+      ResolveHostWeightsSectionSize(
+          /*begin_offset=*/1024,
+          /*end_offset=*/1024 + kWasmMaxHostSectionBytes -
+              LITERT_HOST_MEMORY_BUFFER_ALIGNMENT,
+          "tf_lite_mtp_drafter", kWasmMaxHostSectionBytes,
+          /*max_size=*/std::numeric_limits<uint32_t>::max()),
+      StatusIs(absl::StatusCode::kResourceExhausted,
+               HasSubstr("tf_lite_mtp_drafter")));
+}
+
+TEST(ModelResourcesStreamingTest,
+     ResolveHostWeightsSectionSizeRejectsSizeTOverflowAndAlignmentWrap) {
+  constexpr uint64_t kMax32 = std::numeric_limits<uint32_t>::max();
+  // Simulated wasm32 without CPU 4 GB override (e.g. host-cached embedder on
+  // GPU): >4 GiB uint64 sizes that previously truncated to a small size_t and
+  // near-UINT32_MAX sizes that wrapped `+ LITERT_HOST_MEMORY_BUFFER_ALIGNMENT`
+  // are both rejected.
+  EXPECT_THAT(
+      ResolveHostWeightsSectionSize(
+          /*begin_offset=*/0, /*end_offset=*/kMax32 + 16, "tf_lite_embedder",
+          /*wasm_host_limit_bytes=*/std::nullopt, /*max_size=*/kMax32),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      ResolveHostWeightsSectionSize(
+          /*begin_offset=*/0,
+          /*end_offset=*/kMax32 - LITERT_HOST_MEMORY_BUFFER_ALIGNMENT + 1,
+          "tf_lite_embedder", /*wasm_host_limit_bytes=*/std::nullopt,
+          /*max_size=*/kMax32),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      ResolveHostWeightsSectionSize(
+          /*begin_offset=*/0,
+          /*end_offset=*/kMax32 - LITERT_HOST_MEMORY_BUFFER_ALIGNMENT,
+          "tf_lite_embedder", /*wasm_host_limit_bytes=*/std::nullopt,
+          /*max_size=*/kMax32),
+      IsOkAndHolds(
+          static_cast<size_t>(kMax32 - LITERT_HOST_MEMORY_BUFFER_ALIGNMENT)));
+
+  // Native `SIZE_MAX` boundary: `SIZE_MAX - alignment + 1` must fail rather
+  // than wrapping `size + LITERT_HOST_MEMORY_BUFFER_ALIGNMENT`.
+  constexpr size_t kMaxAllowed =
+      std::numeric_limits<size_t>::max() - LITERT_HOST_MEMORY_BUFFER_ALIGNMENT;
+  EXPECT_THAT(ResolveHostWeightsSectionSize(0, kMaxAllowed + 1,
+                                            "tf_lite_prefill_decode"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(ModelResourcesStreamingTest,
+     SetWeightsFromStreamRejectsOversizedLengthWithoutReading) {
+  ModelResourcesStreaming model_resources;
+  MemoryDataStream empty_stream("");
+
+  EXPECT_THAT(
+      model_resources.SetWeightsFromStream(
+          proto::LlmMetadata::TF_LITE_PREFILL_DECODE, empty_stream,
+          std::numeric_limits<size_t>::max() -
+              LITERT_HOST_MEMORY_BUFFER_ALIGNMENT + 1),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(model_resources.SetWeightsFromStream(
+                  proto::LlmMetadata::TF_LITE_PREFILL_DECODE, empty_stream,
+                  std::numeric_limits<uint64_t>::max()),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_EQ(model_resources.GetWeightInMemoryMap(
+                proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+            nullptr);
 }
 
 }  // namespace

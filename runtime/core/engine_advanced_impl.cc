@@ -144,9 +144,10 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
         UpdateCompilationOptions(executor_settings, compilation_options));
   }
 
-  // Weights already in host memory, e.g. a token embedding table that a
-  // deduplicated model file stores once in the embedder's section. The weight
-  // loader uploads these from host memory and streams the rest.
+  // Weights already in host memory, e.g. external weights on CPU, or a token
+  // embedding table that a deduplicated model file stores once in the
+  // embedder's section. The weight loader reads these from host memory and
+  // streams the rest.
   if (const auto* weight_map = resources.GetWeightInMemoryMap(model_type);
       weight_map != nullptr) {
     LITERT_RETURN_IF_ERROR(
@@ -215,6 +216,34 @@ void MaybeUpgradeToStreamingModelAssets(EngineSettings& engine_settings) {
   main_executor_settings.SetModelAssets(*std::move(streaming_model_assets));
 }
 #endif  // __EMSCRIPTEN__
+
+std::optional<uint64_t> GetWasmCpuHostMemoryLimit(
+    const EngineSettings& engine_settings) {
+#ifdef __EMSCRIPTEN__
+  if (engine_settings.GetMainExecutorSettings().GetBackend() == Backend::CPU) {
+    return kWasmMaxHostSectionBytes;
+  }
+#endif  // __EMSCRIPTEN__
+  return std::nullopt;
+}
+
+template <typename ByteT = char>
+absl::StatusOr<std::vector<ByteT>> ReadSectionIntoHostBuffer(
+    const SectionInfo& section, absl::string_view section_name,
+    const EngineSettings& engine_settings) {
+  ABSL_ASSIGN_OR_RETURN(
+      const size_t size,
+      ResolveHostMemorySectionSize(
+          section.section->begin_offset(), section.section->end_offset(),
+          section_name, /*alignment_padding=*/0,
+          GetWasmCpuHostMemoryLimit(engine_settings)));
+  std::vector<ByteT> buffer(size);
+  if (!buffer.empty()) {
+    ABSL_RETURN_IF_ERROR(section.data_stream->ReadAndDiscard(
+        reinterpret_cast<char*>(buffer.data()), 0, buffer.size()));
+  }
+  return buffer;
+}
 
 }  // namespace
 
@@ -718,49 +747,33 @@ EngineAdvancedImpl::CreateStreamingWeights(
       [&tokenizer, &set_llm_metadata, &engine_settings, &llm_metadata,
        &engine_settings_updated, &streaming_model_resources,
        input_prompt_as_hint]() -> absl::Status {
-    if (!set_llm_metadata) {
+    // Like the non-streaming path, model files with LlmModelType can update
+    // the settings without the tokenizer. They are updated again with the
+    // tokenizer once it is loaded, before the executor is created.
+    if (!set_llm_metadata ||
+        (tokenizer == nullptr &&
+         (!llm_metadata.has_llm_model_type() || engine_settings_updated))) {
       return absl::OkStatus();
     }
-    if (tokenizer != nullptr) {
-      ABSL_LOG(INFO) << "Setting engine settings...";
-      ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
-          tokenizer.get(), &llm_metadata, input_prompt_as_hint,
-          streaming_model_resources->GetTFLiteModelBackendConstraint(
-              proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-          streaming_model_resources->GetTFLiteModelBackendConstraint(
-              proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-          streaming_model_resources->GetTFLiteModelBackendConstraint(
-              proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
-          streaming_model_resources->GetTFLiteModelPreferActivationType(
-              proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-          streaming_model_resources->GetTFLiteModelPreferActivationType(
-              proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-          streaming_model_resources->GetTFLiteModelPreferActivationType(
-              proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
-      engine_settings_updated = true;
-      ABSL_LOG(INFO) << "Engine settings set.";
-    } else if (llm_metadata.has_llm_model_type() && !engine_settings_updated) {
-      // Like the non-streaming path, model files with LlmModelType can update
-      // the settings without the tokenizer. They are updated again with the
-      // tokenizer once it is loaded, before the executor is created.
-      ABSL_LOG(INFO) << "Setting engine settings without tokenizer...";
-      ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
-          /*tokenizer=*/nullptr, &llm_metadata, input_prompt_as_hint,
-          streaming_model_resources->GetTFLiteModelBackendConstraint(
-              proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-          streaming_model_resources->GetTFLiteModelBackendConstraint(
-              proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-          streaming_model_resources->GetTFLiteModelBackendConstraint(
-              proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
-          streaming_model_resources->GetTFLiteModelPreferActivationType(
-              proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
-          streaming_model_resources->GetTFLiteModelPreferActivationType(
-              proto::LlmMetadata::TF_LITE_VISION_ENCODER),
-          streaming_model_resources->GetTFLiteModelPreferActivationType(
-              proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
-      engine_settings_updated = true;
-      ABSL_LOG(INFO) << "Engine settings set.";
-    }
+    ABSL_LOG(INFO) << (tokenizer != nullptr
+                           ? "Setting engine settings..."
+                           : "Setting engine settings without tokenizer...");
+    ABSL_RETURN_IF_ERROR(engine_settings.MaybeUpdateAndValidate(
+        tokenizer.get(), &llm_metadata, input_prompt_as_hint,
+        streaming_model_resources->GetTFLiteModelBackendConstraint(
+            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+        streaming_model_resources->GetTFLiteModelBackendConstraint(
+            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+        streaming_model_resources->GetTFLiteModelBackendConstraint(
+            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW),
+        streaming_model_resources->GetTFLiteModelPreferActivationType(
+            proto::LlmMetadata::TF_LITE_PREFILL_DECODE),
+        streaming_model_resources->GetTFLiteModelPreferActivationType(
+            proto::LlmMetadata::TF_LITE_VISION_ENCODER),
+        streaming_model_resources->GetTFLiteModelPreferActivationType(
+            proto::LlmMetadata::TF_LITE_AUDIO_ENCODER_HW)));
+    engine_settings_updated = true;
+    ABSL_LOG(INFO) << "Engine settings set.";
     return absl::OkStatus();
   };
 
@@ -785,10 +798,10 @@ EngineAdvancedImpl::CreateStreamingWeights(
         break;
       case schema::AnySectionDataType_LlmMetadataProto: {
         ABSL_LOG(INFO) << "Processing section data type: LlmMetadata";
-        std::vector<char> buffer(section_metadata->end_offset() -
-                                 section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            buffer.data(), 0, buffer.size()));
+        ABSL_ASSIGN_OR_RETURN(
+            std::vector<char> buffer,
+            ReadSectionIntoHostBuffer(*section, "LlmMetadataProto",
+                                      engine_settings));
         if (!llm_metadata.ParseFromString(
                 absl::string_view(buffer.data(), buffer.size()))) {
           return absl::InternalError("Failed to parse LlmMetadata");
@@ -810,10 +823,10 @@ EngineAdvancedImpl::CreateStreamingWeights(
           ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
               BenchmarkInfo::InitPhase::kTokenizer));
         }
-        std::vector<char> buffer(section_metadata->end_offset() -
-                                 section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            buffer.data(), 0, buffer.size()));
+        ABSL_ASSIGN_OR_RETURN(
+            std::vector<char> buffer,
+            ReadSectionIntoHostBuffer(*section, "SP_Tokenizer",
+                                      engine_settings));
         ABSL_ASSIGN_OR_RETURN(
             tokenizer,
             ::litert::support::SentencePieceTokenizer::CreateFromBuffer(
@@ -857,10 +870,11 @@ EngineAdvancedImpl::CreateStreamingWeights(
 
         ABSL_LOG(INFO) << "Caching model from stream for type: "
                        << static_cast<int>(model_type);
-        std::vector<char> buffer(section_metadata->end_offset() -
-                                 section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            buffer.data(), 0, buffer.size()));
+        ABSL_ASSIGN_OR_RETURN(
+            std::vector<char> buffer,
+            ReadSectionIntoHostBuffer(
+                *section, TfLiteModelTypeToWireString(model_type),
+                engine_settings));
         streaming_model_resources->SetModelBuffer(model_type,
                                                   std::move(buffer));
         if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE &&
@@ -886,13 +900,24 @@ EngineAdvancedImpl::CreateStreamingWeights(
         ABSL_ASSIGN_OR_RETURN(
             const proto::LlmMetadata::TfLiteModelType model_type,
             ParseLlmTfLiteModelType(*section->buffer_key.model_type));
+        if (section_metadata->end_offset() < section_metadata->begin_offset()) {
+          return absl::InvalidArgumentError(absl::StrCat(
+              "Section '", TfLiteModelTypeToWireString(model_type),
+              "' has end_offset (", section_metadata->end_offset(),
+              ") < begin_offset (", section_metadata->begin_offset(), ")."));
+        }
+        auto get_host_weights_size = [&]() -> absl::StatusOr<size_t> {
+          return ResolveHostWeightsSectionSize(
+              section_metadata->begin_offset(), section_metadata->end_offset(),
+              TfLiteModelTypeToWireString(model_type),
+              GetWasmCpuHostMemoryLimit(engine_settings));
+        };
         if (model_type == proto::LlmMetadata::TF_LITE_PER_LAYER_EMBEDDER ||
             model_type == proto::LlmMetadata::TF_LITE_EMBEDDER) {
+          ABSL_ASSIGN_OR_RETURN(const size_t size, get_host_weights_size());
           ABSL_LOG(INFO)
               << "Caching embedder weights from stream (CPU) for model type: "
               << static_cast<int>(model_type);
-          size_t size =
-              section_metadata->end_offset() - section_metadata->begin_offset();
           ABSL_RETURN_IF_ERROR(streaming_model_resources->SetWeightsFromStream(
               model_type, *section->data_stream, size));
         } else if (model_type == proto::LlmMetadata::TF_LITE_VISION_ENCODER ||
@@ -907,8 +932,7 @@ EngineAdvancedImpl::CreateStreamingWeights(
                            << static_cast<int>(model_type);
             break;
           }
-          const size_t size =
-              section_metadata->end_offset() - section_metadata->begin_offset();
+          ABSL_ASSIGN_OR_RETURN(const size_t size, get_host_weights_size());
           ABSL_LOG(INFO) << "Reading weights (" << size
                          << " bytes) for model type "
                          << static_cast<int>(model_type)
@@ -927,8 +951,7 @@ EngineAdvancedImpl::CreateStreamingWeights(
                            << static_cast<int>(model_type);
             break;
           }
-          const size_t size =
-              section_metadata->end_offset() - section_metadata->begin_offset();
+          ABSL_ASSIGN_OR_RETURN(const size_t size, get_host_weights_size());
           ABSL_LOG(INFO) << "Reading weights (" << size
                          << " bytes) for model type "
                          << static_cast<int>(model_type)
@@ -947,6 +970,24 @@ EngineAdvancedImpl::CreateStreamingWeights(
                 << "The engine's speculative decoding mode is off. Skipping "
                    "weights for MTP drafter; sessions of this engine can't "
                    "load it lazily.";
+            break;
+          }
+          if ((model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE ||
+               model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) &&
+              engine_settings.GetMainExecutorSettings().GetBackend() ==
+                  Backend::CPU) {
+            // The CPU backend restores external weights from host memory and
+            // cannot consume a weights stream, so read them in here; the model
+            // is compiled from them after all sections are processed.
+            ABSL_ASSIGN_OR_RETURN(const size_t size, get_host_weights_size());
+            ABSL_LOG(INFO) << "Reading weights (" << size
+                           << " bytes) for model type "
+                           << static_cast<int>(model_type)
+                           << " into host memory...";
+            ABSL_RETURN_IF_ERROR(
+                streaming_model_resources->SetWeightsFromStream(
+                    model_type, *section->data_stream, size));
+            ABSL_LOG(INFO) << "Weights read.";
             break;
           }
           if (owned_env == nullptr) {
@@ -999,11 +1040,10 @@ EngineAdvancedImpl::CreateStreamingWeights(
           ABSL_RETURN_IF_ERROR(benchmark_info->TimeInitPhaseStart(
               BenchmarkInfo::InitPhase::kTokenizer));
         }
-        std::vector<uint8_t> compressed_buffer(
-            section_metadata->end_offset() - section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            reinterpret_cast<char*>(compressed_buffer.data()), 0,
-            compressed_buffer.size()));
+        ABSL_ASSIGN_OR_RETURN(
+            std::vector<uint8_t> compressed_buffer,
+            ReadSectionIntoHostBuffer<uint8_t>(*section, "HF_Tokenizer_Zlib",
+                                               engine_settings));
 
         std::vector<uint8_t> decompressed_buffer;
         ABSL_RETURN_IF_ERROR(schema::DecompressData(compressed_buffer.data(),
@@ -1037,10 +1077,10 @@ EngineAdvancedImpl::CreateStreamingWeights(
       }
       case schema::AnySectionDataType_ExecutorMetadataProto: {
         ABSL_LOG(INFO) << "Processing section data type: ExecutorMetadataProto";
-        std::vector<char> buffer(section_metadata->end_offset() -
-                                 section_metadata->begin_offset());
-        ABSL_RETURN_IF_ERROR(section->data_stream->ReadAndDiscard(
-            buffer.data(), 0, buffer.size()));
+        ABSL_ASSIGN_OR_RETURN(
+            std::vector<char> buffer,
+            ReadSectionIntoHostBuffer(*section, "ExecutorMetadataProto",
+                                      engine_settings));
         proto::ExecutorMetadata executor_metadata;
         if (!executor_metadata.ParseFromString(
                 absl::string_view(buffer.data(), buffer.size()))) {

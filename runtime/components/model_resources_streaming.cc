@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -72,6 +73,43 @@ std::vector<std::string> GetExternalBufferGroupNames(
 }
 
 }  // namespace
+
+absl::StatusOr<size_t> ResolveHostMemorySectionSize(
+    uint64_t begin_offset, uint64_t end_offset, absl::string_view section_name,
+    size_t alignment_padding, std::optional<uint64_t> wasm_host_limit_bytes,
+    uint64_t max_size) {
+  if (end_offset < begin_offset) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Section '", section_name, "' has end_offset (", end_offset,
+        ") < begin_offset (", begin_offset, ")."));
+  }
+  const uint64_t length = end_offset - begin_offset;
+  if (wasm_host_limit_bytes.has_value() &&
+      (alignment_padding >= *wasm_host_limit_bytes ||
+       length >= *wasm_host_limit_bytes - alignment_padding)) {
+    return absl::ResourceExhaustedError(absl::StrCat(
+        "Section '", section_name, "' (", length,
+        " bytes) exceeds the 4 GB WebAssembly memory limit on CPU; switch to "
+        "the GPU backend or use a smaller model."));
+  }
+  const uint64_t effective_max =
+      std::min<uint64_t>(max_size, std::numeric_limits<size_t>::max());
+  if (alignment_padding > effective_max ||
+      length > effective_max - alignment_padding) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Section '", section_name, "' size (", length,
+                     " bytes) overflows host buffer allocation."));
+  }
+  return static_cast<size_t>(length);
+}
+
+absl::StatusOr<size_t> ResolveHostWeightsSectionSize(
+    uint64_t begin_offset, uint64_t end_offset, absl::string_view section_name,
+    std::optional<uint64_t> wasm_host_limit_bytes, uint64_t max_size) {
+  return ResolveHostMemorySectionSize(
+      begin_offset, end_offset, section_name,
+      LITERT_HOST_MEMORY_BUFFER_ALIGNMENT, wasm_host_limit_bytes, max_size);
+}
 
 bool ModelResourcesStreaming::HasTFLiteModel(
     proto::LlmMetadata::TfLiteModelType model_type) {
@@ -267,19 +305,21 @@ void ModelResourcesStreaming::SetModelBuffer(absl::string_view model_type_str,
 }
 
 absl::Status ModelResourcesStreaming::SetWeightsFromStream(
-    absl::string_view model_type_str, DataStream& stream, size_t size) {
+    absl::string_view model_type_str, DataStream& stream, uint64_t size) {
   const std::string key = absl::AsciiStrToLower(model_type_str);
+  ABSL_ASSIGN_OR_RETURN(const size_t byte_size,
+                        ResolveHostWeightsSectionSize(0, size, key));
   auto& storage = weights_storage_[key];
   // LiteRT requires host memory tensor buffers to be aligned to
   // LITERT_HOST_MEMORY_BUFFER_ALIGNMENT.
-  storage.resize(size + LITERT_HOST_MEMORY_BUFFER_ALIGNMENT);
+  storage.resize(byte_size + LITERT_HOST_MEMORY_BUFFER_ALIGNMENT);
   uintptr_t addr = reinterpret_cast<uintptr_t>(storage.data());
   uintptr_t aligned_addr = (addr + LITERT_HOST_MEMORY_BUFFER_ALIGNMENT - 1) &
                            ~uintptr_t(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT - 1);
   uint8_t* aligned_ptr = reinterpret_cast<uint8_t*>(aligned_addr);
 
   constexpr size_t kChunkSize = 1024 * 1024 * 16;  // 16MB chunk
-  size_t remaining = size;
+  size_t remaining = byte_size;
   size_t offset = 0;
   while (remaining > 0) {
     size_t read_size = std::min(remaining, kChunkSize);
@@ -289,7 +329,7 @@ absl::Status ModelResourcesStreaming::SetWeightsFromStream(
     offset += read_size;
   }
   auto span = absl::MakeConstSpan(
-      reinterpret_cast<const std::byte*>(aligned_ptr), size);
+      reinterpret_cast<const std::byte*>(aligned_ptr), byte_size);
   weights_in_memory_per_model_[key][kModelWeightGroupName] = span;
 
   // Expose the weights to the other models that reference this model's

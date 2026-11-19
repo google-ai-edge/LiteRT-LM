@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -40,6 +41,35 @@
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::lm {
+
+// Maximum section size that can fit in 32-bit WebAssembly linear memory
+// (4 GiB).
+inline constexpr uint64_t kWasmMaxHostSectionBytes = uint64_t{4} << 30;
+
+// Validates `[begin_offset, end_offset)` for a container section to be read
+// into host memory (reserving `alignment_padding` extra bytes for alignment)
+// and returns its `size_t` byte length:
+//   - Returns `InvalidArgumentError` if `end_offset < begin_offset`.
+//   - If `wasm_host_limit_bytes` is set (e.g. `kWasmMaxHostSectionBytes` on
+//     WebAssembly CPU) and `end_offset - begin_offset + alignment_padding`
+//     reaches or exceeds it, returns `ResourceExhaustedError` naming
+//     `section_name` and the size, and suggesting the GPU backend or a smaller
+//     model.
+//   - Returns `InvalidArgumentError` if `end_offset - begin_offset` plus
+//     `alignment_padding` exceeds `max_size` (clamped to `SIZE_MAX`).
+absl::StatusOr<size_t> ResolveHostMemorySectionSize(
+    uint64_t begin_offset, uint64_t end_offset, absl::string_view section_name,
+    size_t alignment_padding = 0,
+    std::optional<uint64_t> wasm_host_limit_bytes = std::nullopt,
+    uint64_t max_size = std::numeric_limits<size_t>::max());
+
+// Same as `ResolveHostMemorySectionSize`, reserving the host tensor buffer
+// alignment padding required by
+// `ModelResourcesStreaming::SetWeightsFromStream`.
+absl::StatusOr<size_t> ResolveHostWeightsSectionSize(
+    uint64_t begin_offset, uint64_t end_offset, absl::string_view section_name,
+    std::optional<uint64_t> wasm_host_limit_bytes = std::nullopt,
+    uint64_t max_size = std::numeric_limits<size_t>::max());
 
 // Implementation of ModelResources for streaming model loading (e.g. from
 // .litertlm container streams). Lazily constructs models from in-memory
@@ -236,16 +266,17 @@ class ModelResourcesStreaming : public ModelResources {
   //   stream: The stream to read the weights from.
   //   size: The number of bytes to read.
   // returns:
-  //   OkStatus on success, or the error from reading the stream.
+  //   OkStatus on success, InvalidArgumentError if `size` plus alignment
+  //   padding overflows `size_t`, or the error from reading the stream.
   absl::Status SetWeightsFromStream(absl::string_view model_type_str,
-                                    DataStream& stream, size_t size);
+                                    DataStream& stream, uint64_t size);
 
   // Streams external weights for a given capability-scoped Protobuf model type
-  // enum. See SetWeightsFromStream(absl::string_view, DataStream&, size_t).
+  // enum. See SetWeightsFromStream(absl::string_view, DataStream&, uint64_t).
   template <typename TfLiteModelTypeT,
             typename = std::enable_if_t<kIsTfLiteModelType<TfLiteModelTypeT>>>
   absl::Status SetWeightsFromStream(TfLiteModelTypeT model_type,
-                                    DataStream& stream, size_t size) {
+                                    DataStream& stream, uint64_t size) {
     return SetWeightsFromStream(TfLiteModelTypeToWireString(model_type), stream,
                                 size);
   }

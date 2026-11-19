@@ -42,7 +42,9 @@
 #include "runtime/util/status_macros.h"
 #ifdef ENGINE_ADVANCED
 #include "runtime/executor/executor_backend_registry.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor.h"
+#include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/util/file_data_stream.h"
 #endif
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -575,6 +577,126 @@ TEST(EngineTest, CreateEngine_StreamedModelLoading) {
   EXPECT_FALSE(responses->GetTexts()[0].empty());
   ASSERT_TRUE(responses->GetExecutorStats().has_value());
   EXPECT_GE(responses->GetExecutorStats()->plain_steps(), 1);
+}
+
+// Regression test: on the CPU backend, the main model's external weights must
+// be read into host memory rather than left as a weights stream, which only the
+// GPU backends can consume.
+TEST(EngineTest,
+     CreateEngine_StreamedModelLoading_ExternalWeightsOnCpuMatchesFileBacked) {
+  // Small 1-layer random-weights LLM packed with externalized weights
+  // ("tflite_weights" group) via `litert-lm pack
+  // --weights-in-model-graph=false`.
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_tflite_weights.litertlm";
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets file_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings file_settings,
+      EngineSettings::CreateDefault(std::move(file_assets), Backend::CPU));
+  file_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(kMaxNumTokens);
+  file_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Engine> file_engine,
+                       CreateEngine(std::move(file_settings)));
+
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<FileDataStream> file_stream,
+                       FileDataStream::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(ModelAssets streamed_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings streamed_settings,
+      EngineSettings::CreateDefault(std::move(streamed_assets), Backend::CPU));
+  streamed_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  streamed_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Engine> streamed_engine,
+                       CreateEngine(std::move(streamed_settings)));
+
+  std::vector<InputData> file_inputs;
+  file_inputs.emplace_back(InputText("Hello world!"));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Engine::Session> file_session,
+      file_engine->CreateSession(SessionConfig::CreateDefault()));
+  ASSERT_OK(file_session->RunPrefill(file_inputs));
+  ASSERT_OK_AND_ASSIGN(Responses file_responses, file_session->RunDecode());
+
+  std::vector<InputData> streamed_inputs;
+  streamed_inputs.emplace_back(InputText("Hello world!"));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Engine::Session> streamed_session,
+      streamed_engine->CreateSession(SessionConfig::CreateDefault()));
+  ASSERT_OK(streamed_session->RunPrefill(streamed_inputs));
+  ASSERT_OK_AND_ASSIGN(Responses streamed_responses,
+                       streamed_session->RunDecode());
+
+  ASSERT_EQ(streamed_responses.GetTexts().size(), 1);
+  EXPECT_FALSE(streamed_responses.GetTexts()[0].empty());
+  EXPECT_EQ(streamed_responses.GetTexts(), file_responses.GetTexts());
+}
+
+// Regression test: on the CPU backend with speculative decoding enabled, both
+// the main model's and the MTP drafter's external weights must be read into
+// host memory and compiled from there, matching the file-backed engine.
+TEST(EngineTest,
+     CreateEngine_StreamedModelLoading_ExternalWeightsMtpOnCpuMatchesFile) {
+  constexpr int kSpeculativeMaxNumTokens = 16;
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm_tflite_weights.litertlm";
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets file_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings file_settings,
+      EngineSettings::CreateDefault(std::move(file_assets), Backend::CPU));
+  file_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kSpeculativeMaxNumTokens);
+  file_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  file_settings.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kOn});
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Engine> file_engine,
+                       CreateEngine(std::move(file_settings)));
+
+  ASSERT_OK_AND_ASSIGN(std::shared_ptr<FileDataStream> file_stream,
+                       FileDataStream::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(ModelAssets streamed_assets,
+                       ModelAssets::Create(std::move(file_stream)));
+  ASSERT_OK_AND_ASSIGN(
+      EngineSettings streamed_settings,
+      EngineSettings::CreateDefault(std::move(streamed_assets), Backend::CPU));
+  streamed_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kSpeculativeMaxNumTokens);
+  streamed_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  streamed_settings.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kOn});
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Engine> streamed_engine,
+                       CreateEngine(std::move(streamed_settings)));
+
+  std::vector<InputData> file_inputs;
+  file_inputs.emplace_back(InputText("Hello world!"));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Engine::Session> file_session,
+      file_engine->CreateSession(SessionConfig::CreateDefault()));
+  ASSERT_OK(file_session->RunPrefill(file_inputs));
+  ASSERT_OK_AND_ASSIGN(Responses file_responses, file_session->RunDecode());
+
+  std::vector<InputData> streamed_inputs;
+  streamed_inputs.emplace_back(InputText("Hello world!"));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Engine::Session> streamed_session,
+      streamed_engine->CreateSession(SessionConfig::CreateDefault()));
+  ASSERT_OK(streamed_session->RunPrefill(streamed_inputs));
+  ASSERT_OK_AND_ASSIGN(Responses streamed_responses,
+                       streamed_session->RunDecode());
+
+  ASSERT_EQ(streamed_responses.GetTexts().size(), 1);
+  EXPECT_FALSE(streamed_responses.GetTexts()[0].empty());
+  EXPECT_EQ(streamed_responses.GetTexts(), file_responses.GetTexts());
+  ASSERT_TRUE(streamed_responses.GetExecutorStats().has_value());
+  EXPECT_GE(streamed_responses.GetExecutorStats()->mtp_rounds(), 1);
+  EXPECT_GE(streamed_responses.GetExecutorStats()->mtp_num_draft_tokens(), 1);
 }
 
 TEST(EngineTest, CreateEngine_StreamedModelLoading_EnableDebuggerDisabled) {

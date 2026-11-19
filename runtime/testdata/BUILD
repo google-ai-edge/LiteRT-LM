@@ -23,7 +23,9 @@ filegroup(
     name = "testdata",
     srcs = glob(
         ["*"],
-        exclude = ["BUILD"],
+        exclude = [
+            "BUILD",
+        ],
     ),
 )
 
@@ -39,6 +41,7 @@ exports_files([
     "colored_rect_163_586_615_957.jpg",
     "test_lm.litertlm",
     "test_lm_lora.litertlm",
+    "test_lm_tflite_weights.litertlm",
     "test_lora_rank32_f16_all_ones.tflite",
     "test_lora_rank32_f16_all_twos.tflite",
     "test_embedding.litertlm",

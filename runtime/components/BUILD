@@ -1476,6 +1476,7 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@flatbuffers",
+        "@litert//litert/c:litert_tensor_buffer_types",
         "@litert//litert/cc:litert_model",
         "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/proto:executor_metadata_cc_proto",
