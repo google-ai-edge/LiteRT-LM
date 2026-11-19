@@ -31,6 +31,7 @@ licenses(["notice"])
 package_group(
     name = "engine_impl_users",
     packages = [
+        # for Chrome.
         # for ":engine_impl_selected".
         "//runtime/engine",
         # for e2e tests.
