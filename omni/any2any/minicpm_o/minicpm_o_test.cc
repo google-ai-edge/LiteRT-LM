@@ -12,14 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <cstdint>
-#include <filesystem>  // NOLINT: Required for path manipulation.
-#include <fstream>
-#include <ios>
-#include <iterator>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <variant>
@@ -28,14 +22,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
-#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
-#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
-#include "flatbuffers/buffer.h"  // from @flatbuffers
-#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -59,9 +49,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/proto/any2any_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
-#include "schema/core/litertlm_header.h"
 #include "schema/core/litertlm_header_schema_generated.h"
-#include "schema/core/litertlm_section.h"
 #include "support/tokenizer/huggingface_tokenizer.h"
 #include "support/tokenizer/tokenizer.h"
 #include "support/util/convert_tensor_buffer.h"
@@ -109,18 +97,6 @@ constexpr absl::string_view kMinimalTokenizerJson = R"json({
   }
 })json";
 
-constexpr absl::string_view kTestdataDir =
-    "litert_lm/runtime/testdata";
-
-absl::StatusOr<std::string> ReadFileBytes(const std::filesystem::path& path) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in.is_open()) {
-    return absl::InternalError(absl::StrCat("Failed to open: ", path.string()));
-  }
-  return std::string(std::istreambuf_iterator<char>(in),
-                     std::istreambuf_iterator<char>());
-}
-
 MiniCpmOModelConfig MakeSmallTestConfig(bool generate_audio = false) {
   MiniCpmOModelConfig config;
   config.generate_audio = generate_audio;
@@ -154,155 +130,69 @@ struct TestBundleOptions {
 
 absl::StatusOr<std::string> WriteTestMiniCpmOLitertLmFile(
     absl::string_view filename, const TestBundleOptions& opts = {}) {
-  const auto testdata_dir =
-      std::filesystem::path(::testing::SrcDir()) / std::string(kTestdataDir);
-  ABSL_ASSIGN_OR_RETURN(
-      std::string llm_backbone_bytes,
-      ReadFileBytes(testdata_dir / "checksum_fake_lm_embedding_input.tflite"));
-  ABSL_ASSIGN_OR_RETURN(
-      std::string text_embedder_bytes,
-      ReadFileBytes(testdata_dir / "checksum_fake_lm_embedder.tflite"));
-
-  lm::schema::ZlibBackendedSectionStream zlib_tok_stream(
-      std::make_unique<lm::schema::StringBackedSectionStream>(
-          std::string(kMinimalTokenizerJson)));
-  ABSL_RETURN_IF_ERROR(zlib_tok_stream.Prepare());
-  std::stringstream tok_ss;
-  tok_ss << zlib_tok_stream.GetStream().rdbuf();
-  std::string compressed_tokenizer_bytes = tok_ss.str();
-
   lm::proto::Any2AnyMetadata any2any_meta;
   any2any_meta.add_supported_languages("en");
   any2any_meta.set_input_sample_rate_hz(16000);
-  std::string any2any_meta_bytes = any2any_meta.SerializeAsString();
 
-  struct SectionPayload {
-    lm::schema::AnySectionDataType data_type;
-    std::string model_type;
-    std::string backend_constraint;
-    std::string prefer_activation_type;
-    std::string bytes;
+  Any2AnyBundleOptions bundle_opts{
+      .metadata = std::move(any2any_meta),
+      .tokenizer_json = std::string(kMinimalTokenizerJson),
+      .backbone_backend_constraint = "cpu",
+      .backbone_prefer_activation_type = "fp32",
   };
-  std::vector<SectionPayload> payloads;
-  payloads.push_back({lm::schema::AnySectionDataType_Any2AnyMetadataProto, "",
-                      "", "", std::move(any2any_meta_bytes)});
-  payloads.push_back({lm::schema::AnySectionDataType_HF_Tokenizer_Zlib, "", "",
-                      "", std::move(compressed_tokenizer_bytes)});
-  payloads.push_back({lm::schema::AnySectionDataType_TFLiteModel,
-                      "tf_lite_text_embedder", "cpu", "fp32",
-                      std::move(text_embedder_bytes)});
-  payloads.push_back({lm::schema::AnySectionDataType_TFLiteModel,
-                      "tf_lite_llm_backbone", "cpu", "fp32",
-                      std::move(llm_backbone_bytes)});
-
   if (opts.include_vision_encoder) {
     const std::string img_name =
         opts.use_fallback_vision_input_names ? "pixel_values" : "images";
     const std::string pos_name =
         opts.use_fallback_vision_input_names ? "position_ids" : "positions_xy";
-    payloads.push_back(
-        {lm::schema::AnySectionDataType_TFLiteModel, "tf_lite_vision_encoder",
-         "", "",
-         BuildMinimalTfliteModelBuffer(
-             {{img_name, {1, 4, 12}, tflite::TensorType_FLOAT32},
-              {pos_name, {1, 4, 2}, tflite::TensorType_INT32},
-              {"vit_positions", {1, 4}, tflite::TensorType_INT32}},
-             {{"features", {1, 2, 4}, tflite::TensorType_FLOAT32}})});
+    bundle_opts.extra_sections.push_back(BundleSectionPayload{
+        .data_type = lm::schema::AnySectionDataType_TFLiteModel,
+        .model_type = "tf_lite_vision_encoder",
+        .bytes = BuildMinimalTfliteModelBuffer(
+            {{img_name, {1, 4, 12}, tflite::TensorType_FLOAT32},
+             {pos_name, {1, 4, 2}, tflite::TensorType_INT32},
+             {"vit_positions", {1, 4}, tflite::TensorType_INT32}},
+            {{"features", {1, 2, 4}, tflite::TensorType_FLOAT32}}),
+    });
   }
   if (opts.include_audio_encoder) {
-    payloads.push_back(
-        {lm::schema::AnySectionDataType_TFLiteModel, "tf_lite_audio_encoder",
-         "", "",
-         BuildMinimalTfliteModelBuffer(
-             {{"mel", {1, 80, 10}, tflite::TensorType_FLOAT32}},
-             {{"features", {1, 2, 4}, tflite::TensorType_FLOAT32}})});
+    bundle_opts.extra_sections.push_back(BundleSectionPayload{
+        .data_type = lm::schema::AnySectionDataType_TFLiteModel,
+        .model_type = "tf_lite_audio_encoder",
+        .bytes = BuildMinimalTfliteModelBuffer(
+            {{"mel", {1, 80, 10}, tflite::TensorType_FLOAT32}},
+            {{"features", {1, 2, 4}, tflite::TensorType_FLOAT32}}),
+    });
   }
   if (opts.include_tts_and_vocoder) {
-    payloads.push_back(
-        {lm::schema::AnySectionDataType_TFLiteModel, "tf_lite_tts_projector",
-         "", "",
-         BuildMinimalTfliteModelBuffer(
-             {{"llm_hidden", {1, 4}, tflite::TensorType_FLOAT32},
-              {"token_id", {1}, tflite::TensorType_INT32}},
-             {{"cond_emb", {1, 4}, tflite::TensorType_FLOAT32}})});
-    payloads.push_back(
-        {lm::schema::AnySectionDataType_TFLiteModel, "tf_lite_tts_decoder", "",
-         "",
-         BuildMinimalTfliteModelBuffer(
-             {{"cond_emb", {1, 4}, tflite::TensorType_FLOAT32},
-              {"prev_audio_code", {1}, tflite::TensorType_INT32},
-              {"step_idx", {1}, tflite::TensorType_INT32},
-              {"kv_cache", {2, 1, 8, 4}, tflite::TensorType_FLOAT32}},
-             {{"code_logits", {1, 8}, tflite::TensorType_FLOAT32},
-              {"new_kv_cache", {2, 1, 8, 4}, tflite::TensorType_FLOAT32}})});
-    payloads.push_back(
-        {lm::schema::AnySectionDataType_TFLiteModel, "tf_lite_audio_vocoder",
-         "", "",
-         BuildMinimalTfliteModelBuffer(
-             {{"codes", {1, 4}, tflite::TensorType_INT32}},
-             {{"waveform", {1, 12}, tflite::TensorType_FLOAT32}})});
+    bundle_opts.extra_sections.push_back(BundleSectionPayload{
+        .data_type = lm::schema::AnySectionDataType_TFLiteModel,
+        .model_type = "tf_lite_tts_projector",
+        .bytes = BuildMinimalTfliteModelBuffer(
+            {{"llm_hidden", {1, 4}, tflite::TensorType_FLOAT32},
+             {"token_id", {1}, tflite::TensorType_INT32}},
+            {{"cond_emb", {1, 4}, tflite::TensorType_FLOAT32}}),
+    });
+    bundle_opts.extra_sections.push_back(BundleSectionPayload{
+        .data_type = lm::schema::AnySectionDataType_TFLiteModel,
+        .model_type = "tf_lite_tts_decoder",
+        .bytes = BuildMinimalTfliteModelBuffer(
+            {{"cond_emb", {1, 4}, tflite::TensorType_FLOAT32},
+             {"prev_audio_code", {1}, tflite::TensorType_INT32},
+             {"step_idx", {1}, tflite::TensorType_INT32},
+             {"kv_cache", {2, 1, 8, 4}, tflite::TensorType_FLOAT32}},
+            {{"code_logits", {1, 8}, tflite::TensorType_FLOAT32},
+             {"new_kv_cache", {2, 1, 8, 4}, tflite::TensorType_FLOAT32}}),
+    });
+    bundle_opts.extra_sections.push_back(BundleSectionPayload{
+        .data_type = lm::schema::AnySectionDataType_TFLiteModel,
+        .model_type = "tf_lite_audio_vocoder",
+        .bytes = BuildMinimalTfliteModelBuffer(
+            {{"codes", {1, 4}, tflite::TensorType_INT32}},
+            {{"waveform", {1, 12}, tflite::TensorType_FLOAT32}}),
+    });
   }
-
-  // Reserve a 16KB padded header region so section offsets are known upfront.
-  constexpr uint64_t kDataStartOffset = 16384;
-  flatbuffers::FlatBufferBuilder builder(2048);
-  std::vector<flatbuffers::Offset<lm::schema::SectionObject>> section_objects;
-  uint64_t cursor = kDataStartOffset;
-  for (const auto& p : payloads) {
-    std::vector<flatbuffers::Offset<lm::schema::KeyValuePair>> items;
-    if (!p.model_type.empty()) {
-      items.push_back(
-          lm::schema::CreateKeyValuePair(builder, "model_type", p.model_type));
-    }
-    if (!p.backend_constraint.empty()) {
-      items.push_back(lm::schema::CreateKeyValuePair(
-          builder, "backend_constraint", p.backend_constraint));
-    }
-    if (!p.prefer_activation_type.empty()) {
-      items.push_back(lm::schema::CreateKeyValuePair(
-          builder, "prefer_activation_type", p.prefer_activation_type));
-    }
-    auto items_vec = items.empty() ? 0 : builder.CreateVector(items);
-    const uint64_t begin = cursor;
-    const uint64_t end = begin + p.bytes.size();
-    section_objects.push_back(lm::schema::CreateSectionObject(
-        builder, items_vec, begin, end, p.data_type));
-    cursor = end;
-  }
-  auto section_metadata = lm::schema::CreateSectionMetadata(
-      builder, builder.CreateVector(section_objects));
-  auto metadata =
-      lm::schema::CreateLiteRTLMMetaData(builder, 0, section_metadata);
-  builder.Finish(metadata);
-
-  const auto out_path =
-      std::filesystem::path(::testing::TempDir()) / std::string(filename);
-  std::ofstream file(out_path, std::ios::binary);
-  if (!file.good()) {
-    return absl::InternalError("Failed to open test .litertlm file.");
-  }
-  file.write("LITERTLM", 8);
-  const uint32_t major_version = 1;
-  const uint32_t minor_version = 0;
-  const uint32_t patch_version = 0;
-  const uint32_t padding = 0;
-  file.write(reinterpret_cast<const char*>(&major_version), 4);
-  file.write(reinterpret_cast<const char*>(&minor_version), 4);
-  file.write(reinterpret_cast<const char*>(&patch_version), 4);
-  file.write(reinterpret_cast<const char*>(&padding), 4);
-  const uint64_t header_end_offset = 32 + builder.GetSize();
-  file.write(reinterpret_cast<const char*>(&header_end_offset), 8);
-  file.write(reinterpret_cast<const char*>(builder.GetBufferPointer()),
-             builder.GetSize());
-  std::string header_pad(kDataStartOffset - header_end_offset, '\0');
-  file.write(header_pad.data(), header_pad.size());
-  for (const auto& p : payloads) {
-    file.write(p.bytes.data(), p.bytes.size());
-  }
-  if (!file.good()) {
-    return absl::InternalError("Failed to write test .litertlm file.");
-  }
-  return out_path.string();
+  return WriteAny2AnyTestBundle(filename, std::move(bundle_opts));
 }
 
 class FakeFrontendStage
@@ -332,16 +222,21 @@ TEST(MiniCpmOTest, InitMiniCpmOResourcesFailsWithNonexistentModels) {
   auto env = ::litert::Environment::Create({});
   ASSERT_TRUE(env.HasValue());
   auto shared_env = std::make_shared<::litert::Environment>(std::move(*env));
-  ModelResources resources(shared_env);
+  ModelResources resources;
 
+  std::shared_ptr<::litert::Environment> null_env;
+  EXPECT_THAT(
+      InitMiniCpmOResources(config, "/tmp/nonexistent_minicpm_o.litertlm", "",
+                            lm::Backend::CPU, 1, null_env, resources),
+      StatusIs(absl::StatusCode::kInvalidArgument));
   EXPECT_THAT(
       InitMiniCpmOResources(config, "/tmp/nonexistent_minicpm_o_dir", "",
-                            lm::Backend::CPU, 1, *shared_env, resources),
+                            lm::Backend::CPU, 1, shared_env, resources),
       StatusIs(absl::StatusCode::kInvalidArgument));
-  EXPECT_FALSE(
-      InitMiniCpmOResources(config, "/tmp/nonexistent_minicpm_o.litertlm", "",
-                            lm::Backend::CPU, 1, *shared_env, resources)
-          .ok());
+  EXPECT_FALSE(InitMiniCpmOResources(config,
+                                     "/tmp/nonexistent_minicpm_o.litertlm", "",
+                                     lm::Backend::CPU, 1, shared_env, resources)
+                   .ok());
 }
 
 TEST(MiniCpmOTest, CreateMiniCpmOComponentsRejectsNullAndMissingModels) {
@@ -395,14 +290,15 @@ TEST(MiniCpmOTest, InitMiniCpmOResourcesAndBackboneDelegationFromLitertLmFile) {
   auto env = ::litert::Environment::Create({});
   ASSERT_TRUE(env.HasValue());
   auto shared_env = std::make_shared<::litert::Environment>(std::move(*env));
-  ModelResources resources(shared_env);
+  ModelResources resources;
 
   // Act
   ASSERT_OK(InitMiniCpmOResources(config, bundle_path, ":nocache",
                                   lm::Backend::CPU, /*num_threads=*/1,
-                                  *shared_env, resources));
+                                  shared_env, resources));
 
   // Assert
+  EXPECT_EQ(resources.environment(), shared_env);
   EXPECT_TRUE(resources.HasLmModelResources());
   EXPECT_TRUE(resources.HasCompiledModel("text_embedder"));
   EXPECT_TRUE(resources.HasCompiledModel("vision_encoder"));
@@ -515,10 +411,10 @@ TEST(MiniCpmOTest, CreateMiniCpmOComponentsEndToEndTurnWithAllStages) {
   auto env = ::litert::Environment::Create({});
   ASSERT_TRUE(env.HasValue());
   auto shared_env = std::make_shared<::litert::Environment>(std::move(*env));
-  auto resources = std::make_shared<ModelResources>(shared_env);
+  auto resources = std::make_shared<ModelResources>();
   ASSERT_OK(InitMiniCpmOResources(config, bundle_path, ":nocache",
                                   lm::Backend::CPU, /*num_threads=*/1,
-                                  *shared_env, *resources));
+                                  std::move(shared_env), *resources));
 
   auto input_source = std::make_unique<PushInputSource>();
   PushInputSource* raw_input = input_source.get();
@@ -578,10 +474,10 @@ TEST(MiniCpmOTest,
   auto env = ::litert::Environment::Create({});
   ASSERT_TRUE(env.HasValue());
   auto shared_env = std::make_shared<::litert::Environment>(std::move(*env));
-  auto resources = std::make_shared<ModelResources>(shared_env);
+  auto resources = std::make_shared<ModelResources>();
   ASSERT_OK(InitMiniCpmOResources(config, bundle_path, ":nocache",
                                   lm::Backend::CPU, /*num_threads=*/1,
-                                  *shared_env, *resources));
+                                  std::move(shared_env), *resources));
   EXPECT_FALSE(resources->HasCompiledModel("audio_encoder"));
   EXPECT_TRUE(resources->HasCompiledModel("vision_encoder"));
 

@@ -29,7 +29,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "omni/any2any/any2any_vocoder_test_utils.h"
+#include "omni/any2any/any2any_test_utils.h"
 #include "omni/any2any/io_types.h"
 #include "omni/any2any/minicpm_o/minicpm_o_model_config.h"
 #include "omni/base/io_types.h"

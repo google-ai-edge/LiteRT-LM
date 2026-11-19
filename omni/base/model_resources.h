@@ -38,6 +38,11 @@ class ModelResources {
   ModelResources() = default;
   explicit ModelResources(std::shared_ptr<Environment> absl_nullable env);
 
+  ModelResources(const ModelResources&) = delete;
+  ModelResources& operator=(const ModelResources&) = delete;
+  ModelResources(ModelResources&&) noexcept = default;
+  ModelResources& operator=(ModelResources&& other) noexcept;
+
   ~ModelResources() = default;
 
   // Registers a CompiledModel instance under a string key.
@@ -80,6 +85,8 @@ class ModelResources {
   std::shared_ptr<Environment> environment() const;
 
  private:
+  // Declared first so `env_` and `lm_resources_` outlive `models_` and
+  // `lm_runners_` during destruction.
   std::shared_ptr<Environment> absl_nullable env_;
   std::shared_ptr<lm::ModelResources> absl_nullable lm_resources_;
   absl::flat_hash_map<std::string, std::shared_ptr<CompiledModel>> models_;

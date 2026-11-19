@@ -15,15 +15,18 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_ANY2ANY_SESSION_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_ANY2ANY_ANY2ANY_SESSION_H_
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
+#include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "omni/base/io_types.h"
 #include "omni/base/model_resources.h"
+#include "omni/base/stage.h"
 #include "omni/multi_staged_session.h"
 #include "omni/omni_engine.h"
 #include "omni/omni_session.h"
@@ -57,6 +60,8 @@ class Any2AnySessionFactory : public OmniSessionFactory {
   }
 
   std::vector<std::string> GetAvailableLanguages() const;
+  // Returns true if `voice` matches an entry in `available_voices()`
+  // (case-insensitive).
   bool HasVoice(absl::string_view voice) const;
   virtual std::string GetDefaultVoice(absl::string_view language) const;
 
@@ -74,9 +79,9 @@ class Any2AnySessionFactory : public OmniSessionFactory {
       std::vector<std::string> available_voices = {},
       std::shared_ptr<ModelResources> absl_nullable model_resources = nullptr);
 
-  // Must be implemented by model-specific subclasses (e.g.
-  // MiniCpmOSessionFactory) to construct model-specific pipeline stages
-  // connected to `input_source` and return a MultiStagedSession.
+  // Must be implemented by subclasses (e.g. `LeasedAny2AnySessionFactory`) to
+  // construct model-specific pipeline stages connected to `input_source` and
+  // return a `MultiStagedSession`.
   virtual absl::StatusOr<std::unique_ptr<MultiStagedSession>>
   CreateWithInputSource(
       const lm::proto::Any2AnySessionConfig& session_config,
@@ -93,6 +98,61 @@ class Any2AnySessionFactory : public OmniSessionFactory {
   std::vector<std::string> available_voices_;
   std::shared_ptr<ModelResources> absl_nullable model_resources_;
   std::unique_ptr<lm::ThreadPool> absl_nonnull thread_pool_;
+};
+
+// Resolves `Any2AnyMetadata` from the `metadata` proto (already merged with
+// bundle-embedded metadata by `OmniRegistry::CreateSessionFactory`), populating
+// default supported languages (`"en-US"`, `"zh-CN"`) if none are specified.
+lm::proto::Any2AnyMetadata ResolveAny2AnyMetadata(
+    const MessageLite* absl_nullable metadata);
+
+// Options configuring a `LeasedAny2AnySessionFactory`.
+struct LeasedAny2AnySessionOptions {
+  // Human-readable model name included in concurrent-session error messages.
+  std::string model_display_name = "Any2Any";
+  // Fallback voice returned by `GetDefaultVoice` when `available_voices()` is
+  // empty.
+  std::string fallback_default_voice;
+};
+
+// `Any2AnySessionFactory` implementation that enforces a single active session
+// lease per engine instance (protecting shared stateful model runners) and
+// delegates stage graph construction to a model-specific `ComponentBuilder`.
+class LeasedAny2AnySessionFactory : public Any2AnySessionFactory {
+ public:
+  // Builds model-specific pipeline stages for a session from the merged
+  // `session_config`, `input_source`, and shared `model_resources`. Must append
+  // all stages (with `input_source` first and the returned output stage last)
+  // to `stages`.
+  using ComponentBuilder =
+      absl::AnyInvocable<absl::StatusOr<Stage<Output>* absl_nonnull>(
+          const lm::proto::Any2AnySessionConfig& session_config,
+          std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+          std::shared_ptr<ModelResources> absl_nonnull model_resources,
+          std::vector<std::unique_ptr<internal::StageBase>>& stages) const>;
+
+  LeasedAny2AnySessionFactory(
+      const OmniEngine::Settings& settings,
+      const MessageLite* absl_nullable session_config,
+      const lm::proto::Any2AnyMetadata& metadata,
+      std::vector<std::string> available_voices,
+      std::shared_ptr<ModelResources> absl_nullable model_resources,
+      ComponentBuilder component_builder,
+      LeasedAny2AnySessionOptions options = {});
+
+  std::string GetDefaultVoice(absl::string_view language) const override;
+
+ protected:
+  absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateWithInputSource(
+      const lm::proto::Any2AnySessionConfig& session_config,
+      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
+      override;
+
+ private:
+  ComponentBuilder component_builder_;
+  std::string model_display_name_;
+  std::string fallback_default_voice_;
+  std::shared_ptr<std::atomic<bool>> active_session_;
 };
 
 }  // namespace litert::omni::any2any

@@ -43,11 +43,15 @@ cc_test(
     name = "model_resources_test",
     srcs = ["model_resources_test.cc"],
     deps = [
+        ":litert_lm_runner",
         ":model_resources",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
         "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "//runtime/executor:llm_executor_io_types",
         "//support/util:test_utils",
     ],
 )

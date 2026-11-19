@@ -35,7 +35,7 @@
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
-#include "omni/any2any/any2any_vocoder_test_utils.h"
+#include "omni/any2any/any2any_test_utils.h"
 #include "omni/any2any/io_types.h"
 #include "omni/base/io_types.h"
 #include "omni/base/mock_litert_runner.h"

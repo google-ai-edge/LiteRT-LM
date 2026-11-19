@@ -43,18 +43,18 @@ namespace litert::omni::any2any {
 //   backend: Default execution backend when a per-component backend override is
 //     not set in `config`.
 //   num_threads: Number of CPU execution threads.
-//   env: LiteRT environment used for model compilation.
-//   resources: Output `ModelResources` populated with compiled sub-models and
-//     the shared LLM backbone runner.
+//   env: Non-null LiteRT environment used for model compilation and retained by
+//     `resources` so it outlives all compiled models.
+//   resources: Output `ModelResources` populated with compiled sub-models,
+//     `env`, and the shared LLM backbone runner.
 //
 // Returns:
-//   `absl::OkStatus()` on success, or an error status if any required model
-//   section is missing or fails to compile.
-absl::Status InitMiniCpmOResources(const MiniCpmOModelConfig& config,
-                                   absl::string_view model_path,
-                                   absl::string_view cache_dir,
-                                   lm::Backend backend, int num_threads,
-                                   Environment& env, ModelResources& resources);
+//   `absl::OkStatus()` on success, or an error status if `env` is null or any
+//   required model section is missing or fails to compile.
+absl::Status InitMiniCpmOResources(
+    const MiniCpmOModelConfig& config, absl::string_view model_path,
+    absl::string_view cache_dir, lm::Backend backend, int num_threads,
+    std::shared_ptr<Environment> absl_nonnull env, ModelResources& resources);
 
 // Instantiates all stage components for a MiniCPM-o 4.5 Any2Any inference
 // session and appends them in upstream-to-downstream order to `stages`.

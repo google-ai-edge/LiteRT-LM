@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <atomic>
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -21,7 +21,6 @@
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
-#include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -38,12 +37,10 @@
 #include "omni/base/model_resources.h"
 #include "omni/base/model_utils.h"
 #include "omni/base/stage.h"
-#include "omni/multi_staged_session.h"
 #include "omni/omni_engine.h"
 #include "omni/omni_registry.h"
 #include "omni/omni_session.h"
 #include "runtime/components/model_resources.h"
-#include "runtime/framework/threadpool.h"
 #include "runtime/proto/any2any_metadata.pb.h"
 #include "runtime/proto/any2any_model_type.pb.h"
 #include "runtime/proto/any2any_session_config.pb.h"
@@ -60,28 +57,6 @@ constexpr absl::string_view kModelNames[] = {
     "openbmb/MiniCPM-o-4_5",
     "openbmb/MiniCPM-o-4.5",
 };
-
-lm::proto::Any2AnyMetadata ResolveMetadata(
-    lm::ModelResources* absl_nullable lm_resources,
-    const MessageLite* absl_nullable metadata) {
-  lm::proto::Any2AnyMetadata resolved;
-  if (lm_resources != nullptr) {
-    absl::StatusOr<const lm::proto::Any2AnyMetadata*> embedded =
-        lm_resources->GetAny2AnyMetadata();
-    if (embedded.ok() && *embedded != nullptr) {
-      resolved = **embedded;
-    }
-  }
-  if (metadata != nullptr) {
-    resolved.CheckTypeAndMergeFrom(*metadata);
-  }
-  resolved.mutable_any2any_model_type()->mutable_minicpm_o();
-  if (resolved.supported_languages().empty()) {
-    resolved.add_supported_languages("en-US");
-    resolved.add_supported_languages("zh-CN");
-  }
-  return resolved;
-}
 
 void PopulateMiniCpmOConfigFromProto(const lm::proto::Any2AnyMetadata& metadata,
                                      MiniCpmOModelConfig& config) {
@@ -140,7 +115,8 @@ void PopulateMiniCpmOConfigFromProto(const lm::proto::Any2AnyMetadata& metadata,
   if (proto.has_max_tts_tokens() && proto.max_tts_tokens() > 0) {
     config.max_tts_tokens = proto.max_tts_tokens();
   }
-  if (proto.has_voice() && !proto.voice().empty()) {
+  if (proto.has_voice() && !proto.voice().empty() &&
+      !absl::EqualsIgnoreCase(proto.voice(), "default")) {
     config.voice_name = proto.voice();
   }
   if (proto.has_language() && !proto.language().empty()) {
@@ -184,105 +160,17 @@ void ApplySessionConfigToModelConfig(
   if (session_config.has_system_prompt()) {
     config.system_prompt = session_config.system_prompt();
   }
-  if (session_config.has_voice() && !session_config.voice().empty()) {
+  if (session_config.has_voice() && !session_config.voice().empty() &&
+      !absl::EqualsIgnoreCase(session_config.voice(), "default")) {
     config.voice_name = session_config.voice();
   }
   if (session_config.has_language() && !session_config.language().empty()) {
     config.language = session_config.language();
   }
+  if (session_config.has_seed()) {
+    config.seed = static_cast<uint64_t>(session_config.seed());
+  }
 }
-
-class MiniCpmOSession : public MultiStagedSession {
- public:
-  MiniCpmOSession(std::vector<std::unique_ptr<internal::StageBase>> stages,
-                  Stage<Output>* absl_nonnull output_stage,
-                  ::litert::lm::ThreadPool* absl_nullable thread_pool,
-                  std::shared_ptr<std::atomic<bool>> active_session)
-      : MultiStagedSession(std::move(stages), output_stage, thread_pool),
-        active_session_(std::move(active_session)) {}
-
-  ~MiniCpmOSession() override {
-    Reset();
-    if (active_session_ != nullptr) {
-      active_session_->store(false, std::memory_order_release);
-    }
-  }
-
- private:
-  std::shared_ptr<std::atomic<bool>> active_session_;
-};
-
-class MiniCpmOSessionFactory : public Any2AnySessionFactory {
- public:
-  MiniCpmOSessionFactory(
-      const OmniEngine::Settings& settings,
-      const MessageLite* absl_nullable session_config,
-      const lm::proto::Any2AnyMetadata& metadata,
-      std::vector<std::string> available_voices,
-      std::shared_ptr<ModelResources> absl_nullable model_resources,
-      MiniCpmOModelConfig config = {})
-      : Any2AnySessionFactory(settings, session_config, metadata,
-                              std::move(available_voices),
-                              std::move(model_resources)),
-        config_(std::move(config)) {}
-
-  std::string GetDefaultVoice(absl::string_view /*language*/) const override {
-    if (!available_voices().empty()) {
-      return available_voices().front();
-    }
-    return config_.voice_name;
-  }
-
- protected:
-  absl::StatusOr<std::unique_ptr<MultiStagedSession>> CreateWithInputSource(
-      const lm::proto::Any2AnySessionConfig& session_config,
-      std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source)
-      override {
-    if (model_resources() == nullptr) {
-      return absl::FailedPreconditionError("ModelResources must not be null.");
-    }
-
-    bool expected = false;
-    if (!active_session_->compare_exchange_strong(expected, true,
-                                                  std::memory_order_acq_rel,
-                                                  std::memory_order_relaxed)) {
-      return absl::FailedPreconditionError(
-          "Another MiniCPM-o session is already active on this engine.");
-    }
-    bool lease_transferred = false;
-    absl::Cleanup release_lease = [&] {
-      if (!lease_transferred) {
-        active_session_->store(false, std::memory_order_release);
-      }
-    };
-
-    lm::proto::Any2AnySessionConfig effective =
-        MergeSessionConfig(session_config);
-    MiniCpmOModelConfig session_model_config = config_;
-    ApplySessionConfigToModelConfig(effective, session_model_config);
-
-    if (input_source == nullptr) {
-      input_source = std::make_unique<PushInputSource>();
-    }
-
-    std::vector<std::unique_ptr<internal::StageBase>> stages;
-    ABSL_ASSIGN_OR_RETURN(
-        Stage<Output> * output_stage,
-        CreateMiniCpmOComponents(session_model_config, std::move(input_source),
-                                 model_resources(), stages));
-    if (output_stage == nullptr) {
-      return absl::InternalError("Output stage must not be null.");
-    }
-    lease_transferred = true;
-    return std::make_unique<MiniCpmOSession>(std::move(stages), output_stage,
-                                             thread_pool(), active_session_);
-  }
-
- private:
-  MiniCpmOModelConfig config_;
-  std::shared_ptr<std::atomic<bool>> active_session_ =
-      std::make_shared<std::atomic<bool>>(false);
-};
 
 absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetMiniCpmOSessionFactory(
     absl::string_view model_name, const OmniEngine::Settings& settings,
@@ -301,7 +189,8 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetMiniCpmOSessionFactory(
   }
 
   lm::proto::Any2AnyMetadata resolved_metadata =
-      ResolveMetadata(lm_resources.get(), metadata);
+      ResolveAny2AnyMetadata(metadata);
+  resolved_metadata.mutable_any2any_model_type()->mutable_minicpm_o();
   MiniCpmOModelConfig config;
   config.force_fp32_on_gpu = settings.force_fp32_on_gpu;
   PopulateMiniCpmOConfigFromProto(resolved_metadata, config);
@@ -312,24 +201,43 @@ absl::StatusOr<std::unique_ptr<OmniSessionFactory>> GetMiniCpmOSessionFactory(
   }
 
   auto shared_env = std::make_shared<Environment>(std::move(env));
-  auto resources = std::make_shared<ModelResources>(shared_env);
+  auto resources = std::make_shared<ModelResources>();
   if (lm_resources != nullptr) {
     resources->SetLmModelResources(std::move(lm_resources));
   }
 
   const int num_threads = settings.num_threads > 0 ? settings.num_threads : 4;
-  ABSL_RETURN_IF_ERROR(InitMiniCpmOResources(
-      config, settings.model_path, settings.cache_dir,
-      ToLmBackend(settings.backend), num_threads, *shared_env, *resources));
+  ABSL_RETURN_IF_ERROR(
+      InitMiniCpmOResources(config, settings.model_path, settings.cache_dir,
+                            ToLmBackend(settings.backend), num_threads,
+                            std::move(shared_env), *resources));
 
   std::vector<std::string> available_voices;
   if (!config.voice_name.empty()) {
     available_voices.push_back(config.voice_name);
   }
+  LeasedAny2AnySessionOptions lease_options{
+      .model_display_name = "MiniCPM-o",
+      .fallback_default_voice = config.voice_name,
+  };
+  LeasedAny2AnySessionFactory::ComponentBuilder component_builder =
+      [base_config = std::move(config)](
+          const lm::proto::Any2AnySessionConfig& effective_config,
+          std::unique_ptr<OmniSession::InputSource> absl_nonnull input_source,
+          std::shared_ptr<ModelResources> absl_nonnull model_resources,
+          std::vector<std::unique_ptr<internal::StageBase>>& stages)
+      -> absl::StatusOr<Stage<Output>* absl_nonnull> {
+    MiniCpmOModelConfig session_model_config = base_config;
+    ApplySessionConfigToModelConfig(effective_config, session_model_config);
+    return CreateMiniCpmOComponents(session_model_config,
+                                    std::move(input_source),
+                                    std::move(model_resources), stages);
+  };
 
-  return std::make_unique<MiniCpmOSessionFactory>(
+  return std::make_unique<LeasedAny2AnySessionFactory>(
       settings, session_config, resolved_metadata, std::move(available_voices),
-      std::move(resources), std::move(config));
+      std::move(resources), std::move(component_builder),
+      std::move(lease_options));
 }
 
 [[maybe_unused]] const bool kMiniCpmORegistered = [] {

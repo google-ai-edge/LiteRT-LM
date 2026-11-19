@@ -33,6 +33,18 @@ namespace litert::omni {
 ModelResources::ModelResources(std::shared_ptr<Environment> absl_nullable env)
     : env_(std::move(env)) {}
 
+ModelResources& ModelResources::operator=(ModelResources&& other) noexcept {
+  if (this != &other) {
+    // Destroy dependent runners and models before releasing the previous
+    // container resources and Environment.
+    lm_runners_ = std::move(other.lm_runners_);
+    models_ = std::move(other.models_);
+    lm_resources_ = std::move(other.lm_resources_);
+    env_ = std::move(other.env_);
+  }
+  return *this;
+}
+
 absl::Status ModelResources::AddCompiledModel(
     absl::string_view key, std::shared_ptr<CompiledModel> model) {
   if (model == nullptr) {
