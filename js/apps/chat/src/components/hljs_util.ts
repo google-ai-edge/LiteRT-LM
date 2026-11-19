@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-import {CSSResult, unsafeCSS} from 'lit';
+import {css, CSSResult} from 'lit';
 import hljs from 'highlight.js';
-import hljsStylesText from 'highlight.js/styles/github-dark.css?inline';
 
 type ModernHighlightFn = (code: string, options: { language: string }) => { value: string };
 
@@ -50,5 +49,8 @@ export function highlightAuto(code: string): {value: string, language?: string} 
   return hljs.highlightAuto(code);
 }
 
-/** Stylesheet for highlight.js code block formatting. */
-export const hljsStyles: CSSResult = unsafeCSS(hljsStylesText);
+/**
+ * Stylesheet hook exported for highlight.js consumers; theme-aware `.hljs*`
+ * rules live in `shared_styles.ts`.
+ */
+export const hljsStyles: CSSResult = css``;
