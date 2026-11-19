@@ -23,7 +23,7 @@ OPEN_BRACKET : '[';
 CLOSE_BRACKET : ']';
 COMMA : ',';
 COLON : ':';
-ESCAPE : '<escape>' | '<ctrl46>' | '<|"|>';
+ESCAPE : '<escape>' | '<|"|>';
 
 // Literals
 BOOLEAN : 'true' | 'false';
