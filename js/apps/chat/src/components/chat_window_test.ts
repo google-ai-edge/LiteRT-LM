@@ -94,6 +94,22 @@ describe('litert-chat-window', () => {
     mockSettings.customModels = [];
     mockSettings.localDirModels = [];
     mockSettings.textBackend = 'gpu';
+    mockSettings.visionBackend = 'gpu';
+    mockSettings.audioBackend = 'gpu';
+    mockSettings.textPrecision = 'default';
+    mockSettings.visionPrecision = 'default';
+    mockSettings.audioPrecision = 'default';
+    mockSettings.useAutosizedRingbuffers = true;
+    mockSettings.contextLength = 4096;
+    mockSettings.maxOutputTokens = 2048;
+    mockSettings.samplerType = 'greedy';
+    mockSettings.temperature = 1.0;
+    mockSettings.topP = 0.95;
+    mockSettings.topK = 64;
+    mockSettings.enableThinking = true;
+    mockSettings.enableSpeculativeDecoding = false;
+    mockSettings.systemPrompt = '';
+    mockSettings.disabledTools = [];
 
     mockLocalDirService = jasmine.createSpyObj('LocalDirectoryService', [
       'mountDirectory',
@@ -996,6 +1012,130 @@ describe('litert-chat-window', () => {
                .toBeNull();
            expect(sendBtn.disabled).toBeFalse();
            expect(sendBtn.textContent?.trim()).toBe('Send');
+         });
+    });
+
+    describe('modality disabling', () => {
+      it('disables camera, mic, and media attach buttons with explanations when Vision and/or Audio are off',
+         async () => {
+           const addMediaBtn =
+               element.shadowRoot!.querySelector<HTMLButtonElement>(
+                   '#btn-add-media')!;
+           const cameraBtn =
+               element.shadowRoot!.querySelector<HTMLButtonElement>(
+                   '#btn-camera')!;
+           const recordBtn =
+               element.shadowRoot!.querySelector<HTMLButtonElement>(
+                   '#btn-record')!;
+           const mediaInput =
+               element.shadowRoot!.querySelector<HTMLInputElement>(
+                   '#media-input')!;
+
+           const heroSubtitle = () =>
+               element.shadowRoot!
+                   .querySelector<HTMLElement>('.hero-subtitle')!
+                   .textContent!.replace(/\s+/g, ' ')
+                   .trim();
+           const firstCapTag = () =>
+               element.shadowRoot!
+                   .querySelector<HTMLElement>('.capability-tag')!
+                   .textContent!.replace(/\s+/g, ' ')
+                   .trim();
+
+           expect(heroSubtitle()).toContain('Attach images or audio inline');
+           expect(firstCapTag()).toBe('Vision & Audio');
+
+           mockSettings.visionBackend = 'off';
+           mockSettings.audioBackend = 'gpu';
+           element.requestUpdate();
+           await element.updateComplete;
+
+           expect(cameraBtn.disabled).toBeTrue();
+           expect(cameraBtn.title).toContain('Vision is turned off');
+           expect(recordBtn.disabled).toBeFalse();
+           expect(addMediaBtn.disabled).toBeFalse();
+           expect(addMediaBtn.title).toContain('Vision is turned off');
+           expect(mediaInput.accept).toBe('audio/*');
+           expect(heroSubtitle()).toContain('Attach audio inline');
+           expect(heroSubtitle()).not.toContain('images');
+           expect(firstCapTag()).toBe('Audio');
+
+           // Rejects dropped/picked images when Vision is off
+           await addImageViaPicker();
+           expect(mockChatSession.createMedia).not.toHaveBeenCalled();
+           expect(mockState.statusText).toContain('Vision is turned off');
+
+           mockSettings.visionBackend = 'gpu';
+           mockSettings.audioBackend = 'off';
+           element.requestUpdate();
+           await element.updateComplete;
+           expect(heroSubtitle()).toContain('Attach images inline');
+           expect(heroSubtitle()).not.toContain('audio');
+           expect(firstCapTag()).toBe('Vision');
+
+           mockSettings.visionBackend = 'off';
+           mockSettings.audioBackend = 'off';
+           element.requestUpdate();
+           await element.updateComplete;
+
+           expect(cameraBtn.disabled).toBeTrue();
+           expect(recordBtn.disabled).toBeTrue();
+           expect(recordBtn.title).toContain('Audio is turned off');
+           expect(addMediaBtn.disabled).toBeTrue();
+           expect(addMediaBtn.title)
+               .toContain('Vision and Audio are turned off');
+           expect(heroSubtitle()).toContain('in text-only mode');
+           expect(heroSubtitle()).not.toContain('Attach');
+           expect(firstCapTag()).toBe('Text-Only Mode');
+         });
+
+      it('blocks composer send and error-banner retry when attached media belongs to an off modality',
+         async () => {
+           // Attach an image while Vision is still enabled, then turn Vision
+           // off.
+           await addImageViaPicker();
+           const editor = getEditor();
+           expect(editor.querySelector('.media-chip')).toBeTruthy();
+
+           mockSettings.visionBackend = 'off';
+           element.requestUpdate();
+           await element.updateComplete;
+
+           const sendBtn = element.shadowRoot!.querySelector<HTMLButtonElement>(
+               '#btn-send')!;
+           sendBtn.click();
+           await element.updateComplete;
+
+           expect(mockChatSession.sendMessage).not.toHaveBeenCalled();
+           expect(editor.querySelector('.media-chip')).toBeTruthy();
+           expect(mockState.statusText)
+               .toContain('Vision is turned off in Experimental settings');
+
+           // Retrying a failed trailing user message with disabled media from
+           // the error banner must not rewind/drop the message or send media.
+           mockState.errorMessage = 'Previous generation error';
+           mockChatSession.messages = [{
+             role: 'user',
+             text: '[image: cat.png]',
+             parts: [{type: 'image', id: fakeImage.id, name: 'cat.png'}],
+             senderName: 'User',
+           }];
+           mockChatSession.getMessageParts =
+               jasmine.createSpy('getMessageParts')
+                   .and.returnValue([{type: 'media', media: fakeImage}]);
+           element.requestUpdate();
+           await element.updateComplete;
+
+           const retryBtn =
+               element.shadowRoot!.querySelector<HTMLButtonElement>(
+                   '#btn-retry-error')!;
+           retryBtn.click();
+           await new Promise(resolve => setTimeout(resolve));
+
+           expect(mockChatSession.rewindAndEdit).not.toHaveBeenCalled();
+           expect(mockChatSession.sendMessage).not.toHaveBeenCalled();
+           expect(mockState.statusText)
+               .toContain('Vision is turned off in Experimental settings');
          });
     });
   });

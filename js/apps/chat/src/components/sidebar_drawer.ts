@@ -19,7 +19,7 @@ import {customElement, property, state} from 'lit/decorators.js';
 
 import {LlmChatStateController} from '../state_controller.js';
 import {getModelKey} from '../stores/model_loader_service.js';
-import {getCpuTextMemoryWarning, getExperimentalNote, getModalityConfigs, getNonDefaultBackendSummary, isGpuOnlyTextModel, Modality, MODALITIES, PartialSettingsSchema, Settings, SettingsGroup} from '../stores/settings_store.js';
+import {DEFAULT_EXPERIMENTAL_CONFIG, getCpuTextMemoryWarning, getExperimentalNote, getModalityConfigs, getNonDefaultBackendSummary, isGpuOnlyTextModel, Modality, MODALITIES, PartialSettingsSchema, Settings, SettingsGroup} from '../stores/settings_store.js';
 import {CHAT_TOOLS} from '../stores/tools.js';
 import {sharedStyles} from '../styles/shared_styles.js';
 
@@ -44,7 +44,7 @@ const RESET_CONFIRMATIONS: Record<SettingsGroup, {title: string; message: string
   experimental: {
     title: 'Reset experimental settings?',
     message:
-        'Restore Text, Vision, and Audio backends and activation precision to their default values?',
+        'Restore Text, Vision, and Audio backends, activation precision, and Ring buffers to their default values?',
   },
 };
 
@@ -581,6 +581,25 @@ export class LitertSidebar extends LitElement {
       .toggle-row input[type="checkbox"]:focus-visible {
         outline: none;
         box-shadow: none;
+      }
+
+      .toggle-row.is-disabled {
+        background-color: var(--bg-sidebar, #131720);
+        cursor: not-allowed;
+      }
+
+      .toggle-row.is-disabled:hover {
+        background-color: var(--bg-sidebar, #131720);
+        border-color: var(--border, #262f40);
+      }
+
+      .toggle-row.is-disabled .toggle-title {
+        color: var(--text-muted, #94a3b8);
+        cursor: not-allowed;
+      }
+
+      .toggle-row input[type="checkbox"]:disabled {
+        cursor: not-allowed;
       }
 
       .tool-text {
@@ -1532,12 +1551,18 @@ export class LitertSidebar extends LitElement {
     const overrides = MODALITIES.flatMap(modality => {
       const {backend, precision} = configs[modality];
       const prefix = modality[0].toUpperCase();
+      if (backend === 'off') return [`${prefix}:Off`];
       if (backend === 'cpu') return [`${prefix}:CPU`];
       if (precision !== 'default') {
         return [`${prefix}:${precision.toUpperCase()}`];
       }
       return [];
     });
+    if (configs.text.backend === 'gpu' &&
+        !(this.state.settings.useAutosizedRingbuffers ??
+          DEFAULT_EXPERIMENTAL_CONFIG.useAutosizedRingbuffers)) {
+      overrides.push('Ring:Off');
+    }
     if (overrides.length === 0) {
       return 'GPU · Default';
     }
@@ -1557,16 +1582,26 @@ export class LitertSidebar extends LitElement {
     const cpuMemoryWarning = getCpuTextMemoryWarning(
         settings.selectedModelPath, settings, cachedSizeBytes);
     const experimentalNote = getExperimentalNote(settings, cachedSizeBytes);
+    const useCpuText = configs.text.backend === 'cpu';
+    const ringBuffersEnabled = settings.useAutosizedRingbuffers ??
+        DEFAULT_EXPERIMENTAL_CONFIG.useAutosizedRingbuffers;
+    const ringBuffersTitle = useCpuText ?
+        'Ring buffers apply to GPU text execution only.' :
+        'Autosized local-attention ring buffers save GPU memory on long contexts (disables instantaneous KV-cache rewinding).';
 
     const textBackendReason =
         'This model uses a WebGPU-only text decoder (-gpu.litertlm). Choose a standard .litertlm model to try CPU.';
     const cpuPrecisionReason =
         'CPU backend always executes in FP32 / native graph precision.';
+    const offPrecisionReason =
+        'Turn this modality on (GPU or CPU) to configure activation precision.';
 
     const renderRow = (modality: Modality, label: string,
                        defaultPrecision: string) => {
       const {backend, precision} = configs[modality];
       const backendLocked = modality === 'text' && gpuOnlyText;
+      const canTurnOff = modality !== 'text';
+      const isOff = backend === 'off';
       const onCpu = backend === 'cpu';
       const backendTitle = backendLocked ?
           textBackendReason :
@@ -1588,19 +1623,24 @@ export class LitertSidebar extends LitElement {
             >
               <option value="gpu">GPU</option>
               <option value="cpu">CPU</option>
+              ${canTurnOff ? html`<option value="off">Off</option>` : nothing}
             </select>
             <select
               id="${modality}-precision"
               aria-label="${label} precision"
-              .value=${onCpu ? 'fp32' : precision}
-              ?disabled=${onCpu}
-              title=${onCpu ? cpuPrecisionReason : nothing}
+              .value=${isOff ? 'off' : (onCpu ? 'fp32' : precision)}
+              ?disabled=${isOff || onCpu}
+              title=${
+          isOff ? offPrecisionReason :
+                  (onCpu ? cpuPrecisionReason : nothing)}
               aria-describedby=${
-          modality === 'text' || onCpu ? 'experimental-note' : nothing}
+          modality === 'text' || onCpu || isOff ? 'experimental-note' : nothing}
               @change=${(e: Event) =>
           this.handleSettingInput(e, `${modality}Precision`)}
             >
-              ${onCpu ? html`
+              ${isOff ? html`
+                <option value="off">Off</option>
+              ` : onCpu ? html`
                 <option value="fp32">FP32 (CPU)</option>
               ` : html`
                 <option value="default">Default (${defaultPrecision})</option>
@@ -1630,6 +1670,31 @@ export class LitertSidebar extends LitElement {
           ${renderRow('vision', 'Vision', 'FP32')}
           ${renderRow('audio', 'Audio', 'FP32')}
         </div>
+
+        <label
+          class="toggle-row ${useCpuText ? 'is-disabled' : ''}"
+          for="use-autosized-ringbuffers"
+          title=${ringBuffersTitle}
+        >
+          <span class="tool-text">
+            <span id="use-autosized-ringbuffers-label" class="toggle-title">Ring buffers</span>
+            <span id="use-autosized-ringbuffers-desc" class="setting-hint">${
+              useCpuText ?
+                  'GPU text only (local-attention buffers).' :
+                  'Saves GPU memory on long contexts.'}</span>
+          </span>
+          <input
+            type="checkbox"
+            id="use-autosized-ringbuffers"
+            aria-labelledby="use-autosized-ringbuffers-label"
+            aria-describedby="use-autosized-ringbuffers-desc"
+            title=${ringBuffersTitle}
+            .checked=${!useCpuText && ringBuffersEnabled}
+            ?disabled=${useCpuText}
+            @change=${(e: Event) =>
+              this.handleSettingInput(e, 'useAutosizedRingbuffers')}
+          />
+        </label>
 
         <div
           id="experimental-note"

@@ -23,8 +23,9 @@ import {html, LitElement, nothing, render, svg} from 'lit';
 import {customElement, property, query, state} from 'lit/decorators.js';
 
 import {LlmChatStateController} from '../state_controller.js';
-import {MediaKind, promptHasContent, PromptMedia, PromptPart, promptPartsToText} from '../stores/chat_session_store.js';
+import {getDisabledMediaMessage, MediaKind, promptHasContent, PromptMedia, PromptPart, promptPartsToText} from '../stores/chat_session_store.js';
 import {getModelKey} from '../stores/model_loader_service.js';
+import {getMediaUiCopy, getModalityConfigs, type MediaUiCopy} from '../stores/settings_store.js';
 import {sharedStyles} from '../styles/shared_styles.js';
 import {AudioRecorder, toSupportedAudio} from '../utils/audio.js';
 import type {LitertCameraCapture} from './camera_capture.js';
@@ -79,6 +80,16 @@ const STARTERS = [
     icon: svg`<polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline>`,
   },
 ];
+
+const CAPABILITY_MODALITY_ICONS:
+    Readonly<Record<MediaUiCopy['capabilityIcon'], ReturnType<typeof svg>>> = {
+      'text':
+          svg`<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>`,
+      'audio':
+          svg`<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line>`,
+      'vision':
+          svg`<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline>`,
+    };
 
 /** Main chat window component managing messages and input. */
 @customElement('litert-chat-window')
@@ -304,6 +315,15 @@ export class LitertChatWindow extends LitElement {
   }
 
   protected override willUpdate() {
+    if (this.state?.settings) {
+      const modalities = getModalityConfigs(this.state.settings);
+      if (modalities.audio.backend === 'off' && this.isRecording) {
+        this.cancelRecording();
+      }
+      if (modalities.vision.backend === 'off' && this.isCameraModalOpen) {
+        this.camera?.close();
+      }
+    }
     if (!this.state?.chatSession) return;
     const isGenerating = this.state.chatSession.isGenerating;
     const messageCount = this.state.chatSession.messages.length;
@@ -688,11 +708,22 @@ export class LitertChatWindow extends LitElement {
 
   /** Adds image and audio files to the prompt at the saved caret position. */
   private async addMediaFiles(files: File[]) {
+    const modalities = getModalityConfigs(this.state.settings);
+    const visionOff = modalities.vision.backend === 'off';
+    const audioOff = modalities.audio.backend === 'off';
     for (const file of files) {
       let kind: MediaKind;
       if (file.type.startsWith('image/')) {
+        if (visionOff) {
+          this.setStatus('Vision is turned off in Experimental settings.');
+          continue;
+        }
         kind = 'image';
       } else if (file.type.startsWith('audio/')) {
+        if (audioOff) {
+          this.setStatus('Audio is turned off in Experimental settings.');
+          continue;
+        }
         kind = 'audio';
       } else {
         this.setStatus(
@@ -714,6 +745,10 @@ export class LitertChatWindow extends LitElement {
   private async toggleRecording() {
     if (this.isRecording) {
       await this.finishRecording();
+      return;
+    }
+    if (getModalityConfigs(this.state.settings).audio.backend === 'off') {
+      this.setStatus('Audio is turned off in Experimental settings.');
       return;
     }
     try {
@@ -764,6 +799,10 @@ export class LitertChatWindow extends LitElement {
   }
 
   private async openCamera() {
+    if (getModalityConfigs(this.state.settings).vision.backend === 'off') {
+      this.setStatus('Vision is turned off in Experimental settings.');
+      return;
+    }
     if (!(await this.camera?.open())) {
       this.cameraFallbackInput?.click();
     }
@@ -837,6 +876,13 @@ export class LitertChatWindow extends LitElement {
     const parts = this.serializeEditor();
     if (!promptHasContent(parts)) return;
 
+    const disabledMediaMessage =
+        getDisabledMediaMessage(parts, this.state.settings);
+    if (disabledMediaMessage) {
+      this.setStatus(disabledMediaMessage);
+      return;
+    }
+
     this.chatInput.replaceChildren();
     this.savedRange = null;
     this.updateEmptyState();
@@ -868,6 +914,15 @@ export class LitertChatWindow extends LitElement {
     const lastIdx = msgs.length - 1;
     if (lastIdx >= 0 && msgs[lastIdx]?.role === 'user' &&
         this.state.chatSession.rewindAndEdit) {
+      const lastParts = this.state.chatSession.getMessageParts?.(msgs[lastIdx]);
+      if (lastParts) {
+        const disabledMediaMessage =
+            getDisabledMediaMessage(lastParts, this.state.settings);
+        if (disabledMediaMessage) {
+          this.setStatus(disabledMediaMessage);
+          return;
+        }
+      }
       const parts = await this.state.chatSession.rewindAndEdit(lastIdx);
       if (parts && promptHasContent(parts)) {
         const isTextOnly = parts.every(p => p.type === 'text');
@@ -1089,6 +1144,31 @@ export class LitertChatWindow extends LitElement {
     const cleanModelName = modelSummary.name;
     const isAddModelDisabled = this.isLookingUpModel || isLoading;
     const showScrollBottom = !this.shouldAutoScroll && !isMessagesEmpty;
+    const modalities = getModalityConfigs(this.state.settings);
+    const visionOff = modalities.vision.backend === 'off';
+    const audioOff = modalities.audio.backend === 'off';
+    const allMediaOff = visionOff && audioOff;
+    const mediaUi = getMediaUiCopy(!visionOff, !audioOff);
+    const cameraTitle = visionOff ?
+        'Vision is turned off in Experimental settings' :
+        'Take a photo';
+    const cameraAriaLabel = visionOff ?
+        'Take a photo (disabled: Vision is turned off in Experimental settings)' :
+        'Take a photo';
+    const recordTitle = audioOff ?
+        'Audio is turned off in Experimental settings' :
+        (this.isRecording ? 'Stop and attach recording' : 'Record audio');
+    const recordAriaLabel = audioOff ?
+        'Record audio (disabled: Audio is turned off in Experimental settings)' :
+        recordTitle;
+    const editorPlaceholder = isLoading ?
+        'Model is preparing, please wait...' :
+        (this.isCompactViewport ? 'Message LiteRT-LM...' :
+                                  mediaUi.editorPlaceholder);
+    const capabilityModalityIcon =
+        CAPABILITY_MODALITY_ICONS[mediaUi.capabilityIcon];
+    const runtimeLead =
+        modalities.text.backend === 'cpu' ? 'in WASM' : 'with WebGPU';
 
     return html`
       <!-- Top Error Banner -->
@@ -1153,17 +1233,15 @@ export class LitertChatWindow extends LitElement {
             </div>
             <h2 class="hero-heading">Private, on-device AI in your browser</h2>
             <p class="hero-subtitle">
-              Run <strong>${cleanModelName}</strong> locally with WebGPU. Attach images or audio inline, verify math in the JS sandbox, and preview generated HTML with zero server round-trips.
+              Run <strong>${cleanModelName}</strong> locally ${runtimeLead}${mediaUi.heroModeSuffix}. ${mediaUi.heroCapabilitiesSentence}
             </p>
 
             <ul class="capability-row" aria-label="Supported capabilities">
               <li class="capability-tag">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                  <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                  <polyline points="21 15 16 10 5 21"></polyline>
+                  ${capabilityModalityIcon}
                 </svg>
-                Vision &amp; Audio
+                ${mediaUi.capabilityLabel}
               </li>
               <li class="capability-tag">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1237,7 +1315,7 @@ export class LitertChatWindow extends LitElement {
         <input
           type="file"
           id="media-input"
-          accept="image/*,audio/*"
+          accept=${mediaUi.mediaAccept}
           multiple
           hidden
           @change=${this.handleMediaInputChange}
@@ -1324,11 +1402,7 @@ export class LitertChatWindow extends LitElement {
             aria-multiline="true"
             aria-label="Message"
             aria-disabled=${isLoading ? 'true' : 'false'}
-            data-placeholder=${
-        isLoading ? 'Model is preparing, please wait...' :
-                    (this.isCompactViewport ?
-                         'Message LiteRT-LM...' :
-                         'Message LiteRT-LM... Drop or attach images & audio.')}
+            data-placeholder=${editorPlaceholder}
             @input=${this.updateEmptyState}
             @keyup=${this.handleEditorSelect}
             @mouseup=${this.handleEditorSelect}
@@ -1445,9 +1519,9 @@ export class LitertChatWindow extends LitElement {
                   id="btn-add-media"
                   type="button"
                   class="btn-icon"
-                  title="Add images or audio"
-                  aria-label="Add images or audio"
-                  ?disabled=${isLoading}
+                  title=${mediaUi.addMediaTitle}
+                  aria-label=${mediaUi.addMediaAriaLabel}
+                  ?disabled=${isLoading || allMediaOff}
                   @mousedown=${(e: Event) => e.preventDefault()}
                   @click=${() => this.mediaInput?.click()}
                 >
@@ -1460,9 +1534,9 @@ export class LitertChatWindow extends LitElement {
                   id="btn-camera"
                   type="button"
                   class="btn-icon"
-                  title="Take a photo"
-                  aria-label="Take a photo"
-                  ?disabled=${isLoading}
+                  title=${cameraTitle}
+                  aria-label=${cameraAriaLabel}
+                  ?disabled=${isLoading || visionOff}
                   @mousedown=${(e: Event) => e.preventDefault()}
                   @click=${this.openCamera}
                 >
@@ -1475,9 +1549,9 @@ export class LitertChatWindow extends LitElement {
                   id="btn-record"
                   type="button"
                   class="btn-icon ${this.isRecording ? 'recording' : ''}"
-                  title=${this.isRecording ? 'Stop and attach recording' : 'Record audio'}
-                  aria-label=${this.isRecording ? 'Stop and attach recording' : 'Record audio'}
-                  ?disabled=${isLoading}
+                  title=${recordTitle}
+                  aria-label=${recordAriaLabel}
+                  ?disabled=${isLoading || audioOff}
                   @mousedown=${(e: Event) => e.preventDefault()}
                   @click=${this.toggleRecording}
                 >${this.isRecording ? html`⏹ ${Math.floor(this.recordingSeconds / 60)}:${

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {CPU_TEXT_WASM_WARNING_BYTES, CPU_TEXT_WASM_WARNING_LABEL, findModel, formatCpuTextWasmLimitLabel, getCpuTextMemoryWarning, getExperimentalNote, getModalityConfigs, getNonDefaultBackendSummary, isGpuOnlyTextModel, migrateModelPath, MODELS, parseModelSizeBytes, selectCustomModel, SettingsStore} from './settings_store.js';
+import {CPU_TEXT_WASM_WARNING_BYTES, CPU_TEXT_WASM_WARNING_LABEL, DEFAULT_EXPERIMENTAL_CONFIG, EXPERIMENTAL_SETTING_KEYS, findModel, formatCpuTextWasmLimitLabel, getCpuTextMemoryWarning, getExperimentalNote, getMediaUiCopy, getModalityConfigs, getNonDefaultBackendSummary, isGpuOnlyTextModel, migrateModelPath, MODELS, parseModelSizeBytes, selectCustomModel, SettingsStore} from './settings_store.js';
 
 describe('SettingsStore', () => {
   let mockCallbackCount = 0;
@@ -51,6 +51,8 @@ describe('SettingsStore', () => {
     expect(store.textPrecision).toBe('default');
     expect(store.visionPrecision).toBe('default');
     expect(store.audioPrecision).toBe('default');
+    expect(store.useAutosizedRingbuffers).toBeTrue();
+    expect(EXPERIMENTAL_SETTING_KEYS).toContain('useAutosizedRingbuffers');
   });
 
   it('persists, resets, and coerces experimental backend and precision settings', () => {
@@ -62,6 +64,7 @@ describe('SettingsStore', () => {
     store.textPrecision = 'fp32';
     store.visionPrecision = 'fp16';
     store.audioPrecision = 'fp16';
+    store.useAutosizedRingbuffers = false;
     store.temperature = 0.4;
     store.saveSettings();
 
@@ -69,6 +72,7 @@ describe('SettingsStore', () => {
     expect(loaded.textBackend).toBe('cpu');
     expect(loaded.visionBackend).toBe('cpu');
     expect(loaded.audioPrecision).toBe('fp16');
+    expect(loaded.useAutosizedRingbuffers).toBeFalse();
     expect(isGpuOnlyTextModel(MODELS[0]!.path)).toBeTrue();
     expect(isGpuOnlyTextModel('https://example.com/custom-cpu.litertlm'))
         .toBeFalse();
@@ -94,6 +98,7 @@ describe('SettingsStore', () => {
     expect(loaded.textPrecision).toBe('default');
     expect(loaded.visionPrecision).toBe('default');
     expect(loaded.audioPrecision).toBe('default');
+    expect(loaded.useAutosizedRingbuffers).toBeTrue();
     expect(loaded.temperature).toBe(0.4);
   });
 
@@ -270,6 +275,32 @@ describe('SettingsStore', () => {
          label: 'WebGPU · CPU',
          detail: 'Backend: WebGPU · CPU (Vision, Audio on CPU)',
        });
+
+       // Disabled Vision and/or Audio modalities
+       store.resetDefaults('experimental');
+       store.visionBackend = 'off';
+       expect(getNonDefaultBackendSummary(store)).toEqual({
+         label: 'No Vision',
+         detail: 'Modalities: Vision off (Text, Audio on WebGPU)',
+       });
+
+       store.audioBackend = 'off';
+       expect(getNonDefaultBackendSummary(store)).toEqual({
+         label: 'Text only',
+         detail: 'Modalities: Text only on WebGPU (Vision, Audio off)',
+       });
+
+       store.visionBackend = 'gpu';
+       expect(getNonDefaultBackendSummary(store)).toEqual({
+         label: 'No Audio',
+         detail: 'Modalities: Audio off (Text, Vision on WebGPU)',
+       });
+
+       // Persists and restores 'off' across reloads
+       store.saveSettings();
+       const reloaded = new SettingsStore(mockUpdateCallback);
+       expect(reloaded.audioBackend).toBe('off');
+       expect(reloaded.visionBackend).toBe('gpu');
      });
 
   it('selects built-in models in selectCustomModel without adding duplicates to customModels',
@@ -451,7 +482,15 @@ describe('SettingsStore', () => {
        store.selectedModelPath = 'https://example.com/small.litertlm';
        expect(getExperimentalNote(store)).toEqual({
          text:
-             'Experimental overrides. GPU defaults: Text FP16, Vision & Audio FP32.',
+             'Experimental overrides. Set Vision or Audio to Off to skip loading weights.',
+         warning: false,
+       });
+
+       // 2b. Vision or Audio turned off while Text stays on GPU
+       store.visionBackend = 'off';
+       expect(getExperimentalNote(store)).toEqual({
+         text:
+             'Off modalities skip weight loading to save memory. GPU defaults: Text FP16, Vision/Audio FP32.',
          warning: false,
        });
 
@@ -487,5 +526,82 @@ describe('SettingsStore', () => {
              '2.40 GB may not fit in WASM memory (~1.5 GB practical limit); loading may fail.',
          warning: true,
        });
+     });
+
+  it('falls back to DEFAULT_EXPERIMENTAL_CONFIG when optional modality fields are omitted',
+     () => {
+       expect(getModalityConfigs({
+         selectedModelPath: 'https://example.com/standard.litertlm',
+       })).toEqual({
+         text: {
+           backend: DEFAULT_EXPERIMENTAL_CONFIG.textBackend,
+           precision: DEFAULT_EXPERIMENTAL_CONFIG.textPrecision,
+         },
+         vision: {
+           backend: DEFAULT_EXPERIMENTAL_CONFIG.visionBackend,
+           precision: DEFAULT_EXPERIMENTAL_CONFIG.visionPrecision,
+         },
+         audio: {
+           backend: DEFAULT_EXPERIMENTAL_CONFIG.audioBackend,
+           precision: DEFAULT_EXPERIMENTAL_CONFIG.audioPrecision,
+         },
+       });
+     });
+
+  it('returns consistent media UI copy across all four Vision/Audio combinations',
+     () => {
+       expect(getMediaUiCopy(true, true)).toEqual(jasmine.objectContaining({
+         availability: 'both',
+         mediaAccept: 'image/*,audio/*',
+         addMediaTitle: 'Add images or audio',
+         addMediaAriaLabel: 'Add images or audio',
+         editorPlaceholder: 'Message LiteRT-LM... Drop or attach images & audio.',
+         capabilityLabel: 'Vision & Audio',
+         capabilityIcon: 'vision',
+         heroModeSuffix: '',
+       }));
+       expect(getMediaUiCopy(true, true).heroCapabilitiesSentence)
+           .toContain('Attach images or audio inline');
+
+       expect(getMediaUiCopy(true, false)).toEqual(jasmine.objectContaining({
+         availability: 'vision-only',
+         mediaAccept: 'image/*',
+         addMediaTitle:
+             'Add images (Audio is turned off in Experimental settings)',
+         editorPlaceholder: 'Message LiteRT-LM... Drop or attach images.',
+         capabilityLabel: 'Vision',
+         capabilityIcon: 'vision',
+         heroModeSuffix: '',
+       }));
+       expect(getMediaUiCopy(true, false).heroCapabilitiesSentence)
+           .toContain('Attach images inline');
+
+       expect(getMediaUiCopy(false, true)).toEqual(jasmine.objectContaining({
+         availability: 'audio-only',
+         mediaAccept: 'audio/*',
+         addMediaTitle:
+             'Add audio (Vision is turned off in Experimental settings)',
+         editorPlaceholder: 'Message LiteRT-LM... Drop or attach audio.',
+         capabilityLabel: 'Audio',
+         capabilityIcon: 'audio',
+         heroModeSuffix: '',
+       }));
+       expect(getMediaUiCopy(false, true).heroCapabilitiesSentence)
+           .toContain('Attach audio inline');
+
+       expect(getMediaUiCopy(false, false)).toEqual(jasmine.objectContaining({
+         availability: 'none',
+         mediaAccept: '',
+         addMediaTitle:
+             'Vision and Audio are turned off in Experimental settings',
+         addMediaAriaLabel:
+             'Add images or audio (disabled: Vision and Audio are turned off in Experimental settings)',
+         editorPlaceholder: 'Message LiteRT-LM...',
+         capabilityLabel: 'Text-Only Mode',
+         capabilityIcon: 'text',
+         heroModeSuffix: ' in text-only mode',
+       }));
+       expect(getMediaUiCopy(false, false).heroCapabilitiesSentence)
+           .not.toContain('Attach');
      });
 });

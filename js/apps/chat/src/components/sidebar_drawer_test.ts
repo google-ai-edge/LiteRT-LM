@@ -68,6 +68,7 @@ describe('litert-sidebar', () => {
     mockSettings.textPrecision = 'default';
     mockSettings.visionPrecision = 'default';
     mockSettings.audioPrecision = 'default';
+    mockSettings.useAutosizedRingbuffers = true;
     mockSettings.customModels = [];
     mockSettings.localDirModels = [];
 
@@ -629,6 +630,90 @@ describe('litert-sidebar', () => {
              .toBeLessThanOrEqual(runtimeBadge!.clientWidth);
          expect(statusHeader.scrollWidth)
              .toBeLessThanOrEqual(statusHeader.clientWidth);
+       });
+
+    it('lets Vision and Audio be turned Off, disabling precision and updating badges',
+       async () => {
+         const expTab = element.shadowRoot!.querySelector<HTMLButtonElement>(
+             '#tab-experimental')!;
+         const visionBackend =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#vision-backend')!;
+         const audioBackend =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#audio-backend')!;
+         expect(Array.from(visionBackend.options).map(o => o.value))
+             .toEqual(['gpu', 'cpu', 'off']);
+         expect(Array.from(audioBackend.options).map(o => o.value))
+             .toEqual(['gpu', 'cpu', 'off']);
+
+         visionBackend.value = 'off';
+         visionBackend.dispatchEvent(new Event('change'));
+         expect(mockSettings.visionBackend).toBe('off');
+
+         audioBackend.value = 'off';
+         audioBackend.dispatchEvent(new Event('change'));
+         expect(mockSettings.audioBackend).toBe('off');
+
+         element.requestUpdate();
+         await element.updateComplete;
+
+         const visionPrecision =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#vision-precision')!;
+         const audioPrecision =
+             element.shadowRoot!.querySelector<HTMLSelectElement>(
+                 '#audio-precision')!;
+         expect(visionPrecision.disabled).toBeTrue();
+         expect(visionPrecision.value).toBe('off');
+         expect(audioPrecision.disabled).toBeTrue();
+         expect(audioPrecision.value).toBe('off');
+         expect(expTab.querySelector('.tuning-pill')!.textContent!.trim())
+             .toBe('V:Off · A:Off');
+
+         const runtimeBadge =
+             element.shadowRoot!.querySelector<HTMLElement>(
+                 '#runtime-backend-badge');
+         expect(runtimeBadge).toBeTruthy();
+         expect(runtimeBadge!.textContent!.trim()).toBe('Text only');
+       });
+
+    it('toggles Ring buffers on GPU text with memory-saving tooltip and disables it on CPU text',
+       async () => {
+         const expTab = element.shadowRoot!.querySelector<HTMLButtonElement>(
+             '#tab-experimental')!;
+         const ringCheckbox =
+             element.shadowRoot!.querySelector<HTMLInputElement>(
+                 '#use-autosized-ringbuffers')!;
+         const ringRow = ringCheckbox.closest('.toggle-row') as HTMLElement;
+
+         expect(ringCheckbox.disabled).toBeFalse();
+         expect(ringCheckbox.checked).toBeTrue();
+         expect(ringCheckbox.title).toContain('save GPU memory on long contexts');
+         expect(expTab.querySelector('.tuning-pill')!.textContent!.trim())
+             .toBe('GPU · Default');
+
+         ringCheckbox.checked = false;
+         ringCheckbox.dispatchEvent(new Event('change'));
+         expect(mockSettings.useAutosizedRingbuffers).toBeFalse();
+         expect(mockSettings.saveSettings).toHaveBeenCalled();
+
+         element.requestUpdate();
+         await element.updateComplete;
+         expect(expTab.querySelector('.tuning-pill')!.textContent!.trim())
+             .toBe('Ring:Off');
+
+         // Standard .litertlm on CPU text disables Ring buffers with GPU-only tooltip
+         mockSettings.selectedModelPath =
+             'https://example.com/gemma-3-1b-it.litertlm';
+         mockSettings.textBackend = 'cpu';
+         element.requestUpdate();
+         await element.updateComplete;
+
+         expect(ringCheckbox.disabled).toBeTrue();
+         expect(ringCheckbox.checked).toBeFalse();
+         expect(ringRow.classList).toContain('is-disabled');
+         expect(ringCheckbox.title).toContain('GPU text');
        });
   });
 

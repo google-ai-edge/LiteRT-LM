@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-import {ActivationDataType, Backend, Engine, getOrLoadGlobalLiteRtLm, LiteRtLm, ResolvedModelInput, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
+import {ActivationDataType, Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, LiteRtLm, ResolvedModelInput, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
 import {EngineFake} from '@litert-lm/core/testing';
 
-import {formatModelLoadError, getModelKey, ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
+import {buildGpuBackendConfig, CORE_GPU_ARTISAN_DEFAULTS, formatModelLoadError, getModelKey, ModelLoaderService, suppressKnownWasmWarnings} from './model_loader_service.js';
 import {SettingsStore} from './settings_store.js';
 
 /** Returns a fake cache that has a 3-byte model. */
@@ -772,6 +772,62 @@ describe('ModelLoaderService', () => {
       settingsStore.topK = 64;
       expect(modelLoader.needsModelReload(settingsStore.modelSettings)).toBeFalse();
     });
+
+    it('returns true when switching from greedy to non-greedy with topK differing from default max_top_k',
+       async () => {
+         const createEngine = jasmine.createSpy('createEngine')
+                                  .and.callFake(
+                                      async (settings, hint) =>
+                                          await EngineFake.create(
+                                              settings, hint));
+         modelLoader = new ModelLoaderService(
+             () => {}, () => {}, undefined, createEngine, fakeLoadWasm);
+         spyOn(window.caches, 'open').and.callFake(async () => fakeCache());
+
+         settingsStore.selectedModelPath = 'https://example.com/model.litertlm';
+         settingsStore.samplerType = 'greedy';
+         settingsStore.topK = 96;
+         await modelLoader.loadModelWeights(
+             settingsStore.modelSettings, async () => {});
+
+         expect((createEngine.calls.mostRecent()
+                     .args[0]
+                     .mainExecutorSettings?.backendConfig as GpuArtisanConfig)
+                    .max_top_k)
+             .toBe(64);
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeFalse();
+
+         // Switching to Top-K keeps topK=96, which exceeds the engine's
+         // loaded max_top_k=64 and therefore requires a reload.
+         settingsStore.samplerType = 'top_k';
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeTrue();
+
+         await modelLoader.loadModelWeights(
+             settingsStore.modelSettings, async () => {});
+         expect((createEngine.calls.mostRecent()
+                     .args[0]
+                     .mainExecutorSettings?.backendConfig as GpuArtisanConfig)
+                    .max_top_k)
+             .toBe(96);
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeFalse();
+
+         // Switching back to Greedy (k=1) does not require a reload.
+         settingsStore.samplerType = 'greedy';
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeFalse();
+
+         // Loading under Greedy at default topK=64 and switching to Top-K
+         // already has effective max_top_k=64, so no reload is needed.
+         settingsStore.topK = 64;
+         await modelLoader.loadModelWeights(
+             settingsStore.modelSettings, async () => {});
+         settingsStore.samplerType = 'top_k';
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeFalse();
+       });
   });
 
   describe('engine settings', () => {
@@ -858,7 +914,7 @@ describe('ModelLoaderService', () => {
              .toBeFalse();
 
          // Non-GPU .litertlm with textBackend = 'cpu' passes Backend.CPU and
-         // omits GPU Artisan config and text activationDataType.
+         // omits GPU Artisan config, maxNumImages, and text activationDataType.
          settingsStore.textBackend = 'cpu';
          expect(modelLoader.needsModelReload(settingsStore.modelSettings))
              .toBeTrue();
@@ -867,6 +923,7 @@ describe('ModelLoaderService', () => {
          callArgs = createEngine.calls.mostRecent().args[0];
          expect(callArgs.backend).toBe(Backend.CPU);
          expect(callArgs.activationDataType).toBeUndefined();
+         expect(callArgs.mainExecutorSettings?.maxNumImages).toBeUndefined();
          expect(callArgs.mainExecutorSettings?.backendConfig).toBeUndefined();
 
          // -gpu.litertlm models coerce textBackend back to GPU (backend omitted).
@@ -875,6 +932,57 @@ describe('ModelLoaderService', () => {
          await load();
          callArgs = createEngine.calls.mostRecent().args[0];
          expect(callArgs.backend).toBeUndefined();
+         expect(callArgs.mainExecutorSettings?.maxNumImages).toBe(8);
+
+         // Turning Vision off on GPU text omits visionBackend and
+         // visionActivationDataType, sets maxNumImages to 0 (overriding core's
+         // default of 4), and triggers needsModelReload.
+         settingsStore.visionBackend = 'off';
+         settingsStore.visionPrecision = 'fp16';
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeTrue();
+         await load();
+         callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.visionBackend).toBeUndefined();
+         expect(callArgs.visionActivationDataType).toBeUndefined();
+         expect(callArgs.mainExecutorSettings?.maxNumImages).toBe(0);
+         expect(callArgs.audioBackend).toBe(Backend.GPU);
+
+         settingsStore.audioBackend = 'off';
+         settingsStore.audioPrecision = 'fp32';
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeTrue();
+         await load();
+         callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.visionBackend).toBeUndefined();
+         expect(callArgs.audioBackend).toBeUndefined();
+         expect(callArgs.audioActivationDataType).toBeUndefined();
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeFalse();
+
+         // Toggling useAutosizedRingbuffers updates backendConfig and triggers
+         // needsModelReload.
+         expect((callArgs.mainExecutorSettings?.backendConfig as
+                 GpuArtisanConfig | undefined)
+                    ?.use_autosized_ringbuffers)
+             .toBeTrue();
+         settingsStore.useAutosizedRingbuffers = false;
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeTrue();
+         await load();
+         callArgs = createEngine.calls.mostRecent().args[0];
+         expect(callArgs.mainExecutorSettings?.backendConfig).toEqual({
+           ...CORE_GPU_ARTISAN_DEFAULTS,
+           num_decode_steps_per_sync: 3,
+           use_autosized_ringbuffers: false,
+         });
+         expect(buildGpuBackendConfig(settingsStore.modelSettings)).toEqual({
+           ...CORE_GPU_ARTISAN_DEFAULTS,
+           num_decode_steps_per_sync: 3,
+           use_autosized_ringbuffers: false,
+         });
+         expect(modelLoader.needsModelReload(settingsStore.modelSettings))
+             .toBeFalse();
        });
   });
 

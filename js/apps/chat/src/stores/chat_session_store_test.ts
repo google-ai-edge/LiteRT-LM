@@ -316,6 +316,99 @@ describe('ChatSessionStore', () => {
     ]);
   });
 
+  it('sendMessage blocks disabled Vision and Audio media before loading or sending',
+     async () => {
+       await chatSessionStore.createConversationSession();
+       const image = chatSessionStore.createMedia(
+           'image', 'cat.png', new Blob([new Uint8Array([1])], {type: 'image/png'}));
+       const audio = chatSessionStore.createMedia(
+           'audio', 'meow.wav', new Blob([new Uint8Array([2])], {type: 'audio/wav'}));
+       const loadSpy = spyOn(modelLoader, 'loadModelWeights');
+       const sendSpy = spyOn(
+           chatSessionStore.activeConversation!, 'sendMessageStreaming');
+
+       settingsStore.visionBackend = 'off';
+       await chatSessionStore.sendMessage([
+         {type: 'text', text: 'Describe '},
+         {type: 'media', media: image},
+       ]);
+       expect(loadSpy).not.toHaveBeenCalled();
+       expect(sendSpy).not.toHaveBeenCalled();
+       expect(chatSessionStore.messages).toEqual([]);
+       expect(lastStatus)
+           .toBe(
+               'Vision is turned off in Experimental settings — remove the attachment or re-enable it before sending.');
+
+       settingsStore.audioBackend = 'off';
+       await chatSessionStore.sendMessage([
+         {type: 'media', media: image},
+         {type: 'media', media: audio},
+       ]);
+       expect(loadSpy).not.toHaveBeenCalled();
+       expect(sendSpy).not.toHaveBeenCalled();
+       expect(chatSessionStore.messages).toEqual([]);
+       expect(lastStatus)
+           .toBe(
+               'Vision and Audio are turned off in Experimental settings — remove the attachments or re-enable them before sending.');
+
+       settingsStore.visionBackend = 'gpu';
+       await chatSessionStore.sendMessage([{type: 'media', media: audio}]);
+       expect(loadSpy).not.toHaveBeenCalled();
+       expect(sendSpy).not.toHaveBeenCalled();
+       expect(lastStatus)
+           .toBe(
+               'Audio is turned off in Experimental settings — remove the attachment or re-enable it before sending.');
+     });
+
+  it('redoResponse blocks disabled media without truncating history and still allows text-placeholder redos',
+     async () => {
+       await chatSessionStore.createConversationSession();
+       const originalConv = chatSessionStore.activeConversation;
+       const image = chatSessionStore.createMedia(
+           'image', 'cat.png', new Blob([new Uint8Array([1])], {type: 'image/png'}));
+       chatSessionStore.messages = [
+         {
+           role: 'user',
+           text: 'What is [image: cat.png]?',
+           parts: [
+             {type: 'text', text: 'What is '},
+             {type: 'image', id: image.id, name: 'cat.png'},
+             {type: 'text', text: '?'},
+           ],
+           senderName: 'User',
+         },
+         {role: 'assistant', text: 'A cat', senderName: 'Assistant'},
+       ];
+       const sendSpy = spyOn(chatSessionStore, 'sendMessage').and.resolveTo();
+
+       // Turn Vision off after the original turn -> redo must not drop messages
+       // or send image data to the engine.
+       settingsStore.visionBackend = 'off';
+       await chatSessionStore.redoResponse(1);
+
+       expect(sendSpy).not.toHaveBeenCalled();
+       expect(chatSessionStore.messages.length).toBe(2);
+       expect(chatSessionStore.activeConversation).toBe(originalConv);
+       expect(lastStatus).toContain('Vision is turned off in Experimental settings');
+
+       // If media bytes are no longer in memory (e.g. after reload),
+       // getMessageParts falls back to text placeholders so redo still works.
+       chatSessionStore.messages = [
+         {
+           role: 'user',
+           text: '[image: gone.png]',
+           parts: [{type: 'image', id: 'missing-id', name: 'gone.png'}],
+           senderName: 'User',
+         },
+         {role: 'assistant', text: 'Old answer', senderName: 'Assistant'},
+       ];
+       await chatSessionStore.redoResponse(1);
+
+       expect(sendSpy).toHaveBeenCalledOnceWith([
+         {type: 'text', text: '[image: gone.png]'},
+       ]);
+     });
+
   it('sendMessage processes simulated function calls correctly', async () => {
     await chatSessionStore.createConversationSession();
 

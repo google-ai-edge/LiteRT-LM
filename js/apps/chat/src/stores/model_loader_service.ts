@@ -14,22 +14,24 @@
  * limitations under the License.
  */
 
-import {ActivationDataType, Backend, Engine, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
+import {ActivationDataType, Backend, Engine, type EngineSettings, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, type ModelInput, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
 
 import {teeStream} from '../tee_stream.js';
 
 import {LocalDirectoryService} from './local_directory_service.js';
 import {parseModelReference} from './model_reference.js';
-import {CPU_TEXT_WASM_WARNING_LABEL, CustomModel, EXPERIMENTAL_SETTING_KEYS, getModalityConfigs, LEGACY_MODEL_PATHS, MODALITIES, ModalityBackend, ModalityConfig, type ModelLists, ModelSettings} from './settings_store.js';
+import {CPU_TEXT_WASM_WARNING_LABEL, CustomModel, DEFAULT_EXPERIMENTAL_CONFIG, DEFAULT_MODEL_CONFIG, EXPERIMENTAL_SETTING_KEYS, getModalityConfigs, LEGACY_MODEL_PATHS, MODALITIES, ModalityBackend, ModalityConfig, type ModelLists, ModelSettings} from './settings_store.js';
 
-function toBackend({backend}: ModalityConfig): Backend {
+/** Converts a modality's backend setting into `@litert-lm/core`'s `Backend`. */
+export function toOptionalBackend({backend}: ModalityConfig): Backend|undefined {
+  if (backend === 'off') return undefined;
   return backend === 'cpu' ? Backend.CPU : Backend.GPU;
 }
 
 /** Returns the activation precision override, which only applies on GPU. */
-function toActivationDataType({backend, precision}: ModalityConfig):
+export function toActivationDataType({backend, precision}: ModalityConfig):
     ActivationDataType|undefined {
-  if (backend === 'cpu' || precision === 'default') return undefined;
+  if (backend !== 'gpu' || precision === 'default') return undefined;
   return precision === 'fp32' ? ActivationDataType.FLOAT32 :
                                 ActivationDataType.FLOAT16;
 }
@@ -82,7 +84,148 @@ export function formatModelLoadError(
  * Maximum number of images in a conversation. Artisan models reserve GPU memory
  * for this many images' embeddings when the model is loaded.
  */
-const MAX_NUM_IMAGES = 8;
+export const MAX_NUM_IMAGES = 8;
+
+/**
+ * `@litert-lm/core`'s effective defaults for `GpuArtisanConfig` (from C++
+ * `litert::lm::GpuArtisanConfig` in `llm_executor_settings.h`).
+ */
+export const CORE_GPU_ARTISAN_DEFAULTS: Readonly<GpuArtisanConfig> = {
+  num_output_candidates: 1,
+  wait_for_weight_uploads: false,
+  num_decode_steps_per_sync: 1,
+  sequence_batch_size: 0,
+  supported_lora_ranks: [],
+  max_top_k: 64,
+  enable_decode_logits: false,
+  enable_external_embeddings: false,
+  use_submodel: false,
+  use_autosized_ringbuffers: false,
+};
+
+type EngineOptionsInput = ModelSettings&ModelLists;
+
+/**
+ * Builds the `GpuArtisanConfig` used by the app on GPU text, starting from
+ * `CORE_GPU_ARTISAN_DEFAULTS`. Shared with `buildModelCodeSnippet` so the app
+ * and generated snippet cannot drift. Returns `undefined` when text runs on
+ * CPU.
+ */
+export function buildGpuBackendConfig(settings: EngineOptionsInput):
+    GpuArtisanConfig|undefined {
+  const modalities = getModalityConfigs(settings);
+  if (modalities.text.backend === 'cpu') {
+    return undefined;
+  }
+  const samplerType = settings.samplerType ?? DEFAULT_MODEL_CONFIG.samplerType;
+  const topK = settings.topK ?? DEFAULT_MODEL_CONFIG.topK;
+  // Greedy sampling uses k=1 and skips the reload that changes max_top_k
+  // (see `ModelLoaderService.needsModelReload`).
+  const maxTopK =
+      samplerType === 'greedy' ? DEFAULT_MODEL_CONFIG.topK : Math.max(1, topK);
+  return {
+    ...CORE_GPU_ARTISAN_DEFAULTS,
+    supported_lora_ranks: [...CORE_GPU_ARTISAN_DEFAULTS.supported_lora_ranks],
+    num_decode_steps_per_sync: 3,
+    max_top_k: maxTopK,
+    use_autosized_ringbuffers: settings.useAutosizedRingbuffers ??
+        DEFAULT_EXPERIMENTAL_CONFIG.useAutosizedRingbuffers,
+  };
+}
+
+/** Engine options derived from `ModelSettings` for `Engine.create()`. */
+export interface UserEngineOptions {
+  backend?: Backend;
+  activationDataType?: ActivationDataType;
+  maxNumTokens: number;
+  maxNumImages?: number;
+  backendConfig?: GpuArtisanConfig;
+  visionBackend?: Backend;
+  visionActivationDataType?: ActivationDataType;
+  audioBackend?: Backend;
+  audioActivationDataType?: ActivationDataType;
+  speculativeDecodingConfig?: {mode: SpeculativeDecodingMode};
+}
+
+/**
+ * Derives `@litert-lm/core` `Engine.create()` options from the user's current
+ * settings. Shared with the code snippet generator so the two cannot drift.
+ */
+export function getUserEngineOptions(
+    settings: EngineOptionsInput): UserEngineOptions {
+  const modalities = getModalityConfigs(settings);
+  const useCpuText = modalities.text.backend === 'cpu';
+  const visionEnabled = modalities.vision.backend !== 'off';
+  const contextLength =
+      settings.contextLength ?? DEFAULT_MODEL_CONFIG.contextLength;
+  return {
+    backend: useCpuText ? Backend.CPU : undefined,
+    activationDataType: toActivationDataType(modalities.text),
+    maxNumTokens: contextLength,
+    maxNumImages: !useCpuText ? (visionEnabled ? MAX_NUM_IMAGES : 0) :
+                                undefined,
+    backendConfig: buildGpuBackendConfig(settings),
+    visionBackend: toOptionalBackend(modalities.vision),
+    visionActivationDataType: toActivationDataType(modalities.vision),
+    audioBackend: toOptionalBackend(modalities.audio),
+    audioActivationDataType: toActivationDataType(modalities.audio),
+    speculativeDecodingConfig: settings.enableSpeculativeDecoding ?
+        {mode: SpeculativeDecodingMode.ADAPTIVE} :
+        undefined,
+  };
+}
+
+/**
+ * Builds the `EngineSettings` passed to `Engine.create()` for `settings`
+ * (excluding the UI-only `benchmarkEnabled` telemetry flag).
+ */
+export function buildUserEngineSettings(
+    model: ModelInput, settings: EngineOptionsInput): EngineSettings {
+  const engineOpts = getUserEngineOptions(settings);
+  return {
+    model,
+    // Without a backend, Engine.create() picks GPU or GPU_ARTISAN.
+    ...(engineOpts.backend !== undefined ? {backend: engineOpts.backend} : {}),
+    ...(engineOpts.activationDataType !== undefined ?
+            {activationDataType: engineOpts.activationDataType} :
+            {}),
+    mainExecutorSettings: {
+      maxNumTokens: engineOpts.maxNumTokens,
+      // Artisan (GPU_ARTISAN) models reserve GPU memory up front for this many
+      // images' embeddings per conversation (C++ defaults max_num_images to 4
+      // even when visionBackend is unset). Pass 0 when Vision is off on GPU
+      // text to skip that allocation, and omit when text runs on CPU.
+      ...(engineOpts.maxNumImages !== undefined ?
+              {maxNumImages: engineOpts.maxNumImages} :
+              {}),
+      ...(engineOpts.backendConfig !== undefined ?
+              {backendConfig: engineOpts.backendConfig} :
+              {}),
+    },
+    ...(engineOpts.visionBackend !== undefined ?
+            {visionBackend: engineOpts.visionBackend} :
+            {}),
+    ...(engineOpts.visionActivationDataType !== undefined ? {
+      visionActivationDataType: engineOpts.visionActivationDataType,
+    } :
+                                                            {}),
+    ...(engineOpts.audioBackend !== undefined ?
+            {audioBackend: engineOpts.audioBackend} :
+            {}),
+    ...(engineOpts.audioActivationDataType !== undefined ? {
+      audioActivationDataType: engineOpts.audioActivationDataType,
+    } :
+                                                           {}),
+    // The drafter can only be loaded when the engine is created, so this can't
+    // be changed per session. ADAPTIVE only speculates while it's faster than
+    // decoding normally. Models without a drafter can't use speculative
+    // decoding.
+    ...(engineOpts.speculativeDecodingConfig ? {
+      speculativeDecodingConfig: engineOpts.speculativeDecodingConfig,
+    } :
+                                               {}),
+  };
+}
 
 /**
  * Returns a model's key in `ModelLoaderService.cachedModels`,
@@ -218,8 +361,10 @@ export class ModelLoaderService {
 
   needsModelReload(settings: ModelSettings): boolean {
     if (!this.engine || !this.loadedSettings) return true;
-    const topKChanged = settings.samplerType !== 'greedy' &&
-        this.loadedSettings.topK !== settings.topK;
+    const loadedMaxTopK = buildGpuBackendConfig(this.loadedSettings)?.max_top_k;
+    const nextMaxTopK = buildGpuBackendConfig(settings)?.max_top_k;
+    const topKChanged =
+        settings.samplerType !== 'greedy' && loadedMaxTopK !== nextMaxTopK;
     return this.loadedSettings.selectedModelPath !==
         settings.selectedModelPath ||
         this.loadedSettings.contextLength !== settings.contextLength ||
@@ -334,7 +479,6 @@ export class ModelLoaderService {
     const modelKey = getModelKey(modelPath);
     const modalities = getModalityConfigs(settings);
     const textBackend = modalities.text.backend;
-    const useCpuText = textBackend === 'cpu';
 
     this.isModelLoading = true;
     this.isDownloadAborted = false;
@@ -517,48 +661,8 @@ export class ModelLoaderService {
       this.updateStatus(`Compiling Model (${modelFilename})...`);
 
       this.engine = await this.createEngine({
-        model: modelInput,
-        // Without a backend, Engine.create() picks GPU or GPU_ARTISAN.
-        ...(useCpuText ? {backend: Backend.CPU} : {}),
-        activationDataType: toActivationDataType(modalities.text),
-        mainExecutorSettings: useCpuText ? {
-          maxNumTokens: settings.contextLength,
-        } : {
-          maxNumTokens: settings.contextLength,
-          // Artisan (GPU_ARTISAN) models reserve GPU memory for the embeddings
-          // of this many images per conversation up front, and can't take
-          // images if it's unset.
-          maxNumImages: MAX_NUM_IMAGES,
-          backendConfig: {
-            num_output_candidates: 1,
-            wait_for_weight_uploads: true,
-            num_decode_steps_per_sync: 3,
-            sequence_batch_size: 0,
-            supported_lora_ranks: [] as number[],
-            max_top_k: Math.max(1, settings.topK),
-            enable_decode_logits: false,
-            enable_external_embeddings: false,
-            use_submodel: false,
-            use_autosized_ringbuffers: true,
-          } as GpuArtisanConfig,
-        },
-        // Always enable image input. On web, only one vision signature is
-        // loaded by default to fit in the wasm heap.
-        visionBackend: toBackend(modalities.vision),
-        visionActivationDataType: toActivationDataType(modalities.vision),
-        // Always enable audio input. On GPU, the audio encoder's weights are
-        // released from the wasm heap after they are uploaded.
-        audioBackend: toBackend(modalities.audio),
-        audioActivationDataType: toActivationDataType(modalities.audio),
-        // The drafter can only be loaded when the engine is created, so this
-        // can't be changed per session. ADAPTIVE only speculates while it's
-        // faster than decoding normally. Models without a drafter can't use
-        // speculative decoding.
-        ...(settings.enableSpeculativeDecoding ? {
-          speculativeDecodingConfig: {mode: SpeculativeDecodingMode.ADAPTIVE}
-        } :
-                                     {}),
-        benchmarkEnabled: true
+        ...buildUserEngineSettings(modelInput, settings),
+        benchmarkEnabled: true,
       });
 
       this.loadedSettings = structuredClone(settings);

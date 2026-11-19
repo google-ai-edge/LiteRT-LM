@@ -82,6 +82,7 @@ describe('litert-lm-chat-app', () => {
     mockSettings.textPrecision = 'default';
     mockSettings.visionPrecision = 'default';
     mockSettings.audioPrecision = 'default';
+    mockSettings.useAutosizedRingbuffers = true;
     mockSettings.customModels = [];
     mockSettings.localDirModels = [];
 

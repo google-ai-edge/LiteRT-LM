@@ -21,7 +21,7 @@ import {CodeSandbox} from '../components/code_sandbox.js';
 import {createObjectUrl} from '../components/util.js';
 
 import {ModelLoaderService} from './model_loader_service.js';
-import {findModel, migrateModelPath, ModelSettings, SettingsStore} from './settings_store.js';
+import {ExperimentalSettingsInput, findModel, getModalityConfigs, migrateModelPath, ModelSettings, SettingsStore} from './settings_store.js';
 import {createEnabledTools} from './tools.js';
 
 const ConversationMetaSchema = z.object({
@@ -126,6 +126,29 @@ export function promptPartsToText(parts: PromptPart[]): string {
 /** Whether a prompt has anything worth sending. */
 export function promptHasContent(parts: PromptPart[]): boolean {
   return parts.some(p => p.type === 'media' || p.text.trim().length > 0);
+}
+
+/**
+ * Returns an actionable status message when `parts` include image or audio
+ * media whose modality is turned off in Experimental settings, or `null` when
+ * all attached media are enabled.
+ */
+export function getDisabledMediaMessage(
+    parts: readonly PromptPart[],
+    settings: ExperimentalSettingsInput): string|null {
+  const modalities = getModalityConfigs(settings);
+  const hasDisabledImage = modalities.vision.backend === 'off' &&
+      parts.some(p => p.type === 'media' && p.media.kind === 'image');
+  const hasDisabledAudio = modalities.audio.backend === 'off' &&
+      parts.some(p => p.type === 'media' && p.media.kind === 'audio');
+  if (!hasDisabledImage && !hasDisabledAudio) {
+    return null;
+  }
+  if (hasDisabledImage && hasDisabledAudio) {
+    return 'Vision and Audio are turned off in Experimental settings — remove the attachments or re-enable them before sending.';
+  }
+  const modality = hasDisabledImage ? 'Vision' : 'Audio';
+  return `${modality} is turned off in Experimental settings — remove the attachment or re-enable it before sending.`;
 }
 
 /** Trims leading and trailing whitespace from a prompt. */
@@ -578,6 +601,12 @@ export class ChatSessionStore {
         typeof prompt === 'string' ? [{type: 'text', text: prompt}] : prompt);
     if (this.isGenerating || !promptHasContent(parts)) return;
 
+    const disabledMediaMessage = getDisabledMediaMessage(parts, this.settings);
+    if (disabledMediaMessage) {
+      this.updateStatus(disabledMediaMessage);
+      return;
+    }
+
     const settings = this.settings.modelSettings;
     if (this.modelLoader.needsModelReload(settings)) {
       await this.modelLoader.loadModelWeights(settings, async () => {
@@ -802,6 +831,18 @@ export class ChatSessionStore {
       return;
     }
 
+    const retryPrompt = previousUserMsg.parts ?
+        this.getMessageParts(previousUserMsg) :
+        previousUserMsg.text;
+    if (Array.isArray(retryPrompt)) {
+      const disabledMediaMessage =
+          getDisabledMediaMessage(retryPrompt, this.settings);
+      if (disabledMediaMessage) {
+        this.updateStatus(disabledMediaMessage);
+        return;
+      }
+    }
+
     this.messages = this.messages.slice(0, targetMessageIndex - 1);
     this.commitActiveChatHistory();
 
@@ -810,9 +851,7 @@ export class ChatSessionStore {
       this.activeConversation = null;
     }
 
-    await this.sendMessage(
-        previousUserMsg.parts ? this.getMessageParts(previousUserMsg) :
-                                previousUserMsg.text);
+    await this.sendMessage(retryPrompt);
   }
 
   /**

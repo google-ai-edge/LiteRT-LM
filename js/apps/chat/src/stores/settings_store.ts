@@ -27,17 +27,56 @@ export const CustomModelSchema = z.object({
 /** Type for custom model stored in the file system. */
 export type CustomModel = z.infer<typeof CustomModelSchema>;
 
-/** Compute backend choice for a model modality in experimental settings. */
+/** Compute backend choice for the text modality (`'gpu'` or `'cpu'`). */
 export const ModalityBackendSchema = z.enum(['gpu', 'cpu']);
 
 /** Compute backend choice (`'gpu'` or `'cpu'`). */
 export type ModalityBackend = z.infer<typeof ModalityBackendSchema>;
+
+/** Compute backend choice for optional modalities (`'gpu'`, `'cpu'`, or `'off'`). */
+export const OptionalModalityBackendSchema = z.enum(['gpu', 'cpu', 'off']);
+
+/** Compute backend choice for Vision and Audio (`'gpu'`, `'cpu'`, or `'off'`). */
+export type OptionalModalityBackend =
+    z.infer<typeof OptionalModalityBackendSchema>;
 
 /** Activation precision override for GPU modalities. */
 export const ActivationPrecisionSchema = z.enum(['default', 'fp16', 'fp32']);
 
 /** Activation precision override (`'default'`, `'fp16'`, or `'fp32'`). */
 export type ActivationPrecision = z.infer<typeof ActivationPrecisionSchema>;
+
+/** The settings in the "Experimental" tab, which can be reset together. */
+export const EXPERIMENTAL_SETTING_KEYS = [
+  'textBackend',
+  'visionBackend',
+  'audioBackend',
+  'textPrecision',
+  'visionPrecision',
+  'audioPrecision',
+  'useAutosizedRingbuffers',
+] as const;
+
+type ExperimentalSettingKey = (typeof EXPERIMENTAL_SETTING_KEYS)[number];
+
+/** Default values for experimental modality backend and precision settings. */
+export const DEFAULT_EXPERIMENTAL_CONFIG: {
+  textBackend: ModalityBackend;
+  visionBackend: OptionalModalityBackend;
+  audioBackend: OptionalModalityBackend;
+  textPrecision: ActivationPrecision;
+  visionPrecision: ActivationPrecision;
+  audioPrecision: ActivationPrecision;
+  useAutosizedRingbuffers: boolean;
+} = {
+  textBackend: 'gpu',
+  visionBackend: 'gpu',
+  audioBackend: 'gpu',
+  textPrecision: 'default',
+  visionPrecision: 'default',
+  audioPrecision: 'default',
+  useAutosizedRingbuffers: true,
+};
 
 /** Schema for inference configuration settings. */
 export const SettingsSchema = z.object({
@@ -57,12 +96,20 @@ export const SettingsSchema = z.object({
   systemPrompt: z.string(),
   /** Names of the tools in `CHAT_TOOLS` that the model can't use. */
   disabledTools: z.array(z.string()),
-  textBackend: ModalityBackendSchema.default('gpu'),
-  visionBackend: ModalityBackendSchema.default('gpu'),
-  audioBackend: ModalityBackendSchema.default('gpu'),
-  textPrecision: ActivationPrecisionSchema.default('default'),
-  visionPrecision: ActivationPrecisionSchema.default('default'),
-  audioPrecision: ActivationPrecisionSchema.default('default'),
+  textBackend:
+      ModalityBackendSchema.default(DEFAULT_EXPERIMENTAL_CONFIG.textBackend),
+  visionBackend: OptionalModalityBackendSchema.default(
+      DEFAULT_EXPERIMENTAL_CONFIG.visionBackend),
+  audioBackend: OptionalModalityBackendSchema.default(
+      DEFAULT_EXPERIMENTAL_CONFIG.audioBackend),
+  textPrecision: ActivationPrecisionSchema.default(
+      DEFAULT_EXPERIMENTAL_CONFIG.textPrecision),
+  visionPrecision: ActivationPrecisionSchema.default(
+      DEFAULT_EXPERIMENTAL_CONFIG.visionPrecision),
+  audioPrecision: ActivationPrecisionSchema.default(
+      DEFAULT_EXPERIMENTAL_CONFIG.audioPrecision),
+  useAutosizedRingbuffers:
+      z.boolean().default(DEFAULT_EXPERIMENTAL_CONFIG.useAutosizedRingbuffers),
   customModels: z.array(CustomModelSchema).default([]),
   localDirModels: z.array(CustomModelSchema).default([]),
 });
@@ -88,7 +135,7 @@ export type ModelLists =
     Partial<Pick<Settings, 'customModels'|'localDirModels'>>;
 
 /** The settings in the "Model Config" tab, which can be reset together. */
-const DEFAULT_MODEL_CONFIG = {
+export const DEFAULT_MODEL_CONFIG = {
   contextLength: 4096,
   maxOutputTokens: 2048,
   samplerType: 'greedy',
@@ -100,30 +147,9 @@ const DEFAULT_MODEL_CONFIG = {
 };
 
 /** The settings in the "System Prompt" tab, which can be reset together. */
-const DEFAULT_SYSTEM_PROMPT_CONFIG = {
+export const DEFAULT_SYSTEM_PROMPT_CONFIG = {
   systemPrompt: '',
   disabledTools: [] as string[],
-};
-
-/** The settings in the "Experimental" tab, which can be reset together. */
-export const EXPERIMENTAL_SETTING_KEYS = [
-  'textBackend',
-  'visionBackend',
-  'audioBackend',
-  'textPrecision',
-  'visionPrecision',
-  'audioPrecision',
-] as const;
-
-type ExperimentalSettingKey = (typeof EXPERIMENTAL_SETTING_KEYS)[number];
-
-const DEFAULT_EXPERIMENTAL_CONFIG: Pick<Settings, ExperimentalSettingKey> = {
-  textBackend: 'gpu',
-  visionBackend: 'gpu',
-  audioBackend: 'gpu',
-  textPrecision: 'default',
-  visionPrecision: 'default',
-  audioPrecision: 'default',
 };
 
 /** A group of settings that can be reset to their defaults together. */
@@ -296,28 +322,50 @@ export type Modality = (typeof MODALITIES)[number];
 
 /** The backend and activation precision that a modality runs with. */
 export interface ModalityConfig {
-  backend: ModalityBackend;
+  backend: OptionalModalityBackend;
   precision: ActivationPrecision;
+}
+
+/** Resolved modality configurations across Text, Vision, and Audio. */
+export interface ModalityConfigs {
+  text: {backend: ModalityBackend; precision: ActivationPrecision};
+  vision: ModalityConfig;
+  audio: ModalityConfig;
 }
 
 /** Settings subset used to resolve per-modality backends and notes. */
 export type ExperimentalSettingsInput =
-    Pick<Settings, 'selectedModelPath'|ExperimentalSettingKey>&ModelLists;
+    Pick<Settings, 'selectedModelPath'>&
+    Partial<Pick<Settings, ExperimentalSettingKey>>&ModelLists;
 
 /**
  * Returns the backend and precision each modality runs with. Text always runs
  * on GPU for WebGPU-only (`-gpu.litertlm`) models.
  */
-export function getModalityConfigs(settings: ExperimentalSettingsInput):
-    Record<Modality, ModalityConfig> {
-  const gpuOnlyText = isGpuOnlyTextModel(settings.selectedModelPath, settings);
+export function getModalityConfigs(
+    settings: ExperimentalSettingsInput): ModalityConfigs {
+  const gpuOnlyText =
+      isGpuOnlyTextModel(settings.selectedModelPath ?? '', settings);
   return {
     text: {
-      backend: gpuOnlyText ? 'gpu' : settings.textBackend,
-      precision: settings.textPrecision,
+      backend: gpuOnlyText ?
+          'gpu' :
+          (settings.textBackend ?? DEFAULT_EXPERIMENTAL_CONFIG.textBackend),
+      precision:
+          settings.textPrecision ?? DEFAULT_EXPERIMENTAL_CONFIG.textPrecision,
     },
-    vision: {backend: settings.visionBackend, precision: settings.visionPrecision},
-    audio: {backend: settings.audioBackend, precision: settings.audioPrecision},
+    vision: {
+      backend:
+          settings.visionBackend ?? DEFAULT_EXPERIMENTAL_CONFIG.visionBackend,
+      precision: settings.visionPrecision ??
+          DEFAULT_EXPERIMENTAL_CONFIG.visionPrecision,
+    },
+    audio: {
+      backend:
+          settings.audioBackend ?? DEFAULT_EXPERIMENTAL_CONFIG.audioBackend,
+      precision:
+          settings.audioPrecision ?? DEFAULT_EXPERIMENTAL_CONFIG.audioPrecision,
+    },
   };
 }
 
@@ -344,7 +392,8 @@ export interface ExperimentalNote {
 export function getExperimentalNote(
     settings: ExperimentalSettingsInput,
     cachedSizeBytes?: number): ExperimentalNote {
-  if (isGpuOnlyTextModel(settings.selectedModelPath, settings)) {
+  const modelPath = settings.selectedModelPath ?? '';
+  if (isGpuOnlyTextModel(modelPath, settings)) {
     return {
       text:
           'This model\'s text is WebGPU-only (-gpu.litertlm). Use a standard .litertlm for CPU.',
@@ -353,13 +402,12 @@ export function getExperimentalNote(
   }
   const configs = getModalityConfigs(settings);
   if (configs.text.backend === 'cpu') {
-    const cpuMemoryWarning = getCpuTextMemoryWarning(
-        settings.selectedModelPath, settings, cachedSizeBytes);
+    const cpuMemoryWarning =
+        getCpuTextMemoryWarning(modelPath, settings, cachedSizeBytes);
     if (cpuMemoryWarning !== null) {
       return {text: cpuMemoryWarning, warning: true};
     }
-    if (getKnownModelSizeBytes(
-            settings.selectedModelPath, settings, cachedSizeBytes) === null) {
+    if (getKnownModelSizeBytes(modelPath, settings, cachedSizeBytes) === null) {
       return {
         text: `Text CPU runs in WASM (FP32). May not fit in WASM memory (${
             CPU_TEXT_WASM_WARNING_LABEL} practical limit); loading may fail.`,
@@ -372,6 +420,13 @@ export function getExperimentalNote(
       warning: false,
     };
   }
+  if (configs.vision.backend === 'off' || configs.audio.backend === 'off') {
+    return {
+      text:
+          'Off modalities skip weight loading to save memory. GPU defaults: Text FP16, Vision/Audio FP32.',
+      warning: false,
+    };
+  }
   if (configs.vision.backend === 'cpu' || configs.audio.backend === 'cpu') {
     return {
       text:
@@ -381,14 +436,14 @@ export function getExperimentalNote(
   }
   return {
     text:
-        'Experimental overrides. GPU defaults: Text FP16, Vision & Audio FP32.',
+        'Experimental overrides. Set Vision or Audio to Off to skip loading weights.',
     warning: false,
   };
 }
 
-/** Summary of non-default modality backend overrides (`WebGPU · CPU` / `CPU`). */
+/** Summary of non-default modality backend or disabled-modality overrides. */
 export interface NonDefaultBackendSummary {
-  label: 'WebGPU · CPU'|'CPU';
+  label: 'WebGPU · CPU'|'CPU'|'Text only'|'No Vision'|'No Audio';
   detail: string;
 }
 
@@ -400,21 +455,126 @@ export function getNonDefaultBackendSummary(
     settings: Parameters<typeof getModalityConfigs>[0]):
     NonDefaultBackendSummary|null {
   const configs = getModalityConfigs(settings);
-  const cpuModalities = MODALITIES.filter(m => configs[m].backend === 'cpu')
-                            .map(m => m[0].toUpperCase() + m.slice(1));
-  if (cpuModalities.length === 0) {
+  const cap = (m: Modality) => m[0].toUpperCase() + m.slice(1);
+  const enabledModalities =
+      MODALITIES.filter(m => configs[m].backend !== 'off');
+  const offModalities =
+      MODALITIES.filter(m => configs[m].backend === 'off').map(cap);
+  const cpuModalities =
+      enabledModalities.filter(m => configs[m].backend === 'cpu').map(cap);
+
+  if (cpuModalities.length === 0 && offModalities.length === 0) {
     return null;
   }
-  if (cpuModalities.length === MODALITIES.length) {
+  if (cpuModalities.length === 0) {
+    if (offModalities.length === 2) {
+      return {
+        label: 'Text only',
+        detail: 'Modalities: Text only on WebGPU (Vision, Audio off)',
+      };
+    }
+    const offName = offModalities[0] as 'Vision' | 'Audio';
+    const onNames = enabledModalities.map(cap).join(', ');
+    return {
+      label: offName === 'Vision' ? 'No Vision' : 'No Audio',
+      detail: `Modalities: ${offName} off (${onNames} on WebGPU)`,
+    };
+  }
+  const offSuffix =
+      offModalities.length > 0 ? `; ${offModalities.join(', ')} off` : '';
+  if (cpuModalities.length === enabledModalities.length) {
     return {
       label: 'CPU',
-      detail: 'Backend: CPU (Text, Vision, Audio in WASM FP32)',
+      detail: `Backend: CPU (${enabledModalities.map(cap).join(', ')} in WASM FP32${offSuffix})`,
     };
   }
   return {
     label: 'WebGPU · CPU',
-    detail: `Backend: WebGPU · CPU (${cpuModalities.join(', ')} on CPU)`,
+    detail: `Backend: WebGPU · CPU (${cpuModalities.join(', ')} on CPU${offSuffix})`,
   };
+}
+
+/** Media modality availability state across Vision and Audio. */
+export type MediaAvailability = 'both'|'vision-only'|'audio-only'|'none';
+
+/** Copy and input configuration for the chat UI given enabled media modalities. */
+export interface MediaUiCopy {
+  availability: MediaAvailability;
+  mediaAccept: string;
+  addMediaTitle: string;
+  addMediaAriaLabel: string;
+  editorPlaceholder: string;
+  capabilityLabel: string;
+  capabilityIcon: 'vision'|'audio'|'text';
+  heroModeSuffix: string;
+  heroCapabilitiesSentence: string;
+}
+
+const MEDIA_UI_COPY: Readonly<Record<MediaAvailability, MediaUiCopy>> = {
+  'both': {
+    availability: 'both',
+    mediaAccept: 'image/*,audio/*',
+    addMediaTitle: 'Add images or audio',
+    addMediaAriaLabel: 'Add images or audio',
+    editorPlaceholder: 'Message LiteRT-LM... Drop or attach images & audio.',
+    capabilityLabel: 'Vision & Audio',
+    capabilityIcon: 'vision',
+    heroModeSuffix: '',
+    heroCapabilitiesSentence:
+        'Attach images or audio inline, verify math in the JS sandbox, and preview generated HTML with zero server round-trips.',
+  },
+  'vision-only': {
+    availability: 'vision-only',
+    mediaAccept: 'image/*',
+    addMediaTitle: 'Add images (Audio is turned off in Experimental settings)',
+    addMediaAriaLabel:
+        'Add images (Audio is turned off in Experimental settings)',
+    editorPlaceholder: 'Message LiteRT-LM... Drop or attach images.',
+    capabilityLabel: 'Vision',
+    capabilityIcon: 'vision',
+    heroModeSuffix: '',
+    heroCapabilitiesSentence:
+        'Attach images inline, verify math in the JS sandbox, and preview generated HTML with zero server round-trips.',
+  },
+  'audio-only': {
+    availability: 'audio-only',
+    mediaAccept: 'audio/*',
+    addMediaTitle: 'Add audio (Vision is turned off in Experimental settings)',
+    addMediaAriaLabel:
+        'Add audio (Vision is turned off in Experimental settings)',
+    editorPlaceholder: 'Message LiteRT-LM... Drop or attach audio.',
+    capabilityLabel: 'Audio',
+    capabilityIcon: 'audio',
+    heroModeSuffix: '',
+    heroCapabilitiesSentence:
+        'Attach audio inline, verify math in the JS sandbox, and preview generated HTML with zero server round-trips.',
+  },
+  'none': {
+    availability: 'none',
+    mediaAccept: '',
+    addMediaTitle: 'Vision and Audio are turned off in Experimental settings',
+    addMediaAriaLabel:
+        'Add images or audio (disabled: Vision and Audio are turned off in Experimental settings)',
+    editorPlaceholder: 'Message LiteRT-LM...',
+    capabilityLabel: 'Text-Only Mode',
+    capabilityIcon: 'text',
+    heroModeSuffix: ' in text-only mode',
+    heroCapabilitiesSentence:
+        'Verify math in the JS sandbox and preview generated HTML with zero server round-trips.',
+  },
+};
+
+/**
+ * Returns the UI copy and file-picker configuration for the current Vision and
+ * Audio modality states.
+ */
+export function getMediaUiCopy(
+    visionEnabled: boolean, audioEnabled: boolean): MediaUiCopy {
+  const key: MediaAvailability = visionEnabled && audioEnabled ? 'both' :
+      visionEnabled                                            ? 'vision-only' :
+      audioEnabled                                             ? 'audio-only' :
+                                                                 'none';
+  return MEDIA_UI_COPY[key];
 }
 
 /** Store for managing inference configuration and persistence. */
@@ -432,14 +592,18 @@ export class SettingsStore implements Settings {
   systemPrompt = DEFAULT_SYSTEM_PROMPT_CONFIG.systemPrompt;
   disabledTools: string[] = [...DEFAULT_SYSTEM_PROMPT_CONFIG.disabledTools];
   textBackend: ModalityBackend = DEFAULT_EXPERIMENTAL_CONFIG.textBackend;
-  visionBackend: ModalityBackend = DEFAULT_EXPERIMENTAL_CONFIG.visionBackend;
-  audioBackend: ModalityBackend = DEFAULT_EXPERIMENTAL_CONFIG.audioBackend;
+  visionBackend: OptionalModalityBackend =
+      DEFAULT_EXPERIMENTAL_CONFIG.visionBackend;
+  audioBackend: OptionalModalityBackend =
+      DEFAULT_EXPERIMENTAL_CONFIG.audioBackend;
   textPrecision: ActivationPrecision =
       DEFAULT_EXPERIMENTAL_CONFIG.textPrecision;
   visionPrecision: ActivationPrecision =
       DEFAULT_EXPERIMENTAL_CONFIG.visionPrecision;
   audioPrecision: ActivationPrecision =
       DEFAULT_EXPERIMENTAL_CONFIG.audioPrecision;
+  useAutosizedRingbuffers: boolean =
+      DEFAULT_EXPERIMENTAL_CONFIG.useAutosizedRingbuffers;
   customModels: CustomModel[] = [];
   localDirModels: CustomModel[] = [];
 
@@ -462,6 +626,7 @@ export class SettingsStore implements Settings {
       textPrecision: this.textPrecision,
       visionPrecision: this.visionPrecision,
       audioPrecision: this.audioPrecision,
+      useAutosizedRingbuffers: this.useAutosizedRingbuffers,
     };
   }
 
@@ -502,6 +667,8 @@ export class SettingsStore implements Settings {
           this.visionPrecision =
               validated.visionPrecision ?? this.visionPrecision;
           this.audioPrecision = validated.audioPrecision ?? this.audioPrecision;
+          this.useAutosizedRingbuffers = validated.useAutosizedRingbuffers ??
+              this.useAutosizedRingbuffers;
           this.customModels = validated.customModels ?? [];
           this.localDirModels = validated.localDirModels ?? [];
           coerceGpuOnlyTextBackend(this);
@@ -536,6 +703,7 @@ export class SettingsStore implements Settings {
         textPrecision: this.textPrecision,
         visionPrecision: this.visionPrecision,
         audioPrecision: this.audioPrecision,
+        useAutosizedRingbuffers: this.useAutosizedRingbuffers,
         customModels: this.customModels,
         localDirModels: this.localDirModels,
       };
