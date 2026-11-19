@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -681,10 +682,10 @@ absl::StatusOr<Responses> ScoreSingleTokenTargets(
 
 }  // namespace
 
-absl::StatusOr<Responses> Prefill(LlmExecutor& executor, ExecutorInputs& inputs,
-                                  bool wait_for_completion,
-                                  std::optional<BenchmarkInfo>& benchmark_info,
-                                  RandomState& random_state) {
+absl::StatusOr<Responses> Prefill(
+    LlmExecutor& executor, ExecutorInputs& inputs, bool wait_for_completion,
+    std::optional<BenchmarkInfo>& benchmark_info, RandomState& random_state,
+    std::atomic<uint64_t>* absl_nullable progress_counter) {
   const int max_num_tokens = TryGetMaxNumTokens(executor);
   ABSL_ASSIGN_OR_RETURN(auto text_data, inputs.GetTextDataPtr());
   RET_CHECK(text_data != nullptr) << "text_data must not be null.";
@@ -723,6 +724,7 @@ absl::StatusOr<Responses> Prefill(LlmExecutor& executor, ExecutorInputs& inputs,
   // Wait for prefill to complete if benchmark mode is enabled.
   params.SetWaitForCompletion(wait_for_completion | benchmark_info.has_value());
   params.SetRandomState(&random_state);
+  params.SetProgressCounter(progress_counter);
   if (benchmark_info.has_value()) {
     ABSL_RETURN_IF_ERROR(benchmark_info->TimePrefillTurnStart());
   }

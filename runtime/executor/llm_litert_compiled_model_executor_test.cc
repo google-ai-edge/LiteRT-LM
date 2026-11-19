@@ -15,6 +15,7 @@
 #include "runtime/executor/llm_litert_compiled_model_executor.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -407,7 +408,11 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest, PrefillTest) {
       CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 3}));
   inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
 
-  EXPECT_OK(executor->Prefill(inputs));
+  ExecutorPrefillParams params;
+  std::atomic<uint64_t> progress_counter{0};
+  params.SetProgressCounter(&progress_counter);
+  EXPECT_OK(executor->Prefill(inputs, params));
+  EXPECT_GT(progress_counter.load(std::memory_order_relaxed), 0);
 
   ASSERT_OK_AND_ASSIGN(auto current_step, executor->GetCurrentStep());
 
@@ -2315,6 +2320,35 @@ TEST(LlmLiteRtCompiledModelExecutorDynamicTest, PrefillTest) {
     ASSERT_OK_AND_ASSIGN(auto current_step, executor->GetCurrentStep());
     EXPECT_EQ(current_step, 3 * (i + 1));
   }
+}
+
+TEST(LlmLiteRtCompiledModelExecutorDynamicTest,
+     PrefillRecordsProgressPerChunk) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  std::unique_ptr<ModelResources> model_resources;
+  std::unique_ptr<LlmLiteRtCompiledModelExecutorDynamic> executor;
+  {
+    ASSERT_OK_AND_ASSIGN(auto p,
+                         CreateDynamicExecutor(env, kTestDynamicModelPath,
+                                               /*kv_increment_size=*/8,
+                                               /*prefill_chunk_size=*/2));
+    std::tie(model_resources, executor) = std::move(p);
+  }
+
+  ExecutorInputs inputs;
+  const std::vector<int> input_tokens = {1, 2, 3, 4, 5};
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto input_tokens_buffer,
+      CopyToTensorBuffer<int>(absl::MakeSpan(input_tokens), {1, 5}));
+  inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
+
+  ExecutorPrefillParams params;
+  std::atomic<uint64_t> progress_counter{0};
+  params.SetProgressCounter(&progress_counter);
+  EXPECT_OK(executor->Prefill(inputs, params));
+  // 5 tokens with prefill_chunk_size=2 runs 3 chunks (2 + 2 + 1).
+  EXPECT_EQ(progress_counter.load(std::memory_order_relaxed), 3);
 }
 
 TEST(LlmLiteRtCompiledModelExecutorDynamicTest, ResetTest) {

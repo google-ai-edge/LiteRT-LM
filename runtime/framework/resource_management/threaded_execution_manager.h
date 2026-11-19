@@ -420,11 +420,11 @@ class ThreadedExecutionManager : public ExecutionManager {
       ABSL_GUARDED_BY(session_and_task_lookup_mutex_) = {};
   bool active_callback_waiting_for_execution_
       ABSL_GUARDED_BY(session_and_task_lookup_mutex_) = false;
-  // Incremented on every decode step and every task end state. Restarts the
-  // stall timeout of WaitUntilSessionDone. Atomic rather than guarded by
-  // `session_and_task_lookup_mutex_`, because decode steps record progress
-  // while holding the executor lock, which ReleaseSession() acquires after
-  // `session_and_task_lookup_mutex_`.
+  // Incremented on every prefill chunk, multimodal encode, decode step, and
+  // task end state. Restarts the stall timeout of WaitUntilSessionDone. Atomic
+  // rather than guarded by `session_and_task_lookup_mutex_`, because prefill
+  // and decode record progress while holding the executor lock, which
+  // ReleaseSession() acquires after `session_and_task_lookup_mutex_`.
   std::atomic<uint64_t> progress_count_ = 0;
   // The last prefill token ID.
   int last_prefill_token_id_ = 0;

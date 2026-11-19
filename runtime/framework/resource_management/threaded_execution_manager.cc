@@ -771,6 +771,7 @@ ThreadedExecutionManager::ProcessAndCombineContents(
       if (benchmark_info.has_value()) {
         ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("vision_executor"));
       }
+      RecordProgress();
       ABSL_ASSIGN_OR_RETURN(auto embeddings_ptr,
                             single_image_data.GetEmbeddingsPtr());
       ABSL_ASSIGN_OR_RETURN(const auto& dimensions,
@@ -816,6 +817,7 @@ ThreadedExecutionManager::ProcessAndCombineContents(
         if (benchmark_info.has_value()) {
           ABSL_RETURN_IF_ERROR(benchmark_info->TimeMarkDelta("audio_executor"));
         }
+        RecordProgress();
       }
       const int num_audio_tokens = single_audio_data.GetValidTokens();
       if (num_audio_tokens > 0) {
@@ -1101,7 +1103,7 @@ absl::Status ThreadedExecutionManager::AddPrefillTask(
         Tasks::Prefill(*llm_executor.value(), *executor_inputs,
                        /*wait_for_completion=*/true,
                        /*benchmark_info=*/session_info->benchmark_info,
-                       session_info->random_state);
+                       session_info->random_state, &progress_count_);
     if (!responses.ok()) {
       llm_executor.value().reset();
       FinishTaskAndLogErrors(task_id, responses.status(), std::move(callback));

@@ -2401,6 +2401,7 @@ absl::Status LlmLiteRtCompiledModelExecutorStatic::Prefill(
         prefill_output_buffers_[prefill_signature],
         ids.subspan(/*pos=*/0, prefill_length), async, &inputs));
     ids = ids.subspan(/*pos=*/prefill_length);
+    params.RecordProgress();
   }
   RET_CHECK_EQ(ids.size(), 0).SetCode(absl::StatusCode::kInternal)
       << "Work groups not covering the entire prefill input.";
@@ -2879,7 +2880,9 @@ absl::Status LlmLiteRtCompiledModelExecutorDynamic::Prefill(
                           ReferTensorBufferAsSpan<int32_t>(*token_ids_buffer));
 
   if (prefill_chunk_size_ <= 0) {
-    return PrefillInternal(ids, params);
+    ABSL_RETURN_IF_ERROR(PrefillInternal(ids, params));
+    params.RecordProgress();
+    return absl::OkStatus();
   }
 
   while (!ids.empty()) {
@@ -2888,6 +2891,7 @@ absl::Status LlmLiteRtCompiledModelExecutorDynamic::Prefill(
     absl::Span<int> chunk_ids = ids.first(chunk_size);
     ids = ids.subspan(chunk_size);
     ABSL_RETURN_IF_ERROR(PrefillInternal(chunk_ids, params));
+    params.RecordProgress();
   }
   return absl::OkStatus();
 }

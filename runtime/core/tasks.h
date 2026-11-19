@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_CORE_TASKS_H_
 
 #include <atomic>
+#include <cstdint>
 #include <limits>
 #include <optional>
 #include <vector>
@@ -47,10 +48,10 @@ using ::litert::support::Tokenizer;
 // the executor (or draws the external sampler's uniforms from it), so that the
 // session's random sequence continues across calls.
 
-absl::StatusOr<Responses> Prefill(LlmExecutor& executor, ExecutorInputs& inputs,
-                                  bool wait_for_completion,
-                                  std::optional<BenchmarkInfo>& benchmark_info,
-                                  RandomState& random_state);
+absl::StatusOr<Responses> Prefill(
+    LlmExecutor& executor, ExecutorInputs& inputs, bool wait_for_completion,
+    std::optional<BenchmarkInfo>& benchmark_info, RandomState& random_state,
+    std::atomic<uint64_t>* absl_nullable progress_counter = nullptr);
 
 absl::StatusOr<Responses> Decode(
     LlmExecutor& executor, Tokenizer& tokenizer,

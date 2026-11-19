@@ -1069,6 +1069,7 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::Prefill(
         prefill_signature, ids.subspan(/*pos=*/0, prefill_length)));
     ids = ids.subspan(/*pos=*/prefill_length);
     latency_stats_.prefill_num_tokens += prefill_length;
+    params.RecordProgress();
   }
   RET_CHECK_EQ(ids.size(), 0).SetCode(absl::StatusCode::kInternal)
       << "Work groups not covering the entire prefill input.";

@@ -834,6 +834,25 @@ TEST(LlmExecutorIoTypesTest, ExecutorPrefillParamsGetSetRandomState) {
   EXPECT_EQ(params.GetRandomState(), &random_state);
 }
 
+TEST(LlmExecutorIoTypesTest, ExecutorPrefillParamsProgressCounter) {
+  ExecutorPrefillParams params;
+  EXPECT_EQ(params.GetProgressCounter(), nullptr);
+  // No-op when unset.
+  params.RecordProgress();
+
+  std::atomic<uint64_t> counter{0};
+  params.SetProgressCounter(&counter);
+  EXPECT_EQ(params.GetProgressCounter(), &counter);
+
+  params.RecordProgress();
+  EXPECT_EQ(counter.load(std::memory_order_relaxed), 1);
+
+  // Copying preserves the pointer.
+  ExecutorPrefillParams copy = params;
+  copy.RecordProgress();
+  EXPECT_EQ(counter.load(std::memory_order_relaxed), 2);
+}
+
 TEST(LlmExecutorIoTypesTest, ExecutorDecodeParamsGetSetRandomState) {
   ExecutorDecodeParams params;
   EXPECT_EQ(params.GetRandomState(), nullptr);

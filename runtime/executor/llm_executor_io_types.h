@@ -416,6 +416,19 @@ class ExecutorPrefillParams {
   RandomState* GetRandomState() const;
   void SetRandomState(RandomState* random_state);
 
+  // Optional monotonic counter incremented after each prefill chunk completes,
+  // used by execution managers to detect prefill progress (by checking whether
+  // the value changed) without taking locks or needing a reset between calls.
+  // The caller retains ownership and must ensure it outlives the Prefill call.
+  //
+  // Note: Asking each executor implementation to call `RecordProgress()` is a
+  // pragmatic interim hook; long-term, prefill progress/chunking should be
+  // handled architecturally at the execution-manager / executor boundary
+  // instead of per executor.
+  std::atomic<uint64_t>* GetProgressCounter() const;
+  void SetProgressCounter(std::atomic<uint64_t>* progress_counter);
+  void RecordProgress() const;
+
  private:
   // The current step to prefill.
   int current_step_ = -1;
@@ -437,6 +450,7 @@ class ExecutorPrefillParams {
   std::optional<int> max_prefill_sequence_length_;
 
   RandomState* random_state_ = nullptr;
+  std::atomic<uint64_t>* progress_counter_ = nullptr;
 };
 std::ostream& operator<<(std::ostream& os, const ExecutorPrefillParams& params);
 

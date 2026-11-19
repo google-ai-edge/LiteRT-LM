@@ -15,6 +15,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 
 #include <atomic>
+#include <cstdint>
 #include <ios>
 #include <optional>
 #include <ostream>
@@ -624,6 +625,21 @@ RandomState* ExecutorPrefillParams::GetRandomState() const {
 
 void ExecutorPrefillParams::SetRandomState(RandomState* random_state) {
   random_state_ = random_state;
+}
+
+std::atomic<uint64_t>* ExecutorPrefillParams::GetProgressCounter() const {
+  return progress_counter_;
+}
+
+void ExecutorPrefillParams::SetProgressCounter(
+    std::atomic<uint64_t>* progress_counter) {
+  progress_counter_ = progress_counter;
+}
+
+void ExecutorPrefillParams::RecordProgress() const {
+  if (progress_counter_ != nullptr) {
+    progress_counter_->fetch_add(1, std::memory_order_relaxed);
+  }
 }
 
 std::ostream& operator<<(std::ostream& os,

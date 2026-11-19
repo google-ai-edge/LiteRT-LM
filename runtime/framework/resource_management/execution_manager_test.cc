@@ -322,6 +322,38 @@ class SlowDecodeStepFakeLlmExecutor : public ContextSwitchingFakeLlmExecutor {
   absl::Duration step_delay_;
 };
 
+// A fake LLM executor that simulates a multi-chunk prefill, sleeping before
+// each chunk and optionally reporting progress through `ExecutorPrefillParams`.
+class SlowPrefillChunkFakeLlmExecutor : public FakeLlmExecutor {
+ public:
+  SlowPrefillChunkFakeLlmExecutor(int vocab_size,
+                                  std::vector<std::vector<int>> prefill_tokens,
+                                  std::vector<std::vector<int>> decode_tokens,
+                                  int num_chunks, absl::Duration chunk_delay,
+                                  bool record_progress)
+      : FakeLlmExecutor(vocab_size, std::move(prefill_tokens),
+                        std::move(decode_tokens)),
+        num_chunks_(num_chunks),
+        chunk_delay_(chunk_delay),
+        record_progress_(record_progress) {}
+
+  absl::Status Prefill(const ExecutorInputs& inputs,
+                       const ExecutorPrefillParams& prefill_params) override {
+    for (int i = 0; i < num_chunks_; ++i) {
+      absl::SleepFor(chunk_delay_);
+      if (record_progress_) {
+        prefill_params.RecordProgress();
+      }
+    }
+    return FakeLlmExecutor::Prefill(inputs);
+  }
+
+ private:
+  int num_chunks_;
+  absl::Duration chunk_delay_;
+  bool record_progress_;
+};
+
 // Returns a callback that records the terminal status of a task.
 absl::AnyInvocable<void(absl::StatusOr<Responses>)>
 CaptureTerminalStatusCallback(absl::Status* status) {
@@ -1542,6 +1574,53 @@ TEST_P(ExecutionManagerTest, WaitUntilSessionDoneTimesOutWhenStalled) {
                                 HasSubstr("made no progress for 200ms")));
 
   // Wait for the decode to actually finish to avoid use after free.
+  EXPECT_OK(
+      execution_manager_->WaitUntilSessionDone(session_id, absl::Seconds(3)));
+}
+
+TEST_P(ExecutionManagerTest,
+       WaitUntilSessionDoneDoesNotTimeOutWhilePrefillMakesProgress) {
+  if (GetParam() == ExecutionManagerType::kSerial) {
+    GTEST_SKIP() << "SerialExecutionManager runs the prefill task inline.";
+  }
+  // 5 prefill chunks of 200ms each (~1s total) exceed the 500ms stall timeout,
+  // but each chunk reports progress and restarts the stall timeout.
+  CreateExecutionManager(std::make_unique<SlowPrefillChunkFakeLlmExecutor>(
+      kVocabSize, /*prefill_tokens=*/std::vector<std::vector<int>>{{1, 2, 3}},
+      /*decode_tokens=*/std::vector<std::vector<int>>{{6}},
+      /*num_chunks=*/5, /*chunk_delay=*/absl::Milliseconds(200),
+      /*record_progress=*/true));
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK(AddPrefillAndDecodeTasks(session_id, /*with_decode=*/false));
+
+  EXPECT_OK(execution_manager_->WaitUntilSessionDone(session_id,
+                                                     absl::Milliseconds(500)));
+}
+
+TEST_P(ExecutionManagerTest, WaitUntilSessionDoneTimesOutWhenPrefillStalls) {
+  if (GetParam() == ExecutionManagerType::kSerial) {
+    GTEST_SKIP() << "SerialExecutionManager runs the prefill task inline.";
+  }
+  // A single prefill chunk that blocks for 1s without reporting progress.
+  CreateExecutionManager(std::make_unique<SlowPrefillChunkFakeLlmExecutor>(
+      kVocabSize, /*prefill_tokens=*/std::vector<std::vector<int>>{{1, 2, 3}},
+      /*decode_tokens=*/std::vector<std::vector<int>>{{6}},
+      /*num_chunks=*/1, /*chunk_delay=*/absl::Seconds(1),
+      /*record_progress=*/false));
+  ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
+  ASSERT_OK_AND_ASSIGN(const SessionId session_id,
+                       execution_manager_->RegisterNewSession(session_config));
+  ASSERT_OK(AddPrefillAndDecodeTasks(session_id, /*with_decode=*/false));
+
+  EXPECT_THAT(
+      execution_manager_->WaitUntilSessionDone(session_id,
+                                               absl::Milliseconds(200)),
+      testing::status::StatusIs(absl::StatusCode::kDeadlineExceeded,
+                                HasSubstr("made no progress for 200ms")));
+
+  // Wait for the prefill to actually finish to avoid use after free.
   EXPECT_OK(
       execution_manager_->WaitUntilSessionDone(session_id, absl::Seconds(3)));
 }
