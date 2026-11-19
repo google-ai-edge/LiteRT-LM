@@ -214,6 +214,8 @@ class ConversationTests: XCTestCase {
     default:
       XCTFail("Response should be text but received \(response.contents[0])")
     }
+    // The response ends the turn.
+    XCTAssertNotNil(response.finishReason)
   }
 
   func testSendMessageStream() async throws {
@@ -221,16 +223,19 @@ class ConversationTests: XCTestCase {
     XCTAssertTrue(conversation.isAlive)
 
     let message = Message("How are you")
-    var accumulatedText = ""
-    var chunkCount = 0
+    var chunks: [Message] = []
 
     for try await chunk in conversation.sendMessageStream(message) {
-      chunkCount += 1
-      accumulatedText += chunk.toString
+      chunks.append(chunk)
     }
-    XCTAssertEqual(chunkCount, 6)
-    XCTAssertEqual(accumulatedText, "stöstöstöstöstö mengenal")
-
+    XCTAssertEqual(chunks.count, 7)
+    XCTAssertEqual(chunks.map(\.toString).joined(), "stöstöstöstöstö mengenal")
+    // Only the last element, which has no content, ends the turn.
+    XCTAssertTrue(chunks.dropLast().allSatisfy { $0.finishReason == nil })
+    let endOfTurn = try XCTUnwrap(chunks.last)
+    XCTAssertTrue(endOfTurn.contents.isEmpty)
+    XCTAssertEqual(endOfTurn.role, .model)
+    XCTAssertNotNil(endOfTurn.finishReason)
   }
 
   func testSendMessageStreamAndCancel() async throws {
@@ -269,6 +274,19 @@ class ConversationTests: XCTestCase {
         "Expected LiteRTLMError.conversation(.invalidResponse(...)) containing 'CANCELLED', but got: \(String(describing: didReceiveError))"
       )
     }
+  }
+
+  func testFailedStreamHasNoEndOfTurn() async throws {
+    let conversation = try await self.engine.createConversation(with: ConversationConfig())
+    let stream = conversation.sendMessageStream(Message("Hello"))
+    try conversation.cancel()
+
+    do {
+      for try await chunk in stream {
+        XCTAssertNil(chunk.finishReason)
+      }
+      XCTFail("Stream should have thrown an error.")
+    } catch {}
   }
 
   func testBenchmarkInfoOnEmptyConversation() async throws {
