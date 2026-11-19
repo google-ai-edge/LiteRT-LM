@@ -35,6 +35,14 @@ filegroup(
     srcs = glob(["checksum_fake_lm*.tflite"]),
 )
 
+# An end-of-turn message of a Conversation. The C++ end_of_turn_test checks
+# that it matches the writer, and the tests of each language binding parse it,
+# so that their parsers follow the same schema.
+filegroup(
+    name = "end_of_turn_json",
+    srcs = ["end_of_turn.json"],
+)
+
 exports_files([
     "dummy_audio_only.litertlm",
     "have_a_wonderful_day.wav",

@@ -15,6 +15,7 @@
 #include "runtime/conversation/end_of_turn.h"
 
 #include <cstdint>
+#include <fstream>
 #include <limits>
 #include <optional>
 #include <string>
@@ -24,6 +25,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "runtime/conversation/io_types.h"
@@ -218,6 +220,24 @@ TEST(EndOfTurnTest, GetExecutorStatsReturnsErrorForInvalidStats) {
       GetExecutorStats(Message::parse(
           R"json({"finish_reason": "stop", "executor_stats": []})json")),
       StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+// The tests of the language bindings parse `runtime/testdata/end_of_turn.json`,
+// so it has to stay what the writer emits.
+TEST(EndOfTurnTest, BindingTestdataMatchesTheWriter) {
+  std::ifstream file(absl::StrCat(
+      testing::SrcDir(), "/",
+      "litert_lm/runtime/testdata/end_of_turn.json"));
+  ASSERT_TRUE(file.is_open());
+  const Message message = Message::parse(file);
+
+  EXPECT_TRUE(IsEndOfTurnMessage(message));
+  EXPECT_EQ(message.at("finish_reason").get<std::string>(),
+            FinishReasonToString(FinishReason::kMaxTokens));
+  ASSERT_OK_AND_ASSIGN(std::optional<ExecutorStats> stats,
+                       GetExecutorStats(message));
+  ASSERT_TRUE(stats.has_value());
+  EXPECT_EQ(ExecutorStatsToJson(*stats), message.at("executor_stats"));
 }
 
 }  // namespace

@@ -1,0 +1,18 @@
+{
+  "role": "assistant",
+  "finish_reason": "max_tokens",
+  "executor_stats": {
+    "module_name": "LLM",
+    "metrics": {"plain_steps": 3, "acceptance_rate": 0.5},
+    "latencies_us": {"plain_step_time": 51234},
+    "substats": [
+      {
+        "module_name": "Drafter",
+        "metrics": {"draft_steps": 2},
+        "latencies_us": {},
+        "substats": []
+      }
+    ]
+  },
+  "future_field": {"ignored": [1]}
+}

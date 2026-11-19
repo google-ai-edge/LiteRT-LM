@@ -521,9 +521,12 @@ This function is triggered under the following conditions:
     Detect it with `IsEndOfTurnMessage()` and read the executor stats of the
     turn (e.g. speculative decoding rounds and accepted draft tokens) with
     `GetExecutorStats()`, both from `runtime/conversation/end_of_turn.h`.
-    `finish_reason` is `stop`, `max_tokens` or `appended` (a message appended
-    without a response); treat unknown values as the end of the turn too.
-    `executor_stats` is null when the turn has no stats.
+    `finish_reason` is `stop` (the model finished its response, or the response
+    reached `max_output_tokens`), `max_tokens` (the conversation filled the
+    engine's context window, `max_num_tokens`, which cut the response off) or
+    `appended` (a message appended without a response); treat unknown values as
+    the end of the turn too. `executor_stats` is null when the turn has no
+    stats.
 
 Refer to the [Step 6 asynchronous call](#text-only-content) for an example
 implementation.

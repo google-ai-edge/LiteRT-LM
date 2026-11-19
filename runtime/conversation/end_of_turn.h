@@ -39,9 +39,11 @@ inline constexpr absl::string_view kExecutorStatsKey = "executor_stats";
 // Why a turn ended. More reasons may be added, so consumers must treat any
 // `finish_reason` they don't know as the end of the turn.
 enum class FinishReason {
-  // The model finished its response.
+  // The model finished its response, or the response reached
+  // `max_output_tokens`.
   kStop,
-  // The response reached the maximum number of tokens.
+  // The conversation filled the engine's context window (`max_num_tokens`),
+  // which cut the response off.
   kMaxTokens,
   // The message was appended to the conversation without a response.
   kAppended,

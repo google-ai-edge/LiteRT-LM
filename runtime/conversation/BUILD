@@ -48,11 +48,13 @@ cc_library(
 cc_test(
     name = "end_of_turn_test",
     srcs = ["end_of_turn_test.cc"],
+    data = ["//runtime/testdata:end_of_turn_json"],
     deps = [
         ":end_of_turn",
         ":io_types",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
         "@nlohmann_json//:json",
         "//runtime/executor:executor_stats",
