@@ -448,6 +448,9 @@ litert::Expected<litert::Options> CreateLiteRtNpuOptions(
         ::litert::google_tensor::GoogleTensorOptions::PerformanceMode::kBurst);
   }
 #endif
+  // Vendor flags (e.g. --intel_openvino_configs_map=NPU_TURBO=YES) reach the
+  // dispatch library only through these options.
+  RunVendorOptionsParsers(options);
   return options;
 }
 

@@ -339,6 +339,11 @@ absl::Status SetNpuOptions(const NpuOptions& npu_options,
                            litert::Options& options);
 #endif  // !defined(LITERT_DISABLE_NPU)
 
+// Applies the vendor options registered with LiteRT's OptionsParserRegistry
+// (e.g. from vendor command line flags linked into the binary) to `options`.
+// Failures are logged and ignored.
+void RunVendorOptionsParsers(litert::Options& options);
+
 // Set the CPU weight cache options for XNNPACK.
 // Args:
 //   - weight_cache_file: An optional weight cache file path.
