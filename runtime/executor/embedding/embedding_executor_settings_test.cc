@@ -189,5 +189,32 @@ TEST(EmbeddingExecutorSettingsTest, SelectedSignatures) {
               ElementsAre("encoder_256", "encoder_512"));
 }
 
+TEST(EmbeddingExecutorSettingsTest, PerTokenOutputsDefaultAndSetters) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create(""));
+  ASSERT_OK_AND_ASSIGN(
+      EmbeddingExecutorSettings settings,
+      EmbeddingExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+
+  EXPECT_FALSE(settings.GetPerTokenOutputs().IsEnabled());
+  EXPECT_FALSE(settings.GetPerTokenOutputs().token_embeddings);
+  EXPECT_TRUE(settings.GetPerTokenOutputs().hidden_state_layers.empty());
+
+  settings.SetPerTokenOutputs(PerTokenOutputsConfig{
+      .token_embeddings = true, .hidden_state_layers = {6, 14}});
+  EXPECT_TRUE(settings.GetPerTokenOutputs().IsEnabled());
+  EXPECT_TRUE(settings.GetPerTokenOutputs().token_embeddings);
+  EXPECT_THAT(settings.GetPerTokenOutputs().hidden_state_layers,
+              ElementsAre(6, 14));
+
+  settings.GetMutablePerTokenOutputs().token_embeddings = false;
+  EXPECT_TRUE(settings.GetPerTokenOutputs().IsEnabled());
+  EXPECT_FALSE(settings.GetPerTokenOutputs().token_embeddings);
+
+  std::ostringstream os;
+  os << settings;
+  EXPECT_THAT(os.str(), HasSubstr("per_token_outputs: {token_embeddings: "
+                                  "false, hidden_state_layers: [6, 14]}"));
+}
+
 }  // namespace
 }  // namespace litert::lm

@@ -18,6 +18,7 @@
 #include <optional>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -49,6 +50,14 @@ struct ComputeEmbeddingOptions {
   // If non-empty, and input_overflow_strategy is kTruncate, the EOS token IDs
   // will be preserved at the end of the truncated input sequence.
   std::vector<int> eos_token_ids = {};
+
+  // If true, returns the encoder's `token_embeddings` output (requires a model
+  // exposing it or `EmbeddingExecutorSettings::SetPerTokenOutputs`).
+  bool return_token_embeddings = false;
+
+  // 0-based layer indices to return from `layer_<NN>` encoder outputs in
+  // `EmbeddingOutput::hidden_states`.
+  std::vector<int> return_hidden_state_layers = {};
 };
 
 // Represents the output of an embedding computation from the executor.
@@ -61,6 +70,15 @@ struct EmbeddingOutput {
   std::optional<int> truncated_length = std::nullopt;
   // The number of chunks the input was split into.
   int num_chunks = 1;
+  // Row-major `[num_tokens, token_embedding_dim]` per-token embeddings for all
+  // active input tokens (including special/prefix tokens, excluding padding;
+  // concatenated across chunks for `kChunkAndAverage`).
+  std::vector<float> token_embeddings;
+  int token_embedding_dim = 0;
+  // Row-major `[num_tokens, hidden_state_dim]` residual-stream hidden states
+  // keyed by 0-based layer index, covering the same active tokens.
+  absl::flat_hash_map<int, std::vector<float>> hidden_states;
+  int hidden_state_dim = 0;
 };
 
 // The Embedding Executor serves as a wrapper around converted text encoder

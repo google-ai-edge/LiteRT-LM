@@ -1757,6 +1757,8 @@ absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbeddingInternal(
     const ExecutorInputs& inputs, const EmbeddingOptions& options) {
   ComputeEmbeddingOptions compute_options{
       .input_overflow_strategy = options.input_overflow_strategy,
+      .return_token_embeddings = options.return_token_embeddings,
+      .return_hidden_state_layers = options.return_hidden_state_layers,
   };
   if (options.insert_special_tokens && !special_tokens_.eos_token_ids.empty()) {
     compute_options.eos_token_ids = special_tokens_.eos_token_ids;
@@ -1770,6 +1772,10 @@ absl::StatusOr<EmbeddingResponse> EmbeddingEngineImpl::ComputeEmbeddingInternal(
   response.input_length = embedding_output.input_length;
   response.truncated_length = embedding_output.truncated_length;
   response.num_chunks = embedding_output.num_chunks;
+  response.token_embeddings = std::move(embedding_output.token_embeddings);
+  response.token_embedding_dim = embedding_output.token_embedding_dim;
+  response.hidden_states = std::move(embedding_output.hidden_states);
+  response.hidden_state_dim = embedding_output.hidden_state_dim;
 
   if (options.output_size.has_value()) {
     if (*options.output_size < 0) {

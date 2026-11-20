@@ -99,7 +99,13 @@ std::optional<CacheModel> GetCacheModel(absl::string_view suffix,
     if (absl::ConsumeSuffix(&suffix, backend_suffix)) break;
   }
   for (CacheModel model : kAllCacheModels) {
-    if (suffix == ExecutorSettingsBase::GetCacheModelName(model)) {
+    const absl::string_view name =
+        ExecutorSettingsBase::GetCacheModelName(model);
+    // A model may tag a variant of itself after its name, e.g. the text
+    // encoder patched with per-token outputs uses ".text_encoder.pt_te_l06".
+    // The variant still uses the model's scoped or provided cache file.
+    if (suffix == name || (!name.empty() && absl::StartsWith(suffix, name) &&
+                           suffix[name.size()] == '.')) {
       return model;
     }
   }
@@ -524,11 +530,16 @@ absl::StatusOr<std::shared_ptr<ScopedFile>> ModelAssets::GetOrCreateScopedFile()
 
 std::ostream& operator<<(std::ostream& os, const ModelAssets& model_assets) {
   if (model_assets.HasScopedFile()) {
-    os << "model_file file descriptor ID: "
-       << model_assets.GetScopedFile().value()->file() << "\n";
+    const auto scoped_file = model_assets.GetScopedFile();
+    if (scoped_file.ok()) {
+      os << "model_file file descriptor ID: " << (*scoped_file)->file() << "\n";
+    }
   } else if (model_assets.HasMemoryMappedFile()) {
-    os << "model_file memory mapped file: "
-       << model_assets.GetMemoryMappedFile().value()->data() << "\n";
+    const auto memory_mapped_file = model_assets.GetMemoryMappedFile();
+    if (memory_mapped_file.ok()) {
+      os << "model_file memory mapped file: " << (*memory_mapped_file)->data()
+         << "\n";
+    }
   } else if (model_assets.HasDataStream()) {
     os << "model_file is loading from a data stream\n";
   } else {

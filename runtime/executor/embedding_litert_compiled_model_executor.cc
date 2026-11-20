@@ -17,7 +17,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -29,6 +31,7 @@
 #include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/cleanup/cleanup.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
+#include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
@@ -36,10 +39,14 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "flatbuffers/verifier.h"  // from @flatbuffers
 #include "litert/c/litert_common.h"  // from @litert
+#include "litert/cc/litert_buffer_ref.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
@@ -70,6 +77,7 @@
 #include "runtime/util/data_stream.h"
 #include "runtime/util/status_macros.h"
 #include "runtime/util/streamed_weights_uploader.h"
+#include "tflite/schema/schema_generated.h"  // from @litert
 
 namespace litert::lm {
 namespace {
@@ -102,6 +110,511 @@ constexpr absl::string_view kEncoderSignatureRunner = "encoder";
 constexpr absl::string_view kPerLayerEmbeddingsName = "per_layer";
 constexpr absl::string_view kInputMaskName = "input_mask";
 constexpr absl::string_view kEmbeddingsName = "embeddings";
+constexpr absl::string_view kTokenEmbeddingsName = "token_embeddings";
+constexpr size_t kAppendedBufferAlignment = 64;
+
+std::string LayerTapOutputName(int layer) {
+  return absl::StrFormat("layer_%02d", layer);
+}
+
+absl::StatusOr<std::vector<int>> CanonicalizeHiddenStateLayers(
+    absl::Span<const int> layers) {
+  std::vector<int> canonical(layers.begin(), layers.end());
+  for (int layer : canonical) {
+    if (layer < 0) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Hidden state layer index must be non-negative, got: ", layer));
+    }
+  }
+  absl::c_sort(canonical);
+  canonical.erase(std::unique(canonical.begin(), canonical.end()),
+                  canonical.end());
+  return canonical;
+}
+
+std::string BuildPerTokenCacheTag(bool token_embeddings,
+                                  absl::Span<const int> layers) {
+  std::string tag = ".pt";
+  if (token_embeddings) {
+    absl::StrAppend(&tag, "_te");
+  }
+  for (int layer : layers) {
+    absl::StrAppend(&tag, absl::StrFormat("_l%02d", layer));
+  }
+  return tag;
+}
+
+// Returns true if every considered encoder signature in `model` already exposes
+// all requested per-token output names.
+absl::StatusOr<bool> EncoderSignaturesAlreadyExposeOutputs(
+    const litert::Model& model,
+    absl::Span<const std::string> selected_signatures,
+    bool want_token_embeddings, absl::Span<const int> want_layers) {
+  bool found_encoder_sig = false;
+  for (size_t i = 0; i < model.GetNumSignatures(); ++i) {
+    LITERT_ASSIGN_OR_RETURN(auto signature, model.GetSignature(i));
+    absl::string_view key = signature.Key();
+    if (!absl::StartsWith(key, kEncoderSignatureRunner) ||
+        (!selected_signatures.empty() &&
+         !absl::c_linear_search(selected_signatures, key))) {
+      continue;
+    }
+    found_encoder_sig = true;
+    const auto output_names = signature.OutputNames();
+    if (want_token_embeddings &&
+        !absl::c_linear_search(output_names, kTokenEmbeddingsName)) {
+      return false;
+    }
+    for (int layer : want_layers) {
+      if (!absl::c_linear_search(output_names, LayerTapOutputName(layer))) {
+        return false;
+      }
+    }
+  }
+  return found_encoder_sig;
+}
+
+tflite::BuiltinOperator GetOpBuiltinCode(const tflite::ModelT& model,
+                                         const tflite::OperatorT& op) {
+  if (op.opcode_index >= model.operator_codes.size() ||
+      model.operator_codes[op.opcode_index] == nullptr) {
+    return tflite::BuiltinOperator_CUSTOM;
+  }
+  const auto& oc = *model.operator_codes[op.opcode_index];
+  return static_cast<tflite::BuiltinOperator>(
+      std::max(static_cast<int32_t>(oc.builtin_code),
+               static_cast<int32_t>(oc.deprecated_builtin_code)));
+}
+
+struct FinalNormAndProj {
+  int32_t h_idx = -1;
+  int32_t weight_idx = -1;
+  const tflite::OperatorT* proj_op = nullptr;
+};
+
+// Walks back from output 0 (`encodings`) of `sig` through masked mean pooling
+// (`FULLY_CONNECTED(W) <- DIV <- SUM <- MUL(h, mask)`) to locate the final
+// normalized hidden-state tensor `h` and the bias-free pooling projection `W`.
+absl::StatusOr<FinalNormAndProj> FindFinalNormAndProjection(
+    const tflite::ModelT& model, const tflite::SubGraphT& sg,
+    const tflite::SignatureDefT& sig) {
+  if (sig.outputs.empty() || sig.outputs[0] == nullptr) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Encoder signature '", sig.signature_key,
+                     "' has no pooled output at index 0."));
+  }
+  const int32_t out_idx = static_cast<int32_t>(sig.outputs[0]->tensor_index);
+  if (out_idx < 0 || static_cast<size_t>(out_idx) >= sg.tensors.size() ||
+      sg.tensors[out_idx] == nullptr) {
+    return absl::FailedPreconditionError(
+        "Encoder output 0 references an invalid tensor.");
+  }
+  absl::flat_hash_map<int32_t, const tflite::OperatorT*> producer;
+  for (const auto& op : sg.operators) {
+    if (op == nullptr) continue;
+    for (int32_t out : op->outputs) {
+      if (out >= 0) producer[out] = op.get();
+    }
+  }
+
+  auto proj_it = producer.find(out_idx);
+  if (proj_it == producer.end() ||
+      GetOpBuiltinCode(model, *proj_it->second) !=
+          tflite::BuiltinOperator_FULLY_CONNECTED) {
+    return absl::FailedPreconditionError(
+        "Encoder pooled output is not produced by FULLY_CONNECTED.");
+  }
+  const tflite::OperatorT* proj_op = proj_it->second;
+  if (proj_op->inputs.size() < 2 || proj_op->inputs[0] < 0 ||
+      proj_op->inputs[1] < 0) {
+    return absl::FailedPreconditionError(
+        "Pooling projection FULLY_CONNECTED has invalid inputs.");
+  }
+  if (proj_op->inputs.size() > 2 && proj_op->inputs[2] >= 0) {
+    return absl::FailedPreconditionError(
+        "Pooling projection has a bias; per-token projection requires a "
+        "bias-free linear pooling head.");
+  }
+  const int32_t weight_idx = proj_op->inputs[1];
+  if (static_cast<size_t>(weight_idx) >= sg.tensors.size() ||
+      sg.tensors[weight_idx] == nullptr ||
+      sg.tensors[weight_idx]->shape.size() != 2) {
+    return absl::FailedPreconditionError(
+        "Pooling projection weight tensor does not have rank 2.");
+  }
+  const int32_t hidden_dim = sg.tensors[weight_idx]->shape[1];
+
+  int32_t cur = proj_op->inputs[0];
+  const tflite::OperatorT* mul_op = nullptr;
+  for (tflite::BuiltinOperator expected :
+       {tflite::BuiltinOperator_DIV, tflite::BuiltinOperator_SUM,
+        tflite::BuiltinOperator_MUL}) {
+    auto it = producer.find(cur);
+    const size_t min_inputs = expected == tflite::BuiltinOperator_MUL ? 2 : 1;
+    if (it == producer.end() ||
+        GetOpBuiltinCode(model, *it->second) != expected ||
+        it->second->inputs.size() < min_inputs) {
+      return absl::FailedPreconditionError(
+          "Unexpected op in masked mean pooling chain.");
+    }
+    mul_op = it->second;
+    cur = mul_op->inputs[0];
+  }
+  if (mul_op == nullptr || mul_op->inputs.size() < 2) {
+    return absl::FailedPreconditionError(
+        "Unexpected op in masked mean pooling chain.");
+  }
+
+  for (int k = 0; k < 2; ++k) {
+    const int32_t cand = mul_op->inputs[k];
+    if (cand >= 0 && static_cast<size_t>(cand) < sg.tensors.size() &&
+        sg.tensors[cand] != nullptr && sg.tensors[cand]->shape.size() == 3 &&
+        sg.tensors[cand]->shape[2] == hidden_dim) {
+      return FinalNormAndProj{
+          .h_idx = cand, .weight_idx = weight_idx, .proj_op = proj_op};
+    }
+  }
+  return absl::FailedPreconditionError(
+      "Could not identify rank-3 final normalized hidden state tensor.");
+}
+
+// Finds the per-layer residual-stream output tensor indices (`0..num_layers-1`)
+// right after each layer's post-PLE residual ADD and `skip_scale` MUL.
+absl::StatusOr<std::vector<int32_t>> FindLayerOutputs(
+    const tflite::ModelT& model, const tflite::SubGraphT& sg) {
+  absl::flat_hash_map<int32_t, std::vector<size_t>> consumers;
+  const tflite::OperatorT* unpack_op = nullptr;
+  int num_unpack_ops = 0;
+  for (size_t idx = 0; idx < sg.operators.size(); ++idx) {
+    const auto& op = sg.operators[idx];
+    if (op == nullptr) continue;
+    for (int32_t inp : op->inputs) {
+      if (inp >= 0) consumers[inp].push_back(idx);
+    }
+    if (GetOpBuiltinCode(model, *op) == tflite::BuiltinOperator_UNPACK &&
+        !op->outputs.empty()) {
+      unpack_op = op.get();
+      ++num_unpack_ops;
+    }
+  }
+  if (num_unpack_ops != 1 || unpack_op == nullptr) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Expected exactly 1 per-layer UNPACK op in encoder subgraph, found ",
+        num_unpack_ops, "."));
+  }
+
+  std::vector<int32_t> layer_outs;
+  layer_outs.reserve(unpack_op->outputs.size());
+  for (size_t li = 0; li < unpack_op->outputs.size(); ++li) {
+    int32_t cur = unpack_op->outputs[li];
+    for (tflite::BuiltinOperator expected :
+         {tflite::BuiltinOperator_MUL, tflite::BuiltinOperator_FULLY_CONNECTED,
+          tflite::BuiltinOperator_STABLEHLO_COMPOSITE,
+          tflite::BuiltinOperator_ADD, tflite::BuiltinOperator_MUL}) {
+      auto it = consumers.find(cur);
+      if (it == consumers.end() || it->second.empty()) {
+        return absl::FailedPreconditionError(
+            absl::StrCat("Layer ", li, " incomplete PLE residual chain."));
+      }
+      const tflite::OperatorT& next = *sg.operators[it->second[0]];
+      if (GetOpBuiltinCode(model, next) != expected || next.outputs.empty() ||
+          next.outputs[0] < 0) {
+        return absl::FailedPreconditionError(
+            absl::StrCat("Layer ", li, " unexpected op in PLE chain."));
+      }
+      cur = next.outputs[0];
+    }
+    if (static_cast<size_t>(cur) >= sg.tensors.size() ||
+        sg.tensors[cur] == nullptr) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Layer ", li, " skip_scale tensor index is invalid."));
+    }
+    auto next_it = consumers.find(cur);
+    const bool feeds_composite =
+        next_it != consumers.end() &&
+        absl::c_any_of(next_it->second, [&](size_t ci) {
+          return GetOpBuiltinCode(model, *sg.operators[ci]) ==
+                 tflite::BuiltinOperator_STABLEHLO_COMPOSITE;
+        });
+    if (!feeds_composite) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "Layer ", li,
+          " skip_scale output does not feed STABLEHLO_COMPOSITE."));
+    }
+    layer_outs.push_back(cur);
+  }
+  return layer_outs;
+}
+
+absl::Span<uint8_t> AllocateAlignedBuffer(size_t size,
+                                          std::vector<uint8_t>& storage) {
+  storage.assign(size + kAppendedBufferAlignment, 0);
+  const uintptr_t addr = reinterpret_cast<uintptr_t>(storage.data());
+  const uintptr_t aligned = (addr + kAppendedBufferAlignment - 1) &
+                            ~(uintptr_t{kAppendedBufferAlignment} - 1);
+  return absl::MakeSpan(reinterpret_cast<uint8_t*>(aligned), size);
+}
+
+// Verifies and unpacks `tflite_bytes`, injects missing `token_embeddings`
+// and/or `layer_<NN>` outputs into active encoder signatures, and repacks into
+// a 64-byte-aligned buffer (relocating any FlatBuffer-appended buffers while
+// preserving mod-64 alignment and external buffer groups).
+absl::StatusOr<std::unique_ptr<PatchedTextEncoderModel>>
+BuildPatchedEncoderModel(absl::string_view tflite_bytes,
+                         absl::Span<const std::string> selected_signatures,
+                         bool want_token_embeddings,
+                         absl::Span<const int> want_layers) {
+  constexpr size_t kMaxFlatBufferVerifyBytes =
+      std::numeric_limits<int32_t>::max();
+  flatbuffers::Verifier verifier(
+      reinterpret_cast<const uint8_t*>(tflite_bytes.data()),
+      std::min(tflite_bytes.size(), kMaxFlatBufferVerifyBytes));
+  if (tflite_bytes.size() < 8 ||
+      !tflite::ModelBufferHasIdentifier(tflite_bytes.data()) ||
+      !tflite::VerifyModelBuffer(verifier)) {
+    return absl::FailedPreconditionError(
+        "Invalid TFLite FlatBuffer for text encoder.");
+  }
+  std::unique_ptr<tflite::ModelT> tfl_model =
+      tflite::UnPackModel(tflite_bytes.data());
+  if (tfl_model == nullptr) {
+    return absl::InternalError("Failed to unpack text encoder FlatBuffer.");
+  }
+
+  bool found_encoder_sig = false;
+  absl::flat_hash_map<uint32_t, int32_t> injected_tok_emb_by_subgraph;
+  absl::flat_hash_map<uint32_t, std::vector<int32_t>> layer_outs_by_subgraph;
+
+  for (auto& sig : tfl_model->signature_defs) {
+    if (sig == nullptr ||
+        !absl::StartsWith(sig->signature_key, kEncoderSignatureRunner) ||
+        (!selected_signatures.empty() &&
+         !absl::c_linear_search(selected_signatures, sig->signature_key))) {
+      continue;
+    }
+    found_encoder_sig = true;
+    if (sig->subgraph_index >= tfl_model->subgraphs.size() ||
+        tfl_model->subgraphs[sig->subgraph_index] == nullptr) {
+      return absl::FailedPreconditionError(
+          absl::StrCat("Encoder signature '", sig->signature_key,
+                       "' references invalid subgraph index."));
+    }
+    tflite::SubGraphT& sg = *tfl_model->subgraphs[sig->subgraph_index];
+
+    absl::flat_hash_set<std::string> existing_names;
+    for (const auto& out_map : sig->outputs) {
+      if (out_map != nullptr) existing_names.insert(out_map->name);
+    }
+
+    std::vector<std::pair<std::string, int32_t>> extra_outs;
+    if (want_token_embeddings &&
+        !existing_names.contains(kTokenEmbeddingsName)) {
+      int32_t tok_tensor_idx = -1;
+      if (auto it = injected_tok_emb_by_subgraph.find(sig->subgraph_index);
+          it != injected_tok_emb_by_subgraph.end()) {
+        tok_tensor_idx = it->second;
+      } else {
+        ABSL_ASSIGN_OR_RETURN(FinalNormAndProj norm_proj,
+                              FindFinalNormAndProjection(*tfl_model, sg, *sig));
+        const tflite::TensorT& h_tensor = *sg.tensors[norm_proj.h_idx];
+        const int32_t emb_dim = sg.tensors[norm_proj.weight_idx]->shape[0];
+        const int32_t pooled_out_idx =
+            static_cast<int32_t>(sig->outputs[0]->tensor_index);
+
+        auto new_tensor = std::make_unique<tflite::TensorT>();
+        new_tensor->shape = {h_tensor.shape[0], h_tensor.shape[1], emb_dim};
+        if (h_tensor.shape_signature.size() == 3) {
+          new_tensor->shape_signature = {h_tensor.shape_signature[0],
+                                         h_tensor.shape_signature[1], emb_dim};
+        }
+        new_tensor->type = sg.tensors[pooled_out_idx]->type;
+        new_tensor->buffer = 0;
+        new_tensor->name =
+            absl::StrCat(sig->signature_key, "_", kTokenEmbeddingsName);
+        sg.tensors.push_back(std::move(new_tensor));
+        tok_tensor_idx = static_cast<int32_t>(sg.tensors.size() - 1);
+
+        auto new_op = std::make_unique<tflite::OperatorT>();
+        new_op->opcode_index = norm_proj.proj_op->opcode_index;
+        new_op->inputs = {norm_proj.h_idx, norm_proj.weight_idx, -1};
+        new_op->outputs = {tok_tensor_idx};
+        tflite::FullyConnectedOptionsT fc_opts;
+        if (const auto* src_opts =
+                norm_proj.proj_op->builtin_options.AsFullyConnectedOptions();
+            src_opts != nullptr) {
+          fc_opts = *src_opts;
+        }
+        fc_opts.keep_num_dims = true;
+        new_op->builtin_options.Set(fc_opts);
+        sg.operators.push_back(std::move(new_op));
+        injected_tok_emb_by_subgraph[sig->subgraph_index] = tok_tensor_idx;
+      }
+      extra_outs.emplace_back(std::string(kTokenEmbeddingsName),
+                              tok_tensor_idx);
+    }
+
+    const bool need_layer_walk = absl::c_any_of(want_layers, [&](int layer) {
+      return !existing_names.contains(LayerTapOutputName(layer));
+    });
+    if (need_layer_walk) {
+      auto layer_it = layer_outs_by_subgraph.find(sig->subgraph_index);
+      if (layer_it == layer_outs_by_subgraph.end()) {
+        ABSL_ASSIGN_OR_RETURN(std::vector<int32_t> found_layers,
+                              FindLayerOutputs(*tfl_model, sg));
+        layer_it = layer_outs_by_subgraph
+                       .emplace(sig->subgraph_index, std::move(found_layers))
+                       .first;
+      }
+      for (int layer : want_layers) {
+        if (layer < 0 ||
+            static_cast<size_t>(layer) >= layer_it->second.size()) {
+          return absl::InvalidArgumentError(absl::StrCat(
+              "Requested hidden state layer ", layer, " is out of range [0, ",
+              layer_it->second.size(), ")."));
+        }
+        std::string tap_name = LayerTapOutputName(layer);
+        if (!existing_names.contains(tap_name)) {
+          extra_outs.emplace_back(std::move(tap_name), layer_it->second[layer]);
+        }
+      }
+    }
+
+    for (const auto& [name, tensor_idx] : extra_outs) {
+      if (!absl::c_linear_search(sg.outputs, tensor_idx)) {
+        sg.outputs.push_back(tensor_idx);
+      }
+      auto tensor_map = std::make_unique<tflite::TensorMapT>();
+      tensor_map->name = name;
+      tensor_map->tensor_index = static_cast<uint32_t>(tensor_idx);
+      sig->outputs.push_back(std::move(tensor_map));
+    }
+  }
+
+  if (!found_encoder_sig) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "No signature found with prefix ", kEncoderSignatureRunner));
+  }
+
+  std::vector<std::pair<uint64_t*, uint64_t>> relocated_offsets;
+  uint64_t data_start = std::numeric_limits<uint64_t>::max();
+  auto record_appended = [&](uint64_t& offset_field,
+                             uint64_t region_size) -> absl::Status {
+    if (offset_field <= 1) return absl::OkStatus();
+    if (offset_field > tflite_bytes.size() ||
+        region_size > tflite_bytes.size() - offset_field) {
+      return absl::FailedPreconditionError(
+          "Text encoder FlatBuffer has out-of-bounds appended buffer offset.");
+    }
+    data_start = std::min(data_start, offset_field);
+    relocated_offsets.emplace_back(&offset_field, offset_field);
+    return absl::OkStatus();
+  };
+  for (auto& buf : tfl_model->buffers) {
+    if (buf != nullptr) {
+      ABSL_RETURN_IF_ERROR(record_appended(buf->offset, buf->size));
+    }
+  }
+  for (auto& sg : tfl_model->subgraphs) {
+    if (sg == nullptr) continue;
+    for (auto& op : sg->operators) {
+      if (op != nullptr) {
+        ABSL_RETURN_IF_ERROR(record_appended(op->large_custom_options_offset,
+                                             op->large_custom_options_size));
+      }
+    }
+  }
+
+  const size_t init_builder_bytes = std::min<size_t>(
+      relocated_offsets.empty() ? tflite_bytes.size()
+                                : static_cast<size_t>(data_start),
+      1024 * 1024);
+  std::vector<uint8_t> storage;
+  absl::Span<uint8_t> model_span;
+
+  if (relocated_offsets.empty()) {
+    flatbuffers::FlatBufferBuilder builder(init_builder_bytes);
+    tflite::FinishModelBuffer(builder,
+                              tflite::Model::Pack(builder, tfl_model.get()));
+    model_span = AllocateAlignedBuffer(builder.GetSize(), storage);
+    std::memcpy(model_span.data(), builder.GetBufferPointer(),
+                builder.GetSize());
+  } else {
+    const uint64_t align_rem = data_start % kAppendedBufferAlignment;
+    uint64_t new_start = 0;
+    bool stabilized = false;
+    for (int iter = 0; iter < 4; ++iter) {
+      flatbuffers::FlatBufferBuilder builder(init_builder_bytes);
+      tflite::FinishModelBuffer(builder,
+                                tflite::Model::Pack(builder, tfl_model.get()));
+      const uint64_t fb_size = builder.GetSize();
+      const uint64_t aligned =
+          fb_size <= align_rem
+              ? align_rem
+              : align_rem +
+                    (fb_size - align_rem + kAppendedBufferAlignment - 1) /
+                        kAppendedBufferAlignment * kAppendedBufferAlignment;
+      if (iter > 0 && aligned == new_start) {
+        const size_t tail_size =
+            tflite_bytes.size() - static_cast<size_t>(data_start);
+        model_span = AllocateAlignedBuffer(
+            static_cast<size_t>(new_start) + tail_size, storage);
+        std::memcpy(model_span.data(), builder.GetBufferPointer(),
+                    builder.GetSize());
+        std::memcpy(model_span.data() + new_start,
+                    tflite_bytes.data() + data_start, tail_size);
+        stabilized = true;
+        break;
+      }
+      new_start = aligned;
+      for (auto& [field_ptr, orig_offset] : relocated_offsets) {
+        *field_ptr = orig_offset - data_start + new_start;
+      }
+    }
+    if (!stabilized) {
+      return absl::InternalError(
+          "Failed to stabilize appended buffer offsets during FlatBuffer "
+          "repack.");
+    }
+  }
+
+  ABSL_ASSIGN_OR_RETURN(litert::Model rewritten_model,
+                        CreateLiteRtModelFromBuffer(litert::BufferRef<uint8_t>(
+                            model_span.data(), model_span.size())));
+  return absl::WrapUnique(new PatchedTextEncoderModel{
+      .storage = std::move(storage),
+      .model = std::move(rewritten_model),
+  });
+}
+
+absl::Status AppendPerTokenOutputSlice(const litert::TensorBuffer& buffer,
+                                       absl::string_view output_name,
+                                       size_t padded_length,
+                                       size_t active_tokens,
+                                       std::vector<float>& dst, int& dst_dim) {
+  LITERT_ASSIGN_OR_RETURN(auto all_rows, CopyFromTensorBuffer<float>(buffer));
+  if (padded_length == 0 || all_rows.empty() ||
+      all_rows.size() % padded_length != 0) {
+    return absl::InternalError(absl::StrCat(
+        "Unexpected '", output_name, "' output size ", all_rows.size(),
+        " for padded sequence length ", padded_length, "."));
+  }
+  if (active_tokens > padded_length) {
+    return absl::InternalError(absl::StrCat(
+        "Active token count (", active_tokens,
+        ") exceeds padded sequence length (", padded_length, ")."));
+  }
+  const int dim = static_cast<int>(all_rows.size() / padded_length);
+  if (dst_dim == 0) {
+    dst_dim = dim;
+  } else if (dst_dim != dim) {
+    return absl::InternalError(absl::StrCat("Inconsistent '", output_name,
+                                            "' dimension across chunks (",
+                                            dst_dim, " vs ", dim, ")."));
+  }
+  dst.insert(dst.end(), all_rows.begin(),
+             all_rows.begin() + active_tokens * static_cast<size_t>(dim));
+  return absl::OkStatus();
+}
 
 class CompiledModelWrapper : public litert::CompiledModel {
  public:
@@ -180,9 +693,40 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
     const EmbeddingExecutorSettings& executor_settings, Environment& env,
     ModelResources& resources, std::shared_ptr<DataStream> weights_stream) {
   ABSL_ASSIGN_OR_RETURN(
-      auto text_encoder_model,
+      const litert::Model* text_encoder_model,
       resources.GetTFLiteModel(proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
   RET_CHECK_NE(text_encoder_model, nullptr) << "TEXT_ENCODER model is null.";
+
+  const PerTokenOutputsConfig& per_token_cfg =
+      executor_settings.GetPerTokenOutputs();
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<int> canonical_layers,
+      CanonicalizeHiddenStateLayers(per_token_cfg.hidden_state_layers));
+
+  std::unique_ptr<PatchedTextEncoderModel> patched_model;
+  std::string encoder_cache_name(EmbeddingExecutorSettings::kEncoderName);
+  if (per_token_cfg.IsEnabled()) {
+    ABSL_ASSIGN_OR_RETURN(
+        bool already_exposed,
+        EncoderSignaturesAlreadyExposeOutputs(
+            *text_encoder_model, executor_settings.GetSelectedSignatures(),
+            per_token_cfg.token_embeddings, canonical_layers));
+    if (!already_exposed) {
+      ABSL_ASSIGN_OR_RETURN(
+          absl::string_view raw_model_bytes,
+          resources.GetTFLiteModelBuffer(
+              proto::EmbeddingMetadata::TF_LITE_TEXT_ENCODER));
+      ABSL_ASSIGN_OR_RETURN(
+          patched_model,
+          BuildPatchedEncoderModel(
+              raw_model_bytes, executor_settings.GetSelectedSignatures(),
+              per_token_cfg.token_embeddings, canonical_layers));
+      text_encoder_model = &patched_model->model;
+      absl::StrAppend(&encoder_cache_name,
+                      BuildPerTokenCacheTag(per_token_cfg.token_embeddings,
+                                            canonical_layers));
+    }
+  }
 
   litert::Options options;
   switch (executor_settings.GetBackend()) {
@@ -192,13 +736,12 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
       LITERT_RETURN_IF_ERROR(
           SetCpuOptions(cpu_options, executor_settings.GetNumThreads()));
       auto weight_cache_file = executor_settings.GetWeightCacheFile(
-          absl::StrCat(EmbeddingExecutorSettings::kEncoderName,
+          absl::StrCat(encoder_cache_name,
                        ExecutorSettingsBase::kXnnpackCacheSuffix),
           /*check_and_clean=*/true);
       ABSL_RETURN_IF_ERROR(SetCpuCacheOptions(
           weight_cache_file,
-          /*logging_prefix=*/EmbeddingExecutorSettings::kEncoderName,
-          cpu_options));
+          /*logging_prefix=*/encoder_cache_name, cpu_options));
       options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
       break;
     }
@@ -207,8 +750,7 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
                               options.GetOptions<::litert::GpuOptions>());
       ABSL_ASSIGN_OR_RETURN(
           const auto cache_files,
-          GetGpuModelCacheData(executor_settings,
-                               EmbeddingExecutorSettings::kEncoderName));
+          GetGpuModelCacheData(executor_settings, encoder_cache_name));
       LITERT_RETURN_IF_ERROR(
           SetCommonGpuOptions(executor_settings, gpu_options));
       // The text encoder is compiled for the GPU only, so it is always fully
@@ -220,7 +762,7 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
       ABSL_RETURN_IF_ERROR(SetGpuCacheOptions(
           cache_files.weight_cache_file, cache_files.program_cache_file,
           cache_files.cache_key,
-          /*logging_prefix=*/EmbeddingExecutorSettings::kEncoderName,
+          /*logging_prefix=*/encoder_cache_name,
           /*cache_compiled_shaders_only=*/false, gpu_options));
       options.SetHardwareAccelerators(litert::HwAccelerators::kGpu);
       break;
@@ -311,6 +853,7 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
   }
 
   CompiledTextEncoderInfo info;
+  info.patched_model = std::move(patched_model);
   info.compiled_model = std::move(compiled_model_ptr);
   info.expected_input_dimension = std::move(expected_input_dimension);
   info.embedding_dimension = embedding_dimension;
@@ -358,6 +901,7 @@ EmbeddingLiteRtCompiledModelExecutor::Create(
   return absl::WrapUnique(new EmbeddingLiteRtCompiledModelExecutor(
       std::move(executor_settings), env, std::move(resources),
       std::move(embedding_lookup), std::move(per_layer_embedding_lookup),
+      std::move(compiled_text_encoder_info.patched_model),
       std::move(compiled_text_encoder_info.compiled_model),
       std::move(compiled_text_encoder_info.expected_input_dimension),
       compiled_text_encoder_info.embedding_dimension,
@@ -425,9 +969,47 @@ EmbeddingLiteRtCompiledModelExecutor::PrepareEncoderRun(
 
 absl::StatusOr<std::vector<float>>
 EmbeddingLiteRtCompiledModelExecutor::FinishEncoderRun(
-    const EncoderRun& run, size_t sequence_length, CancellationLatch* latch) {
+    const EncoderRun& run, size_t sequence_length, CancellationLatch* latch,
+    PerTokenOutputCollector* per_token_collector) {
   std::vector<litert::TensorBuffer>& input_buffers = *run.input_buffers;
   std::vector<litert::TensorBuffer>& output_buffers = *run.output_buffers;
+
+  std::optional<size_t> token_embeddings_output_index;
+  std::vector<std::pair<int, size_t>> hidden_state_output_indices;
+  if (per_token_collector != nullptr &&
+      (per_token_collector->collect_token_embeddings ||
+       !per_token_collector->hidden_state_layers.empty())) {
+    LITERT_ASSIGN_OR_RETURN(
+        auto output_names,
+        compiled_model_->GetSignatureOutputNames(run.signature_index));
+    if (per_token_collector->collect_token_embeddings) {
+      auto name_it = absl::c_find(output_names, kTokenEmbeddingsName);
+      if (name_it == output_names.end()) {
+        return absl::FailedPreconditionError(absl::StrCat(
+            "The text encoder has no '", kTokenEmbeddingsName,
+            "' output; enable PerTokenOutputsConfig::token_embeddings at model "
+            "load time."));
+      }
+      token_embeddings_output_index =
+          static_cast<size_t>(std::distance(output_names.begin(), name_it));
+    }
+    hidden_state_output_indices.reserve(
+        per_token_collector->hidden_state_layers.size());
+    for (int layer : per_token_collector->hidden_state_layers) {
+      const std::string tap_name = LayerTapOutputName(layer);
+      auto name_it = absl::c_find(output_names, tap_name);
+      if (name_it == output_names.end()) {
+        return absl::FailedPreconditionError(absl::StrCat(
+            "The text encoder has no '", tap_name, "' output; add layer ",
+            layer,
+            " to PerTokenOutputsConfig::hidden_state_layers at model load "
+            "time."));
+      }
+      hidden_state_output_indices.emplace_back(
+          layer,
+          static_cast<size_t>(std::distance(output_names.begin(), name_it)));
+    }
+  }
 
   // Compute mask for text encoder. The mask masks out tokens outside of the
   // input sequence length, which can be smaller than the static size of the
@@ -469,6 +1051,20 @@ EmbeddingLiteRtCompiledModelExecutor::FinishEncoderRun(
     ScopedLatency scoped(latency_stats_, kOutputCopyLatency);
     LITERT_ASSIGN_OR_RETURN(output_vector,
                             CopyFromTensorBuffer<float>(output_buffers[0]));
+    if (token_embeddings_output_index.has_value()) {
+      ABSL_RETURN_IF_ERROR(AppendPerTokenOutputSlice(
+          output_buffers[*token_embeddings_output_index], kTokenEmbeddingsName,
+          run.padded_sequence_length, sequence_length,
+          per_token_collector->token_embeddings,
+          per_token_collector->token_embedding_dim));
+    }
+    for (const auto& [layer, output_index] : hidden_state_output_indices) {
+      ABSL_RETURN_IF_ERROR(AppendPerTokenOutputSlice(
+          output_buffers[output_index], LayerTapOutputName(layer),
+          run.padded_sequence_length, sequence_length,
+          per_token_collector->hidden_states[layer],
+          per_token_collector->hidden_state_dim));
+    }
   }
 
   AccumulateStat(latency_stats_, kEmbeddingNumTokensMetric,
@@ -481,7 +1077,8 @@ EmbeddingLiteRtCompiledModelExecutor::FinishEncoderRun(
 
 absl::StatusOr<std::vector<float>>
 EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
-    absl::Span<const int32_t> tokens) {
+    absl::Span<const int32_t> tokens,
+    PerTokenOutputCollector* per_token_collector) {
   ScopedLatency scoped_total_latency(latency_stats_);
   RET_CHECK_NE(embedding_lookup_, nullptr);
 
@@ -503,7 +1100,8 @@ EmbeddingLiteRtCompiledModelExecutor::RunEncoderForTokens(
         /*token_offset=*/0));
   }
 
-  return FinishEncoderRun(run, tokens.size(), /*latch=*/nullptr);
+  return FinishEncoderRun(run, tokens.size(), /*latch=*/nullptr,
+                          per_token_collector);
 }
 
 absl::StatusOr<std::vector<float>>
@@ -632,79 +1230,88 @@ EmbeddingLiteRtCompiledModelExecutor::ComputeEmbedding(
 
   size_t max_seq_len = std::prev(encoder_signatures_.end())->first;
 
+  ABSL_ASSIGN_OR_RETURN(
+      std::vector<int> canonical_layers,
+      CanonicalizeHiddenStateLayers(options.return_hidden_state_layers));
+  PerTokenOutputCollector collector{
+      .collect_token_embeddings = options.return_token_embeddings,
+      .hidden_state_layers = std::move(canonical_layers),
+  };
+  PerTokenOutputCollector* collector_ptr =
+      (collector.collect_token_embeddings ||
+       !collector.hidden_state_layers.empty())
+          ? &collector
+          : nullptr;
+
+  std::vector<float> output_vector;
+  std::optional<int> truncated_length = std::nullopt;
+  int num_chunks = 1;
+
   if (token_ids_vec.size() > max_seq_len) {
     switch (options.input_overflow_strategy) {
-      case InputOverflowStrategy::kError: {
+      case InputOverflowStrategy::kError:
         return absl::InvalidArgumentError(
             absl::StrCat("Input sequence length (", token_ids_vec.size(),
                          ") exceeds maximum supported signature length (",
                          max_seq_len, ")."));
-      }
       case InputOverflowStrategy::kTruncate: {
+        token_ids_vec.resize(max_seq_len);
         if (!options.eos_token_ids.empty() &&
             options.eos_token_ids.size() < max_seq_len) {
-          const size_t num_eos = options.eos_token_ids.size();
-          token_ids_vec.resize(max_seq_len);
           std::copy(options.eos_token_ids.begin(), options.eos_token_ids.end(),
-                    token_ids_vec.end() - num_eos);
-        } else {
-          token_ids_vec.resize(max_seq_len);
+                    token_ids_vec.end() - options.eos_token_ids.size());
         }
-        LITERT_ASSIGN_OR_RETURN(
-            auto output_vector,
-            RunEncoderForTokens(absl::MakeSpan(token_ids_vec)));
-        return EmbeddingOutput{
-            .embedding = std::move(output_vector),
-            .input_length = input_length,
-            .truncated_length = static_cast<int>(max_seq_len),
-            .num_chunks = 1,
-        };
+        ABSL_ASSIGN_OR_RETURN(
+            output_vector,
+            RunEncoderForTokens(absl::MakeSpan(token_ids_vec), collector_ptr));
+        truncated_length = static_cast<int>(max_seq_len);
+        break;
       }
       case InputOverflowStrategy::kChunkAndAverage: {
-        int num_chunks = static_cast<int>(
-            (token_ids_vec.size() + max_seq_len - 1) / max_seq_len);
-        std::vector<float> accumulated_embedding;
+        num_chunks = static_cast<int>((token_ids_vec.size() + max_seq_len - 1) /
+                                      max_seq_len);
         for (int i = 0; i < num_chunks; ++i) {
           size_t start = i * max_seq_len;
           size_t end = std::min(start + max_seq_len, token_ids_vec.size());
-          absl::Span<const int32_t> chunk_tokens =
-              absl::MakeSpan(token_ids_vec.data() + start, end - start);
-          LITERT_ASSIGN_OR_RETURN(auto chunk_embedding,
-                                  RunEncoderForTokens(chunk_tokens));
+          ABSL_ASSIGN_OR_RETURN(
+              auto chunk_embedding,
+              RunEncoderForTokens(
+                  absl::MakeSpan(token_ids_vec).subspan(start, end - start),
+                  collector_ptr));
           if (i == 0) {
-            accumulated_embedding = std::move(chunk_embedding);
+            output_vector = std::move(chunk_embedding);
           } else {
-            if (accumulated_embedding.size() != chunk_embedding.size()) {
+            if (output_vector.size() != chunk_embedding.size()) {
               return absl::InternalError(
                   "Mismatch in embedding output dimensions between chunks.");
             }
-            for (size_t j = 0; j < accumulated_embedding.size(); ++j) {
-              accumulated_embedding[j] += chunk_embedding[j];
+            for (size_t j = 0; j < output_vector.size(); ++j) {
+              output_vector[j] += chunk_embedding[j];
             }
           }
         }
         float scale = 1.0f / static_cast<float>(num_chunks);
-        for (float& val : accumulated_embedding) {
+        for (float& val : output_vector) {
           val *= scale;
         }
-        return EmbeddingOutput{
-            .embedding = std::move(accumulated_embedding),
-            .input_length = input_length,
-            .truncated_length = std::nullopt,
-            .num_chunks = num_chunks,
-        };
+        break;
       }
     }
+  } else {
+    ABSL_ASSIGN_OR_RETURN(
+        output_vector,
+        RunEncoderForTokens(absl::MakeSpan(token_ids_vec), collector_ptr));
   }
 
-  // Input length <= max_seq_len
-  LITERT_ASSIGN_OR_RETURN(auto output_vector,
-                          RunEncoderForTokens(absl::MakeSpan(token_ids_vec)));
   return EmbeddingOutput{
       .embedding = std::move(output_vector),
       .input_length = input_length,
-      .truncated_length = std::nullopt,
-      .num_chunks = 1,
+      .truncated_length = truncated_length,
+      .num_chunks = num_chunks,
+      .token_embeddings = std::move(collector.token_embeddings),
+      .token_embedding_dim = collector.token_embedding_dim,
+      .hidden_states = std::move(collector.hidden_states),
+      .hidden_state_dim = collector.hidden_state_dim,
   };
 }
 
@@ -838,6 +1445,7 @@ EmbeddingLiteRtCompiledModelExecutor::EmbeddingLiteRtCompiledModelExecutor(
     std::shared_ptr<ModelResources> resources,
     std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
     std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
+    std::unique_ptr<PatchedTextEncoderModel> patched_model,
     std::unique_ptr<litert::CompiledModel> compiled_model,
     std::vector<int> expected_input_dimension, int embedding_dimension,
     std::map<int, size_t> encoder_signatures,
@@ -850,6 +1458,7 @@ EmbeddingLiteRtCompiledModelExecutor::EmbeddingLiteRtCompiledModelExecutor(
       resources_(std::move(resources)),
       embedding_lookup_(std::move(embedding_lookup)),
       per_layer_embedding_lookup_(std::move(per_layer_embedding_lookup)),
+      patched_model_(std::move(patched_model)),
       compiled_model_(std::move(compiled_model)),
       expected_input_dimension_(std::move(expected_input_dimension)),
       embedding_dimension_(embedding_dimension),
