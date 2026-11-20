@@ -742,6 +742,10 @@ cc_binary(
             "-Wl,-Bsymbolic",
             # Update the rpath
             "-Wl,-rpath,$$ORIGIN",
+            # Set DT_SONAME so downstream binaries record liblitert-lm.so in
+            # DT_NEEDED rather than a build-time path (required by Android's
+            # dynamic linker when symbol versioning is enabled).
+            "-Wl,-soname=liblitert-lm.so",
             # Export only the public C API symbols, in version node
             # LITERT_LM_C_API_1.0, to hide internal C++ symbols. -fvisibility
             # above does not apply to statically linked dependencies.
