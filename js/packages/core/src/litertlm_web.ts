@@ -15,16 +15,33 @@
  */
 
 import {WasmModule} from '@litertjs/wasm-utils';
+import {createDefaultWebGpuDevice} from '@litertjs/webgpu-utils';
 // Placeholder for internal dependency on trusted resource url
 
 import {getGlobalLiteRtLm} from './global_litertlm.js';
 import {LiteRtLmWasm} from './wasm_binding_types.js';
 
+/** Options for `setupDefaultWebGpuDevice`. */
+export declare interface WebGpuDeviceOptions {
+  /**
+   * Whether to briefly create a WebGL context to identify the GPU, when the
+   * browser's WebGPU adapter info is too generic to pick the right kernels
+   * (for example on Apple Silicon Macs in Chrome). Defaults to true.
+   *
+   * The probe runs at most once per page and releases its context right away,
+   * but it takes one of the page's limited WebGL context slots while it runs.
+   */
+  identifyGpuWithWebGl?: boolean;
+}
+
 /**
  * Set up the default WebGPU device for the LiteRT LM Wasm module.
+ *
+ * Engines call this automatically. Call it yourself before creating an engine
+ * to pass `options`; later calls do nothing once the device exists.
  */
-export async function setupDefaultWebGpuDevice() {
-  await getGlobalLiteRtLm().setupDefaultWebGpuDevice();
+export async function setupDefaultWebGpuDevice(options?: WebGpuDeviceOptions) {
+  await getGlobalLiteRtLm().setupDefaultWebGpuDevice(options);
 }
 
 /**
@@ -39,51 +56,15 @@ export class LiteRtLm {
     this.liteRtLmWasm.setupLogging();
   }
 
-  async setupDefaultWebGpuDevice() {
+  async setupDefaultWebGpuDevice(options: WebGpuDeviceOptions = {}) {
     if (this.liteRtLmWasm.preinitializedWebGPUDevice) {
       return;
     }
     this.liteRtLmWasm.preinitializedWebGPUDevice =
-        await createDefaultWebGpuDevice();
+        await createDefaultWebGpuDevice(options);
   }
 
   delete() {
     // no op for now.
   }
-}
-
-// TODO: b/475939320 - Use a shared implementation with LiteRT.
-const DESIRED_WEBGPU_FEATURES = [
-  'shader-f16',
-  'subgroups' as GPUFeatureName,
-] satisfies GPUFeatureName[];
-
-async function createDefaultWebGpuDevice(): Promise<GPUDevice> {
-  const adapterDescriptor: GPURequestAdapterOptions = {
-    powerPreference: 'high-performance',
-  };
-  const adapter = await navigator.gpu.requestAdapter(adapterDescriptor);
-  if (!adapter) {
-    throw new Error('No GPU adapter found.');
-  }
-
-  const requiredLimits = {
-    maxBufferSize: adapter.limits.maxBufferSize,
-    maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
-    maxStorageBuffersPerShaderStage:
-        adapter.limits.maxStorageBuffersPerShaderStage,
-    maxTextureDimension2D: adapter.limits.maxTextureDimension2D,
-  };
-
-  const requiredFeatures: GPUFeatureName[] = [];
-  for (const feature of DESIRED_WEBGPU_FEATURES) {
-    if (adapter.features.has(feature)) {
-      requiredFeatures.push(feature);
-    }
-  }
-
-  return await adapter.requestDevice({
-    requiredFeatures,
-    requiredLimits,
-  });
 }
