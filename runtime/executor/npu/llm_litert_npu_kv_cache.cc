@@ -180,7 +180,8 @@ absl::Status HWKVCacheUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
     const NpuGraphLayout* layout,
-    const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params) {
+    const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params,
+    int num_valid_tokens) {
   RET_CHECK(layout != nullptr) << "layout must not be null";
   const auto* info_map = &layout->kv_cache_buffers;
   bool enable_ringbuffer = layout->uses_ringbuffer;
@@ -326,8 +327,20 @@ absl::Status HWKVCacheUpdate(
         real_len = 0;
       }
     } else {
+      // Without a `valid_mask`, `num_valid_tokens` limits the update to the
+      // first `num_valid_tokens` positions of `input_pos`. For an MTP verify
+      // step these are the input token and the accepted drafts, so the
+      // rejected drafts are not written: with a sliding-window ring buffer, a
+      // rejected draft would overwrite a slot that is still in the window.
+      // The slice holds the last `slice_seq` positions of `input_pos`.
+      const int64_t pos_offset = std::max<int64_t>(
+          0, static_cast<int64_t>(pos_num_elements) - slice_seq);
       if (slice_seq < pos_num_elements) {
-        start_pos = input_pos_ptr[pos_num_elements - slice_seq];
+        start_pos = input_pos_ptr[pos_offset];
+      }
+      if (num_valid_tokens >= 0) {
+        real_len =
+            std::clamp<int64_t>(num_valid_tokens - pos_offset, 0, slice_seq);
       }
     }
 
@@ -973,7 +986,7 @@ absl::Status NpuKVCache::RunDecode(absl::string_view signature) {
   return absl::OkStatus();
 }
 
-absl::Status NpuKVCache::SetVerifyPos(int start_step) {
+absl::Status NpuKVCache::SetVerifyPos(int start_step, int num_valid_tokens) {
   if (cache_update_context_.verify_input_buffers.contains(
           CacheUpdateSignatures::kInputPos)) {
     auto& pos_buf = cache_update_context_
@@ -988,16 +1001,47 @@ absl::Status NpuKVCache::SetVerifyPos(int start_step) {
       pos_ptr[i] = start_step + i;
     }
   }
+  // If the verify cache update has a `valid_mask` input, it decides which
+  // verify slices are committed, both for the in-place update (`kWH`, see
+  // `HWKVCacheUpdate`) and for the model-based one (`kModel`). The buffer is
+  // created all false, so it must be filled on every verify step: mark the
+  // first `num_valid_tokens` positions (the input token and the accepted
+  // drafts) as valid.
+  if (cache_update_context_.verify_input_buffers.contains(
+          CacheUpdateSignatures::kInputValidMask)) {
+    auto& mask_buf =
+        cache_update_context_
+            .verify_input_buffers[CacheUpdateSignatures::kInputValidMask];
+    LITERT_ASSIGN_OR_RETURN(RankedTensorType mask_type, mask_buf.TensorType());
+    if (mask_type.ElementType() != ::litert::ElementType::Bool) {
+      return absl::InvalidArgumentError("valid_mask must be Bool type");
+    }
+    LITERT_ASSIGN_OR_RETURN(size_t mask_size, mask_type.Layout().NumElements());
+    LITERT_ASSIGN_OR_RETURN(
+        auto mask_lock,
+        ::litert::TensorBufferScopedLock::Create(
+            mask_buf, ::litert::TensorBuffer::LockMode::kWrite));
+    auto* mask_ptr = static_cast<bool*>(mask_lock.second);
+    for (size_t i = 0; i < mask_size; ++i) {
+      mask_ptr[i] =
+          num_valid_tokens < 0 || i < static_cast<size_t>(num_valid_tokens);
+    }
+  }
   return absl::OkStatus();
 }
 
 absl::Status NpuKVCache::CommitVerifiedKVCache(int start_step,
+                                               int num_valid_tokens,
                                                absl::string_view signature) {
-  LITERT_RETURN_IF_ERROR(SetVerifyPos(start_step));
+  if (num_valid_tokens < 1) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("num_valid_tokens must be positive: ", num_valid_tokens));
+  }
+  LITERT_RETURN_IF_ERROR(SetVerifyPos(start_step, num_valid_tokens));
   if (method_ == KVCacheUpdateMethod::kWH) {
     return HWKVCacheUpdate(cache_update_context_.verify_input_buffers,
                            cache_update_context_.verify_output_buffers, layout_,
-                           kv_quant_params_);
+                           kv_quant_params_, num_valid_tokens);
   }
   absl::string_view sig =
       signature.empty() ? CacheUpdateSignatures::kVerifyCacheUpdate : signature;

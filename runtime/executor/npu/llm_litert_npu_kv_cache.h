@@ -51,12 +51,17 @@ absl::Status ClearKVCacheBuffers(
     int64_t init_value = 0);
 
 // Performs manual KV cache update (CPU fallback).
+//
+// If `num_valid_tokens` is non-negative and `in_buffers` has no `valid_mask`,
+// only the first `num_valid_tokens` positions of `input_pos` are written to
+// the cache (e.g. the accepted tokens of an MTP verify step).
 absl::Status HWKVCacheUpdate(
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& in_buffers,
     absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>& out_buffers,
     const NpuGraphLayout* layout,
     const absl::flat_hash_map<absl::string_view, HWQuantParams>& quant_params =
-        {});
+        {},
+    int num_valid_tokens = -1);
 
 enum class KVCacheUpdateMethod {
   kModel,
@@ -82,7 +87,7 @@ struct CacheUpdateSignatures {
 //    cache_.RunDecode();
 //
 // 3. MTP Speculative Decoding - Verification:
-//    cache_.CommitVerifiedKVCache(start_step);
+//    cache_.CommitVerifiedKVCache(start_step, num_accepted + 1);
 //
 // 4. Dynamic Context Migration:
 //    When switching from a smaller context size to a larger context size:
@@ -144,8 +149,16 @@ class NpuKVCache {
   absl::Status RunDecode(absl::string_view signature = "");
 
   // --- Stage 3: Speculative Decoding (Verify Commit) ---
-  absl::Status SetVerifyPos(int start_step);
-  absl::Status CommitVerifiedKVCache(int start_step,
+  // Fills the verify `input_pos` with `start_step + i`. If the verify cache
+  // update has a `valid_mask` input, also sets `valid_mask[i]` to
+  // `i < num_valid_tokens` (all true if `num_valid_tokens` is negative).
+  absl::Status SetVerifyPos(int start_step, int num_valid_tokens = -1);
+  // Writes the first `num_valid_tokens` verify KV slices (the bonus token and
+  // the accepted drafts) to the cache at `start_step`. The rejected drafts are
+  // not written: with a sliding-window ring buffer, they would overwrite slots
+  // that are still in the window. The model-based update (`kModel`) can only
+  // skip them if its verify signature has a `valid_mask` input.
+  absl::Status CommitVerifiedKVCache(int start_step, int num_valid_tokens,
                                      absl::string_view signature = "");
 
   // --- Stage 4: Dynamic Context Migration ---

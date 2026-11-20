@@ -885,6 +885,176 @@ TEST_F(NpuKVCacheTest, NpuKVCacheCommitVerifiedKVCacheSetsPosition) {
   EXPECT_EQ(read_lock->second[2], 102);
 }
 
+TEST_F(NpuKVCacheTest, SetVerifyPosFillsValidMaskWithNumValidTokens) {
+  InferenceContext ctx;
+  ctx.verify_input_buffers.insert_or_assign(
+      CacheUpdateSignatures::kInputPos,
+      CreateTensorBufferWithDims(std::vector<int32_t>(4, 0), ElementType::Int32,
+                                 {4}));
+  ctx.verify_input_buffers.insert_or_assign(
+      CacheUpdateSignatures::kInputValidMask,
+      CreateTensorBufferWithDims(std::vector<uint8_t>(4, 0), ElementType::Bool,
+                                 {1, 4}));
+  NpuGraphLayout layout;
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto update, NpuKVCache::CreateForTest(KVCacheUpdateMethod::kWH, nullptr,
+                                             std::move(ctx),
+                                             /*kv_quant_params=*/{}, &layout));
+
+  auto read_mask = [&]() {
+    auto lock = TensorBufferScopedLock::Create<bool>(
+        update.Context().verify_input_buffers.at(
+            CacheUpdateSignatures::kInputValidMask),
+        TensorBuffer::LockMode::kRead);
+    ABSL_CHECK(lock.HasValue());
+    return std::vector<bool>(lock->second, lock->second + 4);
+  };
+
+  LITERT_ASSERT_OK(update.SetVerifyPos(/*start_step=*/10,
+                                       /*num_valid_tokens=*/2));
+  EXPECT_THAT(read_mask(), ::testing::ElementsAre(true, true, false, false));
+
+  // Without `num_valid_tokens`, all verify tokens are valid.
+  LITERT_ASSERT_OK(update.SetVerifyPos(/*start_step=*/10));
+  EXPECT_THAT(read_mask(), ::testing::ElementsAre(true, true, true, true));
+}
+
+// A verify step of 4 tokens at positions 6..9 in an 8-slot ring buffer: with 1
+// accepted draft, only positions 6 and 7 (slots 6 and 7) are written, and slots
+// 0 and 1, which still hold positions 0 and 1 of the window, are kept.
+TEST_F(NpuKVCacheTest, HWKVCacheUpdateRingBufferWritesOnlyNumValidTokens) {
+  constexpr int kHiddenDim = 2;
+  constexpr int kCacheSeq = 8;
+  constexpr int kSliceSeq = 4;
+  const std::vector<float> cache_data(kHiddenDim * kCacheSeq, -1.0f);
+  const std::vector<float> slice_data = {1.0f, 2.0f, 3.0f, 4.0f,
+                                         5.0f, 6.0f, 7.0f, 8.0f};
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> in_buffers;
+  in_buffers.emplace(
+      "input_pos", CreateTensorBufferWithDims(std::vector<int32_t>{6, 7, 8, 9},
+                                              ElementType::Int32, {kSliceSeq}));
+  in_buffers.emplace("kv_cache_k_0", CreateTensorBufferWithDims(
+                                         cache_data, ElementType::Float32,
+                                         {1, kCacheSeq, kHiddenDim}));
+  in_buffers.emplace("kv_cache_v_0", CreateTensorBufferWithDims(
+                                         cache_data, ElementType::Float32,
+                                         {1, kCacheSeq, kHiddenDim}));
+  in_buffers.emplace("kv_slice_k_0", CreateTensorBufferWithDims(
+                                         slice_data, ElementType::Float32,
+                                         {1, kSliceSeq, kHiddenDim}));
+  in_buffers.emplace("kv_slice_v_0", CreateTensorBufferWithDims(
+                                         slice_data, ElementType::Float32,
+                                         {1, kSliceSeq, kHiddenDim}));
+  absl::flat_hash_map<absl::string_view, TensorBuffer> out_buffers;
+
+  NpuGraphLayout layout = NpuGraphLayout::Resolve(0, 0, in_buffers, nullptr);
+  layout.uses_ringbuffer = true;
+  LITERT_ASSERT_OK(HWKVCacheUpdate(in_buffers, out_buffers, &layout,
+                                   /*quant_params=*/{},
+                                   /*num_valid_tokens=*/2));
+
+  for (absl::string_view name : {"kv_cache_k_0", "kv_cache_v_0"}) {
+    auto lock = TensorBufferScopedLock::Create<float>(
+        in_buffers.at(name), TensorBuffer::LockMode::kRead);
+    ASSERT_TRUE(lock.HasValue());
+    const std::vector<float> expected = {
+        -1.0f, -1.0f,  // slot 0: kept (rejected position 8 not written)
+        -1.0f, -1.0f,  // slot 1: kept (rejected position 9 not written)
+        -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
+        -1.0f, -1.0f, -1.0f, 1.0f,  2.0f,  // slot 6: position 6
+        3.0f,  4.0f};                      // slot 7: position 7
+    EXPECT_EQ(std::vector<float>(lock->second, lock->second + 16), expected)
+        << name;
+  }
+}
+
+class NpuKVCacheCommitVerifiedTest : public NpuKVCacheTest {
+ protected:
+  static constexpr int kHiddenDim = 2;
+  static constexpr int kCacheSeq = 8;
+  static constexpr int kVerifyLen = 4;
+
+  // Returns a kWH cache whose verify step covers positions 6..9 of an 8-slot
+  // ring buffer; the cache starts filled with -1.
+  NpuKVCache CreateRingCache(bool with_valid_mask) {
+    InferenceContext ctx;
+    ctx.verify_input_buffers.emplace(
+        CacheUpdateSignatures::kInputPos,
+        CreateTensorBufferWithDims(std::vector<int32_t>(kVerifyLen, 0),
+                                   ElementType::Int32, {kVerifyLen}));
+    if (with_valid_mask) {
+      ctx.verify_input_buffers.emplace(
+          CacheUpdateSignatures::kInputValidMask,
+          CreateTensorBufferWithDims(std::vector<uint8_t>(kVerifyLen, 0),
+                                     ElementType::Bool, {1, kVerifyLen}));
+    }
+    const std::vector<float> cache_data(kHiddenDim * kCacheSeq, -1.0f);
+    std::vector<float> slice_data(kHiddenDim * kVerifyLen);
+    std::iota(slice_data.begin(), slice_data.end(), 1.0f);
+    for (absl::string_view name : {"kv_cache_k_0", "kv_cache_v_0"}) {
+      ctx.verify_input_buffers.emplace(
+          name, CreateTensorBufferWithDims(cache_data, ElementType::Float32,
+                                           {1, kCacheSeq, kHiddenDim}));
+    }
+    for (absl::string_view name : {"kv_slice_k_0", "kv_slice_v_0"}) {
+      ctx.verify_input_buffers.emplace(
+          name, CreateTensorBufferWithDims(slice_data, ElementType::Float32,
+                                           {1, kVerifyLen, kHiddenDim}));
+    }
+    layout_ = NpuGraphLayout::Resolve(0, 0, ctx.verify_input_buffers, nullptr);
+    layout_.uses_ringbuffer = true;
+    absl::StatusOr<NpuKVCache> cache = NpuKVCache::CreateForTest(
+        KVCacheUpdateMethod::kWH, nullptr, std::move(ctx),
+        /*kv_quant_params=*/{}, &layout_);
+    ABSL_CHECK_OK(cache);
+    return *std::move(cache);
+  }
+
+  static std::vector<float> ReadCacheK(NpuKVCache& cache) {
+    auto lock = TensorBufferScopedLock::Create<float>(
+        cache.Context().verify_input_buffers.at("kv_cache_k_0"),
+        TensorBuffer::LockMode::kRead);
+    ABSL_CHECK(lock.HasValue());
+    return std::vector<float>(lock->second,
+                              lock->second + kHiddenDim * kCacheSeq);
+  }
+
+  NpuGraphLayout layout_;
+};
+
+TEST_F(NpuKVCacheCommitVerifiedTest, HwCommitSkipsRejectedDrafts) {
+  for (bool with_valid_mask : {false, true}) {
+    SCOPED_TRACE(absl::StrCat("with_valid_mask=", with_valid_mask));
+    NpuKVCache cache = CreateRingCache(with_valid_mask);
+    // The input token and 1 accepted draft (positions 6 and 7); the rejected
+    // drafts at positions 8 and 9 would wrap to slots 0 and 1.
+    LITERT_ASSERT_OK(cache.CommitVerifiedKVCache(/*start_step=*/6,
+                                                 /*num_valid_tokens=*/2));
+    EXPECT_THAT(ReadCacheK(cache),
+                ::testing::ElementsAre(-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
+                                       -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
+                                       1.0f, 2.0f, 3.0f, 4.0f));
+  }
+}
+
+TEST_F(NpuKVCacheCommitVerifiedTest, HwCommitWritesAllTokensWhenAllAccepted) {
+  NpuKVCache cache = CreateRingCache(/*with_valid_mask=*/true);
+  LITERT_ASSERT_OK(cache.CommitVerifiedKVCache(
+      /*start_step=*/6, /*num_valid_tokens=*/kVerifyLen));
+  EXPECT_THAT(ReadCacheK(cache),
+              ::testing::ElementsAre(5.0f, 6.0f, 7.0f, 8.0f, -1.0f, -1.0f,
+                                     -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
+                                     1.0f, 2.0f, 3.0f, 4.0f));
+}
+
+TEST_F(NpuKVCacheCommitVerifiedTest, CommitRejectsNonPositiveNumValidTokens) {
+  NpuKVCache cache = CreateRingCache(/*with_valid_mask=*/false);
+  EXPECT_THAT(cache.CommitVerifiedKVCache(/*start_step=*/6,
+                                          /*num_valid_tokens=*/0),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST_F(NpuKVCacheTest, FillKVCacheBufferHonorsInitValueForInt8) {
   TensorBuffer buffer =
       CreateTensorBuffer(std::vector<int8_t>(16, 7), ElementType::Int8);
