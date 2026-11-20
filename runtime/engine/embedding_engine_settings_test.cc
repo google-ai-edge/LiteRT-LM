@@ -445,5 +445,37 @@ TEST(EmbeddingEngineSettingsTest, ResolveDefaultsIsIdempotent) {
             ActivationDataType::FLOAT16);
 }
 
+TEST(EmbeddingEngineSettingsTest, PerTokenOutputsGetterAndSetter) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+
+  EXPECT_FALSE(settings.GetPerTokenOutputs().IsEnabled());
+  settings.SetPerTokenOutputs(PerTokenOutputsConfig{
+      .token_embeddings = true, .hidden_state_layers = {6}});
+  EXPECT_TRUE(settings.GetPerTokenOutputs().IsEnabled());
+  EXPECT_TRUE(settings.GetPerTokenOutputs().token_embeddings);
+  ASSERT_EQ(settings.GetPerTokenOutputs().hidden_state_layers.size(), 1);
+  EXPECT_EQ(settings.GetPerTokenOutputs().hidden_state_layers[0], 6);
+  EXPECT_EQ(settings.GetMainExecutorSettings().GetPerTokenOutputs(),
+            settings.GetPerTokenOutputs());
+  EXPECT_OK(settings.Validate());
+}
+
+TEST(EmbeddingEngineSettingsTest,
+     ValidateRejectsNegativePerTokenHiddenStateLayer) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_embedding_model.tflite"));
+  ASSERT_OK_AND_ASSIGN(auto settings, EmbeddingEngineSettings::CreateDefault(
+                                          model_assets, Backend::CPU));
+  settings.SetPerTokenOutputs(PerTokenOutputsConfig{
+      .token_embeddings = false, .hidden_state_layers = {6, -1}});
+
+  EXPECT_THAT(
+      settings.Validate().message(),
+      HasSubstr("per_token_outputs.hidden_state_layers must be non-negative"));
+}
+
 }  // namespace
 }  // namespace litert::lm

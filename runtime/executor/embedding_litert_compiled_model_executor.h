@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_EMBEDDING_LITERT_COMPILED_MODEL_EXECUTOR_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -29,6 +30,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/model_resources.h"
@@ -41,8 +43,18 @@
 
 namespace litert::lm {
 
+// Owns a 64-byte-aligned rewritten FlatBuffer and the LiteRT model viewing it.
+// `storage` is declared before `model` so it outlives `model`.
+struct PatchedTextEncoderModel {
+  std::vector<uint8_t> storage;
+  litert::Model model;
+};
+
 // The EmbeddingLiteRtCompiledModelExecutor runs the two-stage embedding
 struct CompiledTextEncoderInfo {
+  // Retains the rewritten FlatBuffer/Model when per-token outputs are injected
+  // in memory at load time. Declared before `compiled_model` to outlive it.
+  std::unique_ptr<PatchedTextEncoderModel> patched_model;
   std::unique_ptr<litert::CompiledModel> compiled_model;
   std::vector<int> expected_input_dimension;
   int embedding_dimension;
@@ -227,13 +239,26 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
     std::optional<size_t> per_layer_embeddings_buffer_index;
   };
 
+  // Accumulates optional per-token outputs (`token_embeddings` and
+  // `layer_<NN>` hidden states) across one or more encoder invocations.
+  struct PerTokenOutputCollector {
+    bool collect_token_embeddings = false;
+    std::vector<int> hidden_state_layers;
+    std::vector<float> token_embeddings;
+    int token_embedding_dim = 0;
+    absl::flat_hash_map<int, std::vector<float>> hidden_states;
+    int hidden_state_dim = 0;
+  };
+
   // Selects the text encoder signature for `sequence_length` and gets (or
   // creates) its buffers.
   absl::StatusOr<EncoderRun> PrepareEncoderRun(size_t sequence_length);
 
   // Fills the input mask of `run`, runs the text encoder and returns its output
   // embedding vector. The embeddings (and per-layer embeddings, if any) inputs
-  // of `run` must be filled.
+  // of `run` must be filled. When `per_token_collector` is non-null, also
+  // appends the active `[sequence_length, dim]` rows of the requested per-token
+  // outputs.
   //
   // Args:
   //   run: The text encoder run, with its embeddings inputs filled.
@@ -241,13 +266,14 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   //   latch: The latch of a cancellable call, or nullptr. If set, the call is
   //     cancelled before the run, and an interrupted run is reported as
   //     cancelled.
+  //   per_token_collector: Optional accumulator for per-token outputs.
   //
   // Returns:
   //   The output embedding vector, or a CancelledError if `latch` is
   //   cancelled.
-  absl::StatusOr<std::vector<float>> FinishEncoderRun(const EncoderRun& run,
-                                                      size_t sequence_length,
-                                                      CancellationLatch* latch);
+  absl::StatusOr<std::vector<float>> FinishEncoderRun(
+      const EncoderRun& run, size_t sequence_length, CancellationLatch* latch,
+      PerTokenOutputCollector* per_token_collector = nullptr);
 
   // Implements ComputeEmbeddingFromInputEmbeddings(), cancellable with `latch`
   // if not null (see FinishEncoderRun).
@@ -255,13 +281,15 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
       absl::Span<const float> input_embeddings, CancellationLatch* latch);
 
   absl::StatusOr<std::vector<float>> RunEncoderForTokens(
-      absl::Span<const int32_t> tokens);
+      absl::Span<const int32_t> tokens,
+      PerTokenOutputCollector* per_token_collector = nullptr);
 
   EmbeddingLiteRtCompiledModelExecutor(
       EmbeddingExecutorSettings executor_settings, litert::Environment& env,
       std::shared_ptr<ModelResources> resources,
       std::unique_ptr<EmbeddingLookupManager> embedding_lookup,
       std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
+      std::unique_ptr<PatchedTextEncoderModel> patched_model,
       std::unique_ptr<litert::CompiledModel> compiled_model,
       std::vector<int> expected_input_dimension, int embedding_dimension,
       std::map<int, size_t> encoder_signatures,
@@ -275,6 +303,7 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   std::shared_ptr<ModelResources> resources_;
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup_;
   std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup_;
+  std::unique_ptr<PatchedTextEncoderModel> patched_model_;
   std::unique_ptr<litert::CompiledModel> compiled_model_;
   std::vector<int> expected_input_dimension_;
   int embedding_dimension_;

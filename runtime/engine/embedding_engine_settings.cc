@@ -131,6 +131,16 @@ EmbeddingEngineSettings::GetMutableMainExecutorSettings() {
   return main_executor_settings_;
 }
 
+const PerTokenOutputsConfig& EmbeddingEngineSettings::GetPerTokenOutputs()
+    const {
+  return main_executor_settings_.GetPerTokenOutputs();
+}
+
+void EmbeddingEngineSettings::SetPerTokenOutputs(
+    PerTokenOutputsConfig per_token_outputs) {
+  main_executor_settings_.SetPerTokenOutputs(std::move(per_token_outputs));
+}
+
 const std::optional<VisionExecutorSettings>&
 EmbeddingEngineSettings::GetVisionExecutorSettings() const {
   return vision_executor_settings_;
@@ -357,6 +367,14 @@ absl::Status EmbeddingEngineSettings::Validate(
       ValidateInputLengths(min_input_length_, max_input_length_));
   LITERT_RETURN_IF_ERROR(ValidateMinVisionTokensPerImage(
       min_vision_tokens_per_image_, vision_tokens_per_image_));
+  for (int layer :
+       main_executor_settings_.GetPerTokenOutputs().hidden_state_layers) {
+    if (layer < 0) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "per_token_outputs.hidden_state_layers must be non-negative, got: ",
+          layer));
+    }
+  }
 
   return absl::OkStatus();
 }

@@ -14,6 +14,7 @@
 
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 
+#include <cstddef>
 #include <ostream>
 
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -34,6 +35,15 @@ std::ostream& operator<<(std::ostream& os,
                          const EmbeddingExecutorSettings& settings) {
   os << "backend: " << settings.GetBackend() << std::endl;
   os << "npu_options: " << settings.GetNpuOptions() << std::endl;
+  const auto& per_token = settings.GetPerTokenOutputs();
+  os << "per_token_outputs: {token_embeddings: "
+     << (per_token.token_embeddings ? "true" : "false")
+     << ", hidden_state_layers: [";
+  for (size_t i = 0; i < per_token.hidden_state_layers.size(); ++i) {
+    if (i > 0) os << ", ";
+    os << per_token.hidden_state_layers[i];
+  }
+  os << "]}" << std::endl;
   return os;
 }
 

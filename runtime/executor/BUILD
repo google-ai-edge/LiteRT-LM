@@ -1230,6 +1230,7 @@ cc_library(
     deps = [
         ":executor_stats",
         ":llm_executor_io_types",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -1253,6 +1254,7 @@ cc_library(
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/memory",
@@ -1260,10 +1262,13 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
+        "@flatbuffers",
         "@litert//litert/c:litert_common",
+        "@litert//litert/cc:litert_buffer_ref",
         "@litert//litert/cc:litert_common",
         "@litert//litert/cc:litert_compiled_model",
         "@litert//litert/cc:litert_element_type",
@@ -1287,6 +1292,7 @@ cc_library(
         "//runtime/util:data_stream",
         "//runtime/util:litert_status_util",
         "//runtime/util:streamed_weights_uploader",
+        "@litert//tflite/schema:schema_fbs",
     ],
 )
 

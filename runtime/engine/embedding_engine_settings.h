@@ -90,6 +90,12 @@ class EmbeddingEngineSettings {
   const EmbeddingExecutorSettings& GetMainExecutorSettings() const;
   EmbeddingExecutorSettings& GetMutableMainExecutorSettings();
 
+  // Optional load-time injection of per-token outputs (`token_embeddings` and
+  // `layer_<NN>` residual-stream taps) into the text encoder. Forwarded to the
+  // main `EmbeddingExecutorSettings`.
+  const PerTokenOutputsConfig& GetPerTokenOutputs() const;
+  void SetPerTokenOutputs(PerTokenOutputsConfig per_token_outputs);
+
   // Returns the VisionExecutorSettings for the vision model.
   const std::optional<VisionExecutorSettings>& GetVisionExecutorSettings()
       const;
