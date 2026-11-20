@@ -48,26 +48,26 @@
 #endif  // !defined(ASSERT_OK_AND_ASSIGN)
 
 namespace testing::status {
-namespace {
+namespace internal {
 
 // Helper functions and templates to get absl::Status from arbitrary class.
-const absl::Status& GetStatus(const absl::Status& status) {
+inline const absl::Status& GetStatus(const absl::Status& status) {
   return status;
 }
 
 template <class T>
-const absl::Status& GetStatus(const absl::StatusOr<T>& statusor) {
+inline const absl::Status& GetStatus(const absl::StatusOr<T>& statusor) {
   return statusor.status();
 }
 
-}  // namespace
+}  // namespace internal
 
 MATCHER_P(StatusIs, code, "") {
-  return GetStatus(arg).code() == code;
+  return internal::GetStatus(arg).code() == code;
 }
 
 MATCHER_P2(StatusIs, code, msg, "") {
-  const auto& status = GetStatus(arg);
+  const auto& status = internal::GetStatus(arg);
   return status.code() == code &&
       testing::ExplainMatchResult(msg, status.message(), result_listener);
 }
