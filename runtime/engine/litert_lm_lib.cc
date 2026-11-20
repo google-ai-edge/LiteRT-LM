@@ -105,8 +105,6 @@ using ::nlohmann::json;
 
 // Memory check interval in milliseconds.
 constexpr int kMemoryCheckIntervalMs = 50;
-// Timeout duration for waiting until the engine is done with all the tasks.
-const absl::Duration kWaitUntilDoneTimeout = absl::Minutes(10);
 
 namespace {
 
@@ -330,8 +328,11 @@ absl::StatusOr<Message> RunSingleTurnConversation(
                     });
       ABSL_RETURN_IF_ERROR(conversation->SendMessageAsync(
           user_message, std::move(callback), std::move(args)));
-      if (absl::Status wait_status =
-              engine->WaitUntilDone(kWaitUntilDoneTimeout);
+      // Wait on the conversation's session, whose timeout is a stall timeout
+      // that restarts on progress (e.g. each prefill chunk). The engine-wide
+      // `Engine::WaitUntilDone(timeout)` is a total deadline, which fails a
+      // single CPU prefill longer than the deadline (b/587577768).
+      if (absl::Status wait_status = conversation->WaitUntilDone();
           !wait_status.ok()) {
         conversation->CancelProcess();
         return wait_status;
@@ -435,8 +436,11 @@ absl::Status RunMultiTurnConversation(const LiteRtLmSettings& settings,
           json::object({{"role", "user"}, {"content", content_list}}),
           CreatePrintMessageCallback(callback_state),
           std::move(optional_args)));
-      if (absl::Status wait_status =
-              engine->WaitUntilDone(kWaitUntilDoneTimeout);
+      // Wait on the conversation's session, whose timeout is a stall timeout
+      // that restarts on progress (e.g. each prefill chunk). The engine-wide
+      // `Engine::WaitUntilDone(timeout)` is a total deadline, which fails a
+      // single CPU prefill longer than the deadline (b/587577768).
+      if (absl::Status wait_status = conversation->WaitUntilDone();
           !wait_status.ok()) {
         conversation->CancelProcess();
         return wait_status;

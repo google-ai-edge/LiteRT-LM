@@ -498,6 +498,82 @@ TEST(LiteRtLmLibTest, RunLiteRtLmAsyncBenchmarkPrefillOverflowReturnsError) {
                testing::HasSubstr("Exceeding the maximum number of tokens")));
 }
 
+// An Engine whose engine-wide `WaitUntilDone(timeout)` always reports that its
+// total deadline expired, as it does after a CPU prefill longer than the
+// deadline (b/587577768). It only stands in for the `engine` argument of
+// `RunSingleTurnConversation`; the conversation runs on a real engine.
+class DeadlineExpiredEngine : public Engine {
+ public:
+  explicit DeadlineExpiredEngine(const Engine& real_engine)
+      : real_engine_(real_engine) {}
+
+  absl::StatusOr<std::unique_ptr<Engine::Session>> CreateSession(
+      const SessionConfig& session_config) override {
+    return absl::UnimplementedError("Not used by the test.");
+  }
+
+  absl::Status WaitUntilDone(absl::Duration timeout) override {
+    return absl::DeadlineExceededError("Engine-wide deadline expired.");
+  }
+
+  const EngineSettings& GetEngineSettings() const override {
+    return real_engine_.GetEngineSettings();
+  }
+
+  const support::Tokenizer& GetTokenizer() const override {
+    return real_engine_.GetTokenizer();
+  }
+
+  absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
+      const override {
+    return absl::UnimplementedError("Not used by the test.");
+  }
+
+  absl::StatusOr<VisionExecutorProperties> GetVisionExecutorProperties()
+      const override {
+    return absl::UnimplementedError("Not used by the test.");
+  }
+
+ private:
+  const Engine& real_engine_;
+};
+
+TEST(LiteRtLmLibTest,
+     RunSingleTurnConversationAsyncDoesNotWaitOnEngineWideDeadline) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+  settings.backend = "cpu";
+  settings.disable_cache = true;
+  settings.async = true;
+  settings.max_num_tokens = 32;
+  settings.max_output_tokens = 4;
+  ASSERT_OK_AND_ASSIGN(const EngineSettings engine_settings,
+                       CreateEngineSettings(settings));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Engine> engine,
+                       CreateEngine(settings, engine_settings));
+  ASSERT_OK_AND_ASSIGN(const ConversationConfig conversation_config,
+                       ConversationConfig::Builder()
+                           .SetSessionConfig(CreateSessionConfig(settings))
+                           .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<Conversation> conversation,
+                       Conversation::Create(*engine, conversation_config));
+  std::vector<InputData> input_data;
+  input_data.push_back(InputText("Hello"));
+  ASSERT_OK_AND_ASSIGN(const json content_list,
+                       BuildContentList(input_data, settings));
+  DeadlineExpiredEngine deadline_expired_engine(*engine);
+
+  // The async turn waits on the conversation's session (a stall timeout), so
+  // an expired engine-wide deadline doesn't fail it.
+  EXPECT_OK(RunSingleTurnConversation(content_list, settings,
+                                      &deadline_expired_engine,
+                                      conversation.get())
+                .status());
+}
+
 TEST(LiteRtLmLibTest, CreateEngineSuccess) {
   const auto model_path =
       std::filesystem::path(::testing::SrcDir()) /
