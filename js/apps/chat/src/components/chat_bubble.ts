@@ -440,12 +440,12 @@ export class LitertChatBubble extends LitElement {
         margin: 0 !important;
         padding: 8px 10px !important;
         border-radius: 8px !important;
-        background-color: var(--code-bg, #080b10) !important;
+        background-color: var(--code-bg, light-dark(#f1f5f9, #080b10)) !important;
         border: 1px solid var(--border, #262f40) !important;
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         font-size: 0.76rem !important;
         line-height: 1.45;
-        color: var(--hljs-fg, #e2e8f0);
+        color: var(--hljs-fg, light-dark(#1f2328, #e2e8f0));
         white-space: pre-wrap;
         overflow-wrap: anywhere;
         max-height: 180px;
@@ -626,18 +626,18 @@ export class LitertChatBubble extends LitElement {
 
       .message-content code {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        background-color: var(--bg-card, #171c26);
-        border: 1px solid var(--border, #262f40);
+        background-color: var(--bg-card, light-dark(#f1f5f9, #171c26));
+        border: 1px solid var(--border, light-dark(#cbd5e1, #262f40));
         padding: 1px 5px;
         border-radius: 5px;
         font-size: 0.85em;
-        color: var(--text, #f1f5f9);
+        color: var(--text, light-dark(#0f172a, #f1f5f9));
       }
 
       .message-content pre {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        background-color: var(--code-bg, #080b10);
-        border: 1px solid var(--border, #262f40);
+        background-color: var(--code-bg, light-dark(#f1f5f9, #080b10));
+        border: 1px solid var(--border, light-dark(#cbd5e1, #262f40));
         padding: 14px 16px;
         border-radius: 10px;
         overflow-x: auto;
@@ -650,6 +650,7 @@ export class LitertChatBubble extends LitElement {
         border: none;
         padding: 0;
         font-size: inherit;
+        color: var(--hljs-fg, light-dark(#1f2328, #e2e8f0));
       }
 
       .code-content-pre {
@@ -659,53 +660,10 @@ export class LitertChatBubble extends LitElement {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         font-size: 0.83rem;
         line-height: 20px;
-        color: var(--hljs-fg, #e2e8f0);
+        color: var(--hljs-fg, light-dark(#1f2328, #e2e8f0));
         background-color: transparent !important;
         border-radius: 0 !important;
         border: none !important;
-      }
-
-      /* Shadow DOM Highlight.js Theme Tokens (Dark + Light WCAG AA) */
-      .hljs {
-        color: var(--hljs-fg, #e2e8f0);
-      }
-      .hljs-comment,
-      .hljs-quote {
-        color: var(--hljs-comment, #94a3b8);
-        font-style: italic;
-      }
-      .hljs-keyword,
-      .hljs-selector-tag,
-      .hljs-literal,
-      .hljs-type,
-      .hljs-built_in {
-        color: var(--hljs-keyword, #7dd3fc);
-      }
-      .hljs-string,
-      .hljs-regexp,
-      .hljs-addition,
-      .hljs-template-variable {
-        color: var(--hljs-string, #6ee7b7);
-      }
-      .hljs-number,
-      .hljs-symbol,
-      .hljs-bullet {
-        color: var(--hljs-number, #fcd34d);
-      }
-      .hljs-title,
-      .hljs-section,
-      .hljs-function .hljs-title {
-        color: var(--hljs-title, #f9a8d4);
-      }
-      .hljs-attr,
-      .hljs-attribute,
-      .hljs-variable,
-      .hljs-params {
-        color: var(--hljs-attr, #93c5fd);
-      }
-      .hljs-name,
-      .hljs-tag {
-        color: var(--hljs-tag, #5eead4);
       }
 
       .message-actions {

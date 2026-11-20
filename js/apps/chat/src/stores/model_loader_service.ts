@@ -20,7 +20,9 @@ import {teeStream} from '../tee_stream.js';
 
 import {LocalDirectoryService} from './local_directory_service.js';
 import {parseModelReference} from './model_reference.js';
-import {CPU_TEXT_WASM_WARNING_LABEL, CustomModel, DEFAULT_EXPERIMENTAL_CONFIG, DEFAULT_MODEL_CONFIG, EXPERIMENTAL_SETTING_KEYS, getModalityConfigs, LEGACY_MODEL_PATHS, MODALITIES, ModalityBackend, ModalityConfig, type ModelLists, ModelSettings} from './settings_store.js';
+import {CPU_TEXT_WASM_WARNING_LABEL, CustomModel, DEFAULT_EXPERIMENTAL_CONFIG, DEFAULT_MODEL_CONFIG, EXPERIMENTAL_SETTING_KEYS, getModalityConfigs, getModelKey, LEGACY_MODEL_PATHS, MODALITIES, ModalityBackend, ModalityConfig, type ModelLists, MODELS, ModelSettings} from './settings_store.js';
+
+export {getModelKey};
 
 /** Converts a modality's backend setting into `@litert-lm/core`'s `Backend`. */
 export function toOptionalBackend({backend}: ModalityConfig): Backend|undefined {
@@ -228,28 +230,89 @@ export function buildUserEngineSettings(
 }
 
 /**
- * Returns a model's key in `ModelLoaderService.cachedModels`,
- * `downloadProgresses` and `downloadSpeeds`: its normalized URL, which is
- * also its key in the cache. File names aren't unique: many Hugging Face repos
- * name their model `model.litertlm`.
- */
-export function getModelKey(path: string): string {
-  try {
-    return new URL(path).href;
-  } catch {
-    return path;
-  }
-}
-
-/**
  * Local storage key for the URLs that `hf://` models (keyed by `getModelKey()`)
  * were last loaded from, which are also their keys in the cache.
  */
 const HF_MODEL_URLS_KEY = 'litertlm-hf-model-urls';
 
+const BUILT_IN_HF_URIS = new Set(MODELS.map(m => m.path));
+const HF_RESOLVE_URL_PATTERN =
+    /^https:\/\/huggingface\.co\/([^/]+\/[^/]+)\/resolve\/[^/]+\/([^/?#]+)$/;
+
 /** Formats a model's size for the model list. */
 function formatModelSize(bytes: number): string {
   return `${(bytes / 1e9).toFixed(2)} GB`;
+}
+
+function safeDecodeUriComponent(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * Synthesizes a displayable `CustomModel` entry for a cached key in
+ * `ModelLoaderService.cachedModels` when its settings entry is missing.
+ */
+export function inferCustomModelFromCacheKey(
+    cacheKey: string, sizeBytes: number): CustomModel {
+  const size = formatModelSize(sizeBytes);
+  if (cacheKey.startsWith('https://local-model/')) {
+    const rawName = cacheKey.slice('https://local-model/'.length);
+    const filename = safeDecodeUriComponent(rawName) || 'model.litertlm';
+    return {
+      name: filename.replace(/\.litertlm$/i, '') || filename,
+      filename,
+      path: cacheKey,
+      size,
+    };
+  }
+  const hfMatch = HF_RESOLVE_URL_PATTERN.exec(cacheKey);
+  if (hfMatch) {
+    const repo = hfMatch[1] ?? '';
+    const filename = safeDecodeUriComponent(hfMatch[2] ?? 'model.litertlm');
+    const repoName = repo.split('/').pop() || repo;
+    const stem = filename.replace(/\.litertlm$/i, '');
+    return {
+      name: (stem === repoName || stem === 'model') ? repoName :
+                                                      `${repoName} (${stem})`,
+      filename,
+      path: cacheKey,
+      size,
+    };
+  }
+  if (cacheKey.startsWith('hf://')) {
+    const withoutScheme = cacheKey.slice('hf://'.length);
+    const repoPart = withoutScheme.split(/[?#@]/)[0] ?? withoutScheme;
+    const repoName = repoPart.split('/').pop() || repoPart;
+    return {
+      name: repoName,
+      filename: `${repoName}.litertlm`,
+      path: cacheKey,
+      size,
+    };
+  }
+  try {
+    const parsed = new URL(cacheKey);
+    const rawBasename = parsed.pathname.split('/').pop() || cacheKey;
+    const filename = safeDecodeUriComponent(rawBasename);
+    return {
+      name: filename.replace(/\.litertlm$/i, '') || filename,
+      filename,
+      path: cacheKey,
+      size,
+    };
+  } catch {
+    const filename = safeDecodeUriComponent(cacheKey.split('/').pop() || cacheKey);
+    return {
+      name: filename.replace(/\.litertlm$/i, '') || filename,
+      filename,
+      path: cacheKey,
+      size,
+    };
+  }
 }
 
 /**
@@ -308,6 +371,8 @@ export class ModelLoaderService {
   /** Asks the user to confirm a destructive action. */
   confirmAction = (options: ConfirmDialogOptions) =>
       Promise.resolve(confirm(options.message));
+  /** Returns true when `url` is explicitly pinned in `customModels`. */
+  isPinnedCustomUrl: ((url: string) => boolean)|null = null;
   private readonly inMemoryModels = new Map<string, File>();
 
   constructor(
@@ -329,10 +394,12 @@ export class ModelLoaderService {
     try {
       const cache = await window.caches.open('litertlm-models');
       const keys = await cache.keys();
+      const cachedUrlSet = new Set(keys.map(req => req.url));
       const newCachedModels = new Map<string, number>();
+      const storedHfUrls = this.getHfModelUrls();
       // hf:// models are cached under the URL they were loaded from.
       const hfModels = new Map(
-          Object.entries(this.getHfModelUrls())
+          Object.entries(storedHfUrls)
               .map(([uri, url]) => [url, uri.replace(/#backend=cpu$/, '')]));
 
       for (const request of keys) {
@@ -341,9 +408,34 @@ export class ModelLoaderService {
           await cache.delete(request);
           continue;
         }
+        let mappedHfUri = hfModels.get(request.url);
+        if (mappedHfUri === undefined &&
+            !this.isPinnedCustomUrl?.(request.url)) {
+          const hfMatch = HF_RESOLVE_URL_PATTERN.exec(request.url);
+          const candidateUri = hfMatch ? `hf://${hfMatch[1]}` : undefined;
+          const filePart = hfMatch?.[2] ?? '';
+          if (candidateUri && BUILT_IN_HF_URIS.has(candidateUri) &&
+              /\.litertlm$/i.test(filePart)) {
+            const slot: ModalityBackend =
+                /-gpu\.litertlm$/i.test(filePart) ? 'gpu' : 'cpu';
+            const currentUrl =
+                storedHfUrls[this.getHfStorageKey(candidateUri, slot)];
+            if (currentUrl && currentUrl !== request.url &&
+                cachedUrlSet.has(currentUrl)) {
+              // Superseded revision of a built-in hf:// model whose current
+              // revision is already cached.
+              await cache.delete(request);
+              continue;
+            }
+            this.setHfModelUrl(candidateUri, request.url, slot);
+            storedHfUrls[this.getHfStorageKey(candidateUri, slot)] =
+                request.url;
+            mappedHfUri = candidateUri;
+          }
+        }
         const response = await cache.match(request);
         if (response) {
-          const key = hfModels.get(request.url) ?? request.url;
+          const key = mappedHfUri ?? request.url;
           const contentLength = response.headers.get('content-length');
           const size = contentLength ? Number(contentLength) :
                                        (await response.blob()).size;
@@ -386,7 +478,8 @@ export class ModelLoaderService {
     if (!confirmDelete) return false;
 
     if (!window.caches) {
-      const removed = this.inMemoryModels.delete(modelPath);
+      const removed = this.inMemoryModels.delete(modelPath) ||
+          this.inMemoryModels.delete(getModelKey(modelPath));
       if (removed) {
         this.updateStatus('Model cache removed successfully.');
         await this.updateCacheSize();
@@ -400,11 +493,19 @@ export class ModelLoaderService {
       const cpuHfUrl = modelPath.startsWith('hf://') ?
           this.getHfModelUrls()[this.getHfStorageKey(modelPath, 'cpu')] :
           undefined;
-      const deletedGpu = await cache.delete(gpuUrl);
+      let deletedGpu = await cache.delete(gpuUrl);
+      const normalizedKey = getModelKey(modelPath);
+      if (!deletedGpu && !modelPath.startsWith('hf://') &&
+          normalizedKey !== gpuUrl) {
+        deletedGpu = await cache.delete(normalizedKey);
+      }
       const deletedCpu =
           cpuHfUrl && cpuHfUrl !== gpuUrl ? await cache.delete(cpuHfUrl) : false;
       const deleted = deletedGpu || deletedCpu;
       if (deleted) {
+        if (modelPath.startsWith('hf://')) {
+          this.deleteHfModelUrls(modelPath);
+        }
         this.updateStatus('Model cache removed successfully.');
         await this.updateCacheSize();
       }
@@ -427,6 +528,7 @@ export class ModelLoaderService {
 
     if (!window.caches) {
       this.inMemoryModels.clear();
+      window.localStorage.removeItem(HF_MODEL_URLS_KEY);
       this.updateStatus('Model cache cleared successfully.');
       if (onDeleted) onDeleted();
       await this.updateCacheSize();
@@ -438,6 +540,7 @@ export class ModelLoaderService {
 
       const deleted = await window.caches.delete('litertlm-models');
       if (deleted) {
+        window.localStorage.removeItem(HF_MODEL_URLS_KEY);
         this.updateStatus('Model cache cleared successfully.');
         if (onDeleted) onDeleted();
         await this.updateCacheSize();
@@ -513,7 +616,8 @@ export class ModelLoaderService {
         const file = await this.localDirService.getFile(modelPath);
         modelInput = file.stream();
       } else if (!window.caches) {
-        const memFile = this.inMemoryModels.get(modelPath);
+        const memFile = this.inMemoryModels.get(modelPath) ??
+            this.inMemoryModels.get(modelKey);
         if (memFile) {
           this.updateStatus(`Loading imported model (${modelFilename})...`);
           modelInput = memFile.stream();
@@ -691,9 +795,9 @@ export class ModelLoaderService {
   }
 
   async importCustomModel(file: File): Promise<CustomModel> {
-    const path = `https://local-model/${file.name}`;
+    const path = `https://local-model/${encodeURIComponent(file.name)}`;
     const customModel: CustomModel = {
-      name: file.name.replace(/\.litertlm$/, ''),
+      name: file.name.replace(/\.litertlm$/i, ''),
       filename: file.name,
       path,
       size: `${(file.size / 1e9).toFixed(2)} GB`
@@ -852,6 +956,14 @@ export class ModelLoaderService {
     if (!modelPath.startsWith('hf://')) return;
     const urls = this.getHfModelUrls();
     urls[this.getHfStorageKey(modelPath, textBackend)] = url;
+    window.localStorage.setItem(HF_MODEL_URLS_KEY, JSON.stringify(urls));
+  }
+
+  private deleteHfModelUrls(modelPath: string) {
+    if (!modelPath.startsWith('hf://')) return;
+    const urls = this.getHfModelUrls();
+    delete urls[this.getHfStorageKey(modelPath, 'gpu')];
+    delete urls[this.getHfStorageKey(modelPath, 'cpu')];
     window.localStorage.setItem(HF_MODEL_URLS_KEY, JSON.stringify(urls));
   }
 
