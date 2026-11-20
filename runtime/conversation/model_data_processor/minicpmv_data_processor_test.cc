@@ -26,6 +26,7 @@
 #include "runtime/components/preprocessor/minicpmv_image_preprocess.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/minicpmv_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/test_utils.h"  // NOLINT
 
@@ -268,6 +269,53 @@ TEST(MiniCpmVDataProcessorTest, MismatchedImageAndMarkerCountIsRejected) {
           ->ToInputDataVector("<image_soft_token> and <image_soft_token>",
                               MessagesWithImage(280, 280), {})
           .ok());
+}
+
+TEST(MiniCpmVDataProcessorTest,
+     SanitizedRuntimeNoncePreservesLiteralImageSoftTokenInText) {
+  ASSERT_OK_AND_ASSIGN(auto processor, MiniCpmVDataProcessor::Create(
+                                           MiniCpmVDataProcessorConfig{}));
+  ASSERT_OK_AND_ASSIGN(
+      MultimodalDelimiterSanitizer sanitizer,
+      MultimodalDelimiterSanitizer::Create(
+          "{% for item in message['content'] %}<image_soft_token>{% endfor %}",
+          processor->GetMultimodalTokenRegexes()));
+  processor->SetMultimodalDelimiterNonces(sanitizer.nonces());
+
+  // 1. Text-only message containing literal `<image_soft_token>` succeeds and
+  // preserves the literal text intact.
+  const json text_only_messages = json::array(
+      {json::object({{"role", "user"},
+                     {"content", "Explain <image_soft_token> in detail."}})});
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<InputData> text_only_inputs,
+      processor->ToInputDataVector("Explain <image_soft_token> in detail.",
+                                   text_only_messages, {}));
+  ASSERT_EQ(text_only_inputs.size(), 1);
+  EXPECT_EQ(TextOf(text_only_inputs[0]),
+            "Explain <image_soft_token> in detail.");
+
+  // 2. Mixed message with a real image (marked by the runtime nonce) plus
+  // literal `<image_soft_token>` in text splices only the real image, and
+  // CloneState preserves the runtime nonce configuration on a cloned processor.
+  ASSERT_OK_AND_ASSIGN(auto cloned_processor,
+                       MiniCpmVDataProcessor::Create(
+                           MiniCpmVDataProcessorConfig{}));
+  ASSERT_OK(cloned_processor->CloneState(*processor));
+
+  const std::string rendered_mixed =
+      "prefix <image_soft_token> " + sanitizer.nonces().image_nonce_token +
+      " suffix <image_soft_token>";
+  ASSERT_OK_AND_ASSIGN(
+      const std::vector<InputData> mixed_inputs,
+      cloned_processor->ToInputDataVector(rendered_mixed,
+                                          MessagesWithImage(280, 280), {}));
+  ASSERT_EQ(mixed_inputs.size(), 5);
+  EXPECT_EQ(TextOf(mixed_inputs[0]), "prefix <image_soft_token> ");
+  EXPECT_EQ(TextOf(mixed_inputs[1]), "<image_id>0</image_id><image>");
+  ExpectSliceTensors(mixed_inputs[2]);
+  EXPECT_EQ(TextOf(mixed_inputs[3]), "</image>");
+  EXPECT_EQ(TextOf(mixed_inputs[4]), " suffix <image_soft_token>");
 }
 
 }  // namespace

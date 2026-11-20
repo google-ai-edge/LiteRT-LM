@@ -114,10 +114,13 @@ cc_library(
     deps = [
         ":data_utils",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/random",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
         "@nlohmann_json//:json",
         "@litert//litert/cc:litert_macros",
         "@litert//litert/cc:litert_tensor_buffer",
@@ -209,6 +212,7 @@ cc_library(
     deps = [
         ":config_registry",
         ":data_utils",
+        ":multimodal_processor_helper",
         "@com_google_absl//absl/base:no_destructor",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -524,6 +528,7 @@ cc_library(
         ":data_utils",
         ":minicpmv_data_processor_config",
         ":model_data_processor",
+        ":multimodal_processor_helper",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
@@ -551,6 +556,7 @@ cc_test(
     deps = [
         ":minicpmv_data_processor",
         ":minicpmv_data_processor_config",
+        ":multimodal_processor_helper",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/strings",
         "@nlohmann_json//:json",

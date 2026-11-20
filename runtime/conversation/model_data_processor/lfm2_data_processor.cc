@@ -72,6 +72,10 @@ absl::string_view Lfm2DataProcessor::CodeFenceEnd() const {
   return config_.code_fence_end;
 }
 
+MultimodalTokenRegexes Lfm2DataProcessor::GetMultimodalTokenRegexes() const {
+  return {.image_token_regex = R"regex((<\|image_start\|>|<image>))regex"};
+}
+
 absl::StatusOr<std::vector<InputData>> Lfm2DataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt, const ordered_json& messages,
     const Lfm2DataProcessorArguments& args) const {
@@ -82,6 +86,7 @@ absl::StatusOr<std::vector<InputData>> Lfm2DataProcessor::ToInputDataVectorImpl(
       .image_suffix = config_.eoi_token,
       .add_image_end = false,
   };
+  ApplyMultimodalDelimiterNonces(multi_config, GetMultimodalDelimiterNonces());
   using ImageParam = ::litert::support::ImagePreprocessParameter;
   ImageParam image_params;
   image_params.SetPatchifyConfig(ImageParam::PatchifyConfig{

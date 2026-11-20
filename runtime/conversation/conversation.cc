@@ -55,6 +55,7 @@
 #include "runtime/conversation/model_data_processor/gemma4_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
 #include "runtime/conversation/model_data_processor/model_data_processor_factory.h"
+#include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #include "runtime/conversation/prompt_utils.h"
 #include "runtime/conversation/thinking_config.h"
 #include "runtime/core/session_utils.h"
@@ -221,8 +222,9 @@ absl::Status ValidateVisualTokenBudgetForEngine(
 
 // Lightweight C++ fallback for rendering turn-based prompts when the Minijinja
 // template engine is disabled (e.g., in `:conversation_lite`).
-std::string ApplyFallbackPromptTemplate(const PromptTemplateInput& input,
-                                        const ConversationConfig& config) {
+std::string ApplyFallbackPromptTemplate(
+    const PromptTemplateInput& input, const ConversationConfig& config,
+    const std::optional<MultimodalDelimiterSanitizer>& multimodal_sanitizer) {
   const proto::PromptTemplates& prompt_templates =
       config.GetSessionConfig().GetPromptTemplates();
   const proto::LlmModelType& model_type =
@@ -304,9 +306,17 @@ std::string ApplyFallbackPromptTemplate(const PromptTemplateInput& input,
                   item["text"].is_string()) {
                 absl::StrAppend(&output, item["text"].get<std::string>());
               } else if (type == "image") {
-                absl::StrAppend(&output, "<start_of_image>");
+                absl::StrAppend(
+                    &output,
+                    multimodal_sanitizer.has_value()
+                        ? multimodal_sanitizer->fallback_image_placeholder()
+                        : "<start_of_image>");
               } else if (type == "audio") {
-                absl::StrAppend(&output, "<start_of_audio>");
+                absl::StrAppend(
+                    &output,
+                    multimodal_sanitizer.has_value()
+                        ? multimodal_sanitizer->fallback_audio_placeholder()
+                        : "<start_of_audio>");
               }
             }
           }
@@ -376,7 +386,7 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
     bool return_error_on_parse_failure, bool return_error_on_max_tokens_reached,
     std::optional<ThinkingConfig> thinking_config, bool stream_tool_calls,
     const std::string& stream_tool_calls_channel_name,
-    std::optional<bool> enable_rewinding) {
+    std::optional<bool> enable_rewinding, bool sanitize_multimodal_delimiters) {
   if (preface.has_value() && !std::holds_alternative<JsonPreface>(*preface)) {
     return absl::InvalidArgumentError("Only JsonPreface is supported for now.");
   }
@@ -469,7 +479,8 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
       std::move(constraint_provider_config), std::move(channels),
       filter_channel_content_from_kv_cache, return_error_on_parse_failure,
       return_error_on_max_tokens_reached, thinking_config, stream_tool_calls,
-      stream_tool_calls_channel_name, resolved_enable_rewinding);
+      stream_tool_calls_channel_name, resolved_enable_rewinding,
+      sanitize_multimodal_delimiters);
 }
 
 absl::StatusOr<std::string>
@@ -705,6 +716,25 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
                                &engine.GetTokenizer(),
                                session->GetSessionConfig().GetStopTokenIds(),
                                config.constrained_decoding_enabled()));
+  PromptTemplate prompt_template = config.GetPromptTemplate();
+  std::optional<MultimodalDelimiterSanitizer> multimodal_sanitizer;
+  if (config.sanitize_multimodal_delimiters()) {
+    const MultimodalTokenRegexes token_regexes =
+        model_data_processor->GetMultimodalTokenRegexes();
+    if (!token_regexes.IsEmpty()) {
+      ABSL_ASSIGN_OR_RETURN(
+          multimodal_sanitizer,
+          MultimodalDelimiterSanitizer::Create(
+              prompt_template.GetTemplateSource(), token_regexes));
+      if (multimodal_sanitizer->rewritten_template() !=
+          prompt_template.GetTemplateSource()) {
+        prompt_template =
+            PromptTemplate(multimodal_sanitizer->rewritten_template());
+      }
+      model_data_processor->SetMultimodalDelimiterNonces(
+          multimodal_sanitizer->nonces());
+    }
+  }
   std::unique_ptr<ConstraintProvider> constraint_provider;
   if (config.constraint_provider_config().has_value()) {
     ABSL_ASSIGN_OR_RETURN(
@@ -715,8 +745,8 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
   }
   auto conversation = absl::WrapUnique(new Conversation(
       engine, std::move(session), std::move(model_data_processor),
-      config.GetPreface(), config.GetPromptTemplate(), config,
-      std::move(constraint_provider)));
+      config.GetPreface(), std::move(prompt_template), config,
+      std::move(constraint_provider), std::move(multimodal_sanitizer)));
   if (config.prefill_preface_on_init() &&
       !IsEmptyPreface(config.GetPreface())) {
     std::string single_turn_text;
@@ -731,7 +761,7 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Create(
           const auto render_result,
           RenderSingleTurnTemplate(*conversation->model_data_processor_,
                                    tmp_history, config.GetPreface(), Message(),
-                                   config.GetPromptTemplate(),
+                                   conversation->prompt_template_,
                                    /*current_is_appending_message=*/false,
                                    /*append_message=*/false, extra_context));
       single_turn_text = render_result.text;
@@ -1298,8 +1328,8 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
   }
   auto new_conversation = absl::WrapUnique(new Conversation(
       engine_, std::move(session), std::move(model_data_processor),
-      config_.GetPreface(), config_.GetPromptTemplate(), config_,
-      std::move(constraint_provider)));
+      config_.GetPreface(), prompt_template_, config_,
+      std::move(constraint_provider), multimodal_sanitizer_));
   {
     absl::MutexLock lock(history_mutex_);  // NOLINT
     new_conversation->is_appending_message_ = is_appending_message_;
@@ -1310,7 +1340,12 @@ absl::StatusOr<std::unique_ptr<Conversation>> Conversation::Clone() {
 
 absl::StatusOr<std::string> Conversation::RenderMessageIntoString(
     const Message& message, OptionalArgs optional_args) {
-  return GetSingleTurnText(message, optional_args);
+  ABSL_ASSIGN_OR_RETURN(std::string rendered,
+                        GetSingleTurnText(message, optional_args));
+  if (!multimodal_sanitizer_.has_value()) {
+    return rendered;
+  }
+  return multimodal_sanitizer_->RestoreDelimiters(std::move(rendered));
 }
 
 absl::StatusOr<std::string> Conversation::RenderPrefaceIntoString(
@@ -1338,7 +1373,11 @@ absl::StatusOr<std::string> Conversation::RenderPrefaceIntoString(
   }
 
   tmpl_input.add_generation_prompt = false;
-  return ApplyTemplate(tmpl_input);
+  ABSL_ASSIGN_OR_RETURN(std::string rendered, ApplyTemplate(tmpl_input));
+  if (!multimodal_sanitizer_.has_value()) {
+    return rendered;
+  }
+  return multimodal_sanitizer_->RestoreDelimiters(std::move(rendered));
 }
 
 absl::StatusOr<std::string> Conversation::GetPrefillTextForMessages(
@@ -1488,7 +1527,7 @@ absl::StatusOr<std::string> Conversation::ApplyTemplate(
   StripBlobsFromTemplateInput(input);
   absl::StatusOr<std::string> rendered = prompt_template_.Apply(input);
   if (absl::IsUnimplemented(rendered.status())) {
-    return ApplyFallbackPromptTemplate(input, config_);
+    return ApplyFallbackPromptTemplate(input, config_, multimodal_sanitizer_);
   }
   return rendered;
 }

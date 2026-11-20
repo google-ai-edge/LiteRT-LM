@@ -69,6 +69,19 @@ class GenericDataProcessor
                : absl::string_view();
   }
 
+  MultimodalTokenRegexes GetMultimodalTokenRegexes() const override {
+    if (!config_.multimodal.has_value() ||
+        config_.multimodal->processing_config.delimiter_regex.empty()) {
+      return {};
+    }
+    const auto& proc = config_.multimodal->processing_config;
+    return {
+        .image_token_regex = proc.image_token_regex,
+        .audio_token_regex = proc.audio_token_regex,
+        .video_token_regex = proc.video_token_regex,
+    };
+  }
+
  private:
   explicit GenericDataProcessor(
       GenericDataProcessorConfig config, std::optional<Preface> preface,
