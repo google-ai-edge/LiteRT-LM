@@ -16,6 +16,7 @@
 
 import './sidebar_drawer';
 import './chat_window';
+import './code_snippet_dialog';
 import './learn_more_drawer';
 
 import {css, html, LitElement, nothing} from 'lit';
@@ -26,6 +27,7 @@ import {registerAppServiceWorker, setSandboxIframeHtml} from './util.js';
 import {ConfirmDialogOptions, LlmChatStateController} from '../state_controller.js';
 import {sharedStyles} from '../styles/shared_styles.js';
 import type {LitertChatWindow} from './chat_window.js';
+import type {LitertCodeDialog} from './code_snippet_dialog.js';
 import type {CustomDropdown} from './custom_dropdown.js';
 import type {LitertSidebar} from './sidebar_drawer.js';
 
@@ -63,6 +65,8 @@ export class LitertLmChatApp extends LitElement {
 
   @property({type: Boolean}) isLearnMoreOpen = false;
 
+  @property({type: Boolean}) isCodeDialogOpen = false;
+
   @property({type: Boolean}) isPreviewOpen = false;
 
   @property({type: String}) theme: 'dark'|'light' = 'dark';
@@ -84,6 +88,7 @@ export class LitertLmChatApp extends LitElement {
   private observedWco: WindowControlsOverlayLike|null = null;
   private previewReturnFocusEl: HTMLElement|null = null;
   private learnMoreReturnFocusEl: HTMLElement|null = null;
+  private codeDialogReturnFocusEl: HTMLElement|null = null;
   private mobileSidebarReturnFocusEl: HTMLElement|null = null;
   private lastClickedFocusable: HTMLElement|null = null;
   private lastClickTime = 0;
@@ -247,6 +252,7 @@ export class LitertLmChatApp extends LitElement {
         color: var(--text, #f1f5f9);
       }
 
+      .btn-get-code,
       .btn-toggle-learn-more {
         height: 34px;
         background-color: var(--bg-card, #171c26);
@@ -259,15 +265,34 @@ export class LitertLmChatApp extends LitElement {
         cursor: pointer;
         display: inline-flex;
         align-items: center;
+        justify-content: center;
         gap: 6px;
-        transition: border-color 0.15s ease, background-color 0.15s ease;
+        transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
         font-family: inherit;
         white-space: nowrap;
+        flex-shrink: 0;
       }
 
+      .btn-get-code:hover,
       .btn-toggle-learn-more:hover {
         border-color: var(--border-strong, #364156);
         background-color: var(--bg-elevated, #1e2432);
+      }
+
+      .btn-get-code svg {
+        flex-shrink: 0;
+        transition: color 0.15s ease;
+      }
+
+      .btn-get-code:hover svg,
+      .btn-get-code.open svg {
+        color: var(--teal, #14d4aa);
+      }
+
+      .btn-get-code.open {
+        background-color: var(--bg-elevated, #1e2432);
+        border-color: var(--teal, #14d4aa);
+        box-shadow: 0 0 0 2px var(--teal-subtle, rgba(20, 212, 170, 0.14));
       }
 
       .offline-pill {
@@ -681,6 +706,26 @@ export class LitertLmChatApp extends LitElement {
         color: var(--text, #f1f5f9);
       }
 
+      /* Runnable Code Snippet Modal Backdrop */
+      .code-dialog-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 10020;
+        background-color: var(--overlay-backdrop, rgba(4, 7, 13, 0.68));
+        backdrop-filter: blur(4px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px 16px;
+        box-sizing: border-box;
+      }
+
+      litert-code-dialog {
+        display: flex;
+        max-width: 100%;
+        max-height: min(640px, 100%);
+      }
+
       /* Non-blocking Themed Confirmation Modal */
       .confirm-backdrop {
         position: fixed;
@@ -785,13 +830,20 @@ export class LitertLmChatApp extends LitElement {
           height: 32px;
         }
 
+        .get-code-label,
         .learn-more-label {
           display: none;
         }
 
+        .btn-get-code,
         .btn-toggle-learn-more {
+          width: 32px;
           height: 32px;
-          padding: 0 8px;
+          padding: 0;
+        }
+
+        .code-dialog-backdrop {
+          padding: 12px 10px;
         }
 
         .preview-toolbar {
@@ -922,7 +974,9 @@ export class LitertLmChatApp extends LitElement {
         border-radius: 7px;
       }
 
+      :host([data-display-mode="standalone"]) .btn-get-code,
       :host([data-display-mode="standalone"]) .btn-toggle-learn-more,
+      :host([data-display-mode="window-controls-overlay"]) .btn-get-code,
       :host([data-display-mode="window-controls-overlay"]) .btn-toggle-learn-more {
         height: 30px;
         padding: 0 10px;
@@ -1009,6 +1063,7 @@ export class LitertLmChatApp extends LitElement {
         height: calc(100dvh - var(--titlebar-h));
       }
 
+      :host([data-display-mode="window-controls-overlay"]) .code-dialog-backdrop,
       :host([data-display-mode="window-controls-overlay"]) .confirm-backdrop {
         top: var(--titlebar-h);
       }
@@ -1032,12 +1087,15 @@ export class LitertLmChatApp extends LitElement {
           top: calc(162px + var(--titlebar-h));
         }
 
+        :host([data-display-mode="window-controls-overlay"]) .btn-get-code,
         :host([data-display-mode="window-controls-overlay"]) .btn-toggle-learn-more {
-          padding: 0 7px;
+          width: 30px;
+          height: 30px;
+          padding: 0;
         }
       }
 
-      @media (max-width: 680px) {
+      @media (max-width: 860px) {
         :host([data-display-mode="window-controls-overlay"]) .brand-suffix,
         :host([data-display-mode="window-controls-overlay"]) .sw-update-sub {
           display: none;
@@ -1126,6 +1184,12 @@ export class LitertLmChatApp extends LitElement {
             HTMLElement |
             null;
         if (preview) trapTabKey(e, preview);
+      } else if (this.isCodeDialogOpen) {
+        const codeDialog =
+            this.renderRoot.querySelector('#code-dialog-backdrop') as
+                HTMLElement |
+            null;
+        if (codeDialog) trapTabKey(e, codeDialog);
       } else if (this.isLearnMoreOpen) {
         const learnMore = this.renderRoot.querySelector('.sidebar-right') as
             HTMLElement |
@@ -1155,7 +1219,7 @@ export class LitertLmChatApp extends LitElement {
     if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const isModalOrDrawerTrapped = Boolean(
           this.activeConfirm || this.isPreviewOpen || this.isCameraOpen ||
-          this.isLearnMoreOpen ||
+          this.isCodeDialogOpen || this.isLearnMoreOpen ||
           (this.isSidebarOpen && this.isMobileViewport));
       const isEditable = (node: unknown): boolean => {
         if (!(node instanceof HTMLElement)) return false;
@@ -1181,6 +1245,9 @@ export class LitertLmChatApp extends LitElement {
       this.closePreview();
     } else if (this.getChatWindow()?.dismissCameraModal()) {
       e.preventDefault();
+    } else if (this.isCodeDialogOpen) {
+      e.preventDefault();
+      this.closeCodeDialog();
     } else if (this.isLearnMoreOpen) {
       e.preventDefault();
       this.closeLearnMore();
@@ -1595,6 +1662,10 @@ export class LitertLmChatApp extends LitElement {
 
   private toggleSidebar() {
     this.getChatWindow()?.closeTransientMenus();
+    if (this.isCodeDialogOpen) {
+      this.isCodeDialogOpen = false;
+      this.codeDialogReturnFocusEl = null;
+    }
     if (this.isSidebarOpen) {
       this.closeSidebar();
       return;
@@ -1647,6 +1718,10 @@ export class LitertLmChatApp extends LitElement {
 
   private focusComposer() {
     this.getChatWindow()?.closeTransientMenus();
+    if (this.isCodeDialogOpen) {
+      this.isCodeDialogOpen = false;
+      this.codeDialogReturnFocusEl = null;
+    }
     this.getChatWindow()?.focusInput();
   }
 
@@ -1658,8 +1733,46 @@ export class LitertLmChatApp extends LitElement {
     this.getChatWindow()?.openModelPicker();
   }
 
+  private toggleCodeDialog() {
+    this.getChatWindow()?.closeTransientMenus();
+    if (this.isCodeDialogOpen) {
+      this.closeCodeDialog();
+      return;
+    }
+    if (this.isLearnMoreOpen) {
+      this.isLearnMoreOpen = false;
+      this.learnMoreReturnFocusEl = null;
+    }
+    if (this.isMobileViewport && this.isSidebarOpen) {
+      this.isSidebarOpen = false;
+      this.mobileSidebarReturnFocusEl = null;
+    }
+    this.codeDialogReturnFocusEl = this.getModalReturnFocusElement() ??
+        this.renderRoot.querySelector<HTMLElement>('#btn-get-code');
+    this.isCodeDialogOpen = true;
+    void this.updateComplete.then(async () => {
+      const dialog = this.renderRoot.querySelector('litert-code-dialog') as
+          LitertCodeDialog |
+          null;
+      await dialog?.updateComplete;
+      dialog?.focusInitialElement();
+    });
+  }
+
+  private closeCodeDialog() {
+    const returnEl = this.codeDialogReturnFocusEl ??
+        this.renderRoot.querySelector<HTMLElement>('#btn-get-code');
+    this.codeDialogReturnFocusEl = null;
+    this.isCodeDialogOpen = false;
+    this.restoreFocusElement(returnEl);
+  }
+
   private toggleLearnMore() {
     this.getChatWindow()?.closeTransientMenus();
+    if (this.isCodeDialogOpen) {
+      this.isCodeDialogOpen = false;
+      this.codeDialogReturnFocusEl = null;
+    }
     if (this.isLearnMoreOpen) {
       this.closeLearnMore();
       return;
@@ -1778,13 +1891,18 @@ export class LitertLmChatApp extends LitElement {
     const isHeaderFullyInert = this.isPreviewOpen ||
         (!isWco &&
          (isBlockingDialogOpen || this.isLearnMoreOpen ||
-          isMobileSidebarModal));
-    const isWcoSidebarToggleInert =
-        isWco && (isBlockingDialogOpen || this.isLearnMoreOpen);
+          this.isCodeDialogOpen || isMobileSidebarModal));
+    const isWcoSidebarToggleInert = isWco &&
+        (isBlockingDialogOpen || this.isLearnMoreOpen ||
+         this.isCodeDialogOpen);
     const isWcoSecondaryActionsInert = isWco &&
+        (isBlockingDialogOpen || this.isLearnMoreOpen ||
+         this.isCodeDialogOpen || isMobileSidebarModal);
+    const isWcoCodeToggleInert = isWco &&
         (isBlockingDialogOpen || this.isLearnMoreOpen || isMobileSidebarModal);
-    const isWcoLearnMoreToggleInert =
-        isWco && (isBlockingDialogOpen || isMobileSidebarModal);
+    const isWcoLearnMoreToggleInert = isWco &&
+        (isBlockingDialogOpen || this.isCodeDialogOpen ||
+         isMobileSidebarModal);
     const deletedConv = this.state.chatSession.deletedConversation;
     const nextThemeMode = this.getNextThemeMode();
     const nextThemeLabel = nextThemeMode === 'system' ?
@@ -1800,7 +1918,7 @@ export class LitertLmChatApp extends LitElement {
       <!-- Mobile sidebar backdrop overlay -->
       <div
         class="sidebar-overlay ${this.isSidebarOpen ? 'open' : ''}"
-        ?inert=${isAppModalOpen || this.isCameraOpen || this.isLearnMoreOpen}
+        ?inert=${isAppModalOpen || this.isCameraOpen || this.isLearnMoreOpen || this.isCodeDialogOpen}
         @click=${this.closeSidebar}
       ></div>
 
@@ -1809,7 +1927,7 @@ export class LitertLmChatApp extends LitElement {
         id="skip-to-composer"
         type="button"
         class="skip-to-composer"
-        ?inert=${isAppModalOpen || this.isCameraOpen || this.isLearnMoreOpen || isMobileSidebarModal}
+        ?inert=${isAppModalOpen || this.isCameraOpen || this.isLearnMoreOpen || this.isCodeDialogOpen || isMobileSidebarModal}
         @click=${this.focusComposer}
       >Skip to composer</button>
 
@@ -1906,6 +2024,25 @@ export class LitertLmChatApp extends LitElement {
           </button>
 
           <button
+            id="btn-get-code"
+            type="button"
+            class="btn-get-code ${this.isCodeDialogOpen ? 'open' : ''}"
+            title="Get Code"
+            aria-label="Get Code"
+            aria-haspopup="dialog"
+            aria-expanded=${this.isCodeDialogOpen ? 'true' : 'false'}
+            aria-controls=${this.isCodeDialogOpen ? 'code-dialog-backdrop' : nothing}
+            ?inert=${isWcoCodeToggleInert}
+            @click=${this.toggleCodeDialog}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="16 18 22 12 16 6"></polyline>
+              <polyline points="8 6 2 12 8 18"></polyline>
+            </svg>
+            <span class="get-code-label">Get Code</span>
+          </button>
+
+          <button
             id="btn-toggle-learn-more"
             class="btn-toggle-learn-more"
             aria-label="Toggle Learn More"
@@ -1923,7 +2060,7 @@ export class LitertLmChatApp extends LitElement {
         </div>
       </header>
 
-      <div class="app-container" ?inert=${isAppModalOpen || this.isLearnMoreOpen}>
+      <div class="app-container" ?inert=${isAppModalOpen || this.isLearnMoreOpen || this.isCodeDialogOpen}>
         <!-- Collapsible left navigation & configuration sidebar -->
         <div
           class="sidebar ${this.isSidebarOpen ? 'open' : ''}"
@@ -1983,12 +2120,32 @@ export class LitertLmChatApp extends LitElement {
         class="sidebar-right ${this.isLearnMoreOpen ? 'open' : ''}"
         role="dialog"
         aria-modal="true"
-        ?inert=${!this.isLearnMoreOpen || isAppModalOpen || this.isCameraOpen}
+        ?inert=${!this.isLearnMoreOpen || isAppModalOpen || this.isCameraOpen || this.isCodeDialogOpen}
         aria-hidden=${!this.isLearnMoreOpen ? 'true' : 'false'}
         aria-label="About LiteRT-LM"
       >
         <litert-learn-more @close=${this.closeLearnMore}></litert-learn-more>
       </div>
+
+      <!-- Runnable Code Snippet Modal Dialog -->
+      ${this.isCodeDialogOpen ? html`
+        <div
+          id="code-dialog-backdrop"
+          class="code-dialog-backdrop"
+          ?inert=${isAppModalOpen || this.isCameraOpen}
+          @click=${(e: Event) => {
+            if (e.target === e.currentTarget) {
+              this.closeCodeDialog();
+            }
+          }}
+        >
+          <litert-code-dialog
+            .state=${this.state}
+            .open=${this.isCodeDialogOpen}
+            @close=${this.closeCodeDialog}
+          ></litert-code-dialog>
+        </div>
+      ` : nothing}
 
       <!-- Fullscreen HTML Preview Overlay -->
       <div
