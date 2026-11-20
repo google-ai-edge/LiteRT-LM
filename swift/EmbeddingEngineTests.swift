@@ -255,6 +255,29 @@ class EmbeddingEngineTests: XCTestCase {
     await engine.close()
   }
 
+  func testComputeEmbedding_UnsupportedVideoFramesThrows() async throws {
+    let config = EmbeddingEngineConfig(
+      modelPath: modelPath,
+      backend: .cpu()
+    )
+    let engine = EmbeddingEngine(config: config)
+    try await engine.initialize()
+
+    do {
+      let videoFrames = Content.videoFrames([.imageFile("/tmp/frame.png")])
+      _ = try await engine.computeEmbedding(contents: [videoFrames])
+      XCTFail("Expected failedToCreateInputData error")
+    } catch let error as LiteRTLMError {
+      XCTAssertEqual(error, .embeddingEngine(.failedToCreateInputData))
+      guard case .embeddingEngine(.failedToCreateInputData(let message)) = error else {
+        XCTFail("Expected failedToCreateInputData error, got \(error)")
+        return
+      }
+      XCTAssertTrue(message.contains("Video frames are not yet natively supported"))
+    }
+    await engine.close()
+  }
+
   func testComputeEmbedding_InvalidImageFilePathThrows() async throws {
     let config = EmbeddingEngineConfig(
       modelPath: modelPath,

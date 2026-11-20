@@ -88,4 +88,172 @@ class MessageTests: XCTestCase {
     XCTAssertEqual(message.role, .model)
     XCTAssertEqual(message.toString, "Hello Message")
   }
+
+  func testVideoFramesToJsonWithAllFrameKinds() throws {
+    let jpegData = Data([1, 2, 3])
+    let rgbData = Data(repeating: 7, count: 4 * 2 * 3)
+    let content = Content.videoFrames(
+      [
+        .imageData(jpegData, timestamp: 0.0),
+        .imageFile("/tmp/f1.png", timestamp: 0.5),
+        .pixels(rgbData, width: 4, height: 2, timestamp: 1.0),
+      ],
+      fps: 2.0
+    )
+
+    let json = content.toJson
+    XCTAssertEqual(json["type"] as? String, "video")
+    XCTAssertEqual(json["fps"] as? Double, 2.0)
+
+    let frames = try XCTUnwrap(json["frames"] as? [[String: Any]])
+    XCTAssertEqual(frames.count, 3)
+
+    XCTAssertEqual(frames[0]["blob"] as? String, jpegData.base64EncodedString())
+    XCTAssertEqual(frames[0]["timestamp"] as? Double, 0.0)
+
+    XCTAssertEqual(frames[1]["path"] as? String, "/tmp/f1.png")
+    XCTAssertEqual(frames[1]["timestamp"] as? Double, 0.5)
+
+    XCTAssertEqual(frames[2]["pixels"] as? String, rgbData.base64EncodedString())
+    XCTAssertEqual(frames[2]["width"] as? Int, 4)
+    XCTAssertEqual(frames[2]["height"] as? Int, 2)
+    XCTAssertEqual(frames[2]["timestamp"] as? Double, 1.0)
+  }
+
+  func testVideoFramesToJsonOmitsOptionalFields() throws {
+    let content = Content.videoFrames([.imageFile("/tmp/f0.png")])
+
+    let json = content.toJson
+    XCTAssertEqual(json["type"] as? String, "video")
+    XCTAssertNil(json["fps"])
+
+    let frames = try XCTUnwrap(json["frames"] as? [[String: Any]])
+    XCTAssertEqual(frames.count, 1)
+    XCTAssertEqual(frames[0]["path"] as? String, "/tmp/f0.png")
+    XCTAssertNil(frames[0]["timestamp"])
+  }
+
+  func testVideoFramesRoundTripsThroughConversationJsonToMessage() throws {
+    let jpegData = Data([1, 2, 3])
+    let rgbData = Data(repeating: 5, count: 2 * 1 * 3)
+    let expectedFrames: [VideoFrame] = [
+      .imageFile("/tmp/f0.png", timestamp: 0.0),
+      .imageData(jpegData, timestamp: 0.5),
+      .pixels(rgbData, width: 2, height: 1, timestamp: 1.0),
+    ]
+    let message = Message(
+      contents: [.videoFrames(expectedFrames, fps: 2.0), .text("What happens?")],
+      role: .user
+    )
+
+    let parsed = try Conversation.jsonToMessage(try message.jsonString)
+    XCTAssertEqual(parsed.role, .user)
+    XCTAssertEqual(parsed.contents.count, 2)
+
+    if case .videoFrames(let frames, let fps) = parsed.contents[0] {
+      XCTAssertEqual(frames, expectedFrames)
+      XCTAssertEqual(fps, 2.0)
+    } else {
+      XCTFail("Expected .videoFrames content")
+    }
+    if case .text(let text) = parsed.contents[1] {
+      XCTAssertEqual(text, "What happens?")
+    } else {
+      XCTFail("Expected .text content")
+    }
+  }
+
+  func testConversationJsonToMessageRejectsOverflowingVideoFrameDimensions() throws {
+    let json = """
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "video",
+            "frames": [
+              {"pixels": "AAAA", "width": \(Int.max), "height": 2},
+              {"path": "/tmp/valid.png"}
+            ]
+          }
+        ]
+      }
+      """
+
+    let parsed = try Conversation.jsonToMessage(json)
+    XCTAssertEqual(parsed.contents.count, 1)
+    if case .videoFrames(let frames, let fps) = parsed.contents[0] {
+      XCTAssertEqual(frames, [.imageFile("/tmp/valid.png")])
+      XCTAssertNil(fps)
+    } else {
+      XCTFail("Expected .videoFrames content")
+    }
+  }
+
+  func testConversationJsonToMessageRejectsMismatchedPixelsAndNegativeTimestamps() throws {
+    // 2x2 RGB requires 12 bytes, while "AAAA" decodes to 3 bytes.
+    let json = """
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "video",
+            "frames": [
+              {"pixels": "AAAA", "width": 2, "height": 2},
+              {"path": "/tmp/neg.png", "timestamp": -0.5},
+              {"path": "/tmp/neg_zero.png", "timestamp": -0.0},
+              {"path": "/tmp/valid.png", "timestamp": 0.0}
+            ]
+          }
+        ]
+      }
+      """
+
+    let parsed = try Conversation.jsonToMessage(json)
+    XCTAssertEqual(parsed.contents.count, 1)
+    if case .videoFrames(let frames, let fps) = parsed.contents[0] {
+      XCTAssertEqual(frames, [.imageFile("/tmp/valid.png", timestamp: 0.0)])
+      XCTAssertNil(fps)
+    } else {
+      XCTFail("Expected .videoFrames content")
+    }
+  }
+
+  func testConversationJsonToMessageRejectsInvalidFps() throws {
+    for invalidFps in ["0", "-2.0"] {
+      let json = """
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "video",
+              "fps": \(invalidFps),
+              "frames": [{"path": "/tmp/f0.png"}]
+            },
+            {"type": "text", "text": "fallback"}
+          ]
+        }
+        """
+
+      let parsed = try Conversation.jsonToMessage(json)
+      XCTAssertEqual(parsed.contents.count, 1)
+      if case .text(let text) = parsed.contents[0] {
+        XCTAssertEqual(text, "fallback")
+      } else {
+        XCTFail("Expected invalid-fps video part to be skipped")
+      }
+    }
+  }
+
+  func testVideoFrameHashableAndExpectedRgbByteCount() {
+    let frame1 = VideoFrame.imageData(Data([1, 2, 3]), timestamp: 0.5)
+    let frame2 = VideoFrame.imageData(Data([1, 2, 3]), timestamp: 0.5)
+    let frame3 = VideoFrame.imageFile("/tmp/f.png", timestamp: 0.5)
+    let set: Set<VideoFrame> = [frame1, frame2, frame3]
+    XCTAssertEqual(set.count, 2)
+
+    XCTAssertEqual(VideoFrame.expectedRgbByteCount(width: 4, height: 2), 24)
+    XCTAssertNil(VideoFrame.expectedRgbByteCount(width: 0, height: 2))
+    XCTAssertNil(VideoFrame.expectedRgbByteCount(width: 4, height: -1))
+    XCTAssertNil(VideoFrame.expectedRgbByteCount(width: Int.max, height: 2))
+  }
 }
