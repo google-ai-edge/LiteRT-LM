@@ -262,8 +262,9 @@ class ConversationConfig {
     // Sets whether to enable rewinding (`SaveCheckpoint` /
     // `RewindToCheckpoint`) instead of context saving/restoring (`SaveContext`
     // / `RestoreContext`). If not explicitly set, defaults to `false` on
-    // `Backend::CPU`, `Backend::GPU`, and `Backend::GPU_ARTISAN` when
-    // `use_autosized_ringbuffers` is enabled, and `true` otherwise.
+    // `Backend::CPU`, `Backend::GPU`, `Backend::NPU`, and
+    // `Backend::GPU_ARTISAN` when `use_autosized_ringbuffers` is enabled, and
+    // `true` otherwise.
     Builder& SetEnableRewinding(bool enable_rewinding) {
       enable_rewinding_ = enable_rewinding;
       return *this;
