@@ -72,6 +72,13 @@ bool FileExists(absl::string_view path) {
   return f.good();
 }
 
+bool IsKnownModelFileExtension(absl::string_view ext) {
+  return absl::EqualsIgnoreCase(ext, ".litertlm") ||
+         absl::EqualsIgnoreCase(ext, ".tflite") ||
+         absl::EqualsIgnoreCase(ext, ".task") ||
+         absl::EqualsIgnoreCase(ext, ".bin");
+}
+
 std::string NormalizeForMatching(absl::string_view str) {
   std::string result;
   result.reserve(str.size());
@@ -364,7 +371,7 @@ bool OmniRegistry::UnregisterModel(absl::string_view model_name) {
 
 bool OmniRegistry::IsModelRegistered(absl::string_view model_name) const {
   absl::MutexLock lock(mutex_);
-  return models_.contains(model_name);
+  return FindModelEntry(model_name) != models_.end();
 }
 
 std::vector<std::string> OmniRegistry::GetRegisteredModels() const {
@@ -375,6 +382,19 @@ std::vector<std::string> OmniRegistry::GetRegisteredModels() const {
     names.push_back(name);
   }
   return names;
+}
+
+OmniRegistry::ModelMap::const_iterator OmniRegistry::FindModelEntry(
+    absl::string_view model_name) const {
+  if (auto it = models_.find(model_name); it != models_.end()) {
+    return it;
+  }
+  for (auto it = models_.begin(); it != models_.end(); ++it) {
+    if (absl::EqualsIgnoreCase(it->first, model_name)) {
+      return it;
+    }
+  }
+  return models_.end();
 }
 
 std::string OmniRegistry::FindLongestContainedModelName(
@@ -392,24 +412,85 @@ std::string OmniRegistry::FindLongestContainedModelName(
   return best;
 }
 
-absl::StatusOr<std::string> OmniRegistry::FindModelNameForPath(
-    absl::string_view model_path) const {
-  const std::filesystem::path path{std::string(model_path)};
-  const std::string normalized_stem = NormalizeForMatching(
-      path.has_stem() ? path.stem().string() : path.string());
-  absl::MutexLock lock(mutex_);
+std::string OmniRegistry::FindModelNameForLeaf(
+    absl::string_view filename, absl::string_view stem,
+    absl::string_view extension) const {
+  if (filename.empty()) {
+    return "";
+  }
+  if (auto it = FindModelEntry(filename); it != models_.end()) {
+    return it->first;
+  }
+  const std::string normalized_stem = NormalizeForMatching(stem);
   std::string best = FindLongestContainedModelName(normalized_stem);
-  if (best.empty()) {
-    return absl::NotFoundError(
-        absl::StrCat("No registered Omni model matches path: ", model_path));
+  size_t best_len = NormalizeForMatching(best).size();
+  // When `filename` contains a dot that is not a known model file extension,
+  // `std::filesystem::path::stem()` may truncate a version suffix (e.g.
+  // `qwen2.5-omni-3b` -> `qwen2`, `minicpm-o-4.5` -> `minicpm-o-4`). Inspect
+  // the full `filename` as well, ignoring candidates that lie strictly inside a
+  // non-version extension (e.g. `.foo` in `model.foo`).
+  if (!extension.empty() && !IsKnownModelFileExtension(extension)) {
+    const std::string normalized_filename = NormalizeForMatching(filename);
+    const bool is_version_suffix =
+        extension.size() >= 2 &&
+        absl::ascii_isdigit(static_cast<unsigned char>(extension[1]));
+    for (const auto& [name, _] : models_) {
+      const std::string normalized_name = NormalizeForMatching(name);
+      if (normalized_name.size() <= best_len) {
+        continue;
+      }
+      const size_t pos = normalized_filename.find(normalized_name);
+      if (pos == std::string::npos) {
+        continue;
+      }
+      if (is_version_suffix || pos < normalized_stem.size()) {
+        best = name;
+        best_len = normalized_name.size();
+      }
+    }
+  }
+  if (auto it = FindModelEntry(stem);
+      it != models_.end() &&
+      NormalizeForMatching(it->first).size() >= best_len) {
+    return it->first;
   }
   return best;
+}
+
+absl::StatusOr<std::string> OmniRegistry::FindModelNameForPath(
+    absl::string_view model_path) const {
+  absl::string_view trimmed = model_path;
+  while (trimmed.size() > 1 &&
+         (trimmed.back() == '/' || trimmed.back() == '\\')) {
+    trimmed.remove_suffix(1);
+  }
+  const std::filesystem::path path{std::string(trimmed)};
+  const std::string filename = path.filename().string();
+  const std::string stem = path.stem().string();
+  const std::string extension = path.extension().string();
+  absl::MutexLock lock(mutex_);
+  std::string best = FindModelNameForLeaf(filename, stem, extension);
+  if (!best.empty()) {
+    return best;
+  }
+  const std::string parent = path.parent_path().filename().string();
+  if (!parent.empty()) {
+    if (auto it = FindModelEntry(parent); it != models_.end()) {
+      return it->first;
+    }
+    best = FindLongestContainedModelName(NormalizeForMatching(parent));
+    if (!best.empty()) {
+      return best;
+    }
+  }
+  return absl::NotFoundError(
+      absl::StrCat("No registered Omni model matches path: ", model_path));
 }
 
 absl::StatusOr<OmniRegistry::RegisteredModel> OmniRegistry::GetRegisteredModel(
     absl::string_view model_name) const {
   absl::MutexLock lock(mutex_);
-  auto it = models_.find(model_name);
+  auto it = FindModelEntry(model_name);
   if (it == models_.end()) {
     return absl::NotFoundError(
         absl::StrCat("Unsupported or unknown Omni model: ", model_name));
@@ -437,13 +518,9 @@ OmniRegistry::CreateSessionFactory(
 
   {
     absl::MutexLock lock(mutex_);
-    auto model_it = models_.find(resolved_model_name);
-    if (model_it == models_.end()) {
-      const std::string lower_name = absl::AsciiStrToLower(resolved_model_name);
-      model_it = models_.find(lower_name);
-      if (model_it != models_.end()) {
-        resolved_model_name = lower_name;
-      }
+    auto model_it = FindModelEntry(resolved_model_name);
+    if (model_it != models_.end()) {
+      resolved_model_name = model_it->first;
     }
     was_registered_name = (model_it != models_.end());
 

@@ -96,6 +96,7 @@ struct OmniEngineSettings {
 //
 // Supported Any2Any model names (registered in `omni/any2any/`):
 //   - "minicpm-o-4.5" / "minicpm-o" / "openbmb/MiniCPM-o-4_5"
+//   - "qwen2.5-omni-3b" / "qwen2.5-omni" / "Qwen/Qwen2.5-Omni-3B"
 class OmniEngine {
  public:
   using Settings = internal::OmniEngineSettings;

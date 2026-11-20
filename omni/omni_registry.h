@@ -123,11 +123,18 @@ class OmniRegistry {
   // Returns the list of currently registered `model_name`s.
   std::vector<std::string> GetRegisteredModels() const;
 
-  // Returns the longest registered model name contained in the file name of
-  // `model_path`, ignoring case, '-' and '_' (e.g. "kokoro" for
-  // "/x/kokoro_int8_gpu.litertlm"), or `NotFoundError` if none matches.
-  // Published model files carry variant suffixes, so their stem is usually not
-  // a registered name itself.
+  // Infers a registered model name for `model_path` by checking, in order:
+  //   1. The longest registered model name contained in the leaf component of
+  //      `model_path` (ignoring trailing slashes, case, '-' and '_'). For files
+  //      with extensions (e.g. `.litertlm`), only the stem is inspected so
+  //      extension text cannot produce spurious matches; when a dot separates
+  //      a version suffix rather than a file extension (e.g.
+  //      "/x/qwen2.5-omni-3b" or "/x/minicpm-o-4.5"), the full leaf name is
+  //      also checked so version dots are not truncated.
+  //   2. The longest registered model name contained in the parent directory
+  //      name of `model_path` (e.g. "qwen2.5-omni-3b" for
+  //      "/x/qwen2.5-omni-3b/model.litertlm").
+  // Returns `NotFoundError` if none matches.
   absl::StatusOr<std::string> FindModelNameForPath(
       absl::string_view model_path) const;
 
@@ -169,9 +176,25 @@ class OmniRegistry {
     std::string model_remote_url;
     std::shared_ptr<SessionFactoryCreator> factory_creator;
   };
+  using ModelMap = absl::flat_hash_map<std::string, ModelEntry>;
 
   friend class absl::NoDestructor<OmniRegistry>;
   OmniRegistry() = default;
+
+  // Looks up `model_name` in `models_`, checking for an exact match first and
+  // falling back to a case-insensitive scan if no exact key exists.
+  ModelMap::const_iterator FindModelEntry(absl::string_view model_name) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+
+  // Returns the longest registered model name matching the leaf component of a
+  // path (`filename` decomposed into `stem` and `extension`), checking the
+  // full `filename` when `extension` looks like a version suffix or the match
+  // spans from `stem` across the dot, and preferring an exact case-insensitive
+  // match when tied on normalized length. Returns empty if none matches.
+  std::string FindModelNameForLeaf(absl::string_view filename,
+                                   absl::string_view stem,
+                                   absl::string_view extension) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // Returns the longest registered model name whose normalized form (lowercase,
   // without '-' and '_') is contained in `normalized_target`, or an empty
@@ -182,7 +205,7 @@ class OmniRegistry {
   mutable absl::Mutex mutex_;
   absl::flat_hash_map<FactoryKey, std::shared_ptr<SessionFactoryCreator>>
       factories_ ABSL_GUARDED_BY(mutex_);
-  absl::flat_hash_map<std::string, ModelEntry> models_ ABSL_GUARDED_BY(mutex_);
+  ModelMap models_ ABSL_GUARDED_BY(mutex_);
 };
 
 using RegistrySpec = OmniRegistry::RegistrySpec;

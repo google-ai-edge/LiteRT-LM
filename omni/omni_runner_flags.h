@@ -51,8 +51,12 @@ ABSL_DECLARE_FLAG(std::string, output_path);
 // Any-to-Any session flags.
 ABSL_DECLARE_FLAG(bool, generate_audio);
 ABSL_DECLARE_FLAG(bool, generate_image);
+ABSL_DECLARE_FLAG(std::optional<std::string>, system_prompt);
 ABSL_DECLARE_FLAG(std::optional<int>, max_new_tokens);
+ABSL_DECLARE_FLAG(std::optional<int>, max_tts_tokens);
 ABSL_DECLARE_FLAG(std::optional<float>, temperature);
+ABSL_DECLARE_FLAG(std::optional<float>, tts_temperature);
+ABSL_DECLARE_FLAG(std::optional<int>, tts_top_k);
 ABSL_DECLARE_FLAG(std::optional<float>, cfg_weight);
 ABSL_DECLARE_FLAG(std::optional<float>, image_temperature);
 
@@ -60,7 +64,7 @@ ABSL_DECLARE_FLAG(std::optional<float>, image_temperature);
 ABSL_DECLARE_FLAG(float, overlap_ratio);
 ABSL_DECLARE_FLAG(std::string, text_merger_type);
 
-// TTS session flags.
+// TTS / Any-to-Any voice & language flags.
 ABSL_DECLARE_FLAG(std::string, language);
 ABSL_DECLARE_FLAG(std::string, voice);
 

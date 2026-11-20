@@ -32,6 +32,7 @@ Pre-converted on-device models are available in the Hugging Face
 | **Text-to-Image** | `bonsai-flux2` | [Bonsai-Image-ternary-4B](https://huggingface.co/litert-community/Bonsai-Image-ternary-4B) | `//omni/text2image:bonsai_flux2` | `ImageGenInputMetadata` *(optional)* + `TextInput` | `ImageOutput` |
 | **Text-to-Image** | `flux2-klein` (`flux.2-klein-4b`) | [FLUX.2-klein-4B-LiteRT](https://huggingface.co/litert-community/FLUX.2-klein-4B-LiteRT) | `//omni/text2image:flux2_klein` | `ImageGenInputMetadata` *(optional)* + `TextInput` | `ImageOutput` |
 | **Any-to-Any** | `minicpm-o-4.5` (`openbmb/MiniCPM-o-4_5`) | [MiniCPM-o-4_5](https://huggingface.co/openbmb/MiniCPM-o-4_5) | `//omni/any2any:minicpm_o` | `TextInput`, `ImageInput`, and/or `AudioInput` | `TextOutput` + `AudioOutput` |
+| **Any-to-Any** | `qwen2.5-omni-3b` (`Qwen/Qwen2.5-Omni-3B`) | [Qwen2.5-Omni-3B](https://huggingface.co/Qwen/Qwen2.5-Omni-3B) | `//omni/any2any:qwen_omni_cc` | `TextInput`, `ImageInput`, and/or `AudioInput` | `TextOutput` + `AudioOutput` |
 
 <!-- mdformat on -->
 
@@ -54,7 +55,7 @@ bazel build //omni:omni_runner
 
 `omni_runner` selects the task automatically from your input flags
 (`--audio_path` for ASR, `--text` for TTS or Text-to-Image) and infers
-`--model_name` from `--model_path` when omitted:
+`--model_name` from `--model_path` (file name or parent directory) when omitted:
 
 ```sh
 # 1. Automatic Speech Recognition (ASR): WAV -> text transcript
@@ -122,7 +123,7 @@ adb shell $DEVICE_DIR/omni_runner \
 | Flag | Default | Description |
 | :--- | :--- | :--- |
 | `--model_path` | `""` | Path to a `.litertlm` package or model directory. |
-| `--model_name` | *(inferred)* | Model name (e.g., `parakeet-tdt-0.6b-v3`, `kokoro`, `bonsai-flux2`, `minicpm-o-4.5`). |
+| `--model_name` | *(inferred)* | Model name (e.g., `parakeet-tdt-0.6b-v3`, `kokoro`, `bonsai-flux2`, `minicpm-o-4.5`, `qwen2.5-omni-3b`). |
 | `--backend` | `"cpu"` | Hardware accelerator: `cpu`, `gpu`, or `npu`. |
 | `--cache_dir` | `"/tmp/omni_cache"` | Directory for downloaded models and serialized GPU/XNNPack caches. |
 | `--audio_path` | `""` | Input WAV file for ASR or Any-to-Any. |
@@ -131,11 +132,15 @@ adb shell $DEVICE_DIR/omni_runner \
 | `--output_path` | `""` | Output file path (`.wav` for TTS/Any-to-Any audio, `.png` for Text-to-Image/Any-to-Any image, or optional `.txt` for ASR/Any-to-Any text). |
 | `--generate_audio` | `false` | Synthesize speech audio output in addition to text for Any-to-Any models. |
 | `--generate_image` | `false` | Generate an output image instead of text for Any-to-Any models. |
+| `--system_prompt` | *(model default)* | Optional system prompt override for Any-to-Any models. |
 | `--max_new_tokens` | *(model default)* | Optional maximum number of text tokens to generate for Any-to-Any models. |
+| `--max_tts_tokens` | *(model default)* | Optional maximum number of TTS audio frames to generate for Any-to-Any models. |
 | `--temperature` | *(model default)* | Optional sampling temperature for Any-to-Any text generation. |
+| `--tts_temperature` | *(model default)* | Optional TTS audio token sampling temperature for Any-to-Any models. |
+| `--tts_top_k` | *(model default)* | Optional TTS audio token top-k sampling limit for Any-to-Any models. |
 | `--cfg_weight` | *(model default)* | Optional classifier-free guidance weight for Any-to-Any image generation. |
 | `--image_temperature` | *(model default)* | Optional sampling temperature for Any-to-Any image token generation. |
-| `--language` / `--voice` | `"en-US"` / `""` | TTS language code (BCP-47) and optional voice ID (e.g., `af_heart`). |
+| `--language` / `--voice` | `""` / `""` | Optional TTS / Any-to-Any language code (BCP-47; defaults to `"en-US"` for TTS and model default for Any-to-Any) and optional voice ID (e.g., `af_heart`, `Chelsie`, `Ethan`). |
 | `--img_size` / `--steps` / `--seed` | `0` / `4` / `42` | Text-to-Image resolution, denoising steps, and random seed (`--seed` is also used for Any-to-Any image generation). |
 
 <!-- mdformat on -->

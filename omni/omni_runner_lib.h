@@ -45,8 +45,12 @@ struct OmniRunnerOptions {
   // Any-to-Any session options.
   bool generate_audio = false;
   bool generate_image = false;
+  std::optional<std::string> system_prompt;
   std::optional<int> max_new_tokens;
+  std::optional<int> max_tts_tokens;
   std::optional<float> temperature;
+  std::optional<float> tts_temperature;
+  std::optional<int> tts_top_k;
   std::optional<float> cfg_weight;
   std::optional<float> image_temperature;
 
@@ -54,8 +58,10 @@ struct OmniRunnerOptions {
   float overlap_ratio = 0.4f;
   std::string text_merger_type = "timestamp";
 
-  // TTS session options.
-  std::string language = "en-US";
+  // TTS / Any-to-Any voice & language options. When `language` is empty, TTS
+  // models default to "en-US" and Any-to-Any models use the embedded metadata
+  // default.
+  std::string language;
   std::string voice;
 
   // Text-to-Image / Any-to-Any image generation options.

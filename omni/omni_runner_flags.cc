@@ -27,7 +27,8 @@
 // Common engine flags.
 ABSL_FLAG(std::string, model_name, "",
           "Model name (e.g., parakeet-tdt-0.6b-v3, kokoro, bonsai-flux2, "
-          "minicpm-o-4.5). If empty, inferred from --model_path.");
+          "minicpm-o-4.5, qwen2.5-omni-3b). If empty, inferred from "
+          "--model_path.");
 ABSL_FLAG(std::string, model_path, "",
           "Path to a .litertlm model package or model directory.");
 ABSL_FLAG(std::string, backend, "cpu",
@@ -59,11 +60,22 @@ ABSL_FLAG(bool, generate_audio, false,
 ABSL_FLAG(bool, generate_image, false,
           "Whether to generate an output image instead of text for Any-to-Any "
           "models.");
+ABSL_FLAG(std::optional<std::string>, system_prompt, std::nullopt,
+          "Optional system prompt override for Any-to-Any models.");
 ABSL_FLAG(std::optional<int>, max_new_tokens, std::nullopt,
           "Optional maximum number of text tokens to generate for Any-to-Any "
           "models.");
+ABSL_FLAG(std::optional<int>, max_tts_tokens, std::nullopt,
+          "Optional maximum number of TTS audio frames to generate for "
+          "Any-to-Any models.");
 ABSL_FLAG(std::optional<float>, temperature, std::nullopt,
           "Optional sampling temperature for Any-to-Any text generation.");
+ABSL_FLAG(std::optional<float>, tts_temperature, std::nullopt,
+          "Optional TTS audio token sampling temperature for Any-to-Any "
+          "models.");
+ABSL_FLAG(std::optional<int>, tts_top_k, std::nullopt,
+          "Optional TTS audio token top-k sampling limit for Any-to-Any "
+          "models.");
 ABSL_FLAG(std::optional<float>, cfg_weight, std::nullopt,
           "Optional classifier-free guidance weight for Any-to-Any image "
           "generation.");
@@ -77,11 +89,14 @@ ABSL_FLAG(float, overlap_ratio, 0.4f,
 ABSL_FLAG(std::string, text_merger_type, "timestamp",
           "ASR text merger strategy: timestamp or levenshtein.");
 
-// TTS session flags.
-ABSL_FLAG(std::string, language, "en-US",
-          "TTS language code (BCP-47, e.g., en-US, es, zh-CN).");
+// TTS / Any-to-Any voice & language flags.
+ABSL_FLAG(std::string, language, "",
+          "Optional TTS / Any-to-Any language code (BCP-47, e.g., en-US, es, "
+          "zh-CN). If empty, defaults to en-US for TTS and preserves the "
+          "model's embedded default for Any-to-Any.");
 ABSL_FLAG(std::string, voice, "",
-          "Optional TTS voice ID (e.g., af_heart). If empty, uses default.");
+          "Optional TTS / Any-to-Any voice ID (e.g., af_heart, Chelsie, "
+          "Ethan). If empty, uses default.");
 
 // Text-to-Image / Any-to-Any image generation flags.
 ABSL_FLAG(int, img_size, 0,
@@ -111,8 +126,12 @@ OmniRunnerOptions BuildOmniRunnerOptionsFromFlags() {
 
   options.generate_audio = absl::GetFlag(FLAGS_generate_audio);
   options.generate_image = absl::GetFlag(FLAGS_generate_image);
+  options.system_prompt = absl::GetFlag(FLAGS_system_prompt);
   options.max_new_tokens = absl::GetFlag(FLAGS_max_new_tokens);
+  options.max_tts_tokens = absl::GetFlag(FLAGS_max_tts_tokens);
   options.temperature = absl::GetFlag(FLAGS_temperature);
+  options.tts_temperature = absl::GetFlag(FLAGS_tts_temperature);
+  options.tts_top_k = absl::GetFlag(FLAGS_tts_top_k);
   options.cfg_weight = absl::GetFlag(FLAGS_cfg_weight);
   options.image_temperature = absl::GetFlag(FLAGS_image_temperature);
 

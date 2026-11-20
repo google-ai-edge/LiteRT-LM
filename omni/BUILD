@@ -208,6 +208,7 @@ cc_test(
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_options",
         "//omni/any2any:minicpm_o",  # build_cleaner: keep
+        "//omni/any2any:qwen_omni_cc",  # build_cleaner: keep
         "//omni/base:io_types",
         "//omni/base:stage",
         "//omni/speech2text:asr_session",
@@ -326,6 +327,7 @@ omni_runner_binary(
     name = "omni_runner",
     models = [
         "//omni/any2any:minicpm_o",  # build_cleaner: keep
+        "//omni/any2any:qwen_omni_cc",  # build_cleaner: keep
         "//omni/speech2text:moonshine",  # build_cleaner: keep
         "//omni/speech2text:parakeet_ctc",  # build_cleaner: keep
         "//omni/speech2text:parakeet_tdt",  # build_cleaner: keep

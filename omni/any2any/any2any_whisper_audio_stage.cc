@@ -30,7 +30,10 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_element_type.h"  // from @litert
+#include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
+#include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/any2any/io_types.h"
 #include "omni/base/fan_out_stage.h"
@@ -49,6 +52,113 @@ constexpr int kWhisperFrameLength = 400;
 constexpr int kWhisperHopLength = 160;
 constexpr float kWhisperMelFloor = 1e-10f;
 
+struct AudioEncoderInputSpec {
+  int chunk_frames = 0;
+  bool time_major = false;
+};
+
+// Validates that `input_buffer` is a Float32 tensor with a supported positive
+// rank-2 or rank-3 (batch=1) shape matching `num_mel_bins` and exact packed
+// buffer byte size, and extracts `chunk_frames` along with whether the tensor
+// layout is time-major (`[1, chunk_frames, num_mel_bins]` /
+// `[chunk_frames, num_mel_bins]`) vs. mel-major
+// (`[1, num_mel_bins, chunk_frames]` / `[num_mel_bins, chunk_frames]`;
+// ambiguous square shapes where both dims equal `num_mel_bins` default to
+// mel-major).
+absl::StatusOr<AudioEncoderInputSpec> ParseAudioEncoderInputSpec(
+    const TensorBuffer& input_buffer, int num_mel_bins) {
+  LITERT_ASSIGN_OR_RETURN(const RankedTensorType tensor_type,
+                          input_buffer.TensorType());
+  if (tensor_type.ElementType() != ElementType::Float32) {
+    return absl::InvalidArgumentError(
+        "Any2AnyWhisperAudioStage audio_encoder_runner input tensor must have "
+        "Float32 element type.");
+  }
+  const Layout& layout = tensor_type.Layout();
+  const auto dims = layout.Dimensions();
+
+  AudioEncoderInputSpec spec;
+  if (layout.Rank() == 3 && dims[0] == 1 && dims[1] > 0 && dims[2] > 0) {
+    // Rank-3 batched input (batch = 1).
+    if (dims[1] == num_mel_bins) {
+      // Mel-major layout: [1, num_mel_bins, chunk_frames], the standard
+      // Whisper layout (e.g., in-tree MiniCPM-o and Qwen2.5-Omni exporters).
+      spec.chunk_frames = static_cast<int>(dims[2]);
+      spec.time_major = false;
+    } else if (dims[2] == num_mel_bins) {
+      // Time-major layout: [1, chunk_frames, num_mel_bins] (e.g., encoders
+      // exported with frame-major mel input).
+      spec.chunk_frames = static_cast<int>(dims[1]);
+      spec.time_major = true;
+    } else {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Any2AnyWhisperAudioStage audio_encoder_runner input shape [1, ",
+          dims[1], ", ", dims[2], "] does not match num_mel_bins (",
+          num_mel_bins, ")."));
+    }
+  } else if (layout.Rank() == 2 && dims[0] > 0 && dims[1] > 0) {
+    // Rank-2 unbatched input (no batch dimension).
+    if (dims[0] == num_mel_bins) {
+      // Mel-major layout: [num_mel_bins, chunk_frames].
+      spec.chunk_frames = static_cast<int>(dims[1]);
+      spec.time_major = false;
+    } else if (dims[1] == num_mel_bins) {
+      // Time-major layout: [chunk_frames, num_mel_bins].
+      spec.chunk_frames = static_cast<int>(dims[0]);
+      spec.time_major = true;
+    } else {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Any2AnyWhisperAudioStage audio_encoder_runner input shape [",
+          dims[0], ", ", dims[1], "] does not match num_mel_bins (",
+          num_mel_bins, ")."));
+    }
+  } else {
+    return absl::InvalidArgumentError(
+        "Any2AnyWhisperAudioStage audio_encoder_runner input tensor must have "
+        "positive shape [1, num_mel_bins, chunk_frames], [1, chunk_frames, "
+        "num_mel_bins], [num_mel_bins, chunk_frames], or [chunk_frames, "
+        "num_mel_bins].");
+  }
+
+  LITERT_ASSIGN_OR_RETURN(const size_t in_bytes, input_buffer.PackedSize());
+  const size_t expected_bytes = static_cast<size_t>(spec.chunk_frames) *
+                                static_cast<size_t>(num_mel_bins) *
+                                sizeof(float);
+  if (in_bytes != expected_bytes) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Any2AnyWhisperAudioStage audio_encoder_runner input buffer packed "
+        "size (",
+        in_bytes, " bytes) does not match shape (", expected_bytes,
+        " bytes)."));
+  }
+  return spec;
+}
+
+// Validates that `output_buffer` is a Float32 tensor whose packed byte size is
+// a positive multiple of `llm_hidden_size * sizeof(float)`, and returns the
+// corresponding maximum number of output tokens per chunk.
+absl::StatusOr<int> ParseAudioEncoderOutputMaxTokens(
+    const TensorBuffer& output_buffer, int llm_hidden_size) {
+  LITERT_ASSIGN_OR_RETURN(const RankedTensorType tensor_type,
+                          output_buffer.TensorType());
+  if (tensor_type.ElementType() != ElementType::Float32) {
+    return absl::InvalidArgumentError(
+        "Any2AnyWhisperAudioStage audio_encoder_runner output tensor must have "
+        "Float32 element type.");
+  }
+  LITERT_ASSIGN_OR_RETURN(const size_t out_bytes, output_buffer.PackedSize());
+  const size_t token_emb_bytes =
+      static_cast<size_t>(llm_hidden_size) * sizeof(float);
+  if (out_bytes == 0 || out_bytes % token_emb_bytes != 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Any2AnyWhisperAudioStage audio_encoder_runner output buffer packed "
+        "size (",
+        out_bytes, " bytes) must be a positive multiple of llm_hidden_size (",
+        llm_hidden_size, ") * sizeof(float) (", token_emb_bytes, " bytes)."));
+  }
+  return static_cast<int>(out_bytes / token_emb_bytes);
+}
+
 }  // namespace
 
 int Any2AnyWhisperAudioStage::DefaultComputeValidAudioTokens(
@@ -62,7 +172,7 @@ Any2AnyWhisperAudioStage::Any2AnyWhisperAudioStage(
     FanOutOutputQueue<OmniSession::Input, AudioInput>* absl_nonnull audio_queue,
     FanOutOutputQueue<OmniSession::Input, AudioInputMetadata>* absl_nonnull
         audio_input_metadata_queue,
-    int chunk_frames, int max_chunk_tokens,
+    int chunk_frames, int max_chunk_tokens, MelInputLayout input_layout,
     std::unique_ptr<WhisperLogMelExtractor> absl_nonnull log_mel_extractor,
     std::unique_ptr<LiteRtRunner> absl_nonnull audio_encoder_runner,
     std::vector<TensorBuffer> audio_enc_input_buffers,
@@ -72,6 +182,7 @@ Any2AnyWhisperAudioStage::Any2AnyWhisperAudioStage(
       options_(std::move(options)),
       chunk_frames_(chunk_frames),
       max_chunk_tokens_(max_chunk_tokens),
+      input_layout_(input_layout),
       input_sample_rate_hz_(options_.initial_input_sample_rate_hz),
       log_mel_extractor_(std::move(log_mel_extractor)),
       audio_encoder_runner_(std::move(audio_encoder_runner)),
@@ -115,32 +226,18 @@ Any2AnyWhisperAudioStage::Create(
         "input and output buffers.");
   }
 
-  LITERT_ASSIGN_OR_RETURN(size_t audio_enc_out_bytes,
-                          audio_enc_output_buffers[0].Size());
-  const size_t token_emb_bytes =
-      static_cast<size_t>(options.llm_hidden_size) * sizeof(float);
-  if (audio_enc_out_bytes == 0 || audio_enc_out_bytes % token_emb_bytes != 0) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Any2AnyWhisperAudioStage audio_encoder_runner output buffer size (",
-        audio_enc_out_bytes,
-        " bytes) must be a positive multiple of llm_hidden_size (",
-        options.llm_hidden_size, ") * sizeof(float) (", token_emb_bytes,
-        " bytes)."));
-  }
-  const int max_chunk_tokens =
-      static_cast<int>(audio_enc_out_bytes / token_emb_bytes);
+  ABSL_ASSIGN_OR_RETURN(
+      const int max_chunk_tokens,
+      ParseAudioEncoderOutputMaxTokens(audio_enc_output_buffers[0],
+                                       options.llm_hidden_size));
 
-  LITERT_ASSIGN_OR_RETURN(size_t in_bytes, audio_enc_input_buffers[0].Size());
-  const size_t mel_frame_bytes =
-      static_cast<size_t>(options.num_mel_bins) * sizeof(float);
-  if (in_bytes == 0 || in_bytes % mel_frame_bytes != 0) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Any2AnyWhisperAudioStage audio_encoder_runner input buffer size (",
-        in_bytes, " bytes) must be a positive multiple of num_mel_bins (",
-        options.num_mel_bins, ") * sizeof(float) (", mel_frame_bytes,
-        " bytes)."));
-  }
-  const int chunk_frames = static_cast<int>(in_bytes / mel_frame_bytes);
+  ABSL_ASSIGN_OR_RETURN(const AudioEncoderInputSpec input_spec,
+                        ParseAudioEncoderInputSpec(audio_enc_input_buffers[0],
+                                                   options.num_mel_bins));
+  const int chunk_frames = input_spec.chunk_frames;
+  const MelInputLayout input_layout = input_spec.time_major
+                                          ? MelInputLayout::kTimeMajor
+                                          : MelInputLayout::kMelMajor;
 
   const WhisperLogMelExtractor::Config mel_config{
       .sample_rate_hz = options.target_sample_rate_hz,
@@ -149,7 +246,7 @@ Any2AnyWhisperAudioStage::Create(
       .n_mels = options.num_mel_bins,
       .n_frames = chunk_frames,
       .mel_floor = kWhisperMelFloor,
-      .transpose = false,
+      .transpose = input_spec.time_major,
   };
   ABSL_ASSIGN_OR_RETURN(
       std::unique_ptr<WhisperLogMelExtractor> log_mel_extractor,
@@ -157,9 +254,9 @@ Any2AnyWhisperAudioStage::Create(
 
   return absl::WrapUnique(new Any2AnyWhisperAudioStage(
       audio_queue, audio_input_metadata_queue, chunk_frames, max_chunk_tokens,
-      std::move(log_mel_extractor), std::move(audio_encoder_runner),
-      std::move(audio_enc_input_buffers), std::move(audio_enc_output_buffers),
-      std::move(options)));
+      input_layout, std::move(log_mel_extractor),
+      std::move(audio_encoder_runner), std::move(audio_enc_input_buffers),
+      std::move(audio_enc_output_buffers), std::move(options)));
 }
 
 bool Any2AnyWhisperAudioStage::NeedScheduleInternal() const {
@@ -213,6 +310,14 @@ Any2AnyWhisperAudioStage::ProcessAudio(const AudioInput& audio) {
       float* dst = lock_and_addr.second;
       if (num_chunks == 1) {
         absl::c_copy(full_mel, dst);
+      } else if (input_layout_ == MelInputLayout::kTimeMajor) {
+        const size_t chunk_elems =
+            static_cast<size_t>(chunk_frames_) * options_.num_mel_bins;
+        const absl::Span<const float> src_chunk =
+            absl::MakeConstSpan(full_mel).subspan(
+                static_cast<size_t>(frame_offset) * options_.num_mel_bins,
+                chunk_elems);
+        absl::c_copy(src_chunk, dst);
       } else {
         for (int b = 0; b < options_.num_mel_bins; ++b) {
           const absl::Span<const float> src_row =

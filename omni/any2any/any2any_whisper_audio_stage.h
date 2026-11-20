@@ -94,12 +94,19 @@ class Any2AnyWhisperAudioStage
   void ResetInternal() override;
 
  private:
+  enum class MelInputLayout {
+    kMelMajor,   // [1, num_mel_bins, chunk_frames] or [num_mel_bins,
+                 // chunk_frames]
+    kTimeMajor,  // [1, chunk_frames, num_mel_bins] or [chunk_frames,
+                 // num_mel_bins]
+  };
+
   Any2AnyWhisperAudioStage(
       FanOutOutputQueue<OmniSession::Input, AudioInput>* absl_nonnull
           audio_queue,
       FanOutOutputQueue<OmniSession::Input, AudioInputMetadata>* absl_nonnull
           audio_input_metadata_queue,
-      int chunk_frames, int max_chunk_tokens,
+      int chunk_frames, int max_chunk_tokens, MelInputLayout input_layout,
       std::unique_ptr<WhisperLogMelExtractor> absl_nonnull log_mel_extractor,
       std::unique_ptr<LiteRtRunner> absl_nonnull audio_encoder_runner,
       std::vector<TensorBuffer> audio_enc_input_buffers,
@@ -114,6 +121,7 @@ class Any2AnyWhisperAudioStage
   Options options_;
   int chunk_frames_;
   int max_chunk_tokens_;
+  MelInputLayout input_layout_;
   int input_sample_rate_hz_;
 
   AudioResampler resampler_;

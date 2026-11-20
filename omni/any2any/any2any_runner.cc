@@ -15,8 +15,8 @@
 // Example usage:
 // bazel run -c opt \
 //   //omni/any2any:any2any_runner -- \
-//   --model_path="$HOME/models/minicpm_o/MiniCPM-o-4_5.litertlm" \
-//   --model_type="minicpm-o-4.5" \
+//   --model_path="$HOME/models/qwen2.5-omni-3b/model.litertlm" \
+//   --model_type="qwen2.5-omni-3b" \
 //   --prompt="Describe what you see and hear." \
 //   --image_path="/tmp/sample.jpg" \
 //   --output_wav="/tmp/response.wav" \
@@ -53,16 +53,19 @@
 #include "omni/omni_engine.h"
 #include "omni/omni_registry.h"
 #include "omni/omni_session.h"
-#include "omni/speech2text/file_audio_source.h"
 #include "runtime/proto/any2any_session_config.pb.h"
 #include "miniaudio.h"  // from @miniaudio
 
 ABSL_FLAG(std::string, model_path, "",
           "Path to the Any2Any .litertlm model file.");
-ABSL_FLAG(std::string, model_type, "minicpm-o-4.5",
-          "Any2Any model architecture type (e.g. 'minicpm-o-4.5').");
+ABSL_FLAG(std::string, model_type, "",
+          "Any2Any model architecture type (e.g. 'minicpm-o-4.5', "
+          "'qwen2.5-omni-3b'). If empty and --model_path is set, inferred from "
+          "--model_path; otherwise defaults to 'minicpm-o-4.5'.");
 ABSL_FLAG(std::string, prompt, "Hello! How can you help me today?",
           "Text prompt for the multimodal assistant.");
+ABSL_FLAG(std::optional<std::string>, system_prompt, std::nullopt,
+          "Optional system prompt override.");
 ABSL_FLAG(std::string, image_path, "",
           "Optional path to an input image file (PNG/JPEG).");
 ABSL_FLAG(std::string, audio_path, "",
@@ -73,7 +76,13 @@ ABSL_FLAG(std::optional<bool>, generate_audio, std::nullopt,
           "Whether to synthesize speech audio output in addition to text.");
 ABSL_FLAG(int, max_new_tokens, 512,
           "Maximum number of LLM text tokens to generate.");
+ABSL_FLAG(std::optional<int>, max_tts_tokens, std::nullopt,
+          "Optional maximum number of TTS audio frames to generate.");
 ABSL_FLAG(float, temperature, 0.7f, "Sampling temperature (0.0 for greedy).");
+ABSL_FLAG(std::optional<float>, tts_temperature, std::nullopt,
+          "Optional TTS audio token sampling temperature.");
+ABSL_FLAG(std::optional<int>, tts_top_k, std::nullopt,
+          "Optional TTS audio token top-k sampling limit.");
 ABSL_FLAG(std::string, language, "en-US", "Target output language.");
 ABSL_FLAG(std::string, voice, "default", "Target output voice identifier.");
 ABSL_FLAG(int, num_threads, 4,
@@ -84,6 +93,48 @@ ABSL_FLAG(std::string, cache_dir, "",
           "Directory to store/load backend compilation cache.");
 
 namespace {
+
+// Decodes a WAV/audio file at `audio_path` into mono float32 PCM samples
+// resampled to `sample_rate_hz`.
+absl::StatusOr<std::vector<float>> ReadWavFile(absl::string_view audio_path,
+                                               int sample_rate_hz) {
+  if (sample_rate_hz <= 0) {
+    return absl::InvalidArgumentError("Invalid audio sample rate.");
+  }
+  ma_decoder_config config =
+      ma_decoder_config_init(ma_format_f32, /*channels=*/1, sample_rate_hz);
+  ma_decoder decoder;
+  if (ma_decoder_init_file(std::string(audio_path).c_str(), &config,
+                           &decoder) != MA_SUCCESS) {
+    return absl::NotFoundError(
+        absl::StrCat("Failed to open or read WAV file: ", audio_path));
+  }
+  absl::Cleanup uninit_decoder = [&decoder] { ma_decoder_uninit(&decoder); };
+
+  constexpr ma_uint64 kChunkFrames = 16000;
+  std::vector<float> chunk(kChunkFrames);
+  std::vector<float> pcm_samples;
+  while (true) {
+    ma_uint64 frames_read = 0;
+    ma_result res = ma_decoder_read_pcm_frames(&decoder, chunk.data(),
+                                               kChunkFrames, &frames_read);
+    if (frames_read > 0) {
+      pcm_samples.insert(pcm_samples.end(), chunk.begin(),
+                         chunk.begin() + frames_read);
+    }
+    if (res == MA_AT_END) {
+      break;
+    }
+    if (res != MA_SUCCESS) {
+      return absl::InternalError(
+          absl::StrCat("Failed while reading audio frames from: ", audio_path));
+    }
+    if (frames_read == 0) {
+      break;
+    }
+  }
+  return pcm_samples;
+}
 
 absl::Status WriteWavFile(absl::string_view filename,
                           const std::vector<float>& samples, int sample_rate) {
@@ -115,7 +166,7 @@ absl::Status WriteWavFile(absl::string_view filename,
 
 absl::Status Run() {
   const std::string model_path = absl::GetFlag(FLAGS_model_path);
-  const std::string model_type_str = absl::GetFlag(FLAGS_model_type);
+  std::string model_type_str = absl::GetFlag(FLAGS_model_type);
 
   litert::omni::OmniEngine::Settings engine_settings;
   engine_settings.cache_dir = absl::GetFlag(FLAGS_cache_dir);
@@ -124,16 +175,32 @@ absl::Status Run() {
       engine_settings.backend,
       litert::omni::ParseOmniBackend(absl::GetFlag(FLAGS_backend)));
 
-  ABSL_ASSIGN_OR_RETURN(
-      litert::omni::OmniRegistry::RegisteredModel reg_model,
-      litert::omni::OmniRegistry::Get().GetRegisteredModel(model_type_str));
-  const std::string model_name = reg_model.canonical_model_name;
-
   const std::string effective_cache_dir =
       (engine_settings.cache_dir.empty() ||
        engine_settings.cache_dir == litert::omni::kNoCacheDir)
           ? "/tmp/any2any_models"
           : engine_settings.cache_dir;
+  if (!model_path.empty()) {
+    if (model_type_str.empty()) {
+      absl::StatusOr<std::string> inferred =
+          litert::omni::OmniRegistry::Get().FindModelNameForPath(model_path);
+      if (!inferred.ok()) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Could not infer --model_type from --model_path '", model_path,
+            "'. Specify --model_type explicitly (e.g. 'qwen2.5-omni-3b' or "
+            "'minicpm-o-4.5')."));
+      }
+      model_type_str = *std::move(inferred);
+    }
+  } else if (model_type_str.empty()) {
+    model_type_str = "minicpm-o-4.5";
+  }
+
+  ABSL_ASSIGN_OR_RETURN(
+      litert::omni::OmniRegistry::RegisteredModel reg_model,
+      litert::omni::OmniRegistry::Get().GetRegisteredModel(model_type_str));
+  const std::string model_name = reg_model.canonical_model_name;
+
   if (!model_path.empty()) {
     engine_settings.model_path = model_path;
   } else {
@@ -165,8 +232,27 @@ absl::Status Run() {
   } else if (!output_wav.empty()) {
     session_config.set_generate_audio(true);
   }
+  if (const std::optional<std::string> system_prompt =
+          absl::GetFlag(FLAGS_system_prompt);
+      system_prompt.has_value()) {
+    session_config.set_system_prompt(*system_prompt);
+  }
   session_config.set_max_new_tokens(absl::GetFlag(FLAGS_max_new_tokens));
+  if (const std::optional<int> max_tts_tokens =
+          absl::GetFlag(FLAGS_max_tts_tokens);
+      max_tts_tokens.has_value()) {
+    session_config.set_max_tts_tokens(*max_tts_tokens);
+  }
   session_config.set_temperature(absl::GetFlag(FLAGS_temperature));
+  if (const std::optional<float> tts_temperature =
+          absl::GetFlag(FLAGS_tts_temperature);
+      tts_temperature.has_value()) {
+    session_config.set_tts_temperature(*tts_temperature);
+  }
+  if (const std::optional<int> tts_top_k = absl::GetFlag(FLAGS_tts_top_k);
+      tts_top_k.has_value()) {
+    session_config.set_tts_top_k(*tts_top_k);
+  }
   session_config.set_language(absl::GetFlag(FLAGS_language));
   session_config.set_voice(absl::GetFlag(FLAGS_voice));
 
@@ -192,24 +278,16 @@ absl::Status Run() {
   const std::string audio_path = absl::GetFlag(FLAGS_audio_path);
   if (!audio_path.empty()) {
     ABSL_ASSIGN_OR_RETURN(
-        auto wav_source,
-        litert::omni::asr::FileAudioSource::Create(
-            audio_path, /*interval=*/absl::Seconds(10),
-            /*overlap=*/absl::ZeroDuration(), /*sample_rate_hz=*/16000));
+        std::vector<float> pcm_samples,
+        ReadWavFile(audio_path, litert::omni::kDefaultInputSampleRateHz));
     ABSL_RETURN_IF_ERROR(
         raw_input->PushInput(litert::omni::OmniSession::AudioInputMetadata{
-            .sample_rate_hz = 16000}));
-    while (true) {
-      absl::Status s = wav_source->Schedule();
-      if (absl::IsOutOfRange(s)) break;
-      ABSL_RETURN_IF_ERROR(s);
-      while (wav_source->HasOutput()) {
-        ABSL_ASSIGN_OR_RETURN(std::vector<float> chunk,
-                              wav_source->GetOutput());
-        ABSL_RETURN_IF_ERROR(
-            raw_input->PushInput(litert::omni::OmniSession::AudioInput{
-                .pcm_samples = std::move(chunk)}));
-      }
+            .sample_rate_hz = litert::omni::kDefaultInputSampleRateHz,
+            .num_channels = 1}));
+    if (!pcm_samples.empty()) {
+      ABSL_RETURN_IF_ERROR(
+          raw_input->PushInput(litert::omni::OmniSession::AudioInput{
+              .pcm_samples = std::move(pcm_samples)}));
     }
   }
 

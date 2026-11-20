@@ -218,14 +218,14 @@ absl::StatusOr<std::string> PrepareDownloadDir(absl::string_view cache_dir) {
 // Builds `OmniEngine::Settings` from `options`, staging any remote internal
 // `model_path` into `download_dir`.
 absl::StatusOr<OmniEngine::Settings> BuildEngineSettings(
-    const OmniRunnerOptions& options,
+    const OmniRunnerOptions& options, OmniEngine::Settings::Backend backend,
     [[maybe_unused]] absl::string_view download_dir) {
   OmniEngine::Settings settings;
   settings.cache_dir = options.cache_dir;
   settings.num_threads = options.num_threads;
   settings.force_fp32_on_gpu = options.force_fp32_on_gpu;
   settings.litert_dispatch_lib_dir = options.litert_dispatch_lib_dir;
-  ABSL_ASSIGN_OR_RETURN(settings.backend, ParseOmniBackend(options.backend));
+  settings.backend = backend;
 
   std::string model_path = options.model_path;
   if (!model_path.empty()) {
@@ -235,7 +235,7 @@ absl::StatusOr<OmniEngine::Settings> BuildEngineSettings(
 }
 
 // Returns `options.model_name` if specified, otherwise infers a registered
-// model name from `model_path`.
+// model name from the un-staged `model_path`.
 absl::StatusOr<std::string> ResolveModelName(const OmniRunnerOptions& options,
                                              absl::string_view model_path) {
   if (!options.model_name.empty()) {
@@ -245,20 +245,16 @@ absl::StatusOr<std::string> ResolveModelName(const OmniRunnerOptions& options,
     return absl::InvalidArgumentError(
         "Either --model_path or --model_name must be provided.");
   }
+  if (auto inferred = OmniRegistry::Get().FindModelNameForPath(model_path);
+      inferred.ok()) {
+    return *std::move(inferred);
+  }
   std::filesystem::path p{std::string(model_path)};
-  std::string model_name = p.stem().string();
-  if (model_name.empty()) {
-    model_name = p.parent_path().filename().string();
+  std::string fallback = p.stem().string();
+  if (fallback.empty()) {
+    fallback = p.parent_path().filename().string();
   }
-  // Published files carry variant suffixes (e.g. `kokoro_int8_gpu`), so fall
-  // back to the registered name contained in the file name.
-  if (!OmniRegistry::Get().IsModelRegistered(model_name)) {
-    if (auto inferred = OmniRegistry::Get().FindModelNameForPath(model_path);
-        inferred.ok()) {
-      model_name = *std::move(inferred);
-    }
-  }
-  return model_name;
+  return fallback.empty() ? std::string(model_path) : fallback;
 }
 
 // Resolves the cached path for a remote model registered in `reg`, downloading
@@ -304,17 +300,35 @@ std::unique_ptr<MessageLite> BuildAny2AnySessionConfig(
     config->set_generate_image(true);
     config->set_seed(options.seed);
   }
+  if (options.system_prompt.has_value()) {
+    config->set_system_prompt(*options.system_prompt);
+  }
   if (options.max_new_tokens.has_value()) {
     config->set_max_new_tokens(*options.max_new_tokens);
   }
+  if (options.max_tts_tokens.has_value()) {
+    config->set_max_tts_tokens(*options.max_tts_tokens);
+  }
   if (options.temperature.has_value()) {
     config->set_temperature(*options.temperature);
+  }
+  if (options.tts_temperature.has_value()) {
+    config->set_tts_temperature(*options.tts_temperature);
+  }
+  if (options.tts_top_k.has_value()) {
+    config->set_tts_top_k(*options.tts_top_k);
   }
   if (options.cfg_weight.has_value()) {
     config->set_cfg_weight(*options.cfg_weight);
   }
   if (options.image_temperature.has_value()) {
     config->set_image_temperature(*options.image_temperature);
+  }
+  if (!options.voice.empty()) {
+    config->set_voice(options.voice);
+  }
+  if (!options.language.empty()) {
+    config->set_language(options.language);
   }
   return config;
 }
@@ -381,9 +395,7 @@ absl::StatusOr<std::unique_ptr<MessageLite>> BuildText2SpeechSessionConfig(
         "supported)."));
   }
   auto config = std::make_unique<litert::lm::proto::Text2SpeechSessionConfig>();
-  if (!options.language.empty()) {
-    config->set_language(options.language);
-  }
+  config->set_language(options.language.empty() ? "en-US" : options.language);
   if (!options.voice.empty()) {
     config->set_voice(options.voice);
   }
@@ -413,8 +425,10 @@ absl::StatusOr<std::unique_ptr<MessageLite>> BuildSessionConfig(
 }
 
 // Loads any image, audio, and text inputs from `options` into `input_source`
-// and signals end-of-input.
-absl::Status PushInputs(const OmniRunnerOptions& options,
+// and signals end-of-input. When `is_streaming` is true, audio is pushed in
+// 1-second PCM chunks; otherwise the entire audio clip is pushed as a single
+// `AudioInput`.
+absl::Status PushInputs(const OmniRunnerOptions& options, bool is_streaming,
                         PushInputSource& input_source) {
   if (!options.image_path.empty()) {
     ABSL_ASSIGN_OR_RETURN(std::string bytes, LoadFile(options.image_path));
@@ -428,15 +442,20 @@ absl::Status PushInputs(const OmniRunnerOptions& options,
         ReadWavFile(options.audio_path, kDefaultInputSampleRateHz));
     ABSL_RETURN_IF_ERROR(input_source.PushInput(OmniSession::AudioInputMetadata{
         .sample_rate_hz = kDefaultInputSampleRateHz, .num_channels = 1}));
-    constexpr size_t kPushChunkSamples =
-        static_cast<size_t>(kDefaultInputSampleRateHz);  // 1-second chunks.
-    for (size_t offset = 0; offset < pcm_samples.size();
-         offset += kPushChunkSamples) {
-      const size_t end =
-          std::min(offset + kPushChunkSamples, pcm_samples.size());
-      ABSL_RETURN_IF_ERROR(input_source.PushInput(OmniSession::AudioInput{
-          .pcm_samples = std::vector<float>(pcm_samples.begin() + offset,
-                                            pcm_samples.begin() + end)}));
+    if (is_streaming) {
+      constexpr size_t kPushChunkSamples =
+          static_cast<size_t>(kDefaultInputSampleRateHz);  // 1-second chunks.
+      for (size_t offset = 0; offset < pcm_samples.size();
+           offset += kPushChunkSamples) {
+        const size_t end =
+            std::min(offset + kPushChunkSamples, pcm_samples.size());
+        ABSL_RETURN_IF_ERROR(input_source.PushInput(OmniSession::AudioInput{
+            .pcm_samples = std::vector<float>(pcm_samples.begin() + offset,
+                                              pcm_samples.begin() + end)}));
+      }
+    } else if (!pcm_samples.empty()) {
+      ABSL_RETURN_IF_ERROR(input_source.PushInput(
+          OmniSession::AudioInput{.pcm_samples = std::move(pcm_samples)}));
     }
   }
   if (!options.text.empty()) {
@@ -520,20 +539,25 @@ absl::Status RunOmniRunner(const OmniRunnerOptions& options,
 
   ABSL_ASSIGN_OR_RETURN(const std::string download_dir,
                         PrepareDownloadDir(options.cache_dir));
-  ABSL_ASSIGN_OR_RETURN(OmniEngine::Settings settings,
-                        BuildEngineSettings(options, download_dir));
+  ABSL_ASSIGN_OR_RETURN(const OmniEngine::Settings::Backend backend,
+                        ParseOmniBackend(options.backend));
+  // Resolve the model name and validate session options against the original
+  // `options.model_path` before staging any remote model file so that
+  // parent-directory inference works and unknown/invalid inputs fail fast.
   ABSL_ASSIGN_OR_RETURN(const std::string model_name,
-                        ResolveModelName(options, settings.model_path));
+                        ResolveModelName(options, options.model_path));
   ABSL_ASSIGN_OR_RETURN(const auto reg,
                         OmniRegistry::Get().GetRegisteredModel(model_name));
+  ABSL_ASSIGN_OR_RETURN(
+      const std::unique_ptr<MessageLite> session_config,
+      BuildSessionConfig(options, model_name, reg.metadata_proto_type_id));
+  ABSL_ASSIGN_OR_RETURN(OmniEngine::Settings settings,
+                        BuildEngineSettings(options, backend, download_dir));
   if (settings.model_path.empty() && !reg.model_remote_url.empty()) {
     ABSL_ASSIGN_OR_RETURN(
         settings.model_path,
         EnsureRemoteModelDownloaded(reg, model_name, download_dir));
   }
-  ABSL_ASSIGN_OR_RETURN(
-      const std::unique_ptr<MessageLite> session_config,
-      BuildSessionConfig(options, model_name, reg.metadata_proto_type_id));
 
   const absl::Time load_start = absl::Now();
   ABSL_ASSIGN_OR_RETURN(auto engine, OmniEngine::Create(model_name, settings,
@@ -546,7 +570,14 @@ absl::Status RunOmniRunner(const OmniRunnerOptions& options,
   PushInputSource* raw_input_source = input_source.get();
   ABSL_ASSIGN_OR_RETURN(auto session,
                         engine->CreateSession(std::move(input_source)));
-  ABSL_RETURN_IF_ERROR(PushInputs(options, *raw_input_source));
+  // Speech2Text models coalesce streamed 1-second PCM chunks, whereas Any2Any
+  // audio stages treat each `AudioInput` as a self-contained clip (independent
+  // mel extraction/padding, rejection of clips shorter than one 160-sample hop,
+  // and per-clip audio framing tokens in Qwen2.5-Omni), so only stream chunks
+  // for Speech2Text models.
+  const bool is_streaming =
+      (reg.metadata_proto_type_id == "litert.lm.proto.Speech2TextMetadata");
+  ABSL_RETURN_IF_ERROR(PushInputs(options, is_streaming, *raw_input_source));
 
   OutputCollector collector{
       .output_path = options.output_path,

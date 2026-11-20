@@ -333,6 +333,18 @@ TEST(OmniEngineTest, ResolvesAny2AnyModelAndForwardsOptions) {
   mismatched_config.set_overlap_ratio(0.4f);
   EXPECT_THAT(OmniEngine::Create("minicpm-o-4.5", settings, &mismatched_config),
               StatusIs(absl::StatusCode::kInvalidArgument));
+
+  EXPECT_THAT(
+      OmniEngine::Create("qwen2.5-omni-3b", settings),
+      StatusIs(absl::StatusCode::kNotFound,
+               HasSubstr("/custom/any2any_cache/qwen2.5-omni-3b.litertlm")));
+  EXPECT_THAT(
+      OmniEngine::Create("qwen2.5-omni-3b", settings, &any2any_config),
+      StatusIs(absl::StatusCode::kNotFound,
+               HasSubstr("/custom/any2any_cache/qwen2.5-omni-3b.litertlm")));
+  EXPECT_THAT(
+      OmniEngine::Create("qwen2.5-omni-3b", settings, &mismatched_config),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(OmniEngineTest, RejectsUnknownModel) {

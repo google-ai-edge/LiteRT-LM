@@ -353,6 +353,49 @@ TEST(OmniRunnerLibTest, InfersModelNameFromPathAndUsesCachedRemoteModel) {
     EXPECT_EQ(captured.model_name, "runner-infer-model");
   }
 
+  // 3b. Generic filename (`model.litertlm`) falls back to parent directory.
+  {
+    OmniRunnerOptions options;
+    options.model_path =
+        (dir / "runner_infer_model_fixed" / "model.litertlm").string();
+    options.text = "hi";
+    options.cache_dir = ":nocache";
+    std::ostringstream out;
+    ASSERT_OK(RunOmniRunner(options, out));
+    EXPECT_EQ(captured.model_name, "runner-infer-model");
+  }
+
+  // 3c. Mixed-case explicit model_name resolves case-insensitively.
+  {
+    OmniRunnerOptions options;
+    options.model_name = "Runner-Infer-Model";
+    options.model_path = (dir / "custom.litertlm").string();
+    options.text = "hi";
+    options.cache_dir = ":nocache";
+    std::ostringstream out;
+    ASSERT_OK(RunOmniRunner(options, out));
+    EXPECT_EQ(captured.model_name, "runner-infer-model");
+  }
+
+  // 3d. Version-dotted directory path without trailing slash preserves the
+  // full versioned model name over a shorter prefix alias.
+  {
+    ASSERT_OK(RegisterFakeModel("runner2", "Any2Any", behavior, &captured));
+    ASSERT_OK(
+        RegisterFakeModel("runner2.5-omni-3b", "Any2Any", behavior, &captured));
+    absl::Cleanup c = [] {
+      OmniRegistry::Get().UnregisterModel("runner2");
+      OmniRegistry::Get().UnregisterModel("runner2.5-omni-3b");
+    };
+    OmniRunnerOptions options;
+    options.model_path = (dir / "runner2.5-omni-3b").string();
+    options.text = "hi";
+    options.cache_dir = ":nocache";
+    std::ostringstream out;
+    ASSERT_OK(RunOmniRunner(options, out));
+    EXPECT_EQ(captured.model_name, "runner2.5-omni-3b");
+  }
+
   // 4. Remote URL resolves into cache_dir and skips download when cached.
   {
     const std::filesystem::path cache_dir = dir / "cache";
@@ -588,6 +631,21 @@ TEST(OmniRunnerLibTest, Text2SpeechValidatesInputsForwardsConfigAndWritesWav) {
                          HasSubstr("only accepts --text")));
   }
 
+  // Default empty language falls back to "en-US" for TTS.
+  {
+    const std::string wav_out = (dir / "default_lang.wav").string();
+    OmniRunnerOptions options;
+    options.model_name = "runner-tts-model";
+    options.text = "speak default";
+    options.output_path = wav_out;
+    options.cache_dir = ":nocache";
+    captured.tts_config.Clear();
+    out.str("");
+    ASSERT_OK(RunOmniRunner(options, out));
+    EXPECT_TRUE(captured.tts_config.has_language());
+    EXPECT_EQ(captured.tts_config.language(), "en-US");
+  }
+
   // Happy path writes valid RIFF/WAVE file.
   {
     const std::string wav_out = (dir / "out.wav").string();
@@ -598,6 +656,7 @@ TEST(OmniRunnerLibTest, Text2SpeechValidatesInputsForwardsConfigAndWritesWav) {
     options.voice = "af_heart";
     options.output_path = wav_out;
     options.cache_dir = ":nocache";
+    captured.tts_config.Clear();
     out.str("");
     ASSERT_OK(RunOmniRunner(options, out));
     EXPECT_EQ(captured.tts_config.language(), "fr-FR");
@@ -747,8 +806,10 @@ TEST(OmniRunnerLibTest, Any2AnyForwardsMultimodalInputsConfigAndProtectsMedia) {
   const std::string img_in = (dir / "in.bin").string();
   std::ofstream(img_in, std::ios::binary) << "PNG_BYTES";
   const std::string wav_in = (dir / "in.wav").string();
+  // > 16000 samples verifies Any-to-Any pushes the full audio clip in one
+  // AudioInput chunk rather than splitting into 1-second ASR chunks.
   ASSERT_OK(WriteTestWavFile(wav_in, /*sample_rate_hz=*/16000,
-                             /*num_samples=*/800));
+                             /*num_samples=*/20000));
 
   CapturedRun captured;
 
@@ -783,14 +844,23 @@ TEST(OmniRunnerLibTest, Any2AnyForwardsMultimodalInputsConfigAndProtectsMedia) {
     EXPECT_FALSE(captured.any2any_config.generate_audio());
     EXPECT_FALSE(captured.any2any_config.has_generate_image());
     EXPECT_FALSE(captured.any2any_config.generate_image());
+    EXPECT_FALSE(captured.any2any_config.has_system_prompt());
     EXPECT_EQ(captured.any2any_config.max_new_tokens(), 64);
+    EXPECT_FALSE(captured.any2any_config.has_max_tts_tokens());
     EXPECT_FLOAT_EQ(captured.any2any_config.temperature(), 0.7f);
+    EXPECT_FALSE(captured.any2any_config.has_tts_temperature());
+    EXPECT_FALSE(captured.any2any_config.has_tts_top_k());
+    EXPECT_FALSE(captured.any2any_config.has_voice());
+    EXPECT_FALSE(captured.any2any_config.has_language());
     EXPECT_FALSE(captured.any2any_config.has_seed());
-    // ImageInput + AudioInputMetadata + AudioInput + TextInput + EndOfInput.
+    // ImageInput + AudioInputMetadata + 1 full-clip AudioInput + TextInput +
+    // EndOfInput.
     ASSERT_EQ(captured.inputs.size(), 5);
     EXPECT_TRUE(std::holds_alternative<ImageInput>(captured.inputs[0]));
     EXPECT_TRUE(std::holds_alternative<AudioInputMetadata>(captured.inputs[1]));
-    EXPECT_TRUE(std::holds_alternative<AudioInput>(captured.inputs[2]));
+    ASSERT_TRUE(std::holds_alternative<AudioInput>(captured.inputs[2]));
+    EXPECT_EQ(std::get<AudioInput>(captured.inputs[2]).pcm_samples.size(),
+              20000);
     EXPECT_TRUE(std::holds_alternative<TextInput>(captured.inputs[3]));
     EXPECT_TRUE(std::holds_alternative<EndOfInput>(captured.inputs[4]));
   }
@@ -883,10 +953,22 @@ TEST(OmniRunnerLibTest, Any2AnyForwardsMultimodalInputsConfigAndProtectsMedia) {
     options.text = "Say hi";
     options.output_path = wav_out;
     options.generate_audio = true;
+    options.system_prompt = "Be concise.";
+    options.max_tts_tokens = 128;
+    options.tts_temperature = 0.6f;
+    options.tts_top_k = 20;
+    options.voice = "Chelsie";
+    options.language = "zh-CN";
     options.cache_dir = ":nocache";
     std::ostringstream out;
     ASSERT_OK(RunOmniRunner(options, out));
     EXPECT_TRUE(captured.any2any_config.generate_audio());
+    EXPECT_EQ(captured.any2any_config.system_prompt(), "Be concise.");
+    EXPECT_EQ(captured.any2any_config.max_tts_tokens(), 128);
+    EXPECT_FLOAT_EQ(captured.any2any_config.tts_temperature(), 0.6f);
+    EXPECT_EQ(captured.any2any_config.tts_top_k(), 20);
+    EXPECT_EQ(captured.any2any_config.voice(), "Chelsie");
+    EXPECT_EQ(captured.any2any_config.language(), "zh-CN");
     ASSERT_OK_AND_ASSIGN(const std::string wav_bytes, LoadFile(wav_out));
     ASSERT_GT(wav_bytes.size(), 44);
     EXPECT_THAT(wav_bytes, StartsWith("RIFF"));
@@ -895,6 +977,8 @@ TEST(OmniRunnerLibTest, Any2AnyForwardsMultimodalInputsConfigAndProtectsMedia) {
 
 TEST(OmniRunnerFlagsTest, BuildsOptionsAndRunsFromFlags) {
   absl::FlagSaver saver;
+
+  EXPECT_TRUE(BuildOmniRunnerOptionsFromFlags().language.empty());
 
   absl::SetFlag(&FLAGS_model_name, "flag-model");
   absl::SetFlag(&FLAGS_model_path, "/tmp/flag.litertlm");
@@ -909,8 +993,12 @@ TEST(OmniRunnerFlagsTest, BuildsOptionsAndRunsFromFlags) {
   absl::SetFlag(&FLAGS_output_path, "/tmp/out.txt");
   absl::SetFlag(&FLAGS_generate_audio, true);
   absl::SetFlag(&FLAGS_generate_image, true);
+  absl::SetFlag(&FLAGS_system_prompt, "You are helpful.");
   absl::SetFlag(&FLAGS_max_new_tokens, 256);
+  absl::SetFlag(&FLAGS_max_tts_tokens, 512);
   absl::SetFlag(&FLAGS_temperature, 0.8f);
+  absl::SetFlag(&FLAGS_tts_temperature, 0.7f);
+  absl::SetFlag(&FLAGS_tts_top_k, 32);
   absl::SetFlag(&FLAGS_cfg_weight, 4.5f);
   absl::SetFlag(&FLAGS_image_temperature, 0.9f);
   absl::SetFlag(&FLAGS_overlap_ratio, 0.3f);
@@ -935,8 +1023,12 @@ TEST(OmniRunnerFlagsTest, BuildsOptionsAndRunsFromFlags) {
   EXPECT_EQ(opts.output_path, "/tmp/out.txt");
   EXPECT_TRUE(opts.generate_audio);
   EXPECT_TRUE(opts.generate_image);
+  EXPECT_THAT(opts.system_prompt, Optional(Eq("You are helpful.")));
   EXPECT_THAT(opts.max_new_tokens, Optional(Eq(256)));
+  EXPECT_THAT(opts.max_tts_tokens, Optional(Eq(512)));
   EXPECT_THAT(opts.temperature, Optional(Eq(0.8f)));
+  EXPECT_THAT(opts.tts_temperature, Optional(Eq(0.7f)));
+  EXPECT_THAT(opts.tts_top_k, Optional(Eq(32)));
   EXPECT_THAT(opts.cfg_weight, Optional(Eq(4.5f)));
   EXPECT_THAT(opts.image_temperature, Optional(Eq(0.9f)));
   EXPECT_FLOAT_EQ(opts.overlap_ratio, 0.3f);

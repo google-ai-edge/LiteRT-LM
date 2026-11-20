@@ -484,8 +484,166 @@ TEST(OmniRegistryTest, FindModelNameForPathMatchesLongestRegisteredName) {
   EXPECT_THAT(
       registry.FindModelNameForPath("/x/find_test_model_v2_int8_gpu.litertlm"),
       IsOkAndHolds("find-test-model-v2"));
+  // File stem takes precedence over parent directory name.
+  EXPECT_THAT(registry.FindModelNameForPath(
+                  "/x/find_test_model_v2_dir/find_test_model_int8.litertlm"),
+              IsOkAndHolds("find-test-model"));
+  // Generic file name falls back to parent directory name.
+  EXPECT_THAT(
+      registry.FindModelNameForPath("/x/find_test_model_v2_dir/model.litertlm"),
+      IsOkAndHolds("find-test-model-v2"));
   EXPECT_THAT(registry.FindModelNameForPath("/x/unrelated.litertlm"),
               StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(OmniRegistryTest, FindModelNameForPathHandlesVersionDotsAndExtensions) {
+  auto& registry = OmniRegistry::Get();
+  const auto factory = [](absl::string_view, const OmniEngine::Settings&,
+                          const MessageLite* absl_nullable,
+                          const MessageLite* absl_nullable,
+                          ::litert::Environment&, ::litert::Options&,
+                          std::shared_ptr<lm::ModelResources> absl_nullable)
+      -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+    return std::make_unique<FakeSessionFactory>();
+  };
+  ASSERT_OK(registry.RegisterSessionFactory(RegistrySpec{
+      .model_names = {"dot-qwen2", "dot-qwen2.5-omni-3b", "dot-minicpm-o",
+                      "dot-minicpm-o-4.5", "litert", "fooext", "dot-prefix",
+                      "dot-prefix.l", "dot.named.model"},
+      .get_session_factory = factory,
+      .session_config_type_id = "Any2Any",
+  }));
+  absl::Cleanup cleanup = [&] {
+    registry.UnregisterModel("dot-qwen2");
+    registry.UnregisterModel("dot-qwen2.5-omni-3b");
+    registry.UnregisterModel("dot-minicpm-o");
+    registry.UnregisterModel("dot-minicpm-o-4.5");
+    registry.UnregisterModel("litert");
+    registry.UnregisterModel("fooext");
+    registry.UnregisterModel("dot-prefix");
+    registry.UnregisterModel("dot-prefix.l");
+    registry.UnregisterModel("dot.named.model");
+  };
+
+  // Directory paths with version dots and no trailing slash must not lose the
+  // suffix after `.` to `path::stem()`, and must prefer the longer versioned
+  // model over shorter prefix aliases (e.g. `dot-qwen2`, `dot-minicpm-o`).
+  EXPECT_THAT(registry.FindModelNameForPath("/x/dot-qwen2.5-omni-3b"),
+              IsOkAndHolds("dot-qwen2.5-omni-3b"));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/dot-qwen2.5-omni-3b/"),
+              IsOkAndHolds("dot-qwen2.5-omni-3b"));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/dot-qwen2.5-omni-3b//"),
+              IsOkAndHolds("dot-qwen2.5-omni-3b"));
+  EXPECT_THAT(registry.FindModelNameForPath("dot-qwen2.5-omni-3b"),
+              IsOkAndHolds("dot-qwen2.5-omni-3b"));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/dot-qwen2.5-omni-3b_int8"),
+              IsOkAndHolds("dot-qwen2.5-omni-3b"));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/dot-qwen2.5-omni-3b_int8/"),
+              IsOkAndHolds("dot-qwen2.5-omni-3b"));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/dot-minicpm-o-4.5"),
+              IsOkAndHolds("dot-minicpm-o-4.5"));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/dot-minicpm-o-4.5/"),
+              IsOkAndHolds("dot-minicpm-o-4.5"));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/dot-minicpm-o-4.5_fp16"),
+              IsOkAndHolds("dot-minicpm-o-4.5"));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/v1.0_dot-minicpm-o"),
+              IsOkAndHolds("dot-minicpm-o"));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/prefix_dot.named.model_v2"),
+              IsOkAndHolds("dot.named.model"));
+
+  // `.litertlm` file names with version dots and generic filenames under a
+  // dotted parent directory.
+  EXPECT_THAT(
+      registry.FindModelNameForPath("/x/foo/dot-qwen2.5-omni-3b.litertlm"),
+      IsOkAndHolds("dot-qwen2.5-omni-3b"));
+  EXPECT_THAT(
+      registry.FindModelNameForPath("/x/dot-qwen2.5-omni-3b/model.litertlm"),
+      IsOkAndHolds("dot-qwen2.5-omni-3b"));
+  EXPECT_THAT(
+      registry.FindModelNameForPath("dot-qwen2.5-omni-3b/model.litertlm"),
+      IsOkAndHolds("dot-qwen2.5-omni-3b"));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/dot-qwen2.5-omni-3b/weights/"),
+              IsOkAndHolds("dot-qwen2.5-omni-3b"));
+
+  // File extensions must not trigger spurious matches (both known extensions
+  // like `.litertlm` and unknown extensions like `.fooext`).
+  EXPECT_THAT(registry.FindModelNameForPath("/x/unrelated/model.litertlm"),
+              StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/dot-prefix.litertlm"),
+              IsOkAndHolds("dot-prefix"));
+  EXPECT_THAT(registry.FindModelNameForPath("/x/unrelated/model.fooext"),
+              StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(
+      registry.FindModelNameForPath("/x/dot-qwen2.5-omni-3b/model.fooext"),
+      IsOkAndHolds("dot-qwen2.5-omni-3b"));
+
+  // Trailing slashes do not widen matching to grandparent directories.
+  EXPECT_THAT(
+      registry.FindModelNameForPath("/x/dot-qwen2.5-omni-3b/other/unrelated/"),
+      StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(registry.FindModelNameForPath(""),
+              StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(registry.FindModelNameForPath("/"),
+              StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(registry.FindModelNameForPath("///"),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(OmniRegistryTest, CaseInsensitiveLookupForRegisteredModels) {
+  auto& registry = OmniRegistry::Get();
+  std::string captured_model_name;
+  std::string captured_model_path;
+  ASSERT_OK(registry.RegisterSessionFactory(RegistrySpec{
+      .model_names = {"case-lookup-test-model", "Mixed/Case-Model",
+                      "case-exact-pair", "Case-Exact-Pair"},
+      .get_session_factory = [&](absl::string_view model_name,
+                                 const OmniEngine::Settings& settings,
+                                 const MessageLite*, const MessageLite*,
+                                 ::litert::Environment&, ::litert::Options&,
+                                 std::shared_ptr<lm::ModelResources>)
+          -> absl::StatusOr<std::unique_ptr<OmniSessionFactory>> {
+        captured_model_name = std::string(model_name);
+        captured_model_path = settings.model_path;
+        return std::make_unique<FakeSessionFactory>();
+      },
+      .session_config_type_id = "Any2Any",
+  }));
+  absl::Cleanup cleanup = [&] {
+    registry.UnregisterModel("case-lookup-test-model");
+    registry.UnregisterModel("Mixed/Case-Model");
+    registry.UnregisterModel("case-exact-pair");
+    registry.UnregisterModel("Case-Exact-Pair");
+  };
+
+  const OmniEngine::Settings settings{.cache_dir = ":nocache"};
+
+  // Lowercase registered name matched by mixed/uppercase queries.
+  EXPECT_TRUE(registry.IsModelRegistered("Case-Lookup-Test-Model"));
+  ASSERT_OK_AND_ASSIGN(OmniRegistry::RegisteredModel reg,
+                       registry.GetRegisteredModel("CASE-LOOKUP-TEST-MODEL"));
+  EXPECT_EQ(reg.model_name, "case-lookup-test-model");
+  EXPECT_EQ(reg.canonical_model_name, "case-lookup-test-model");
+  ASSERT_OK(registry.CreateSessionFactory("CASE-LOOKUP-TEST-MODEL", settings));
+  EXPECT_EQ(captured_model_name, "case-lookup-test-model");
+
+  // Mixed-case registered alias matched by lowercase queries and forwarded
+  // with its registered casing (not treated as a raw path despite '/').
+  EXPECT_TRUE(registry.IsModelRegistered("mixed/case-model"));
+  ASSERT_OK_AND_ASSIGN(OmniRegistry::RegisteredModel mixed_reg,
+                       registry.GetRegisteredModel("mixed/case-model"));
+  EXPECT_EQ(mixed_reg.model_name, "Mixed/Case-Model");
+  EXPECT_EQ(mixed_reg.canonical_model_name, "case-lookup-test-model");
+  ASSERT_OK(registry.CreateSessionFactory("mixed/case-model", settings));
+  EXPECT_EQ(captured_model_name, "Mixed/Case-Model");
+  EXPECT_NE(captured_model_path, "mixed/case-model");
+
+  // Exact match takes precedence over case-insensitive fallback.
+  ASSERT_OK_AND_ASSIGN(OmniRegistry::RegisteredModel exact_lower,
+                       registry.GetRegisteredModel("case-exact-pair"));
+  EXPECT_EQ(exact_lower.model_name, "case-exact-pair");
+  ASSERT_OK_AND_ASSIGN(OmniRegistry::RegisteredModel exact_mixed,
+                       registry.GetRegisteredModel("Case-Exact-Pair"));
+  EXPECT_EQ(exact_mixed.model_name, "Case-Exact-Pair");
 }
 
 TEST(OmniRegistryTest, ResolvesModelByPathWhenModelNameNotExact) {
