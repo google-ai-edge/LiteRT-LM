@@ -409,6 +409,7 @@ VisionLiteRtCompiledModelExecutor::VisionSubmodel::Create(
           SetNpuOptions(vision_executor_settings.GetNpuOptions(), options));
       options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
                                       litert::HwAccelerators::kCpu);
+      RunVendorOptionsParsers(options);
       break;
     }
 #endif  // !defined(LITERT_DISABLE_NPU)

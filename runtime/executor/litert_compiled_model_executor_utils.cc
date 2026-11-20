@@ -65,6 +65,7 @@
 #include "litert/cc/options/litert_mediatek_options.h"  // from @litert
 #include "litert/cc/options/litert_qualcomm_options.h"  // from @litert
 #endif  // !defined(LITERT_DISABLE_NPU)
+#include "litert/tools/flags/options_parser_registry.h"  // from @litert
 #include "runtime/components/embedding_lookup/embedding_lookup_manager.h"
 #include "runtime/components/embedding_lookup/embedding_lookup_text.h"
 #include "runtime/components/model_resources.h"
@@ -1289,6 +1290,15 @@ absl::Status SetNpuOptions(const NpuOptions& npu_options,
   return SetMediatekOptions(npu_options.mediatek_options, options);
 }
 #endif  // !defined(LITERT_DISABLE_NPU)
+
+void RunVendorOptionsParsers(litert::Options& options) {
+  auto status =
+      tools::OptionsParserRegistry::GetInstance().RunAllParsers(options);
+  if (!status) {
+    ABSL_LOG(WARNING) << "Failed to run options parsers: "
+                      << status.Error().Message();
+  }
+}
 
 absl::Status SetCpuCacheOptions(
     const absl::StatusOr<
