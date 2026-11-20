@@ -151,10 +151,6 @@ absl::StatusOr<PatchGrid> ComputePatchGrid(
   return grid;
 }
 
-}  // namespace
-
-namespace {
-
 // Copies one row of `model_patch_width` pixels of an already-float image into
 // a patch row.
 void CopyFloatPatchRow(const float* src_row, float* dst_row,
@@ -164,8 +160,8 @@ void CopyFloatPatchRow(const float* src_row, float* dst_row,
       static_cast<size_t>(model_patch_width) * channels * sizeof(float));
 }
 
-// Converts one row of `model_patch_width` uint8 pixels into a float patch row
-// with the caller-supplied converter.
+// Functor adapting `Uint8RowConverter` to the `(src_row, dst_row,
+// model_patch_width, channels)` signature expected by `PatchifyImageImpl`.
 class ConvertUint8PatchRow {
  public:
   explicit ConvertUint8PatchRow(Uint8RowConverter convert_row)
@@ -180,12 +176,13 @@ class ConvertUint8PatchRow {
   Uint8RowConverter convert_row_;
 };
 
-// Splits `image_data` (NHWC) into model patches, writing each patch row with
-// `copy_row_fn(src_row, dst_row, model_patch_width, channels)`.
-template <typename T, typename CopyRowFn>
+// Splits an image of `parameter.GetTargetDimensions()` (NHWC) into model
+// patches, populating each patch row with
+// `fill_row(batch_idx, src_h, src_w, model_patch_width, channels, dst_row)`.
+template <typename FillRowFn>
 absl::StatusOr<InputImage> PatchifyImageImpl(
-    absl::Span<const T> image_data, const ImagePreprocessParameter& parameter,
-    const CopyRowFn& copy_row_fn) {
+    const ImagePreprocessParameter& parameter, const FillRowFn& fill_row,
+    std::optional<size_t> image_data_size = std::nullopt) {
   const auto& patchify_config = parameter.GetPatchifyConfig();
   if (!patchify_config.has_value()) {
     return absl::InternalError("Patchify config is not set.");
@@ -199,9 +196,14 @@ absl::StatusOr<InputImage> PatchifyImageImpl(
   const int height = target_dimensions[1];
   const int width = target_dimensions[2];
   const int channels = target_dimensions[3];
-
-  if (image_data.size() !=
-      static_cast<size_t>(batch_size) * height * width * channels) {
+  if (batch_size <= 0 || channels <= 0) {
+    return absl::InvalidArgumentError(
+        "Batch size and channels must be positive.");
+  }
+  if (image_data_size.has_value() &&
+      (height < 0 || width < 0 ||
+       *image_data_size !=
+           static_cast<size_t>(batch_size) * height * width * channels)) {
     return absl::InvalidArgumentError(
         "Image data size does not match target dimensions.");
   }
@@ -218,7 +220,8 @@ absl::StatusOr<InputImage> PatchifyImageImpl(
       ::litert::TensorBuffer::CreateManagedHostMemory(
           MakeRankedTensorType<float>(
               {batch_size, num_model_patches, model_patch_dim}),
-          batch_size * num_model_patches * model_patch_dim * sizeof(float)));
+          static_cast<size_t>(batch_size) * num_model_patches *
+              model_patch_dim * sizeof(float)));
 
   {
     LITERT_ASSIGN_OR_RETURN(
@@ -236,14 +239,11 @@ absl::StatusOr<InputImage> PatchifyImageImpl(
           for (int ph = 0; ph < model_patch_height; ++ph) {
             int src_h = mh * model_patch_height + ph;
             int src_w = mw * model_patch_width;
-            size_t src_idx =
-                ((static_cast<size_t>(b) * height + src_h) * width + src_w) *
-                channels;
             size_t dest_idx =
                 static_cast<size_t>(global_patch_idx) * model_patch_dim +
                 static_cast<size_t>(ph) * model_patch_width * channels;
-            copy_row_fn(image_data.data() + src_idx, patches_ptr + dest_idx,
-                        model_patch_width, channels);
+            fill_row(b, src_h, src_w, model_patch_width, channels,
+                     patches_ptr + dest_idx);
           }
         }
       }
@@ -259,7 +259,8 @@ absl::StatusOr<InputImage> PatchifyImageImpl(
         auto positions_buffer,
         ::litert::TensorBuffer::CreateManagedHostMemory(
             MakeRankedTensorType<int32_t>({batch_size, num_model_patches, 2}),
-            batch_size * num_model_patches * 2 * sizeof(int32_t)));
+            static_cast<size_t>(batch_size) * num_model_patches * 2 *
+                sizeof(int32_t)));
     {
       LITERT_ASSIGN_OR_RETURN(
           auto positions_lock_and_addr,
@@ -281,6 +282,29 @@ absl::StatusOr<InputImage> PatchifyImageImpl(
     tensor_map.insert_or_assign("positions_xy", std::move(positions_buffer));
   }
   return InputImage(std::move(tensor_map));
+}
+
+// Splits `image_data` (NHWC) into model patches, writing each patch row with
+// `copy_row_fn(src_row, dst_row, model_patch_width, channels)`.
+template <typename T, typename CopyRowFn>
+absl::StatusOr<InputImage> PatchifyImageImpl(
+    absl::Span<const T> image_data, const ImagePreprocessParameter& parameter,
+    const CopyRowFn& copy_row_fn) {
+  const Dimensions& dims = parameter.GetTargetDimensions();
+  return PatchifyImageImpl(
+      parameter,
+      [image_data, &dims, &copy_row_fn](int b, int src_h, int src_w,
+                                        int model_patch_width, int channels,
+                                        float* dst_row) {
+        const int height = dims[1];
+        const int width = dims[2];
+        const size_t src_idx =
+            ((static_cast<size_t>(b) * height + src_h) * width + src_w) *
+            channels;
+        copy_row_fn(image_data.data() + src_idx, dst_row, model_patch_width,
+                    channels);
+      },
+      image_data.size());
 }
 
 }  // namespace
@@ -352,6 +376,11 @@ absl::StatusOr<InputImage> CreateDryRunImage(
                              .status());
   }
   return input_image.CreateCopy();
+}
+
+absl::StatusOr<InputImage> PatchifyImage(
+    const ImagePreprocessParameter& parameter, PatchRowFiller fill_row) {
+  return PatchifyImageImpl(parameter, fill_row);
 }
 
 absl::StatusOr<InputImage> PatchifyImage(

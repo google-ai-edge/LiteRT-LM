@@ -18,7 +18,6 @@
 #include <memory>
 #include <tuple>  // IWYU pragma: keep
 #include <utility>
-#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -42,6 +41,7 @@
 #include "include/core/SkColor.h"  // from @skia
 #include "include/core/SkImage.h"  // from @skia
 #include "include/core/SkImageInfo.h"  // from @skia
+#include "include/core/SkPixmap.h"  // from @skia
 #include "include/core/SkRefCnt.h"  // from @skia
 #include "include/core/SkSamplingOptions.h"  // from @skia
 
@@ -127,6 +127,34 @@ absl::StatusOr<sk_sp<SkImage>> DecodeDataAsImage(sk_sp<SkData> data) {
   return image;
 }
 
+struct ResizedImage {
+  // Owns the backing pixel buffer referenced by `pixels`.
+  sk_sp<SkImage> image;
+  SkPixmap pixels;
+};
+
+// Resizes `image` to `target_width` x `target_height` using Mitchell cubic
+// resampling only if dimensions differ (avoiding unnecessary filter blur and
+// allocation at 1:1 scale), and peeks its raster pixels.
+absl::StatusOr<ResizedImage> ResizeImageIfNeeded(sk_sp<SkImage> image,
+                                                 int target_width,
+                                                 int target_height) {
+  if (target_width != image->width() || target_height != image->height()) {
+    SkImageInfo image_info =
+        SkImageInfo::MakeN32(target_width, target_height, image->alphaType());
+    const SkSamplingOptions options(SkCubicResampler::Mitchell());
+    image = image->makeScaled(image_info, options);
+    if (!image) {
+      return absl::InvalidArgumentError("Failed to scale image.");
+    }
+  }
+  SkPixmap pixels;
+  if (!image->peekPixels(&pixels)) {
+    return absl::InvalidArgumentError("Failed to peek pixels.");
+  }
+  return ResizedImage{.image = std::move(image), .pixels = pixels};
+}
+
 }  // namespace
 
 absl::StatusOr<InputImage> SkiaImagePreprocessor::Preprocess(
@@ -162,39 +190,27 @@ absl::StatusOr<InputImage> SkiaImagePreprocessor::Preprocess(
     int new_height = size.first;
     int new_width = size.second;
 
-    // Resize the image to the target size.
-    SkImageInfo image_info =
-        SkImageInfo::MakeN32(new_width, new_height, image->alphaType());
-
-    const SkSamplingOptions options(SkCubicResampler::Mitchell());
-    sk_sp<SkImage> scaled_image = image->makeScaled(image_info, options);
-    if (!scaled_image) {
-      return absl::InvalidArgumentError("Failed to scale image.");
-    }
-
-    SkPixmap resized_pixels;
-    if (!scaled_image->peekPixels(&resized_pixels)) {
-      return absl::InvalidArgumentError("Failed to peek pixels.");
-    }
-
-    // Convert the image to float RGB.
-    // Skia doesn't have 24bpp RGB float, so we do it manually.
-    std::vector<float> float_image;
-    float_image.reserve(new_height * new_width * kDesiredChannels);
-    for (int h = 0; h < resized_pixels.height(); ++h) {
-      for (int w = 0; w < resized_pixels.width(); ++w) {
-        SkColor pixel = resized_pixels.getColor(w, h);
-        float_image.push_back(static_cast<float>(SkColorGetR(pixel)) / 255.0f);
-        float_image.push_back(static_cast<float>(SkColorGetG(pixel)) / 255.0f);
-        float_image.push_back(static_cast<float>(SkColorGetB(pixel)) / 255.0f);
-      }
-    }
+    ABSL_ASSIGN_OR_RETURN(
+        ResizedImage resized,
+        ResizeImageIfNeeded(std::move(image), new_width, new_height));
 
     ImagePreprocessParameter updated_parameter = parameter;
     updated_parameter.SetTargetDimensions(
         {1, new_height, new_width, kDesiredChannels});
 
-    return PatchifyImage(std::move(float_image), updated_parameter);
+    return PatchifyImage(
+        updated_parameter, [&](int /*batch_idx*/, int src_h, int src_w,
+                               int num_pixels, int /*channels*/, float* dst) {
+          for (int x = 0; x < num_pixels; ++x) {
+            SkColor pixel = resized.pixels.getColor(src_w + x, src_h);
+            dst[x * kDesiredChannels + 0] =
+                static_cast<float>(SkColorGetR(pixel)) / 255.0f;
+            dst[x * kDesiredChannels + 1] =
+                static_cast<float>(SkColorGetG(pixel)) / 255.0f;
+            dst[x * kDesiredChannels + 2] =
+                static_cast<float>(SkColorGetB(pixel)) / 255.0f;
+          }
+        });
   }
 
   const Dimensions& target_dimensions = parameter.GetTargetDimensions();
@@ -217,20 +233,9 @@ absl::StatusOr<InputImage> SkiaImagePreprocessor::Preprocess(
   const int target_width = target_dimensions.at(2);
   const int target_channels = target_dimensions.at(3);
 
-  // Resize the image to the target size.
-  SkImageInfo image_info =
-      SkImageInfo::MakeN32(target_width, target_height, image->alphaType());
-
-  const SkSamplingOptions options(SkCubicResampler::Mitchell());
-  sk_sp<SkImage> scaled_image = image->makeScaled(image_info, options);
-  if (!scaled_image) {
-    return absl::InvalidArgumentError("Failed to scale image.");
-  }
-
-  SkPixmap resized_pixels;
-  if (!scaled_image->peekPixels(&resized_pixels)) {
-    return absl::InvalidArgumentError("Failed to peek pixels.");
-  }
+  ABSL_ASSIGN_OR_RETURN(
+      ResizedImage resized,
+      ResizeImageIfNeeded(std::move(image), target_width, target_height));
 
   const int num_elements =
       batch_size * target_height * target_width * target_channels;
@@ -253,9 +258,9 @@ absl::StatusOr<InputImage> SkiaImagePreprocessor::Preprocess(
   // Load pixels into the output buffer. The output buffer expects a specific
   // format, and in the case of 3 input channels, 24 bytes per pixel. Skia does
   // not support 24bpp natively, so this is somewhat manual.
-  for (int h = 0; h < resized_pixels.height(); ++h) {
-    for (int w = 0; w < resized_pixels.width(); ++w) {
-      SkColor pixel = resized_pixels.getColor(w, h);
+  for (int h = 0; h < resized.pixels.height(); ++h) {
+    for (int w = 0; w < resized.pixels.width(); ++w) {
+      SkColor pixel = resized.pixels.getColor(w, h);
       float_buffer_ptr[0] = static_cast<float>(SkColorGetR(pixel)) / 255.0f;
       float_buffer_ptr[1] = static_cast<float>(SkColorGetG(pixel)) / 255.0f;
       float_buffer_ptr[2] = static_cast<float>(SkColorGetB(pixel)) / 255.0f;
