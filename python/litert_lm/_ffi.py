@@ -103,6 +103,15 @@ class LiteRtLmModelType(enum.IntEnum):
   EMBEDDING = 2
 
 
+RANGE_FETCHER_CALLBACK_TYPE = ctypes.CFUNCTYPE(
+    ctypes.c_int,
+    ctypes.c_uint64,
+    ctypes.c_uint64,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+)
+
+
 # C-compatible callback type that matches 'LiteRtLmStreamCallback' in engine.h.
 STREAM_CALLBACK_TYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
 
@@ -225,6 +234,9 @@ def _get_lib() -> ctypes.CDLL:
 
   _setup_lib_signatures(_LIB)
   return _LIB
+
+
+get_lib = _get_lib
 
 
 def _setup_lib_signatures(lib):
@@ -1319,6 +1331,126 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_loaded_file_modality_soc_name.argtypes = [
       ctypes.c_void_p,
       ctypes.c_int,
+      ctypes.POINTER(ctypes.c_char_p),
+  ]
+
+  # ModelSync signatures
+  lib.litert_lm_model_sync_range_writer_write.restype = ctypes.c_int
+  lib.litert_lm_model_sync_range_writer_write.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+      ctypes.c_size_t,
+  ]
+
+  lib.litert_lm_model_sync_range_writer_set_error.restype = ctypes.c_int
+  lib.litert_lm_model_sync_range_writer_set_error.argtypes = [
+      ctypes.c_void_p,
+      c_string_p,
+  ]
+
+  lib.litert_lm_model_sync_options_create.restype = ctypes.c_int
+  lib.litert_lm_model_sync_options_create.argtypes = [
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
+
+  lib.litert_lm_model_sync_options_delete.restype = None
+  lib.litert_lm_model_sync_options_delete.argtypes = [ctypes.c_void_p]
+
+  lib.litert_lm_model_sync_options_set_full_download_threshold.restype = (
+      ctypes.c_int
+  )
+  lib.litert_lm_model_sync_options_set_full_download_threshold.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_double,
+  ]
+
+  lib.litert_lm_model_sync_options_set_clean.restype = ctypes.c_int
+  lib.litert_lm_model_sync_options_set_clean.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
+  ]
+
+  lib.litert_lm_model_sync_options_set_check_disk_space.restype = ctypes.c_int
+  lib.litert_lm_model_sync_options_set_check_disk_space.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
+  ]
+
+  lib.litert_lm_model_sync_options_set_allow_offline_fallback.restype = (
+      ctypes.c_int
+  )
+  lib.litert_lm_model_sync_options_set_allow_offline_fallback.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_bool,
+  ]
+
+  lib.litert_lm_model_sync_plan_create_from_file.restype = ctypes.c_int
+  lib.litert_lm_model_sync_plan_create_from_file.argtypes = [
+      c_string_p,
+      RANGE_FETCHER_CALLBACK_TYPE,
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
+
+  lib.litert_lm_model_sync_plan_delete.restype = None
+  lib.litert_lm_model_sync_plan_delete.argtypes = [ctypes.c_void_p]
+
+  lib.litert_lm_model_sync_plan_is_up_to_date.restype = ctypes.c_int
+  lib.litert_lm_model_sync_plan_is_up_to_date.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_bool),
+  ]
+
+  lib.litert_lm_model_sync_plan_get_bytes_to_download.restype = ctypes.c_int
+  lib.litert_lm_model_sync_plan_get_bytes_to_download.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_uint64),
+  ]
+
+  lib.litert_lm_model_sync_plan_get_bytes_to_reuse.restype = ctypes.c_int
+  lib.litert_lm_model_sync_plan_get_bytes_to_reuse.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_uint64),
+  ]
+
+  lib.litert_lm_model_sync_plan_get_total_remote_size.restype = ctypes.c_int
+  lib.litert_lm_model_sync_plan_get_total_remote_size.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_uint64),
+  ]
+
+  lib.litert_lm_model_sync_plan_format.restype = ctypes.c_int
+  lib.litert_lm_model_sync_plan_format.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_char_p),
+  ]
+
+  lib.litert_lm_model_sync_update.restype = ctypes.c_int
+  lib.litert_lm_model_sync_update.argtypes = [
+      c_string_p,
+      c_string_p,
+      RANGE_FETCHER_CALLBACK_TYPE,
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+  ]
+
+  lib.litert_lm_model_sync_cache_sync.restype = ctypes.c_int
+  lib.litert_lm_model_sync_cache_sync.argtypes = [
+      c_string_p,
+      c_string_p,
+      RANGE_FETCHER_CALLBACK_TYPE,
+      ctypes.c_void_p,
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_void_p),
+  ]
+
+  lib.litert_lm_model_sync_result_delete.restype = None
+  lib.litert_lm_model_sync_result_delete.argtypes = [ctypes.c_void_p]
+
+  lib.litert_lm_model_sync_result_get_cached_path.restype = ctypes.c_int
+  lib.litert_lm_model_sync_result_get_cached_path.argtypes = [
+      ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_char_p),
   ]
 

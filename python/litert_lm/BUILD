@@ -53,6 +53,10 @@ pytype_strict_library(
 pytype_strict_library(
     name = "_ffi",
     srcs = ["_ffi.py"],
+    data = select({
+        ":use_prebuilt_c_api": [":prebuilt_litert_lm_lib"],
+        "//conditions:default": [":default_libs"],
+    }),
 )
 
 pytype_strict_library(
@@ -128,10 +132,6 @@ config_setting(
 pytype_strict_library(
     name = "litert_lm",
     srcs = ["__init__.py"],
-    data = select({
-        ":use_prebuilt_c_api": [":prebuilt_litert_lm_lib"],
-        "//conditions:default": [":default_libs"],
-    }),
     deps = [
         ":_ffi",
         ":_messages",
@@ -500,7 +500,10 @@ py_package(
     # Explicitly specify packages to avoid including transitively linked shared
     # libraries (like duplicate .so files in _solib_*/...) in the wheel.
     packages = ["python.litert_lm"],
-    deps = [":litert_lm"],
+    deps = [
+        ":litert_lm",
+        "//python/litert_lm/model_sync",
+    ],
 )
 
 # To build normal wheel:
