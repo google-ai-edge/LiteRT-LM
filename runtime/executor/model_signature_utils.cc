@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -82,6 +83,7 @@ absl::StatusOr<std::vector<SignatureInfo>> GetTextEncoderSignatures(
 
     if (embeddings_tensor_type->Layout().Rank() == 3) {
       // [batch_size, seq_len, embed_dim]
+      info.batch_size = embeddings_tensor_type->Layout().Dimensions()[0];
       info.length = embeddings_tensor_type->Layout().Dimensions()[1];
     } else if (embeddings_tensor_type->Layout().Rank() == 2) {
       // [seq_len, embed_dim]
@@ -254,8 +256,40 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
   if (signatures.empty()) {
     return absl::NotFoundError("No text encoder signatures found in model.");
   }
-  return SelectSignaturesByCapacity(signatures, max_input_length,
-                                    min_input_length);
+
+  // Select among the batch size 1 signatures, which serve single inputs. The
+  // batched signatures only serve inputs that also fit a selected batch size 1
+  // signature, so they are added for the same length range.
+  std::vector<SignatureInfo> single_signatures;
+  std::vector<SignatureInfo> batched_signatures;
+  for (const auto& sig : signatures) {
+    if (sig.batch_size > 1) {
+      batched_signatures.push_back(sig);
+    } else {
+      single_signatures.push_back(sig);
+    }
+  }
+  if (single_signatures.empty()) {
+    return absl::FailedPreconditionError(
+        "No text encoder signature with batch size 1 found in model.");
+  }
+  ABSL_ASSIGN_OR_RETURN(
+      SelectedTextSignaturesInfo result,
+      SelectSignaturesByCapacity(single_signatures, max_input_length,
+                                 min_input_length));
+
+  const int min_length = *absl::c_min_element(result.signature_lengths);
+  absl::c_stable_sort(batched_signatures,
+                      [](const SignatureInfo& a, const SignatureInfo& b) {
+                        return a.length < b.length;
+                      });
+  for (const auto& sig : batched_signatures) {
+    if (sig.length >= min_length && sig.length <= result.max_signature_length) {
+      result.signature_names.push_back(sig.signature_name);
+      result.signature_lengths.push_back(sig.length);
+    }
+  }
+  return result;
 }
 
 absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(

@@ -16,12 +16,12 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_EMBEDDING_LITERT_COMPILED_MODEL_EXECUTOR_H_
 
 #include <cstddef>
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "absl/container/btree_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -46,17 +46,23 @@ struct CompiledTextEncoderInfo {
   std::unique_ptr<litert::CompiledModel> compiled_model;
   std::vector<int> expected_input_dimension;
   int embedding_dimension;
-  // Sorted map from input sequence length to signature index. Sorted order is
-  // required to use lower_bound() to select the smallest signature bucket that
-  // fits a given input token length.
-  std::map<int, size_t> encoder_signatures;
+  // Sorted map from input sequence length to the index of the signature with
+  // batch size 1. Sorted order is required to use lower_bound() to select the
+  // smallest signature bucket that fits a given input token length.
+  absl::btree_map<int, size_t> encoder_signatures;
+  // Batch size (> 1) -> sorted map from input sequence length to signature
+  // index, for the text encoder signatures that process several sequences in
+  // one run (e.g. `encoder_4x128`). Empty if the model has none, in which case
+  // batches are computed one sequence at a time.
+  absl::btree_map<int, absl::btree_map<int, size_t>> batched_encoder_signatures;
   absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
       input_buffers_cache;
   absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
       output_buffers_cache;
 };
 
-// A variant of the text encoder, i.e. one of its loaded signatures.
+// A batch-size-1 variant of the text encoder, i.e. one of its loaded batch-1
+// signatures.
 //
 // Both fields are always set, and positive, in the variants returned by
 // EmbeddingLiteRtCompiledModelExecutor::GetSupportedVariants(). The defaults
@@ -72,6 +78,47 @@ struct TextEncoderVariant {
 
   bool operator==(const TextEncoderVariant& other) const = default;
 };
+
+// A group of inputs that run together on one batched text encoder signature.
+struct BatchedTextEncoderGroup {
+  // The index of the batched signature.
+  size_t signature_index = 0;
+  // The sequence length of the batched signature.
+  int padded_sequence_length = 0;
+  // The indices of the inputs, one per row of the signature, in ascending
+  // order of length.
+  std::vector<size_t> inputs;
+
+  bool operator==(const BatchedTextEncoderGroup& other) const = default;
+};
+
+// Groups inputs of similar length to run them on batched text encoder
+// signatures with as little padding as possible.
+//
+// At each step, the shortest remaining inputs run on the batched signature
+// with the smallest padded length that they fill entirely (preferring larger
+// batches on ties), as long as the batched run does not process more padded
+// tokens than running those inputs one at a time on the batch size 1
+// signatures. Otherwise the shortest remaining input is left out and runs
+// alone.
+//
+// Args:
+//   lengths: The number of tokens of each input, or 0 for an input that must
+//     not be batched. Inputs longer than the longest batched or batch size 1
+//     signature are not batched either.
+//   single_signatures: Sequence length -> signature index, for the signatures
+//     with batch size 1.
+//   batched_signatures: Batch size (> 1) -> sequence length -> signature
+//     index.
+//
+// Returns:
+//   The groups, each referring to inputs by their index in `lengths`. Inputs
+//   in no group are meant to run one at a time.
+std::vector<BatchedTextEncoderGroup> GroupInputsForBatchedSignatures(
+    absl::Span<const size_t> lengths,
+    const absl::btree_map<int, size_t>& single_signatures,
+    const absl::btree_map<int, absl::btree_map<int, size_t>>&
+        batched_signatures);
 
 // EmbeddingLiteRtCompiledModelExecutor implements a two-stage embedding
 // pipeline:
@@ -115,6 +162,12 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
 
   // Creates an EmbeddingLiteRtCompiledModelExecutor with pre-compiled
   // components.
+  //
+  // Batched text encoder signatures that the executor cannot run (e.g. with
+  // non-float32 inputs, inputs or outputs that do not have `B` rows of the
+  // batch size 1 shape, or per-layer embeddings inputs without a per-layer
+  // embedder) are dropped with a warning; batches then run on the remaining
+  // signatures.
   static absl::StatusOr<std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor>>
   Create(EmbeddingExecutorSettings executor_settings, litert::Environment& env,
          std::shared_ptr<ModelResources> resources,
@@ -141,6 +194,17 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
       const ComputeEmbeddingOptions& options) override;
 
   // Computes a batch of embedding outputs for the given batch of inputs.
+  //
+  // If the text encoder has batched signatures (batch size > 1), text-only
+  // inputs that fit in them are grouped by length and run several sequences
+  // per text encoder run (see `GroupInputsForBatchedSignatures`). Groups only
+  // use a batched signature when they fill all of its rows and when the
+  // batched run does not process more padded tokens than running the same
+  // inputs one at a time. The remaining inputs (multimodal inputs, inputs
+  // longer than the batched signatures, and leftovers) are computed one at a
+  // time, as with `ComputeEmbedding`. Outputs are returned in the order of the
+  // inputs. With `InputOverflowStrategy::kError`, inputs longer than the
+  // longest signature fail the call before any text encoder run.
   absl::StatusOr<std::vector<EmbeddingOutput>> ComputeEmbeddingBatch(
       const std::vector<ExecutorInputs>& batch_inputs,
       const ComputeEmbeddingOptions& options) override;
@@ -200,13 +264,16 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   // encoder model.
   absl::StatusOr<int> GetEmbeddingDimension() const override;
 
-  // Returns the variants of the loaded text encoder signatures. An input is run
-  // with the first variant whose sequence length fits it.
+  // Returns the batch-size-1 variants of the loaded text encoder signatures
+  // (batched `B > 1` signatures are not included). A single input is run with
+  // the first variant whose sequence length fits it; `ComputeEmbeddingBatch`
+  // may additionally dispatch text-only groups to batched (`B > 1`)
+  // signatures when available.
   //
   // Returns:
-  //   The variants, sorted by ascending sequence length (and therefore
-  //   ascending latency). Never empty, since the executor can't be created
-  //   without a text encoder signature.
+  //   The batch-size-1 variants, sorted by ascending sequence length (and
+  //   therefore ascending latency). Never empty, since the executor can't be
+  //   created without a batch-size-1 text encoder signature.
   std::vector<TextEncoderVariant> GetSupportedVariants() const;
 
   // Returns a pointer to the LiteRT environment used by this executor.
@@ -230,6 +297,18 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   // Selects the text encoder signature for `sequence_length` and gets (or
   // creates) its buffers.
   absl::StatusOr<EncoderRun> PrepareEncoderRun(size_t sequence_length);
+
+  // Gets (or creates) the buffers of the given text encoder signature.
+  absl::StatusOr<EncoderRun> PrepareEncoderRunForSignature(
+      size_t signature_index, size_t padded_sequence_length);
+
+  // Runs a batched text encoder signature on `batch_tokens`, one sequence per
+  // row. `batch_tokens.size()` must equal the batch size of the signature and
+  // every sequence must fit in `padded_sequence_length`. Returns one output
+  // embedding vector per sequence.
+  absl::StatusOr<std::vector<std::vector<float>>> RunBatchedEncoderForTokens(
+      size_t signature_index, size_t padded_sequence_length,
+      absl::Span<const absl::Span<const int32_t>> batch_tokens);
 
   // Fills the input mask of `run`, runs the text encoder and returns its output
   // embedding vector. The embeddings (and per-layer embeddings, if any) inputs
@@ -264,7 +343,9 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
       std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup,
       std::unique_ptr<litert::CompiledModel> compiled_model,
       std::vector<int> expected_input_dimension, int embedding_dimension,
-      std::map<int, size_t> encoder_signatures,
+      absl::btree_map<int, size_t> encoder_signatures,
+      absl::btree_map<int, absl::btree_map<int, size_t>>
+          batched_encoder_signatures,
       absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
           input_buffers_cache,
       absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>
@@ -280,8 +361,14 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   int embedding_dimension_;
   std::string backend_name_;
 
-  // Text encoder signatures: Sequence Length -> Signature Index
-  std::map<int, size_t> encoder_signatures_;
+  // Text encoder signatures with batch size 1:
+  // Sequence Length -> Signature Index
+  absl::btree_map<int, size_t> encoder_signatures_;
+
+  // Batched text encoder signatures:
+  // Batch Size (> 1) -> Sequence Length -> Signature Index
+  absl::btree_map<int, absl::btree_map<int, size_t>>
+      batched_encoder_signatures_;
 
   // Input buffer map: Signature Index -> Input Buffer
   absl::flat_hash_map<size_t, std::vector<litert::TensorBuffer>>

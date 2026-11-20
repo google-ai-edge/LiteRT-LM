@@ -89,6 +89,7 @@ using ::testing::Contains;
 using ::testing::ElementsAre;
 using ::testing::FloatNear;
 using ::testing::HasSubstr;
+using ::testing::IsEmpty;
 using ::testing::Key;
 using ::testing::Pointwise;
 using ::testing::Return;
@@ -1847,6 +1848,7 @@ class FakeEmbeddingExecutor : public EmbeddingExecutorBase {
   absl::StatusOr<std::vector<EmbeddingOutput>> ComputeEmbeddingBatch(
       const std::vector<ExecutorInputs>& batch_inputs,
       const ComputeEmbeddingOptions& options) override {
+    batch_sizes_.push_back(batch_inputs.size());
     std::vector<EmbeddingOutput> results;
     for (const auto& inputs : batch_inputs) {
       LITERT_ASSIGN_OR_RETURN(auto result, ComputeEmbedding(inputs, options));
@@ -1855,13 +1857,24 @@ class FakeEmbeddingExecutor : public EmbeddingExecutorBase {
     return results;
   }
 
+  // The size of every batch passed to `ComputeEmbeddingBatch`.
+  const std::vector<size_t>& GetBatchSizes() const { return batch_sizes_; }
+
   absl::string_view ExecutorBackendName() const override { return "Fake"; }
 
   absl::StatusOr<std::vector<int>> GetExpectedInputDimension() const override {
     return std::vector<int>{1, 512};
   }
 
-  absl::StatusOr<int> GetEmbeddingDimension() const override { return 3; }
+  absl::StatusOr<int> GetEmbeddingDimension() const override {
+    return embedding_dimension_;
+  }
+
+  // Sets the value returned by `GetEmbeddingDimension`, e.g. -1 for a dynamic
+  // output dimension.
+  void SetEmbeddingDimension(int embedding_dimension) {
+    embedding_dimension_ = embedding_dimension;
+  }
 
   ::litert::Environment* GetEnvironment() const override { return nullptr; }
 
@@ -1883,6 +1896,8 @@ class FakeEmbeddingExecutor : public EmbeddingExecutorBase {
  private:
   std::vector<int> last_token_ids_;
   ComputeEmbeddingOptions last_options_;
+  std::vector<size_t> batch_sizes_;
+  int embedding_dimension_ = 3;
 };
 
 class FakeVisionExecutor : public VisionExecutor {
@@ -2183,6 +2198,159 @@ TEST(EmbeddingEngineImplTest,
     EXPECT_NEAR(response.embedding[0], 1.0f / norm, 1e-5f);
     EXPECT_NEAR(response.embedding[1], 2.0f / norm, 1e-5f);
   }
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingBatchPassesTextRequestsToExecutorInOneCall) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::_))
+      .WillByDefault(Return(std::vector<int>{1, 2, 3}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  const FakeEmbeddingExecutor* executor = fake_embedding_executor.get();
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor));
+
+  std::vector<std::vector<InputData>> contents(3);
+  for (auto& request : contents) {
+    request.push_back(InputText(std::string("hello")));
+  }
+
+  ASSERT_OK_AND_ASSIGN(auto responses, engine.ComputeEmbeddingBatch(
+                                           contents, EmbeddingOptions()));
+  EXPECT_EQ(responses.size(), 3);
+  EXPECT_THAT(executor->GetBatchSizes(), ElementsAre(3));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingBatchWithImageRequestKeepsResponseOrder) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  ASSERT_OK_AND_ASSIGN(auto image_tensor,
+                       CreateDummyTensorBuffer(env->env, {1, 224, 224, 3}));
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::Eq("text a")))
+      .WillByDefault(Return(std::vector<int>{1, 2}));
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::Eq("text b")))
+      .WillByDefault(Return(std::vector<int>{3, 4, 5, 6, 7}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  const FakeEmbeddingExecutor* executor = fake_embedding_executor.get();
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor),
+                             std::make_unique<FakeVisionExecutor>());
+
+  std::vector<std::vector<InputData>> contents(3);
+  contents[0].push_back(InputText(std::string("text a")));
+  contents[1].push_back(InputImage(std::move(image_tensor)));
+  contents[2].push_back(InputText(std::string("text b")));
+
+  EmbeddingOptions options;
+  options.insert_special_tokens = false;
+  ASSERT_OK_AND_ASSIGN(auto responses,
+                       engine.ComputeEmbeddingBatch(contents, options));
+  ASSERT_EQ(responses.size(), 3);
+  EXPECT_EQ(responses[0].input_length, 2);
+  // FakeVisionExecutor generates 4 soft tokens.
+  EXPECT_EQ(responses[1].input_length, 4);
+  EXPECT_EQ(responses[2].input_length, 5);
+  // The image request runs on its own; the two text requests are batched.
+  EXPECT_THAT(executor->GetBatchSizes(), ElementsAre(2));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingBatchPassesTextRequestsToExecutorInBoundedWindows) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::_))
+      .WillByDefault(Return(std::vector<int>{1, 2, 3}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  const FakeEmbeddingExecutor* executor = fake_embedding_executor.get();
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor));
+
+  constexpr size_t kWindow =
+      EmbeddingEngineImpl::kMaxTextRequestsPerExecutorBatch;
+  std::vector<std::vector<InputData>> contents(2 * kWindow + 1);
+  for (auto& request : contents) {
+    request.push_back(InputText(std::string("hello")));
+  }
+
+  ASSERT_OK_AND_ASSIGN(auto responses, engine.ComputeEmbeddingBatch(
+                                           contents, EmbeddingOptions()));
+  EXPECT_EQ(responses.size(), contents.size());
+  EXPECT_THAT(executor->GetBatchSizes(), ElementsAre(kWindow, kWindow, 1));
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingBatchWithInvalidOutputSizeFailsBeforeRunning) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::_))
+      .WillByDefault(Return(std::vector<int>{1, 2, 3}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  const FakeEmbeddingExecutor* executor = fake_embedding_executor.get();
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor));
+
+  std::vector<std::vector<InputData>> contents(2);
+  for (auto& request : contents) {
+    request.push_back(InputText(std::string("hello")));
+  }
+
+  EmbeddingOptions options;
+  options.output_size = 5;
+  EXPECT_THAT(
+      engine.ComputeEmbeddingBatch(contents, options),
+      StatusIs(
+          absl::StatusCode::kInvalidArgument,
+          HasSubstr("cannot be larger than default output embedding size")));
+  options.output_size = -1;
+  EXPECT_THAT(engine.ComputeEmbeddingBatch(contents, options),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("cannot be negative")));
+  EXPECT_THAT(executor->GetBatchSizes(), IsEmpty());
+}
+
+TEST(EmbeddingEngineImplTest,
+     ComputeEmbeddingBatchWithDynamicEmbeddingDimensionChecksOutputSizeLate) {
+  ASSERT_OK_AND_ASSIGN(auto env, CreateTestEnvironment());
+  auto tokenizer = std::make_unique<MockTokenizer>();
+  ON_CALL(*tokenizer, TextToTokenIds(::testing::_))
+      .WillByDefault(Return(std::vector<int>{1, 2, 3}));
+  auto fake_embedding_executor = std::make_unique<FakeEmbeddingExecutor>();
+  fake_embedding_executor->SetEmbeddingDimension(-1);
+
+  EmbeddingEngineImpl engine(std::move(env), std::move(tokenizer),
+                             std::move(fake_embedding_executor));
+
+  std::vector<std::vector<InputData>> contents(2);
+  for (auto& request : contents) {
+    request.push_back(InputText(std::string("hello")));
+  }
+
+  // The fake executor returns 3-dimensional embeddings.
+  EmbeddingOptions options;
+  options.output_size = 2;
+  ASSERT_OK_AND_ASSIGN(auto responses,
+                       engine.ComputeEmbeddingBatch(contents, options));
+  ASSERT_EQ(responses.size(), 2);
+  for (const auto& response : responses) {
+    EXPECT_EQ(response.embedding.size(), 2);
+  }
+
+  options.output_size = 5;
+  EXPECT_THAT(
+      engine.ComputeEmbeddingBatch(contents, options),
+      StatusIs(
+          absl::StatusCode::kInvalidArgument,
+          HasSubstr("cannot be larger than default output embedding size")));
+  options.output_size = -1;
+  EXPECT_THAT(engine.ComputeEmbeddingBatch(contents, options),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("cannot be negative")));
 }
 
 TEST(EmbeddingEngineImplTest, ComputeEmbeddingWithRawImageSuccess) {

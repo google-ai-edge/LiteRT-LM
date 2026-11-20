@@ -512,6 +512,69 @@ TEST(ModelSignatureUtilsTest,
               StatusIs(absl::StatusCode::kNotFound));
 }
 
+TEST(ModelSignatureUtilsTest,
+     SelectTextEncoderSignatures_SelectsBatchedSignaturesInRange) {
+  // Batched signatures sort before the batch size 1 signatures of the same
+  // length, and must neither replace them nor stop the selection early.
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "encoder_4x64", .length = 64, .batch_size = 4},
+      {.signature_name = "encoder_4x128", .length = 128, .batch_size = 4},
+      {.signature_name = "encoder_1x64", .length = 64},
+      {.signature_name = "encoder_1x128", .length = 128},
+      {.signature_name = "encoder_4x512", .length = 512, .batch_size = 4},
+      {.signature_name = "encoder_1x512", .length = 512},
+  };
+
+  ASSERT_OK_AND_ASSIGN(auto result, SelectTextEncoderSignatures(
+                                        signatures, /*max_input_length=*/100));
+  EXPECT_THAT(result.signature_names,
+              ElementsAre("encoder_1x64", "encoder_1x128", "encoder_4x64",
+                          "encoder_4x128"));
+  EXPECT_THAT(result.signature_lengths, ElementsAre(64, 128, 64, 128));
+  EXPECT_EQ(result.max_signature_length, 128);
+
+  ASSERT_OK_AND_ASSIGN(
+      auto result_min,
+      SelectTextEncoderSignatures(signatures, /*max_input_length=*/std::nullopt,
+                                  /*min_input_length=*/128));
+  EXPECT_THAT(result_min.signature_names,
+              ElementsAre("encoder_1x128", "encoder_1x512", "encoder_4x128",
+                          "encoder_4x512"));
+  EXPECT_EQ(result_min.max_signature_length, 512);
+
+  // A batched signature longer than every batch size 1 signature does not
+  // count towards the capacity.
+  EXPECT_THAT(
+      SelectTextEncoderSignatures(
+          {{.signature_name = "encoder_1x128", .length = 128},
+           {.signature_name = "encoder_4x512", .length = 512, .batch_size = 4}},
+          /*max_input_length=*/256),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("exceeds maximum available signature length (128)")));
+
+  // A dynamic (non-positive) batch dimension is treated as batch size 1.
+  ASSERT_OK_AND_ASSIGN(
+      auto result_dynamic,
+      SelectTextEncoderSignatures(
+          {{.signature_name = "encoder_dyn_128",
+            .length = 128,
+            .batch_size = -1},
+           {.signature_name = "encoder_4x128", .length = 128, .batch_size = 4}},
+          /*max_input_length=*/128));
+  EXPECT_THAT(result_dynamic.signature_names,
+              ElementsAre("encoder_dyn_128", "encoder_4x128"));
+}
+
+TEST(ModelSignatureUtilsTest,
+     SelectTextEncoderSignatures_OnlyBatchedSignaturesReturnsError) {
+  std::vector<SignatureInfo> signatures = {
+      {.signature_name = "encoder_4x128", .length = 128, .batch_size = 4},
+  };
+  EXPECT_THAT(SelectTextEncoderSignatures(signatures, 100),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       HasSubstr("batch size 1")));
+}
+
 TEST(ModelSignatureUtilsTest, SelectVisionEncoderSignatures_Success) {
   std::vector<SignatureInfo> signatures = {
       {.signature_name = "vision_280",
