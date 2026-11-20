@@ -529,8 +529,9 @@ declare interface ConversationConfigConstructor {
   createDefault(engine: Engine): WasmResult<ConversationConfig>;
   createCustom(
       engine: Engine, sessionConfig: SessionConfig,
-      enableConstrainedDecoding: boolean, prefillPrefaceOnInit: boolean,
-      filterChannelContentFromKvCache: boolean,
+      enableConstrainedDecoding: boolean|undefined,
+      prefillPrefaceOnInit: boolean|undefined,
+      filterChannelContentFromKvCache: boolean|undefined,
       prefaceJson: string): WasmResult<ConversationConfig>;
 }
 
@@ -541,6 +542,10 @@ declare const ConversationConfigBrand: unique symbol;
  */
 export declare interface ConversationConfig extends Deletable {
   [ConversationConfigBrand]: void;
+  constrainedDecodingEnabled(): boolean;
+  prefillPrefaceOnInit(): boolean;
+  filterChannelContentFromKvCache(): boolean;
+  enableRewinding(): boolean;
 }
 
 /**

@@ -786,6 +786,8 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
       .field("mtpEmittedTokens", &JsBenchmarkInfo::mtpEmittedTokens)
       .field("plainDecodeSteps", &JsBenchmarkInfo::plainDecodeSteps);
 
+  emscripten::register_optional<bool>();
+
   emscripten::class_<litert::lm::ConversationConfig>("ConversationConfig")
       .class_function(
           "createDefault",
@@ -795,40 +797,57 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
           }))
       .class_function(
           "createCustom",
-          optional_override([](const litert::lm::Engine& engine,
-                               const litert::lm::SessionConfig& session_config,
-                               bool enable_constrained_decoding,
-                               bool prefill_preface_on_init,
-                               bool filter_channel_content_from_kv_cache,
-                               std::string preface_json) {
-            return StatusOrToVal(
-                [&]() -> absl::StatusOr<litert::lm::ConversationConfig> {
-                  litert::lm::ConversationConfig::Builder builder;
-                  builder.SetSessionConfig(session_config);
-                  builder.SetEnableConstrainedDecoding(
-                      enable_constrained_decoding);
-                  builder.SetPrefillPrefaceOnInit(prefill_preface_on_init);
-                  builder.SetFilterChannelContentFromKvCache(
-                      filter_channel_content_from_kv_cache);
+          optional_override(
+              [](const litert::lm::Engine& engine,
+                 const litert::lm::SessionConfig& session_config,
+                 std::optional<bool> enable_constrained_decoding,
+                 std::optional<bool> prefill_preface_on_init,
+                 std::optional<bool> filter_channel_content_from_kv_cache,
+                 std::string preface_json) {
+                return StatusOrToVal(
+                    [&]() -> absl::StatusOr<litert::lm::ConversationConfig> {
+                      litert::lm::ConversationConfig::Builder builder;
+                      builder.SetSessionConfig(session_config);
+                      if (enable_constrained_decoding.has_value()) {
+                        builder.SetEnableConstrainedDecoding(
+                            *enable_constrained_decoding);
+                      }
+                      if (prefill_preface_on_init.has_value()) {
+                        builder.SetPrefillPrefaceOnInit(
+                            *prefill_preface_on_init);
+                      }
+                      if (filter_channel_content_from_kv_cache.has_value()) {
+                        builder.SetFilterChannelContentFromKvCache(
+                            *filter_channel_content_from_kv_cache);
+                      }
 
-                  if (!preface_json.empty()) {
-                    ABSL_ASSIGN_OR_RETURN(auto json,
-                                          ParseJson(preface_json, "Preface"));
-                    litert::lm::JsonPreface json_preface;
-                    if (json.contains("messages")) {
-                      json_preface.messages = json["messages"];
-                    }
-                    if (json.contains("tools")) {
-                      json_preface.tools = json["tools"];
-                    }
-                    if (json.contains("extra_context")) {
-                      json_preface.extra_context = json["extra_context"];
-                    }
-                    builder.SetPreface(litert::lm::Preface(json_preface));
-                  }
-                  return builder.Build(engine);
-                }());
-          }));
+                      if (!preface_json.empty()) {
+                        ABSL_ASSIGN_OR_RETURN(
+                            auto json, ParseJson(preface_json, "Preface"));
+                        litert::lm::JsonPreface json_preface;
+                        if (json.contains("messages")) {
+                          json_preface.messages = json["messages"];
+                        }
+                        if (json.contains("tools")) {
+                          json_preface.tools = json["tools"];
+                        }
+                        if (json.contains("extra_context")) {
+                          json_preface.extra_context = json["extra_context"];
+                        }
+                        builder.SetPreface(litert::lm::Preface(json_preface));
+                      }
+                      return builder.Build(engine);
+                    }());
+              }))
+      .function("constrainedDecodingEnabled",
+                &litert::lm::ConversationConfig::constrained_decoding_enabled)
+      .function("prefillPrefaceOnInit",
+                &litert::lm::ConversationConfig::prefill_preface_on_init)
+      .function(
+          "filterChannelContentFromKvCache",
+          &litert::lm::ConversationConfig::filter_channel_content_from_kv_cache)
+      .function("enableRewinding",
+                &litert::lm::ConversationConfig::enable_rewinding);
 
   emscripten::class_<litert::lm::Conversation>("Conversation")
       .class_function(

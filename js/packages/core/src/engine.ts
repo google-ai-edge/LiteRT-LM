@@ -18,7 +18,7 @@ import {Cleanup} from './cleanup.js';
 import {Conversation} from './conversation.js';
 import {ConversationConfig} from './conversation_config.js';
 import {runExclusiveEngineCreation} from './engine_creation.js';
-import {EngineSettings, fillWasmEngineSettingsFromEngineSettings, GpuArtisanConfig, ResolvedEngineSettings, wasmEngineSettingsToEngineSettings} from './engine_settings.js';
+import {EngineSettings, fillWasmEngineSettingsFromEngineSettings, ResolvedEngineSettings, wasmEngineSettingsToEngineSettings} from './engine_settings.js';
 import type {LiteRtLm} from './litertlm_web.js';
 import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
 import {EngineModelInput, resolveModelInput} from './model_input.js';
@@ -175,8 +175,7 @@ export class Engine implements Deletable {
         (this.settings.visionBackend !== undefined ||
          this.settings.audioBackend !== undefined)) {
       // A custom config is needed to enable the vision and audio modalities.
-      // Match the C++ ConversationConfig defaults.
-      config = {filterChannelContentFromKvCache: true};
+      config = {};
     }
     return this.mutexes.executor.acquireAndRun(async () => {
       let wasmConfigResult: WasmResult<WasmConversationConfig>;
@@ -187,17 +186,9 @@ export class Engine implements Deletable {
             this.withDefaultModalities(config.sessionConfig || {}), this.wasm);
         const prefaceJson =
             config.preface ? JSON.stringify(config.preface) : '';
-        const usesAutosizedRingbuffers =
-            this.settings.backend === Backend.GPU_ARTISAN &&
-            Boolean(
-                (this.settings.mainExecutorSettings?.backendConfig as
-                 GpuArtisanConfig | undefined)
-                    ?.use_autosized_ringbuffers);
-        const filterChannelContentFromKvCache =
-            config.filterChannelContentFromKvCache ?? usesAutosizedRingbuffers;
         wasmConfigResult = this.wasm.ConversationConfig.createCustom(
-            this.engine, wasmSessionConfig, !!config.enableConstrainedDecoding,
-            !!config.prefillPrefaceOnInit, filterChannelContentFromKvCache,
+            this.engine, wasmSessionConfig, config.enableConstrainedDecoding,
+            config.prefillPrefaceOnInit, config.filterChannelContentFromKvCache,
             prefaceJson);
       } else {
         wasmConfigResult =

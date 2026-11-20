@@ -197,8 +197,17 @@ export declare interface Preface {
 export declare interface ConversationConfig {
   sessionConfig?: SessionConfig;
   preface?: Preface;
+  /** Whether constrained decoding is enabled. Defaults to `false`. */
   enableConstrainedDecoding?: boolean;
+  /**
+   * Whether to prefill the preface when the conversation is created. Defaults
+   * to `false`.
+   */
   prefillPrefaceOnInit?: boolean;
+  /**
+   * Whether channel content (e.g. thinking/reasoning tokens) is stripped from
+   * the KV cache after each turn. Defaults to `true`.
+   */
   filterChannelContentFromKvCache?: boolean;
   // TODO: b/477709280 - Add support for custom channel arrays.
 }
