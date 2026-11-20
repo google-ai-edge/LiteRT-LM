@@ -356,6 +356,16 @@ litert::Expected<litert::Options> CreateLiteRtCpuOptions(
 litert::Expected<litert::Options> CreateLiteRtNpuOptions(
     const LlmExecutorSettings& settings, bool is_dynamic_model = false);
 
+// Returns true if `model` carries the LiteRT build stamp, i.e. it was compiled
+// ahead of time for an NPU.
+bool IsPrecompiledForNpu(const litert::Model& model);
+
+// Creates the options for the NPU auxiliary model: NPU and CPU if the model is
+// precompiled for the NPU, CPU only otherwise.
+litert::Expected<litert::Options> CreateLiteRtNpuAuxiliaryOptions(
+    const litert::Model& model, const LlmExecutorSettings& settings,
+    bool is_dynamic_model = false);
+
 // Formats the first N elements of a span as a comma-separated list inside
 // brackets, e.g., "[1, 2, 3, ...]".
 template <typename T>
@@ -539,6 +549,9 @@ inline absl::Status SetFirstElement(::litert::TensorBuffer& buffer,
 
 // Holds the context for the NPU auxiliary model, which contains several
 // signatures for Mask, RoPE and KV cache update computation.
+//
+// An auxiliary model that is not precompiled for the NPU runs on the CPU, so
+// that LiteRT does not JIT-compile it for the NPU.
 struct NpuAuxiliaryContext {
   ::litert::CompiledModel npu_auxiliary_compiled_model;
   explicit NpuAuxiliaryContext(
