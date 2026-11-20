@@ -581,6 +581,12 @@ absl::Status SessionAdvanced::SaveContext(absl::string_view label) {
   }
   ABSL_ASSIGN_OR_RETURN(int current_step,
                         execution_manager_lock->GetCurrentStep(*session_info_));
+  // Release the context saved with the same label first, so that it is not
+  // alive at the same time as the new one (e.g. two copies of the NPU
+  // executor's ring buffer KV cache).
+  if (auto it = checkpoint_map_.find(label); it != checkpoint_map_.end()) {
+    it->second.processed_context.reset();
+  }
   ABSL_ASSIGN_OR_RETURN(std::unique_ptr<ProcessedContext> processed_context,
                         execution_manager_lock->SaveContext(*session_info_));
   checkpoint_map_[label] = {current_step, session_state_, last_task_ids_,

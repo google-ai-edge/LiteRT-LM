@@ -143,6 +143,30 @@ target_link_libraries(runtime_executor_npu_llm_litert_npu_kv_cache
 )
 
 # ==============================================================================
+# LLM LiteRT NPU Ring Buffer State
+# ==============================================================================
+add_litertlm_library(runtime_executor_npu_llm_litert_npu_ring_buffer_state STATIC
+  llm_litert_npu_ring_buffer_state.cc
+)
+add_library(LiteRTLM::Runtime::Executor::Npu::RingBufferState
+  ALIAS runtime_executor_npu_llm_litert_npu_ring_buffer_state)
+
+target_include_directories(runtime_executor_npu_llm_litert_npu_ring_buffer_state
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_npu_llm_litert_npu_ring_buffer_state
+  PUBLIC
+    LiteRTLM::Runtime::Executor::Npu::CompiledModelExecutorUtils
+    LiteRTLM::Runtime::Util::TensorBufferUtil
+
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # LLM LiteRT NPU Embedder
 # ==============================================================================
 add_litertlm_library(runtime_executor_npu_llm_litert_npu_embedder STATIC
