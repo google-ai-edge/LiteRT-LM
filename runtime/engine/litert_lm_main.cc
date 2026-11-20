@@ -48,10 +48,10 @@
 #include "runtime/engine/engine_factory.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/engine/shared_flags.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/status_macros.h"
-#include "runtime/engine/shared_flags.h"
 
 ABSL_FLAG(std::string, backend, "gpu",
           "Executor backend to use for LLM execution (cpu, gpu, etc.)");
@@ -136,6 +136,11 @@ absl::Status MainHelper(int argc, char** argv) {
   // Enable benchmark by default.
   engine_settings.GetMutableBenchmarkParams() =
       litert::lm::proto::BenchmarkParams();
+  const int max_num_tokens = absl::GetFlag(FLAGS_max_num_tokens);
+  if (max_num_tokens > 0) {
+    engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+        max_num_tokens);
+  }
   const int visual_token_budget = absl::GetFlag(FLAGS_visual_token_budget);
   if (visual_token_budget > 0) {
     engine_settings.SetMaxVisionTokensPerImage(visual_token_budget);
@@ -198,8 +203,8 @@ absl::Status MainHelper(int argc, char** argv) {
   ABSL_RETURN_IF_ERROR(engine->WaitUntilDone(absl::Minutes(10)));
 
   // Print the benchmark info.
-  auto benchmark_info = conversation->GetBenchmarkInfo();
-  std::cout << std::endl << *benchmark_info << std::endl;
+  ABSL_ASSIGN_OR_RETURN(auto benchmark_info, conversation->GetBenchmarkInfo());
+  std::cout << std::endl << benchmark_info << std::endl;
   return absl::OkStatus();
 }
 
