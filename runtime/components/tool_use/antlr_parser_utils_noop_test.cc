@@ -23,6 +23,8 @@
 namespace litert::lm {
 namespace {
 
+using ::testing::AllOf;
+using ::testing::HasSubstr;
 using ::testing::status::StatusIs;
 
 TEST(AntlrParserUtilsNoopTest, ParsePythonExpressionReturnsUnimplemented) {
@@ -36,8 +38,11 @@ TEST(AntlrParserUtilsNoopTest, ParseJsonExpressionReturnsUnimplemented) {
 }
 
 TEST(AntlrParserUtilsNoopTest, ParseFcExpressionReturnsUnimplemented) {
-  EXPECT_THAT(ParseFcExpression("call:tool{x:1}"),
-              StatusIs(absl::StatusCode::kUnimplemented));
+  EXPECT_THAT(
+      ParseFcExpression("call:tool{x:1}"),
+      StatusIs(absl::StatusCode::kUnimplemented,
+               AllOf(HasSubstr("depend on :parser_utils"),
+                     HasSubstr("LITERT_LM_ENABLE_TOOL_USE_PARSER=ON"))));
 }
 
 }  // namespace

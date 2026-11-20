@@ -22,22 +22,32 @@
 
 namespace litert::lm {
 
+namespace {
+
+// Returned by all no-op parsers. Explains why parsing is disabled and how to
+// enable it.
+constexpr absl::string_view kToolUseParsingDisabled =
+    "Tool use parsing is disabled in this build: the no-op ANTLR parsers are "
+    "linked. To enable it, depend on :parser_utils (not :parser_utils_lite) "
+    "and do not set enable_tool_use_parser=false or "
+    "LITERT_LM_TOOL_USE_PARSER_DISABLED=1 (or set "
+    "LITERT_LM_ENABLE_TOOL_USE_PARSER=ON in CMake).";
+
+}  // namespace
+
 absl::StatusOr<nlohmann::ordered_json> ParsePythonExpression(
     absl::string_view text) {
-  return absl::UnimplementedError(
-      "Tool use parsing is disabled in this build.");
+  return absl::UnimplementedError(kToolUseParsingDisabled);
 }
 
 absl::StatusOr<nlohmann::ordered_json> ParseJsonExpression(
     absl::string_view text) {
-  return absl::UnimplementedError(
-      "Tool use parsing is disabled in this build.");
+  return absl::UnimplementedError(kToolUseParsingDisabled);
 }
 
 absl::StatusOr<nlohmann::ordered_json> ParseFcExpression(
     absl::string_view text) {
-  return absl::UnimplementedError(
-      "Tool use parsing is disabled in this build.");
+  return absl::UnimplementedError(kToolUseParsingDisabled);
 }
 
 }  // namespace litert::lm
