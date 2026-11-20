@@ -12,12 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import base64
 import json
 
 from absl.testing import absltest
 from absl.testing import parameterized
 
 import litert_lm
+
+
+class _FakeRgbArray:
+  """Minimal `[height, width, 3]` uint8 array-like (no numpy dependency)."""
+
+  def __init__(
+      self, height: int, width: int, value: int = 7, dtype: str = "uint8"
+  ):
+    self.shape = (height, width, 3)
+    self.dtype = dtype
+    self._data = bytes([value]) * (height * width * 3)
+
+  def tobytes(self) -> bytes:
+    return self._data
 
 
 class MessagesTest(parameterized.TestCase):
@@ -351,6 +366,81 @@ class MessagesTest(parameterized.TestCase):
     self.assertEqual(msg.tool_calls[0].arguments, {"city": "Paris"})
     self.assertEqual(msg.tool_calls[0].id, "call_1")
     self.assertEqual(msg.to_json(), raw_dict)
+
+  def test_video_frames_to_json_with_all_frame_kinds(self):
+    content = litert_lm.Content.VideoFrames(
+        frames=[
+            litert_lm.VideoFrame(image_bytes=b"jpeg", timestamp=0.0),
+            litert_lm.VideoFrame(image_path="/tmp/f1.png", timestamp=0.5),
+            litert_lm.VideoFrame(pixels=_FakeRgbArray(2, 4), timestamp=1.0),
+        ],
+        fps=2,
+    )
+    self.assertEqual(
+        content.to_json(),
+        {
+            "type": "video",
+            "frames": [
+                {"blob": "anBlZw==", "timestamp": 0.0},
+                {"path": "/tmp/f1.png", "timestamp": 0.5},
+                {
+                    "pixels": base64.b64encode(bytes([7]) * 24).decode(),
+                    "width": 4,
+                    "height": 2,
+                    "timestamp": 1.0,
+                },
+            ],
+            "fps": 2.0,
+        },
+    )
+
+  def test_video_frames_without_timestamps_or_fps(self):
+    content = litert_lm.Content.VideoFrames(
+        frames=[litert_lm.VideoFrame(image_path="/tmp/f0.png")]
+    )
+    self.assertEqual(
+        content.to_json(),
+        {"type": "video", "frames": [{"path": "/tmp/f0.png"}]},
+    )
+
+  def test_video_frames_round_trips_through_message_json(self):
+    content = litert_lm.Content.VideoFrames(
+        frames=[
+            litert_lm.VideoFrame(image_path="/tmp/f0.png", timestamp=0.0),
+            litert_lm.VideoFrame(image_bytes=b"jpeg", timestamp=0.5),
+            litert_lm.VideoFrame(pixels=_FakeRgbArray(1, 2), timestamp=1.0),
+        ],
+        fps=2.0,
+    )
+    message = litert_lm.Message(
+        role=litert_lm.Role.USER,
+        contents=litert_lm.Contents.of(content, "What happens?"),
+    )
+    parsed = litert_lm.Message.from_json(message.to_json())
+    self.assertIsInstance(parsed.contents[0], litert_lm.Content.VideoFrames)
+    self.assertEqual(parsed.contents[0].to_json(), content.to_json())
+
+  @parameterized.named_parameters(
+      ("none", {}),
+      ("two", {"image_bytes": b"a", "image_path": "/a.png"}),
+  )
+  def test_video_frame_needs_exactly_one_source(self, kwargs):
+    with self.assertRaises(ValueError):
+      litert_lm.VideoFrame(**kwargs)
+
+  def test_raw_frame_validation(self):
+    bad_shape = _FakeRgbArray(2, 2)
+    bad_shape.shape = (2, 2, 4)
+    with self.assertRaises(ValueError):
+      litert_lm.VideoFrame(pixels=bad_shape).to_json()
+    with self.assertRaises(ValueError):
+      litert_lm.VideoFrame(
+          pixels=_FakeRgbArray(2, 2, dtype="float32")
+      ).to_json()
+
+  def test_empty_video_frames_is_rejected(self):
+    with self.assertRaises(ValueError):
+      litert_lm.Content.VideoFrames(frames=[]).to_json()
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@ from ._messages import Contents
 from ._messages import Message
 from ._messages import Role
 from ._messages import ToolCall
+from ._messages import VideoFrame
 from .benchmark import Benchmark
 from .conversation import Conversation
 from .embedding_engine import EmbeddingEngine
@@ -128,6 +129,7 @@ __all__ = (
     "Tool",
     "ToolCall",
     "ToolEventHandler",
+    "VideoFrame",
     "set_min_log_severity",
     "tool_from_function",
 )

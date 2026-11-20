@@ -68,6 +68,7 @@ class Content(abc.ABC):
   AudioBytes: type[AudioBytes]
   AudioFile: type[AudioFile]
   ToolResponse: type[ToolResponse]
+  VideoFrames: type[VideoFrames]
   # pylint: enable=invalid-name
 
   @abc.abstractmethod
@@ -149,6 +150,140 @@ class ToolResponse(Content):
     }
 
 
+@dataclasses.dataclass
+class VideoFrame:
+  """One frame of a `VideoFrames`, already decoded by the caller.
+
+  Exactly one of `image_bytes`, `image_path` or `pixels` must be set. LiteRT-LM
+  does not decode video containers; decode and sample frames in the application
+  and pass them here. The runtime handles resizing and patchification.
+
+  Attributes:
+    image_bytes: The frame as encoded image bytes (e.g. JPEG or PNG).
+    image_path: Absolute path of the frame as an encoded image file.
+    pixels: The frame as a raw `[height, width, 3]` uint8 RGB array (e.g. a
+      numpy array), sent without re-encoding.
+    timestamp: Presentation time of the frame in the source video, in seconds.
+      If unset, the runtime uses `index / VideoFrames.fps`.
+  """
+
+  image_bytes: bytes | None = None
+  image_path: str | None = None
+  pixels: Any = None
+  timestamp: float | None = None
+
+  def __post_init__(self):
+    num_set = sum(
+        value is not None
+        for value in (self.image_bytes, self.image_path, self.pixels)
+    )
+    if num_set != 1:
+      raise ValueError(
+          "Exactly one of image_bytes, image_path or pixels must be set."
+      )
+
+  def to_json(self) -> dict[str, Any]:
+    """Returns the frame as a `"frames"` entry of a video content item."""
+    res: dict[str, Any]
+    if self.image_bytes is not None:
+      res = {"blob": base64.b64encode(self.image_bytes).decode("utf-8")}
+    elif self.image_path is not None:
+      res = {"path": self.image_path}
+    else:
+      res = _raw_rgb_frame_to_json(self.pixels)
+    if self.timestamp is not None:
+      res["timestamp"] = float(self.timestamp)
+    return res
+
+
+def _raw_rgb_frame_to_json(pixels: Any) -> dict[str, Any]:
+  """Serializes a `[height, width, 3]` uint8 array as base64 RGB888 pixels."""
+  shape = tuple(getattr(pixels, "shape", ()))
+  if len(shape) != 3 or shape[2] != 3:
+    raise ValueError(
+        f"Video frame pixels must have shape [height, width, 3], got {shape}."
+    )
+  dtype = getattr(pixels, "dtype", None)
+  if dtype is not None and str(dtype) != "uint8":
+    raise ValueError(f"Video frame pixels must be uint8, got {dtype}.")
+  # C-contiguous HWC bytes (`tobytes()` copies non-contiguous arrays).
+  data = pixels.tobytes() if hasattr(pixels, "tobytes") else bytes(pixels)
+  return {
+      "pixels": base64.b64encode(data).decode("utf-8"),
+      "width": int(shape[1]),
+      "height": int(shape[0]),
+  }
+
+
+@dataclasses.dataclass
+class VideoFrames(Content):
+  """Video provided as a sequence of frames sampled by the caller.
+
+  Requires a model whose metadata reports the Video input modality. The
+  runtime groups the frames as the model expects (for example, pairs of
+  consecutive frames for vision encoders with `temporal_patch_size = 2`,
+  repeating the last frame if the count is odd).
+
+  Attributes:
+    frames: The sampled frames in presentation order, all of the same size.
+    fps: Sampling rate used for frames without a `timestamp` (the runtime
+      defaults to 2 frames per second).
+  """
+
+  frames: Sequence[VideoFrame]
+  fps: float | None = None
+
+  def to_json(self) -> dict[str, Any]:
+    if not self.frames:
+      raise ValueError("A video must have at least one frame.")
+    res: dict[str, Any] = {
+        "type": "video",
+        "frames": [frame.to_json() for frame in self.frames],
+    }
+    if self.fps is not None:
+      res["fps"] = float(self.fps)
+    return res
+
+
+class _RawRgbFrame:
+  """Raw RGB888 frame bytes parsed back from a video content item."""
+
+  def __init__(self, data: bytes, width: int, height: int):
+    self.shape = (height, width, 3)
+    self.dtype = "uint8"
+    self._data = data
+
+  def tobytes(self) -> bytes:
+    return self._data
+
+
+def _video_frames_from_json(item: Mapping[str, Any]) -> VideoFrames:
+  """Parses a `{"type": "video"}` content item into a `VideoFrames`."""
+  frames = []
+  for frame in item.get("frames", []):
+    timestamp = frame.get("timestamp")
+    if "path" in frame:
+      frames.append(VideoFrame(image_path=frame["path"], timestamp=timestamp))
+    elif "blob" in frame:
+      frames.append(
+          VideoFrame(
+              image_bytes=base64.b64decode(frame["blob"]), timestamp=timestamp
+          )
+      )
+    elif "pixels" in frame:
+      frames.append(
+          VideoFrame(
+              pixels=_RawRgbFrame(
+                  base64.b64decode(frame["pixels"]),
+                  int(frame["width"]),
+                  int(frame["height"]),
+              ),
+              timestamp=timestamp,
+          )
+      )
+  return VideoFrames(frames=frames, fps=item.get("fps"))
+
+
 # Attach subclasses to Content
 Content.Text = Text
 Content.ImageBytes = ImageBytes
@@ -156,6 +291,7 @@ Content.ImageFile = ImageFile
 Content.AudioBytes = AudioBytes
 Content.AudioFile = AudioFile
 Content.ToolResponse = ToolResponse
+Content.VideoFrames = VideoFrames
 
 
 class Contents(list[Content]):
@@ -412,6 +548,8 @@ class Message(dict[str, Any]):
                     name=item.get("name", ""), response=item.get("response")
                 )
             )
+          elif item_type == "video":
+            contents_list.append(_video_frames_from_json(item))
 
     parsed_contents = Contents(contents_list)
     raw_content = None
