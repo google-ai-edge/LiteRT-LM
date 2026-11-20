@@ -69,6 +69,16 @@ struct DrafterAuxContext {
   std::vector<std::string> mask_signatures;
   // Drafter mask signature of the currently bound context group.
   std::string mask_signature;
+  // Optional centroid (masked-embedding) drafter head. When the MTP auxiliary
+  // model has a `drafter_scan` signature, it turns the drafter's centroid
+  // outputs into the draft token id on the CPU, instead of an argmax over the
+  // drafter's full-vocabulary logits. The scan's inputs alias the drafter's
+  // output buffers of the same names.
+  bool has_drafter_scan = false;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      scan_input_buffers;
+  absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>
+      scan_output_buffers;
 
   DrafterAuxContext(::litert::CompiledModel mtp_aux_compiled_model,
                     NpuRope drafter_rope, NpuMask drafter_mask,
@@ -85,7 +95,10 @@ struct DrafterAuxContext {
         drafter_rope(std::move(other.drafter_rope)),
         drafter_mask(std::move(other.drafter_mask)),
         mask_signatures(std::move(other.mask_signatures)),
-        mask_signature(std::move(other.mask_signature)) {
+        mask_signature(std::move(other.mask_signature)),
+        has_drafter_scan(other.has_drafter_scan),
+        scan_input_buffers(std::move(other.scan_input_buffers)),
+        scan_output_buffers(std::move(other.scan_output_buffers)) {
     drafter_rope.SetCompiledModel(&mtp_aux_compiled_model);
     drafter_mask.SetCompiledModel(&mtp_aux_compiled_model);
   }
@@ -96,6 +109,9 @@ struct DrafterAuxContext {
       drafter_mask = std::move(other.drafter_mask);
       mask_signatures = std::move(other.mask_signatures);
       mask_signature = std::move(other.mask_signature);
+      has_drafter_scan = other.has_drafter_scan;
+      scan_input_buffers = std::move(other.scan_input_buffers);
+      scan_output_buffers = std::move(other.scan_output_buffers);
       drafter_rope.SetCompiledModel(&mtp_aux_compiled_model);
       drafter_mask.SetCompiledModel(&mtp_aux_compiled_model);
     }

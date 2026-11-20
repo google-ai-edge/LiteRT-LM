@@ -139,6 +139,12 @@ struct MtpSignatures {
   static constexpr absl::string_view kOutputLogits = "logits";
   static constexpr absl::string_view kOutputActivations =
       "projected_activations";
+  // Optional centroid (masked-embedding) drafter head: the drafter outputs
+  // centroid logits and its last hidden state instead of `kOutputLogits`, and
+  // the `kDrafterScan` signature of the MTP auxiliary model takes those
+  // outputs (bound by name) and returns `kOutputDraftTokenId`.
+  static constexpr absl::string_view kDrafterScan = "drafter_scan";
+  static constexpr absl::string_view kOutputDraftTokenId = "draft_token_id";
 };
 
 // Returns the drafter signature to use for a text decoder context group of

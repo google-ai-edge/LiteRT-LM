@@ -1111,13 +1111,17 @@ std::vector<uint8_t> BuildMtpAuxModelBuffer(
     const std::vector<std::pair<std::string, int32_t>>& mask_signatures,
     bool with_input_tokens = true,
     absl::string_view rope_output_name = "activations",
-    absl::string_view mask_output_name = "mask_local") {
+    absl::string_view mask_output_name = "mask_local",
+    absl::string_view drafter_scan_input_name = "") {
   flatbuffers::FlatBufferBuilder builder;
   auto cast_opcode =
       tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_CAST);
   auto add_opcode =
       tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ADD);
-  auto opcodes_vec = builder.CreateVector({cast_opcode, add_opcode});
+  auto arg_min_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ARG_MIN);
+  auto opcodes_vec =
+      builder.CreateVector({cast_opcode, add_opcode, arg_min_opcode});
 
   std::vector<flatbuffers::Offset<tflite::Buffer>> buffers;
   buffers.push_back(tflite::CreateBuffer(builder));  // Buffer 0: empty.
@@ -1202,6 +1206,36 @@ std::vector<uint8_t> BuildMtpAuxModelBuffer(
         builder, builder.CreateVector(inputs_map),
         builder.CreateVector({create_map(mask_output_name, 4)}),
         builder.CreateString(mask_signatures[i].first), subgraph_index));
+  }
+
+  // Optional "drafter_scan" signature: `draft_token_id` = argmin over the last
+  // axis of the [1, 1, 8] input. Argmin (rather than argmax) makes the scan's
+  // token distinguishable from greedy sampling over the drafter logits.
+  if (!drafter_scan_input_name.empty()) {
+    const int32_t kAxis = 2;
+    buffers.push_back(tflite::CreateBuffer(
+        builder, builder.CreateVector(reinterpret_cast<const uint8_t*>(&kAxis),
+                                      sizeof(kAxis))));
+    const uint32_t axis_buf = buffers.size() - 1;
+    auto tensors_vec = builder.CreateVector(
+        {create_tensor({1, 1, 8}, tflite::TensorType_FLOAT32, 0,
+                       drafter_scan_input_name),
+         create_tensor({1}, tflite::TensorType_INT32, axis_buf, "scan_axis"),
+         create_tensor({1, 1}, tflite::TensorType_INT32, 0, "draft_token_id")});
+    auto arg_min_op = tflite::CreateOperator(
+        builder, /*opcode_index=*/2, builder.CreateVector<int32_t>({0, 1}),
+        builder.CreateVector<int32_t>({2}),
+        tflite::BuiltinOptions_ArgMinOptions,
+        tflite::CreateArgMinOptions(builder, tflite::TensorType_INT32).Union());
+    const uint32_t subgraph_index = subgraphs.size();
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, tensors_vec, builder.CreateVector<int32_t>({0}),
+        builder.CreateVector<int32_t>({2}), builder.CreateVector({arg_min_op}),
+        builder.CreateString("drafter_scan")));
+    sig_defs.push_back(tflite::CreateSignatureDef(
+        builder, builder.CreateVector({create_map(drafter_scan_input_name, 0)}),
+        builder.CreateVector({create_map("draft_token_id", 2)}),
+        builder.CreateString("drafter_scan"), subgraph_index));
   }
 
   auto model = tflite::CreateModel(
@@ -2363,7 +2397,8 @@ class LlmLiteRtNpuRunDrafterLoopTest : public DrafterContextTest {
   std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> MakeMtpExecutor(
       MaskUpdateMethod mask_method, bool with_drafter_contexts = true,
       bool uses_ringbuffer = false, int local_cache_length = kContextSize,
-      std::optional<int> sliding_window_size = std::nullopt) {
+      std::optional<int> sliding_window_size = std::nullopt,
+      absl::string_view drafter_scan_input_name = "") {
     absl::StatusOr<ModelAssets> model_assets =
         ModelAssets::Create("dummy_model");
     ABSL_CHECK_OK(model_assets);
@@ -2420,7 +2455,8 @@ class LlmLiteRtNpuRunDrafterLoopTest : public DrafterContextTest {
           BuildRunDrafterLoopModelBuffer(kContextSize, local_cache_length));
       const ::litert::Model& aux_model = KeepModel(BuildMtpAuxModelBuffer(
           {{"mask", local_cache_length}}, /*with_input_tokens=*/true,
-          /*rope_output_name=*/"rope_cos", /*mask_output_name=*/"mask_local"));
+          /*rope_output_name=*/"rope_cos", /*mask_output_name=*/"mask_local",
+          drafter_scan_input_name));
       absl::StatusOr<DrafterContext> created_drafter =
           DrafterContext::Create(*env_, drafter_model, groups);
       ABSL_CHECK_OK(created_drafter);
@@ -2615,6 +2651,91 @@ TEST_F(LlmLiteRtNpuRunDrafterLoopTest,
   EXPECT_EQ(mask_vals[1], 0.0f);
   EXPECT_LT(mask_vals[2], 0.0f);
   EXPECT_EQ(mask_vals[3], 0.0f);
+}
+
+TEST_F(LlmLiteRtNpuRunDrafterLoopTest,
+       DrafterScanSignatureSelectsDraftTokensInsteadOfGreedySampling) {
+  std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor = MakeMtpExecutor(
+      MaskUpdateMethod::kModel, /*with_drafter_contexts=*/true,
+      /*uses_ringbuffer=*/false, /*local_cache_length=*/kContextSize,
+      /*sliding_window_size=*/std::nullopt,
+      /*drafter_scan_input_name=*/"logits");
+
+  // The drafter's `logits` are |activations| = |[embedding(4), act(4)]|:
+  // step 1 gives [2, 2, 2, 2, 0, 50, 0, 0] (greedy: 5), step 2 gives
+  // [4, 4, 4, 4, 0, 0, 0, 100] (greedy: 7). The scan's argmin picks the first
+  // zero, index 4, in both steps.
+  ASSERT_THAT(
+      CallRunDrafterLoop(*executor, /*start_step=*/5, /*current_token_id=*/2),
+      IsOkAndHolds(ElementsAre(4, 4)));
+}
+
+TEST_F(DrafterContextTest, DrafterAuxContextAliasesDrafterScanInputs) {
+  ::litert::Model drafter_model =
+      LoadModel(BuildRunDrafterLoopModelBuffer(/*context_size=*/8));
+  ::litert::Model aux_model = LoadModel(BuildMtpAuxModelBuffer(
+      {{"mask", 8}}, /*with_input_tokens=*/true,
+      /*rope_output_name=*/"rope_cos", /*mask_output_name=*/"mask_local",
+      /*drafter_scan_input_name=*/"logits"));
+  std::vector<NpuContextGroup> groups;
+  groups.push_back(MakeContextGroup(8));
+
+  ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
+                       DrafterContext::Create(*env_, drafter_model, groups));
+  ASSERT_OK_AND_ASSIGN(
+      DrafterAuxContext drafter_aux_context,
+      DrafterAuxContext::Create(*env_, aux_model, drafter_context, groups,
+                                MaskUpdateMethod::kModel));
+
+  EXPECT_TRUE(drafter_aux_context.has_drafter_scan);
+  EXPECT_TRUE(SharesMemory(drafter_aux_context.scan_input_buffers.at("logits"),
+                           drafter_context.mtp_output_buffers.at("logits")));
+  EXPECT_TRUE(
+      drafter_aux_context.scan_output_buffers.contains("draft_token_id"));
+
+  // The aliasing survives a move of the auxiliary context.
+  DrafterAuxContext moved = std::move(drafter_aux_context);
+  EXPECT_TRUE(moved.has_drafter_scan);
+  EXPECT_TRUE(SharesMemory(moved.scan_input_buffers.at("logits"),
+                           drafter_context.mtp_output_buffers.at("logits")));
+}
+
+TEST_F(DrafterContextTest, DrafterAuxContextWithoutDrafterScanSignature) {
+  ::litert::Model drafter_model =
+      LoadModel(BuildRunDrafterLoopModelBuffer(/*context_size=*/8));
+  ::litert::Model aux_model = LoadModel(BuildMtpAuxModelBuffer(
+      {{"mask", 8}}, /*with_input_tokens=*/true,
+      /*rope_output_name=*/"rope_cos", /*mask_output_name=*/"mask_local"));
+  std::vector<NpuContextGroup> groups;
+  groups.push_back(MakeContextGroup(8));
+
+  ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
+                       DrafterContext::Create(*env_, drafter_model, groups));
+  ASSERT_OK_AND_ASSIGN(
+      DrafterAuxContext drafter_aux_context,
+      DrafterAuxContext::Create(*env_, aux_model, drafter_context, groups,
+                                MaskUpdateMethod::kModel));
+  EXPECT_FALSE(drafter_aux_context.has_drafter_scan);
+  EXPECT_TRUE(drafter_aux_context.scan_input_buffers.empty());
+}
+
+TEST_F(DrafterContextTest,
+       DrafterAuxContextRejectsDrafterScanInputMissingFromDrafterOutputs) {
+  ::litert::Model drafter_model =
+      LoadModel(BuildRunDrafterLoopModelBuffer(/*context_size=*/8));
+  ::litert::Model aux_model = LoadModel(BuildMtpAuxModelBuffer(
+      {{"mask", 8}}, /*with_input_tokens=*/true,
+      /*rope_output_name=*/"rope_cos", /*mask_output_name=*/"mask_local",
+      /*drafter_scan_input_name=*/"centroid_logits"));
+  std::vector<NpuContextGroup> groups;
+  groups.push_back(MakeContextGroup(8));
+
+  ASSERT_OK_AND_ASSIGN(DrafterContext drafter_context,
+                       DrafterContext::Create(*env_, drafter_model, groups));
+  EXPECT_THAT(DrafterAuxContext::Create(*env_, aux_model, drafter_context,
+                                        groups, MaskUpdateMethod::kModel),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("centroid_logits")));
 }
 
 }  // namespace

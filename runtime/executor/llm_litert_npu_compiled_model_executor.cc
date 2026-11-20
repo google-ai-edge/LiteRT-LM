@@ -957,6 +957,82 @@ absl::StatusOr<DrafterAuxContext> DrafterAuxContext::Create(
   DrafterAuxContext drafter_aux_context(
       std::move(mtp_aux_compiled_model), std::move(drafter_rope),
       std::move(drafter_mask), std::move(mask_signatures));
+
+  // Two kinds of MTP drafter heads are supported:
+  //
+  // 1. Full-vocabulary head (the default): the drafter projects onto the whole
+  //    vocabulary and outputs `logits`, one per possible next token.
+  //    `RunDrafterLoop` takes the draft token by greedy sampling of `logits`.
+  // 2. Centroid (masked-embedding) head: the drafter only outputs logits for
+  //    clusters of tokens ("centroids"), plus its last hidden state. An extra
+  //    signature of the MTP auxiliary model, `drafter_scan`, turns those
+  //    outputs into the draft token id (`draft_token_id`) on the CPU. This
+  //    keeps the large vocabulary projection off the NPU.
+  //
+  // A centroid head is detected by the presence of the `drafter_scan`
+  // signature in the MTP auxiliary model. Its inputs are bound by name to the
+  // drafter's output buffers of the same names, so the runtime does not need to
+  // know their names; each binding is checked for a matching element type and
+  // shape, and `draft_token_id` must be a single int32.
+  ::litert::CompiledModel& aux_model =
+      drafter_aux_context.mtp_aux_compiled_model;
+  if (aux_model.FindSignature(MtpSignatures::kDrafterScan)) {
+    LITERT_ASSIGN_OR_RETURN(
+        std::vector<absl::string_view> scan_input_names,
+        aux_model.GetSignatureInputNames(MtpSignatures::kDrafterScan));
+    for (absl::string_view name : scan_input_names) {
+      if (!drafter_context.mtp_output_buffers.contains(name)) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "MTP drafter signature \"", drafter_context.signature,
+            "\" has no output \"", name, "\" for the input of signature \"",
+            MtpSignatures::kDrafterScan, "\" of the MTP auxiliary model."));
+      }
+      const ::litert::TensorBuffer& drafter_output_buffer =
+          drafter_context.mtp_output_buffers.at(name);
+      LITERT_ASSIGN_OR_RETURN(
+          ::litert::RankedTensorType scan_input_type,
+          aux_model.GetInputTensorType(MtpSignatures::kDrafterScan, name));
+      LITERT_ASSIGN_OR_RETURN(::litert::RankedTensorType drafter_output_type,
+                              drafter_output_buffer.TensorType());
+      if (!IsCompatibleTensorType(scan_input_type, drafter_output_type)) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Signature \"", MtpSignatures::kDrafterScan,
+            "\" of the MTP auxiliary model expects \"", name, "\" with shape [",
+            absl::StrJoin(scan_input_type.Layout().Dimensions(), ", "),
+            "] but MTP drafter signature \"", drafter_context.signature,
+            "\" outputs shape [",
+            absl::StrJoin(drafter_output_type.Layout().Dimensions(), ", "),
+            "] or a different element type."));
+      }
+      // The scan input aliases the drafter's output buffer.
+      LITERT_ASSIGN_OR_RETURN(::litert::TensorBuffer scan_input_buffer,
+                              drafter_output_buffer.Duplicate());
+      drafter_aux_context.scan_input_buffers.insert_or_assign(
+          name, std::move(scan_input_buffer));
+    }
+    LITERT_ASSIGN_OR_RETURN(
+        ::litert::TensorBuffer draft_token_id_buffer,
+        aux_model.CreateOutputBuffer(MtpSignatures::kDrafterScan,
+                                     MtpSignatures::kOutputDraftTokenId));
+    // `RunDrafterLoop` reads the draft token as a single int32.
+    LITERT_ASSIGN_OR_RETURN(::litert::RankedTensorType draft_token_id_type,
+                            draft_token_id_buffer.TensorType());
+    LITERT_ASSIGN_OR_RETURN(size_t draft_token_id_num_elements,
+                            draft_token_id_type.Layout().NumElements());
+    if (draft_token_id_type.ElementType() != ::litert::ElementType::Int32 ||
+        draft_token_id_num_elements != 1) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Output \"", MtpSignatures::kOutputDraftTokenId, "\" of signature \"",
+          MtpSignatures::kDrafterScan,
+          "\" of the MTP auxiliary model must be a single int32, but has ",
+          draft_token_id_num_elements, " elements of element type ",
+          static_cast<int>(draft_token_id_type.ElementType()), "."));
+    }
+    drafter_aux_context.scan_output_buffers.insert_or_assign(
+        MtpSignatures::kOutputDraftTokenId, std::move(draft_token_id_buffer));
+    drafter_aux_context.has_drafter_scan = true;
+  }
+
   LITERT_RETURN_IF_ERROR(drafter_aux_context.BindContextGroup(
       0, context_groups.front(), drafter_input_buffers));
   return drafter_aux_context;
@@ -2172,11 +2248,32 @@ LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop(int start_step,
         absl::ToInt64Microseconds(absl::Now() - start);
 
     start = absl::Now();
-    LITERT_ASSIGN_OR_RETURN(
-        int draft_id,
-        ApplyGreedySampling(
-            ctx.mtp_output_buffers[MtpSignatures::kOutputLogits],
-            npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
+    // Get the draft token from the drafter's outputs (see the two kinds of
+    // drafter heads in `DrafterAuxContext::Create`).
+    int draft_id = kInvalidTokenId;
+    if (aux_ctx.has_drafter_scan) {
+      // Centroid head: the drafter output centroid logits and its last hidden
+      // state, which the `drafter_scan` signature of the MTP auxiliary model
+      // turns into the draft token id.
+      LITERT_RETURN_IF_ERROR(aux_ctx.mtp_aux_compiled_model.Run(
+          MtpSignatures::kDrafterScan, aux_ctx.scan_input_buffers,
+          aux_ctx.scan_output_buffers));
+      LITERT_ASSIGN_OR_RETURN(
+          (std::pair<::litert::TensorBufferScopedLock, int32_t*>
+               draft_token_id_lock),
+          ::litert::TensorBufferScopedLock::Create<int32_t>(
+              aux_ctx.scan_output_buffers[MtpSignatures::kOutputDraftTokenId],
+              ::litert::TensorBuffer::LockMode::kRead));
+      draft_id = *draft_token_id_lock.second;
+    } else {
+      // Full-vocabulary head: the drafter already output the logits of every
+      // token, so the draft token is the greedy sample of `logits`.
+      LITERT_ASSIGN_OR_RETURN(
+          draft_id,
+          ApplyGreedySampling(
+              ctx.mtp_output_buffers[MtpSignatures::kOutputLogits],
+              npu_config_.enable_neon_for_npu_greedy_sampling.value_or(false)));
+    }
     latency_stats_.decode_sampling_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start);
     draft_tokens.push_back(draft_id);
