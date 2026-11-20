@@ -24,6 +24,7 @@
 // them; including them is the point of the test.
 #include "c/api_export.h"  // IWYU pragma: keep
 #include "c/conversation.h"  // IWYU pragma: keep
+#include "c/decision_engine.h"  // IWYU pragma: keep
 #include "c/embedding_engine.h"  // IWYU pragma: keep
 #include "c/engine.h"  // IWYU pragma: keep
 #include "c/error_reporter.h"  // IWYU pragma: keep

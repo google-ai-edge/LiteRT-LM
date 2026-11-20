@@ -140,6 +140,7 @@ swift_library(
 C_LITERT_LM_PUBLIC_HDRS = [
     "//c:api_export.h",
     "//c:conversation.h",
+    "//c:decision_engine.h",
     "//c:embedding_engine.h",
     "//c:engine.h",
     "//c:error_reporter.h",
@@ -222,6 +223,7 @@ genrule(
        # Copy the headers
        cp $(execpath //c:api_export.h) CLiteRTLM_mac/Headers/
        cp $(execpath //c:conversation.h) CLiteRTLM_mac/Headers/
+       cp $(execpath //c:decision_engine.h) CLiteRTLM_mac/Headers/
        cp $(execpath //c:embedding_engine.h) CLiteRTLM_mac/Headers/
        cp $(execpath //c:engine.h) CLiteRTLM_mac/Headers/
        cp $(execpath //c:error_reporter.h) CLiteRTLM_mac/Headers/
@@ -233,6 +235,7 @@ genrule(
 module CLiteRTLM {
    header "api_export.h"
    header "conversation.h"
+   header "decision_engine.h"
    header "embedding_engine.h"
    header "engine.h"
    header "error_reporter.h"
