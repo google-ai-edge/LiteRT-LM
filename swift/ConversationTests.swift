@@ -753,6 +753,109 @@ class ConversationTests: XCTestCase {
     localConversation = nil
   }
 
+  func testStreamHoldingLastConversationReferenceDoesNotBlockNextStream() async throws {
+    // Only the stream holds this conversation, so its last reference falls when the stream ends.
+    let stream = try await self.engine.createConversation().sendMessageStream(Message("Hello"))
+    for try await _ in stream {}
+
+    // The next stream of the engine finishes only if the engine's callback thread is free.
+    let next = try await self.engine.createConversation()
+    let finished = expectation(description: "The next stream finished.")
+    Task.detached {
+      do {
+        for try await _ in next.sendMessageStream(Message("Hello")) {}
+      } catch {
+        XCTFail("The next stream threw: \(error)")
+      }
+      finished.fulfill()
+    }
+    await fulfillment(of: [finished], timeout: 60)
+  }
+
+  // In the next test the stream holds the conversation's last reference when it ends. That
+  // reference must not be dropped inside the stream's callback: deleting the conversation there
+  // waits for the callback's own task, holds the callback thread that every conversation of the
+  // engine shares for up to 10 minutes, and the next conversation gets no reply until then.
+
+  func testStreamWhoseReaderIsCancelledDoesNotHoldTheEngine() async throws {
+    var conversation: Conversation? = try await self.engine.createConversation(
+      with: ConversationConfig())
+    let stream = conversation!.sendMessageStream(Message("How are you"))
+    conversation = nil
+
+    let reader = Task {
+      for try await _ in stream {
+        withUnsafeCurrentTask { $0?.cancel() }
+      }
+    }
+    _ = await reader.result
+
+    try await assertNextConversationAnswers(on: self.engine)
+  }
+
+  /// A new conversation of `engine` answers within a minute.
+  private func assertNextConversationAnswers(on engine: Engine) async throws {
+    let next = try await engine.createConversation(with: ConversationConfig())
+    let answered = expectation(description: "the next conversation answers")
+    Task {
+      do {
+        let response = try await next.sendMessage(Message("How are you"))
+        XCTAssertFalse(response.contents.isEmpty)
+      } catch {
+        XCTFail("The next conversation threw: \(error)")
+      }
+      answered.fulfill()
+    }
+    await fulfillment(of: [answered], timeout: 60)
+  }
+
+  /// A tool that counts its runs.
+  private struct CountingTool: Tool {
+    static let name = "counting"
+    static let description = "A tool that counts its runs."
+    static var runs = 0
+    func run() async throws -> Any {
+      CountingTool.runs += 1
+      return "done"
+    }
+  }
+
+  func testStreamRunsToolCallAfterItsConversationIsReleased() async throws {
+    // swift-format-ignore
+    let modelResource =
+      "runtime/testdata/fake_gemma4.litertlm"
+    let localEngine = Engine(
+      engineConfig: try EngineConfig(
+        modelPath: testDataPath(forResource: modelResource),
+        maxNumTokens: 160,
+        cacheDir: NSTemporaryDirectory()
+      )
+    )
+    try await localEngine.initialize()
+    let toolCall = ToolCall(name: CountingTool.name, id: "", arguments: [:])
+    var conversation: Conversation? = try await localEngine.createConversation(
+      with: ConversationConfig(
+        initialMessages: [
+          Message("Hello"),
+          Message(contents: [], role: .model, toolCalls: [toolCall]),
+        ],
+        tools: [CountingTool()], enableResponseFormat: true))
+    CountingTool.runs = 0
+
+    // With tools, a response format applies only to a tool response. This one makes the model call
+    // the tool, so the stream needs its conversation after the caller has released it.
+    let stream = conversation!.sendMessageStream(
+      Message(contents: [.toolResponse(name: CountingTool.name, response: "done")], role: .tool),
+      responseFormat: ResponseFormat.regex(
+        pattern: "<\\|tool_call>call:counting\\{\\}<tool_call\\|>"))
+    conversation = nil
+    // This test checks that the tool ran, not how the stream ended.
+    _ = await Task { for try await _ in stream {} }.result
+
+    XCTAssertGreaterThan(CountingTool.runs, 0)
+    try await assertNextConversationAnswers(on: localEngine)
+  }
+
   func testCloneConversationSucceeds() async throws {
     let template = """
       {{ bos_token }}{% for message in messages %}{{ message.content[0].text }}{% endfor %}

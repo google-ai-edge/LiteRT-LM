@@ -773,7 +773,8 @@ public final class Conversation: Sendable {
   /// Context object to bridge the C callback to the Swift AsyncThrowingStream.
   class StreamContext {
     let continuation: AsyncThrowingStream<Message, Error>.Continuation
-    let conversation: Conversation
+    /// The stream's reference to its conversation, dropped by `endStream`.
+    var conversation: Conversation?
     var toolCallCount: Int = 0
     var pendingToolCalls: [[String: Any]] = []
     let repetitionPenaltyConfig: RepetitionPenaltyConfig?
@@ -810,6 +811,26 @@ public final class Conversation: Sendable {
   }
 }
 
+/// Ends the stream from the C callback.
+///
+/// The callback must not delete the conversation (see "Threading model" in c/engine.h):
+/// `litert_lm_conversation_delete` waits for this callback's task, which ends only after the
+/// callback returns. So another thread drops the stream's reference to the conversation, and only
+/// then wakes the consumer, which deletes the conversation on its own thread if it still holds it.
+private func endStream(
+  _ context: Conversation.StreamContext, _ userData: UnsafeMutableRawPointer,
+  throwing error: Error? = nil
+) {
+  let conversation = context.conversation.map(Unmanaged.passRetained)
+  context.conversation = nil
+  let continuation = context.continuation
+  DispatchQueue.global().async {
+    conversation?.release()
+    continuation.finish(throwing: error)
+  }
+  Unmanaged<Conversation.StreamContext>.fromOpaque(userData).release()
+}
+
 /// A callback function to bridge the C callback to the Swift AsyncThrowingStream.
 private func streamCallback(
   userData: UnsafeMutableRawPointer?,
@@ -835,17 +856,14 @@ private func streamCallback(
       litert_lm_stream_chunk_get_text(chunk, $0)
     }
   } catch {
-    context.continuation.finish(throwing: error)
-    Unmanaged<Conversation.StreamContext>.fromOpaque(userData).release()
+    endStream(context, userData, throwing: error)
     return
   }
 
   if let errorMessage = errorMessage {
     let errorString = String(cString: errorMessage)
     let error = LiteRTLMError.conversation(.invalidResponse(errorString))
-    context.continuation.finish(throwing: error)
-
-    Unmanaged<Conversation.StreamContext>.fromOpaque(userData).release()
+    endStream(context, userData, throwing: error)
     return
   }
 
@@ -868,8 +886,7 @@ private func streamCallback(
       }
     } catch {
       logger.error("Failed to parse response JSON: \(error.localizedDescription)")
-      context.continuation.finish(throwing: error)
-      Unmanaged<Conversation.StreamContext>.fromOpaque(userData).release()
+      endStream(context, userData, throwing: error)
       return
     }
   }
@@ -877,10 +894,10 @@ private func streamCallback(
   if isFinal {
     if !context.pendingToolCalls.isEmpty {
       if context.toolCallCount >= recurringToolCallLimit {
-        context.continuation.finish(
+        endStream(
+          context, userData,
           throwing: LiteRTLMError.conversation(
             .recurringToolCallLimitExceeded(limit: recurringToolCallLimit)))
-        Unmanaged<Conversation.StreamContext>.fromOpaque(userData).release()
         return
       }
 
@@ -890,11 +907,14 @@ private func streamCallback(
 
       Task {
         do {
-          let toolResponseJson = try await context.conversation.handleToolCalls(toolCalls)
+          guard let conversation = context.conversation else {
+            throw LiteRTLMError.conversation(.notAlive)
+          }
+          let toolResponseJson = try await conversation.handleToolCalls(toolCalls)
           // The tool choice applies to the first message only, to avoid endless recursive tool
           // calls. For finer control, disable automatic tool calling.
-          try context.conversation.sendToStream(
-            handle: context.conversation.checkIsAlive(),
+          try conversation.sendToStream(
+            handle: conversation.checkIsAlive(),
             messageJson: toolResponseJson,
             extraContext: context.extraContext,
             repetitionPenaltyConfig: context.repetitionPenaltyConfig,
@@ -913,8 +933,7 @@ private func streamCallback(
         Unmanaged<Conversation.StreamContext>.fromOpaque(userData).release()
       }
     } else {
-      context.continuation.finish()
-      Unmanaged<Conversation.StreamContext>.fromOpaque(userData).release()
+      endStream(context, userData)
     }
   }
 }
