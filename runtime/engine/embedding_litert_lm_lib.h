@@ -43,6 +43,7 @@ struct EmbeddingLiteRtLmSettings {
   int output_size = 0;
   bool use_mmap = false;
   std::string dispatch_library_dir;
+  std::string compiler_library_dir;
   int num_warmup = 2;
   int num_iterations = 10;
   std::string input_overflow_strategy = "truncate";

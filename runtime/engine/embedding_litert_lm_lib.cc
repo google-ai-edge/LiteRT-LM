@@ -298,6 +298,8 @@ absl::Status SetEmbeddingFlag(EmbeddingLiteRtLmSettings* settings,
     settings->compare_embedding_path = std::string(value);
   } else if (name == "dispatch_library_dir") {
     settings->dispatch_library_dir = std::string(value);
+  } else if (name == "compiler_library_dir") {
+    settings->compiler_library_dir = std::string(value);
   } else if (name == "input_overflow_strategy") {
     settings->input_overflow_strategy = std::string(value);
   } else if (name == "activation_data_type") {
@@ -460,6 +462,12 @@ absl::Status RunEmbedding(const EmbeddingLiteRtLmSettings& run_settings,
   if (!dispatch_library_dir.empty()) {
     settings.GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
         dispatch_library_dir);
+  }
+
+  const std::string compiler_library_dir = run_settings.compiler_library_dir;
+  if (!compiler_library_dir.empty()) {
+    settings.GetMutableMainExecutorSettings().SetLitertCompilerLibDir(
+        compiler_library_dir);
   }
 
   if (backend == Backend::CPU) {
