@@ -67,12 +67,22 @@ export class LitertCodeBlock extends LitElement {
       display: block;
     }
 
+    :host([data-theme="light"]),
+    :host-context([data-theme="light"]) {
+      color-scheme: light;
+    }
+
+    :host([data-theme="dark"]),
+    :host-context([data-theme="dark"]) {
+      color-scheme: dark;
+    }
+
     .code-container {
       margin-top: 12px;
       margin-bottom: 12px;
-      border: 1px solid var(--border, #262f40);
+      border: 1px solid var(--border, light-dark(#cbd5e1, #262f40));
       border-radius: 12px;
-      background-color: var(--code-bg, #080b10);
+      background-color: var(--code-bg, light-dark(#f1f5f9, #080b10));
       overflow: hidden;
     }
 
@@ -81,7 +91,7 @@ export class LitertCodeBlock extends LitElement {
       justify-content: space-between;
       align-items: center;
       gap: 8px;
-      background-color: var(--code-header-bg, #141923);
+      background-color: var(--code-header-bg, light-dark(#e2e8f0, #141923));
       padding: 8px 14px;
       border-bottom: 1px solid var(--border, #262f40);
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
