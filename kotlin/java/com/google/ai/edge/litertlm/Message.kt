@@ -149,6 +149,147 @@ data class ToolCall(val name: String, val arguments: Map<String, Any?>) {
     }
 }
 
+private fun requireValidTimestamp(timestamp: Double?) {
+  require(timestamp == null || (timestamp.isFinite() && timestamp.compareTo(0.0) >= 0)) {
+    "Video frame timestamp must be a non-negative finite number, got $timestamp."
+  }
+}
+
+/**
+ * One pre-decoded frame of [Content.VideoFrames].
+ *
+ * LiteRT-LM does not decode video containers; decode and sample frames in the application and pass
+ * them here. The runtime handles resizing and patchification.
+ */
+sealed class VideoFrame {
+  /**
+   * Presentation time of the frame in the source video, in seconds (non-negative). If `null`, the
+   * runtime uses `index / fps`.
+   */
+  abstract val timestamp: Double?
+
+  /** Convert to [JsonObject]. Used internally. */
+  internal abstract fun toJson(): JsonObject
+
+  /**
+   * Frame provided as encoded image bytes (e.g. JPEG or PNG).
+   *
+   * @property bytes Encoded image bytes.
+   * @property timestamp Optional non-negative presentation time in seconds.
+   */
+  @OptIn(ExperimentalEncodingApi::class)
+  data class ImageBytes
+  @JvmOverloads
+  constructor(val bytes: ByteArray, override val timestamp: Double? = null) : VideoFrame() {
+    init {
+      requireValidTimestamp(timestamp)
+    }
+
+    override fun toJson(): JsonObject =
+      JsonObject().apply {
+        addProperty("blob", Base64.encode(bytes))
+        if (timestamp != null) {
+          addProperty("timestamp", timestamp)
+        }
+      }
+
+    override fun equals(other: Any?): Boolean {
+      if (this === other) return true
+      if (other !is ImageBytes) return false
+      return bytes.contentEquals(other.bytes) && timestamp == other.timestamp
+    }
+
+    override fun hashCode(): Int {
+      var result = bytes.contentHashCode()
+      result = 31 * result + (timestamp?.hashCode() ?: 0)
+      return result
+    }
+  }
+
+  /**
+   * Frame provided by an encoded image file path.
+   *
+   * @property absolutePath Absolute path to the encoded image file.
+   * @property timestamp Optional non-negative presentation time in seconds.
+   */
+  data class ImageFile
+  @JvmOverloads
+  constructor(val absolutePath: String, override val timestamp: Double? = null) : VideoFrame() {
+    init {
+      requireValidTimestamp(timestamp)
+    }
+
+    override fun toJson(): JsonObject =
+      JsonObject().apply {
+        addProperty("path", absolutePath)
+        if (timestamp != null) {
+          addProperty("timestamp", timestamp)
+        }
+      }
+  }
+
+  /**
+   * Frame provided as raw RGB888 HWC uint8 pixels (`width * height * 3` bytes), sent without
+   * re-encoding.
+   *
+   * @property bytes Raw RGB888 HWC pixel bytes.
+   * @property width Frame width in pixels (must be positive).
+   * @property height Frame height in pixels (must be positive).
+   * @property timestamp Optional non-negative presentation time in seconds.
+   */
+  @OptIn(ExperimentalEncodingApi::class)
+  data class Pixels
+  @JvmOverloads
+  constructor(
+    val bytes: ByteArray,
+    val width: Int,
+    val height: Int,
+    override val timestamp: Double? = null,
+  ) : VideoFrame() {
+    init {
+      require(width > 0 && height > 0) {
+        "Video frame width and height must be positive, got ${width}x${height}."
+      }
+      val pixelCount = width.toLong() * height.toLong()
+      require(pixelCount <= Int.MAX_VALUE / 3L) {
+        "Video frame dimensions ${width}x${height} exceed maximum RGB888 buffer size."
+      }
+      val expectedBytes = pixelCount * 3L
+      require(bytes.size.toLong() == expectedBytes) {
+        "Video frame pixels must have width * height * 3 ($expectedBytes) bytes, got ${bytes.size}."
+      }
+      requireValidTimestamp(timestamp)
+    }
+
+    override fun toJson(): JsonObject =
+      JsonObject().apply {
+        addProperty("pixels", Base64.encode(bytes))
+        addProperty("width", width)
+        addProperty("height", height)
+        if (timestamp != null) {
+          addProperty("timestamp", timestamp)
+        }
+      }
+
+    override fun equals(other: Any?): Boolean {
+      if (this === other) return true
+      if (other !is Pixels) return false
+      return bytes.contentEquals(other.bytes) &&
+        width == other.width &&
+        height == other.height &&
+        timestamp == other.timestamp
+    }
+
+    override fun hashCode(): Int {
+      var result = bytes.contentHashCode()
+      result = 31 * result + width
+      result = 31 * result + height
+      result = 31 * result + (timestamp?.hashCode() ?: 0)
+      return result
+    }
+  }
+}
+
 /** Represents a content in the [Message] of the conversation. */
 sealed class Content {
   /** Convert to [JsonObject]. Used internally. */
@@ -210,6 +351,40 @@ sealed class Content {
         addProperty("type", "tool_response")
         addProperty("name", name)
         add("response", response.toJsonElement())
+      }
+  }
+
+  /**
+   * Video provided as a sequence of pre-decoded frames sampled by the caller.
+   *
+   * Requires a model whose metadata reports the Video input modality. The runtime handles resizing,
+   * patchification, and temporal frame grouping.
+   *
+   * @property frames The sampled frames in presentation order, all of the same size (non-empty).
+   * @property fps Optional sampling rate in frames per second used for frames without a
+   *   [VideoFrame.timestamp] (the runtime defaults to 2 frames per second).
+   */
+  data class VideoFrames
+  @JvmOverloads
+  constructor(val frames: List<VideoFrame>, val fps: Double? = null) : Content() {
+    init {
+      require(frames.isNotEmpty()) { "A video must have at least one frame." }
+      require(fps == null || (fps.isFinite() && fps > 0.0)) {
+        "Video fps must be a positive finite number, got $fps."
+      }
+    }
+
+    override fun toJson() =
+      JsonObject().apply {
+        addProperty("type", "video")
+        val framesJson = JsonArray()
+        for (frame in frames) {
+          framesJson.add(frame.toJson())
+        }
+        add("frames", framesJson)
+        if (fps != null) {
+          addProperty("fps", fps)
+        }
       }
   }
 }
