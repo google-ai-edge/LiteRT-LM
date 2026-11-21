@@ -2856,6 +2856,17 @@ LlmLiteRtCompiledModelExecutorStatic::VerifyDraft(
 /* LlmLiteRtCompiledModelExecutorDynamic */
 /* ===========================================================================*/
 
+absl::Status LlmLiteRtCompiledModelExecutorDynamic::Reset() {
+  state_.reset();
+  ABSL_RETURN_IF_ERROR(LlmLiteRtCompiledModelExecutorBase::Reset());
+  LITERT_ASSIGN_OR_RETURN(
+      state_, LitertState::Create(
+                  env_, *compiled_model_, "prefill", executor_metadata_,
+                  LitertState::AllocationPolicy::kInplace,
+                  /*batch_size=*/1, /*clear_kv_cache_before_prefill=*/true));
+  return absl::OkStatus();
+}
+
 absl::Status LlmLiteRtCompiledModelExecutorDynamic::Prefill(
     const ExecutorInputs& inputs, const ExecutorPrefillParams& params) {
 
