@@ -382,7 +382,7 @@ build:windows --spawn_strategy=local
 build:windows --host_copt=/Iexternal/com_google_protobuf/src
 
 # Use Git Bash for genrules
-build:windows --shell_executable="C:/Program Files/Git/bin/bash.exe"
+# BAZEL_SH or the command line supplies the installed shell location.
 
 # Verbose failure logs when something goes wrong
 build:windows --verbose_failures
@@ -408,7 +408,11 @@ build:avx_win --copt=/arch:AVX
 
 # Assume AVX2 x86_64 platforms for linux and windows.
 build:linux_x86_64 --copt=-mavx2
-build:windows --copt=/arch:AVX2
+build:avx_win --copt=/arch:AVX2
+
+# Native Windows ARM64 (MSVC).
+build:windows_arm64 --cpu=arm64_windows
+build:windows_arm64 --host_cpu=arm64_windows
 
 # Enable all targets in XLA
 build:cpu_cross --define=with_cross_compiler_support=true
