@@ -432,7 +432,11 @@ TEST(ConversationConfigTest,
   EXPECT_FALSE(config.filter_channel_content_from_kv_cache());
 }
 
-TEST(ConversationConfigTest, NoFilterChannelContentFromKvCacheOnNpu) {
+// The NPU executor rolls back more than one token, and restores its ring buffer
+// KV cache from a context saved with `SaveContext` (the NPU default, see
+// DefaultEnableRewindingByBackend), so channel content is filtered from the KV
+// cache on NPU too.
+TEST(ConversationConfigTest, FilterChannelContentFromKvCacheOnNpu) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
   ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
@@ -457,7 +461,8 @@ TEST(ConversationConfigTest, NoFilterChannelContentFromKvCacheOnNpu) {
                        ConversationConfig::Builder()
                            .SetFilterChannelContentFromKvCache(true)
                            .Build(npu_engine));
-  EXPECT_FALSE(config.filter_channel_content_from_kv_cache());
+  EXPECT_TRUE(config.filter_channel_content_from_kv_cache());
+  EXPECT_FALSE(config.enable_rewinding());
 }
 
 TEST(ConversationConfigTest, OverwritePromptTemplate) {
@@ -539,18 +544,19 @@ TEST(ConversationConfigTest, DefaultEnableRewindingByBackend) {
     EXPECT_FALSE(ringbuffer_artisan_config.enable_rewinding());
   }
 
-  // NPU defaults to enable_rewinding = true, while respecting an explicit
-  // SetEnableRewinding(false) override.
+  // NPU defaults to enable_rewinding = false (SaveContext / RestoreContext,
+  // which save and restore the NPU executor's ring buffer KV cache), while
+  // respecting an explicit SetEnableRewinding(true) override.
   {
     ASSERT_OK_AND_ASSIGN(
         auto npu_settings,
         EngineSettings::CreateDefault(model_assets, Backend::NPU));
     ASSERT_OK_AND_ASSIGN(auto default_npu_config,
                          build_for_settings(npu_settings));
-    EXPECT_TRUE(default_npu_config.enable_rewinding());
+    EXPECT_FALSE(default_npu_config.enable_rewinding());
     ASSERT_OK_AND_ASSIGN(auto overridden_npu_config,
-                         build_for_settings(npu_settings, false));
-    EXPECT_FALSE(overridden_npu_config.enable_rewinding());
+                         build_for_settings(npu_settings, true));
+    EXPECT_TRUE(overridden_npu_config.enable_rewinding());
   }
 }
 

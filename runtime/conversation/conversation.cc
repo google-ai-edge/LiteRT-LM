@@ -345,6 +345,10 @@ bool ShouldEnableRewindingByDefault(const EngineSettings& engine_settings) {
   switch (main_settings.GetBackend()) {
     case Backend::CPU:
     case Backend::GPU:
+    // The NPU executor can only roll back more than one step after its ring
+    // buffer KV cache wrapped around by restoring a context saved with
+    // `SaveContext` (see `LlmLiteRtNpuCompiledModelExecutor::SaveContext`).
+    case Backend::NPU:
       return false;
     case Backend::GPU_ARTISAN: {
       auto gpu_artisan_config =
@@ -435,12 +439,6 @@ absl::StatusOr<ConversationConfig> ConversationConfig::CreateInternal(
   const EngineSettings& engine_settings = engine.GetEngineSettings();
   if (engine_settings.IsBenchmarkEnabled() &&
       engine_settings.GetBenchmarkParams()->num_prefill_tokens() > 0) {
-    filter_channel_content_from_kv_cache = false;
-  }
-  // The NPU executor's SetCurrentStep can only roll back one token, so
-  // rewinding the KV cache to drop a reply's channel content fails at the end
-  // of the turn. Keep the channel content in the KV cache on NPU instead.
-  if (engine_settings.GetMainExecutorSettings().GetBackend() == Backend::NPU) {
     filter_channel_content_from_kv_cache = false;
   }
 

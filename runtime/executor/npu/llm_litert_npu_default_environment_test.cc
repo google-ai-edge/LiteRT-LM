@@ -17,6 +17,9 @@
 // function-local static and logs its creation only once per process, so these
 // tests live in their own binary and each one checks the logs: no other test
 // may create it first.
+//
+// The `SaveContext` / `RestoreContext` tests also check the executor's rollback
+// logic with a synthetic model whose second layer has a ring buffer KV cache.
 
 #include <cstddef>
 #include <cstdint>
@@ -53,9 +56,12 @@
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/litert/legacy_map_state.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_npu_compiled_model_executor.h"
+#include "runtime/executor/llm_processed_context.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "tflite/schema/schema_generated.h"  // from @litert
@@ -365,6 +371,278 @@ TEST_F(LlmLiteRtNpuDefaultEnvironmentTest,
       LlmLiteRtNpuCompiledModelExecutor::Create(*settings_, *resources, *env_),
       StatusIs(absl::StatusCode::kNotFound,
                HasSubstr("has no input \"embeddings\"")));
+}
+
+// Ring buffer model: layer 0 has a global KV cache of `kRingModelContextLen`
+// entries, layer 1 a ring buffer of `kRingLen` entries, which the NPU executor
+// detects from the shorter KV cache. `kRingLen` differs from `kDim`, so that
+// the sequence axis of the KV cache buffers is unambiguous.
+constexpr int kRingModelContextLen = 16;
+constexpr int kRingLen = 8;
+
+SyntheticSigSpec RingCacheUpdateSpec(absl::string_view key, int seq_len) {
+  return SyntheticSigSpec{key,
+                          {Int32Spec("input_pos", {seq_len}),
+                           {"kv_cache_k_0", {1, 1, kRingModelContextLen, kDim}},
+                           {"kv_cache_v_0", {1, 1, kDim, kRingModelContextLen}},
+                           {"kv_cache_k_1", {1, 1, kRingLen, kDim}},
+                           {"kv_cache_v_1", {1, 1, kDim, kRingLen}},
+                           {"kv_slice_k_0", {1, 1, seq_len, kDim}},
+                           {"kv_slice_v_0", {1, 1, kDim, seq_len}},
+                           {"kv_slice_k_1", {1, 1, seq_len, kDim}},
+                           {"kv_slice_v_1", {1, 1, kDim, seq_len}}},
+                          {{"kv_cache_k_0", {1, 1, kRingModelContextLen, kDim}},
+                           {"kv_cache_v_0", {1, 1, kDim, kRingModelContextLen}},
+                           {"kv_cache_k_1", {1, 1, kRingLen, kDim}},
+                           {"kv_cache_v_1", {1, 1, kDim, kRingLen}}}};
+}
+
+std::unique_ptr<SyntheticNpuModelResources> MakeSyntheticRingBufferNpuModel(
+    ::litert::Environment& env) {
+  auto decoder_inputs = [&](int seq_len) {
+    return std::vector<TensorSpec>{
+        {"mask_global", {1, 1, seq_len, kRingModelContextLen}},
+        {"pos_emb_cos", {1, seq_len, 1, kDim}},
+        {"pos_emb_sin", {1, seq_len, 1, kDim}},
+        {"kv_cache_k_0", {1, 1, kRingModelContextLen, kDim}},
+        {"kv_cache_v_0", {1, 1, kDim, kRingModelContextLen}},
+        {"kv_cache_k_1", {1, 1, kRingLen, kDim}},
+        {"kv_cache_v_1", {1, 1, kDim, kRingLen}},
+        {"embeddings", {1, seq_len, kDim}}};
+  };
+  auto decoder_outputs = [&](int seq_len) {
+    return std::vector<TensorSpec>{{"kv_slice_k_0", {1, 1, seq_len, kDim}},
+                                   {"kv_slice_v_0", {1, 1, kDim, seq_len}},
+                                   {"kv_slice_k_1", {1, 1, seq_len, kDim}},
+                                   {"kv_slice_v_1", {1, 1, kDim, seq_len}}};
+  };
+  std::vector<TensorSpec> decode_outputs = decoder_outputs(1);
+  decode_outputs.push_back({"logits", {1, 1, kVocabSize}});
+
+  auto resources =
+      std::make_unique<SyntheticNpuModelResources>(kRingModelContextLen);
+  resources->AddModel(
+      env, proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+      {{"prefill_4", decoder_inputs(kPrefillLen), decoder_outputs(kPrefillLen)},
+       {"decode", decoder_inputs(1), decode_outputs}});
+  resources->AddModel(
+      env, proto::LlmMetadata::TF_LITE_AUX,
+      {{"prefill_mask_4",
+        {Int32Spec("time_step", {1}),
+         Int32Spec("input_tokens", {1, kPrefillLen})},
+        {{"mask_global", {1, 1, kPrefillLen, kRingModelContextLen}}}},
+       {"decode_mask",
+        {Int32Spec("time_step", {1}), Int32Spec("input_tokens", {1, 1})},
+        {{"mask_global", {1, 1, 1, kRingModelContextLen}}}},
+       {"prefill_rope_4",
+        {Int32Spec("input_pos", {kPrefillLen})},
+        {{"pos_emb_cos", {1, kPrefillLen, 1, kDim}},
+         {"pos_emb_sin", {1, kPrefillLen, 1, kDim}}}},
+       {"decode_rope",
+        {Int32Spec("input_pos", {1})},
+        {{"pos_emb_cos", {1, 1, 1, kDim}}, {"pos_emb_sin", {1, 1, 1, kDim}}}},
+       RingCacheUpdateSpec("prefill_cache_update_4", kPrefillLen),
+       RingCacheUpdateSpec("decode_cache_update", 1)});
+  resources->AddModel(env, proto::LlmMetadata::TF_LITE_EMBEDDER,
+                      {{"prefill_embedder_4",
+                        {Int32Spec("token_ids", {1, kPrefillLen})},
+                        {{"embeddings", {1, kPrefillLen, kDim}}}},
+                       {"decode_embedder",
+                        {Int32Spec("token_ids", {1, 1})},
+                        {{"embeddings", {1, 1, kDim}}}}});
+  return resources;
+}
+
+// Prefills `ids` (as one prefill call).
+absl::Status PrefillIds(LlmLiteRtNpuCompiledModelExecutor& executor,
+                        ::litert::Environment& env,
+                        const std::vector<int32_t>& ids) {
+  auto tokens = TensorBuffer::CreateManaged(
+      env, ::litert::TensorBufferType::kHostMemory,
+      MakeType(ElementType::Int32, {1, static_cast<int32_t>(ids.size())}),
+      ids.size() * sizeof(int32_t));
+  if (!tokens.HasValue()) {
+    return absl::InternalError(tokens.Error().Message());
+  }
+  if (auto written = tokens->Write<int32_t>(absl::MakeConstSpan(ids));
+      !written.HasValue()) {
+    return absl::InternalError(written.Error().Message());
+  }
+  return executor.Prefill(ExecutorInputs(ExecutorTextData(std::move(*tokens)),
+                                         std::nullopt, std::nullopt));
+}
+
+class LlmLiteRtNpuSaveContextTest : public LlmLiteRtNpuDefaultEnvironmentTest {
+ protected:
+  // Creates an executor for the ring buffer model, which needs the HW KV cache
+  // update.
+  absl::StatusOr<std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor>>
+  CreateRingBufferExecutor() {
+    if (ring_resources_ == nullptr) {
+      ring_resources_ = MakeSyntheticRingBufferNpuModel(*env_);
+    }
+    LlmExecutorSettings settings = *settings_;
+    settings.SetMaxNumTokens(kRingModelContextLen);
+    absl::StatusOr<NpuConfig> npu_config =
+        settings.MutableBackendConfig<NpuConfig>();
+    if (!npu_config.ok()) {
+      return npu_config.status();
+    }
+    npu_config->use_hw_cache_update_for_npu = true;
+    settings.SetBackendConfig(*npu_config);
+    return LlmLiteRtNpuCompiledModelExecutor::Create(settings, *ring_resources_,
+                                                     *env_);
+  }
+
+  std::unique_ptr<SyntheticNpuModelResources> ring_resources_;
+};
+
+// Rolling back more than one token after the ring buffer wrapped around
+// requires restoring a saved context: until then, prefill, `CloneContext`,
+// `SaveContext` and moving to another step fail, since the ring buffer holds
+// the entries of the rolled back steps.
+TEST_F(LlmLiteRtNpuSaveContextTest, RollbackAfterWrapAroundRequiresRestore) {
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateRingBufferExecutor());
+  ASSERT_OK(PrefillIds(*executor, *env_, {1, 2, 3}));
+  ASSERT_OK_AND_ASSIGN(const int saved_step, executor->GetCurrentStep());
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ProcessedContext> saved,
+                       executor->SaveContext());
+  // The ring buffer (layer 1) is saved, the global KV cache (layer 0) is not.
+  auto* saved_context = dynamic_cast<LlmProcessedContext*>(saved.get());
+  ASSERT_NE(saved_context, nullptr);
+  auto* saved_state =
+      dynamic_cast<LegacyMapState*>(saved_context->state().get());
+  ASSERT_NE(saved_state, nullptr);
+  EXPECT_EQ(saved_state->buffers().size(), 2);
+  EXPECT_TRUE(saved_state->Contains("kv_cache_k_1"));
+  EXPECT_TRUE(saved_state->Contains("kv_cache_v_1"));
+  EXPECT_EQ(saved_context->processed_tokens().TokenCount(), saved_step);
+
+  // Wraps the ring buffer around.
+  ASSERT_OK(PrefillIds(*executor, *env_, {4, 5, 6, 7, 8, 9, 10, 11}));
+  ASSERT_OK_AND_ASSIGN(const int wrapped_step, executor->GetCurrentStep());
+  ASSERT_GT(wrapped_step, kRingLen);
+
+  ASSERT_OK(executor->SetCurrentStep(saved_step));
+  EXPECT_THAT(PrefillIds(*executor, *env_, {4}),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(executor->CloneContext(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(executor->SaveContext(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(executor->SetCurrentStep(saved_step + 1),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+
+  ASSERT_OK(executor->RestoreContext(std::move(saved)));
+  ASSERT_OK_AND_ASSIGN(const int restored_step, executor->GetCurrentStep());
+  EXPECT_EQ(restored_step, saved_step);
+  ASSERT_OK(PrefillIds(*executor, *env_, {4, 5}));
+  ASSERT_OK(executor->CloneContext().status());
+}
+
+// A one-token rollback (e.g. dropping a stop token) and rolling back before the
+// ring buffer wrapped around need no restore.
+TEST_F(LlmLiteRtNpuSaveContextTest, RollbackWithoutWrapAroundNeedsNoRestore) {
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateRingBufferExecutor());
+  ASSERT_OK(PrefillIds(*executor, *env_, {1, 2, 3}));
+  ASSERT_OK(executor->SetCurrentStep(1));
+  ASSERT_OK(PrefillIds(*executor, *env_, {2, 3, 4, 5, 6, 7, 8, 9, 10, 11}));
+  ASSERT_OK_AND_ASSIGN(const int step, executor->GetCurrentStep());
+  ASSERT_OK(executor->SetCurrentStep(step - 1));
+  ASSERT_OK(PrefillIds(*executor, *env_, {12}));
+}
+
+// A context saved before the executor switches to a context size with other
+// ring buffers can't restore them, and restoring it changes no state.
+TEST_F(LlmLiteRtNpuSaveContextTest, RestoreFailsForOtherRingBuffers) {
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateRingBufferExecutor());
+  ASSERT_OK(PrefillIds(*executor, *env_, {1, 2, 3}));
+  ASSERT_OK_AND_ASSIGN(const int step, executor->GetCurrentStep());
+  auto other = std::make_unique<LlmProcessedContext>(
+      /*lora_id=*/std::nullopt,
+      std::make_unique<LegacyMapState>(
+          absl::flat_hash_map<std::string, ::litert::TensorBuffer>()));
+  EXPECT_THAT(executor->RestoreContext(std::move(other)),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  ASSERT_OK_AND_ASSIGN(const int step_after, executor->GetCurrentStep());
+  EXPECT_EQ(step_after, step);
+  ASSERT_OK(PrefillIds(*executor, *env_, {4}));
+}
+
+// The resource manager clones a context handler (e.g. `Conversation::Clone()`)
+// with the executor's runtime config and state, and switches between a clone
+// and its source, which share the KV cache, by rolling back to the step of the
+// shared processed context.
+TEST_F(LlmLiteRtNpuSaveContextTest, RuntimeStateRollsBackToSharedStep) {
+  std::unique_ptr<SyntheticNpuModelResources> resources =
+      MakeSyntheticNpuModel(*env_);
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor,
+      LlmLiteRtNpuCompiledModelExecutor::Create(*settings_, *resources, *env_));
+  ASSERT_OK(PrefillIds(*executor, *env_, {1, 2, 3}));
+  ASSERT_OK_AND_ASSIGN(RuntimeConfig runtime_config,
+                       executor->GetRuntimeConfig());
+  EXPECT_TRUE(runtime_config.sampler_params.has_value());
+  ASSERT_OK_AND_ASSIGN(RuntimeState shared_state, executor->GetRuntimeState());
+  EXPECT_EQ(shared_state.current_step, 3);
+
+  // The clone continues past the shared step.
+  ASSERT_OK(PrefillIds(*executor, *env_, {4, 5}));
+  ASSERT_OK_AND_ASSIGN(RuntimeState clone_state, executor->GetRuntimeState());
+  // Switches back to the source.
+  ASSERT_OK(executor->UpdateRuntimeState(shared_state));
+  ASSERT_OK_AND_ASSIGN(const int step, executor->GetCurrentStep());
+  EXPECT_EQ(step, shared_state.current_step);
+  // The clone's later steps are not in the shared KV cache anymore.
+  EXPECT_THAT(executor->UpdateRuntimeState(clone_state),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  ASSERT_OK(executor->UpdateRuntimeState(shared_state));
+  ASSERT_OK(PrefillIds(*executor, *env_, {6, 7}));
+}
+
+// After the ring buffer wrapped around, switching back to the shared step
+// leaves the ring buffer with the clone's entries, so the next prefill fails
+// instead of using them.
+TEST_F(LlmLiteRtNpuSaveContextTest,
+       RuntimeStateRollbackAfterWrapAroundRequiresRestore) {
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateRingBufferExecutor());
+  ASSERT_OK(PrefillIds(*executor, *env_, {1, 2, 3}));
+  ASSERT_OK_AND_ASSIGN(RuntimeState shared_state, executor->GetRuntimeState());
+  ASSERT_OK(PrefillIds(*executor, *env_, {4, 5, 6, 7, 8, 9, 10, 11}));
+  ASSERT_OK(executor->UpdateRuntimeState(shared_state));
+  EXPECT_THAT(PrefillIds(*executor, *env_, {4}),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+// Without a ring buffer, `SaveContext` copies no buffers, and rolling back more
+// than one token needs no restore. A context saved after a rollback holds the
+// processed tokens up to the current step (they are rolled back lazily).
+TEST_F(LlmLiteRtNpuSaveContextTest, WithoutRingBufferSavesNoBuffers) {
+  std::unique_ptr<SyntheticNpuModelResources> resources =
+      MakeSyntheticNpuModel(*env_);
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor,
+      LlmLiteRtNpuCompiledModelExecutor::Create(*settings_, *resources, *env_));
+  ASSERT_OK(PrefillIds(*executor, *env_, {1, 2, 3, 4, 5}));
+  EXPECT_THAT(executor->SetCurrentStep(6),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  ASSERT_OK(executor->SetCurrentStep(2));
+
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ProcessedContext> saved,
+                       executor->SaveContext());
+  auto* saved_context = dynamic_cast<LlmProcessedContext*>(saved.get());
+  ASSERT_NE(saved_context, nullptr);
+  auto* saved_state =
+      dynamic_cast<LegacyMapState*>(saved_context->state().get());
+  ASSERT_NE(saved_state, nullptr);
+  EXPECT_TRUE(saved_state->buffers().empty());
+  EXPECT_EQ(saved_context->processed_tokens().TokenCount(), 2);
+  ASSERT_OK(PrefillIds(*executor, *env_, {6, 7}));
+  ASSERT_OK(executor->SetCurrentStep(2));
+  ASSERT_OK(executor->RestoreContext(std::move(saved)));
+  ASSERT_OK_AND_ASSIGN(const int step, executor->GetCurrentStep());
+  EXPECT_EQ(step, 2);
+  ASSERT_OK(PrefillIds(*executor, *env_, {6, 7}));
 }
 
 }  // namespace
