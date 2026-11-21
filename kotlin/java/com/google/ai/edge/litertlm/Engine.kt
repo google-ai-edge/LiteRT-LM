@@ -214,6 +214,7 @@ class Engine(val engineConfig: EngineConfig) : AutoCloseable {
           sessionConfig.enableSpeculativeDecoding,
           sessionConfig.speculativeDecodingConfig?.mode?.value,
           sessionConfig.speculativeDecodingConfig?.lenience,
+          sessionConfig.applyPromptTemplate,
         )
       )
     }
