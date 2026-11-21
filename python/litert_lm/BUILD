@@ -119,6 +119,27 @@ pytype_strict_library(
     ],
 )
 
+# Experimental: not a dependency of `:litert_lm`, so it is not part of the
+# `litert-lm-api` PyPI package yet. Depend on it explicitly.
+pytype_strict_library(
+    name = "decision_engine",
+    srcs = ["decision_engine.py"],
+    data = select({
+        ":use_prebuilt_c_api": [":prebuilt_litert_lm_lib"],
+        "//conditions:default": [":default_libs"],
+    }),
+    deps = [
+        ":_decision_json",
+        ":_ffi",
+        ":interfaces",
+    ],
+)
+
+pytype_strict_library(
+    name = "_decision_json",
+    srcs = ["_decision_json.py"],
+)
+
 pytype_strict_library(
     name = "benchmark",
     srcs = ["benchmark.py"],
@@ -208,6 +229,20 @@ py_test(
         "@absl_py//absl/flags",
         "@absl_py//absl/testing:absltest",
         "@absl_py//absl/testing:parameterized",
+    ],
+    imports = [".."],
+)
+
+py_test(
+    name = "decision_engine_test",
+    srcs = ["decision_engine_test.py"],
+    data = ["//runtime/testdata"],
+    tags = ["nowindows"],
+    deps = [
+        ":_decision_json",
+        ":decision_engine",
+        ":litert_lm",
+        "@absl_py//absl/testing:absltest",
     ],
     imports = [".."],
 )

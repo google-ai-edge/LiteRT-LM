@@ -16,6 +16,7 @@ load("@custom_pip_deps//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_test")
 load(
     "@org_tensorflow//tensorflow:pytype.default.bzl",
+    "pytype_strict_binary",
     "pytype_strict_library",
     py_test = "pytype_strict_contrib_test",
 )
@@ -167,6 +168,53 @@ py_test(
         ":import",  # fixdeps: keep
         "//python/litert_lm_cli:cli_helpers",
         "//python/litert_lm_cli:huggingface_download",
+        "//python/litert_lm_cli:model",
+        "@absl_py//absl/testing:absltest",
+        requirement("click"),
+    ],
+)
+
+pytype_strict_library(
+    name = "decide",
+    srcs = ["decide.py"],
+    imports = [".."],
+    deps = [
+        "//python/litert_lm:decision_engine",
+        "//python/litert_lm_cli:common",
+        "//python/litert_lm_cli:help_formatter",
+        "//python/litert_lm_cli:model",
+        requirement("click"),
+    ],
+)
+
+# Experimental: `decide` is not registered in `litert-lm` (so it is not in the
+# `litert-lm` PyPI package yet); run it with this binary instead.
+pytype_strict_binary(
+    name = "litert-lm-decide",
+    srcs = ["decide_main.py"],
+    imports = [".."],
+    main = "decide_main.py",
+    tags = [
+        "noios",
+        "nowindows",
+    ],
+    deps = [
+        ":decide",
+        "//python/litert_lm",
+    ],
+)
+
+py_test(
+    name = "decide_test",
+    srcs = ["decide_test.py"],
+    tags = [
+        "nomacos",
+        "nowindows",
+    ],
+    deps = [
+        ":decide",
+        "//python/litert_lm",
+        "//python/litert_lm:decision_engine",
         "//python/litert_lm_cli:model",
         "@absl_py//absl/testing:absltest",
         requirement("click"),
