@@ -626,10 +626,8 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
     main_executor_settings_.SetAdvancedSettings(advanced_settings);
   }
   if (!metadata.has_jinja_prompt_template()) {
-    ABSL_ASSIGN_OR_RETURN(
-        *metadata.mutable_jinja_prompt_template(),
-        GetDefaultJinjaPromptTemplate(metadata.prompt_templates(),
-                                      metadata.llm_model_type()));
+    ABSL_ASSIGN_OR_RETURN(*metadata.mutable_jinja_prompt_template(),
+                          GetDefaultJinjaPromptTemplate(metadata));
   }
 
   // If the executor settings is set, then check if the input backend
