@@ -1509,19 +1509,21 @@ TEST_P(ExecutionManagerTest,
   if (GetParam() == ExecutionManagerType::kSerial) {
     GTEST_SKIP() << "SerialExecutionManager runs the decode task inline.";
   }
-  // The decode takes about 1s in total, longer than the 500ms stall timeout,
-  // but every 200ms step restarts the stall timeout.
+  // The decode takes about 2s in total, longer than the 1s stall timeout,
+  // but every 80ms step restarts the stall timeout.
+  std::vector<std::vector<int>> decode_tokens(24, {4});
+  decode_tokens.push_back({6});
   CreateExecutionManager(std::make_unique<SlowDecodeStepFakeLlmExecutor>(
       kVocabSize, /*prefill_tokens=*/std::vector<std::vector<int>>{{1, 2, 3}},
-      /*decode_tokens=*/std::vector<std::vector<int>>{{4}, {5}, {7}, {8}, {6}},
-      /*step_delay=*/absl::Milliseconds(200)));
+      std::move(decode_tokens),
+      /*step_delay=*/absl::Milliseconds(80)));
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
   ASSERT_OK_AND_ASSIGN(const SessionId session_id,
                        execution_manager_->RegisterNewSession(session_config));
   ASSERT_OK(AddPrefillAndDecodeTasks(session_id));
 
-  EXPECT_OK(execution_manager_->WaitUntilSessionDone(session_id,
-                                                     absl::Milliseconds(500)));
+  EXPECT_OK(
+      execution_manager_->WaitUntilSessionDone(session_id, absl::Seconds(1)));
 }
 
 TEST_P(ExecutionManagerTest,
@@ -1530,12 +1532,14 @@ TEST_P(ExecutionManagerTest,
     GTEST_SKIP() << "SerialExecutionManager runs the tasks inline.";
   }
   // The prefill of `waiting_session_id` is queued behind the decode of
-  // `decoding_session_id`, which takes about 1s but progresses every 200ms.
+  // `decoding_session_id`, which takes about 2s but progresses every 80ms.
+  std::vector<std::vector<int>> decode_tokens(24, {4});
+  decode_tokens.push_back({6});
   CreateExecutionManager(std::make_unique<SlowDecodeStepFakeLlmExecutor>(
       kVocabSize,
       /*prefill_tokens=*/std::vector<std::vector<int>>{{1, 2, 3}, {1, 2, 3}},
-      /*decode_tokens=*/std::vector<std::vector<int>>{{4}, {5}, {7}, {8}, {6}},
-      /*step_delay=*/absl::Milliseconds(200)));
+      std::move(decode_tokens),
+      /*step_delay=*/absl::Milliseconds(80)));
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
   ASSERT_OK_AND_ASSIGN(const SessionId decoding_session_id,
                        execution_manager_->RegisterNewSession(session_config));
@@ -1543,15 +1547,15 @@ TEST_P(ExecutionManagerTest,
                        execution_manager_->RegisterNewSession(session_config));
   ASSERT_OK(AddPrefillAndDecodeTasks(decoding_session_id));
   // Let the decode start, after the prefill that the fake executor delays by
-  // 100ms, so that the prefill below waits about 700ms behind it.
+  // 100ms, so that the prefill below waits about 1.7s behind it.
   absl::SleepFor(absl::Milliseconds(400));
   ASSERT_OK(
       AddPrefillAndDecodeTasks(waiting_session_id, /*with_decode=*/false));
 
   EXPECT_OK(execution_manager_->WaitUntilSessionDone(waiting_session_id,
-                                                     absl::Milliseconds(500)));
+                                                     absl::Seconds(1)));
   EXPECT_OK(execution_manager_->WaitUntilSessionDone(decoding_session_id,
-                                                     absl::Seconds(3)));
+                                                     absl::Seconds(5)));
 }
 
 TEST_P(ExecutionManagerTest, WaitUntilSessionDoneTimesOutWhenStalled) {
@@ -1583,20 +1587,20 @@ TEST_P(ExecutionManagerTest,
   if (GetParam() == ExecutionManagerType::kSerial) {
     GTEST_SKIP() << "SerialExecutionManager runs the prefill task inline.";
   }
-  // 5 prefill chunks of 200ms each (~1s total) exceed the 500ms stall timeout,
+  // 25 prefill chunks of 80ms each (~2s total) exceed the 1s stall timeout,
   // but each chunk reports progress and restarts the stall timeout.
   CreateExecutionManager(std::make_unique<SlowPrefillChunkFakeLlmExecutor>(
       kVocabSize, /*prefill_tokens=*/std::vector<std::vector<int>>{{1, 2, 3}},
       /*decode_tokens=*/std::vector<std::vector<int>>{{6}},
-      /*num_chunks=*/5, /*chunk_delay=*/absl::Milliseconds(200),
+      /*num_chunks=*/25, /*chunk_delay=*/absl::Milliseconds(80),
       /*record_progress=*/true));
   ASSERT_OK_AND_ASSIGN(auto session_config, CreateDefaultSessionConfig());
   ASSERT_OK_AND_ASSIGN(const SessionId session_id,
                        execution_manager_->RegisterNewSession(session_config));
   ASSERT_OK(AddPrefillAndDecodeTasks(session_id, /*with_decode=*/false));
 
-  EXPECT_OK(execution_manager_->WaitUntilSessionDone(session_id,
-                                                     absl::Milliseconds(500)));
+  EXPECT_OK(
+      execution_manager_->WaitUntilSessionDone(session_id, absl::Seconds(1)));
 }
 
 TEST_P(ExecutionManagerTest, WaitUntilSessionDoneTimesOutWhenPrefillStalls) {
