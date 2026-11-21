@@ -460,6 +460,7 @@ cc_library(
         ":mtp_gating_policy",
         ":nvidia_mtp_drafter_support",
         ":nvidia_token_table_support",
+        ":run_options",
         ":speculative_decoding_controller",
         ":speculative_decoding_mode",
         ":state_interface",
@@ -543,6 +544,7 @@ cc_test(
         ":llm_executor_settings",
         ":llm_executor_settings_utils",
         ":llm_litert_compiled_model_executor",
+        ":run_options_test_util",
         ":speculative_decoding_mode",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/cleanup",
@@ -769,6 +771,7 @@ cc_library(
         ":llm_executor_io_types",
         ":llm_executor_processed_tokens",
         ":llm_executor_settings",
+        ":run_options",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
@@ -777,6 +780,45 @@ cc_library(
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_environment",
         "@litert//litert/cc:litert_tensor_buffer",
+    ],
+)
+
+cc_library(
+    name = "run_options",
+    hdrs = ["run_options.h"],
+    deps = [
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@litert//litert/cc:litert_options",
+    ],
+)
+
+cc_library(
+    name = "run_options_test_util",
+    testonly = True,
+    hdrs = ["run_options_test_util.h"],
+    deps = [
+        ":run_options",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@litert//litert/c:litert_opaque_options",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_opaque_options",
+        "@litert//litert/cc:litert_options",
+    ],
+)
+
+cc_test(
+    name = "run_options_test",
+    srcs = ["run_options_test.cc"],
+    deps = [
+        ":run_options",
+        ":run_options_test_util",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@litert//litert/cc:litert_options",
+        "//runtime/util:test_utils",
     ],
 )
 
@@ -791,6 +833,7 @@ cc_library(
         ":llm_executor_processed_tokens",
         ":llm_executor_settings",
         ":llm_processed_context",
+        ":run_options",
         ":speculative_decoding_mode",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -1072,6 +1115,7 @@ cc_library(
         ":executor_settings_base",
         ":executor_stats",
         ":llm_executor_io_types",
+        ":run_options",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -1090,6 +1134,7 @@ cc_library(
         ":executor_stats",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_io_types",
+        ":run_options",
         ":vision_executor",
         ":vision_executor_settings",
         ":vision_executor_utils",
@@ -1158,6 +1203,7 @@ cc_test(
         ":executor_settings_base",
         ":executor_stats",
         ":llm_executor_io_types",
+        ":run_options_test_util",
         ":vision_executor_settings",
         ":vision_litert_compiled_model_executor",
         "@com_google_googletest//:gtest_main",
@@ -1201,6 +1247,7 @@ cc_library(
         ":executor_settings_base",
         ":executor_stats",
         ":llm_executor_io_types",
+        ":run_options",
         "@com_google_absl//absl/status:statusor",
         "@litert//litert/cc:litert_tensor_buffer",
         "//runtime/engine:io_types",
@@ -1345,6 +1392,7 @@ cc_library(
         ":executor_stats",
         ":litert_compiled_model_executor_utils",
         ":llm_executor_io_types",
+        ":run_options",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -1392,6 +1440,7 @@ cc_test(
         ":audio_litert_compiled_model_executor",
         ":executor_settings_base",
         ":executor_stats",
+        ":run_options_test_util",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/status",
@@ -1835,6 +1884,7 @@ cc_library(
         ":llm_executor_settings_utils",
         ":llm_litert_verifier",
         ":nvidia_mtp_drafter_support",
+        ":run_options",
         ":state_interface",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_map",

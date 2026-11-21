@@ -42,6 +42,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/run_options.h"
 
 namespace litert::lm {
 
@@ -205,6 +206,11 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
 
   absl::Status StartProfiling() override;
   absl::StatusOr<ExecutorStats> StopProfiling() override;
+
+  absl::Status SetRunOptions(RunOptionsFactory run_options_factory) override {
+    run_options_factory_ = std::move(run_options_factory);
+    return absl::OkStatus();
+  }
 
  private:
   // The Audio Encoder LiteRT CompiledModel wrapper manage the input and
@@ -598,6 +604,10 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   std::unique_ptr<AudioAdapter> audio_adapter_;
 
   std::optional<ExecutorStats> latency_stats_;
+
+  // The factory of the LiteRT options of every model run (see
+  // SetRunOptions()), or empty to use the compile-time options.
+  RunOptionsFactory run_options_factory_;
 };
 
 }  // namespace litert::lm

@@ -49,6 +49,7 @@
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
+#include "runtime/executor/run_options_test_util.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/status_macros.h"  //NOLINT
@@ -85,6 +86,7 @@ using ::testing::FloatNear;
 using ::testing::HasSubstr;
 using ::testing::Not;
 using ::testing::Pointwise;
+using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
 template <typename T>
@@ -521,6 +523,75 @@ TEST_F(AudioLiteRtCompiledModelExecutorTest,
           *const_cast<litert::TensorBuffer*>(audio_embeddings_ptr)));
   EXPECT_THAT(audio_embeddings_data,
               ElementsAre(1., 1., 2., 2., 1., 2., 3., 3., 1., 2., 2., 3.));
+}
+
+TEST_F(AudioLiteRtCompiledModelExecutorTest, EncodeWithRunOptions) {
+  ASSERT_OK_AND_ASSIGN(
+      auto audio_executor,
+      CreateAudioExecutor(*env_,
+                          (std::filesystem::path(::testing::SrcDir()) /
+                           std::string(kTestAudioModelPath))
+                              .string(),
+                          /*max_sequence_length=*/0, Backend::CPU));
+
+  constexpr std::array<float,
+                       kSpectrogramSequenceLength * kSpectrogramFrequencySlots>
+      mel_spectrogram_data = {
+          1., 0., 1., 0., 0., 0., 0., 1., 1., 0., 1., 0., 1., 0., 1., 1.,
+          1., 1., 1., 0., 1., 1., 0., 1., 1., 1., 1., 0., 0., 0., 1., 1.,
+          1., 1., 0., 1., 0., 1., 0., 1., 1., 1., 0., 0., 1., 1., 0., 0.,
+          1., 0., 1., 1., 1., 0., 0., 0., 1., 1., 1., 1., 0., 1., 1., 0.,
+          1., 1., 1., 0., 1., 1., 1., 0., 0., 0., 0., 0., 1., 0., 0.,
+      };
+  ASSERT_OK_AND_ASSIGN(
+      auto mel_spectrogram_tensor_buffer,
+      CreateTensorBuffer<const float>(
+          mel_spectrogram_data,
+          RankedTensorType(GetElementType<float>(),
+                           Layout(Dimensions({1, kSpectrogramSequenceLength,
+                                              kSpectrogramFrequencySlots})))));
+  constexpr std::array<bool, kSpectrogramSequenceLength>
+      mel_spectrogram_mask_data = {true, true,  true,  true,  true,
+                                   true, false, false, false, false};
+  ASSERT_OK_AND_ASSIGN(
+      auto mel_spectrogram_mask_tensor_buffer,
+      CreateTensorBuffer<const bool>(
+          mel_spectrogram_mask_data,
+          RankedTensorType(
+              GetElementType<bool>(),
+              Layout(Dimensions({1, kSpectrogramSequenceLength})))));
+  auto encode = [&]() -> absl::StatusOr<std::vector<float>> {
+    ABSL_ASSIGN_OR_RETURN(
+        ExecutorAudioData audio_data,
+        audio_executor->Encode(mel_spectrogram_tensor_buffer,
+                               mel_spectrogram_mask_tensor_buffer));
+    ABSL_ASSIGN_OR_RETURN(auto* embeddings,
+                          audio_data.GetMutableProjectedAudioEmbeddingsPtr());
+    return GetDataAsVector<float>(*embeddings);
+  };
+  ASSERT_OK_AND_ASSIGN(std::vector<float> expected, encode());
+
+  // The CPU models ignore the run options, so the results don't change. Every
+  // run (the encoder and the adapter) of every call gets new options.
+  int num_calls = 0;
+  ASSERT_OK(
+      audio_executor->SetRunOptions(CountingRunOptionsFactory(&num_calls)));
+  EXPECT_THAT(encode(), IsOkAndHolds(expected));
+  const int num_calls_per_encode = num_calls;
+  EXPECT_GE(num_calls_per_encode, 2);
+  EXPECT_THAT(encode(), IsOkAndHolds(expected));
+  EXPECT_EQ(num_calls, 2 * num_calls_per_encode);
+
+  // A failure to create the options fails the call.
+  ASSERT_OK(audio_executor->SetRunOptions(
+      FailingRunOptionsFactory(absl::InvalidArgumentError("bad options"))));
+  EXPECT_THAT(encode(),
+              StatusIs(absl::StatusCode::kInvalidArgument, "bad options"));
+
+  // An empty factory reverts to the compile-time options.
+  ASSERT_OK(audio_executor->SetRunOptions(nullptr));
+  EXPECT_THAT(encode(), IsOkAndHolds(expected));
+  EXPECT_EQ(num_calls, 2 * num_calls_per_encode);
 }
 
 TEST_F(AudioLiteRtCompiledModelExecutorTest,
