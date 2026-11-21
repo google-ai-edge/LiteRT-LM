@@ -27,6 +27,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "third_party/gloop/util/gtl/c_memcpy.h"
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
@@ -54,8 +55,8 @@ absl::Status EndOfMultiModalEmbedding::LookupPrefill(
         output_vector.size(), ". End of multi-modal embedding size: ",
         end_of_multi_modal_embedding_.size()));
   }
-  memcpy(output_vector.data(), end_of_multi_modal_embedding_.data(),
-         output_vector.size() * sizeof(float));
+  gtl::c_memcpy(output_vector, end_of_multi_modal_embedding_,
+                output_vector.size() * sizeof(float));
   return absl::OkStatus();
 }
 
