@@ -185,6 +185,30 @@ object ExperimentalFlags {
    * this value will not affect any existing [Engine], [Conversation], or [Session] instances.
    */
   var useHwPleForNpu: Boolean? = null
+
+  /**
+   * Whether to enable the AI Edge Debugger for the engine.
+   *
+   * If null, use the engine's default (currently disabled). When true on supported CPU and GPU
+   * backends, the engine captures per-token traces (JSONL) and intermediate tensor activations
+   * (Safetensors) under `<cache_dir>/litert_lm_debugger/<session_id>/`. On unsupported backends, a
+   * warning is logged and nothing is captured.
+   *
+   * [EngineConfig.cacheDir] must be set to a writable directory path (not `null`, `""`,
+   * `":memory"`, or `":nocache"`), or [Engine.initialize] throws [LiteRtLmJniException]. Creating a
+   * session with the debugger enabled deletes captures left under its `<session_id>/` directory by
+   * earlier runs.
+   *
+   * Warning: Debug captures contain user-derived data (prompt token IDs, decoded text, log
+   * probabilities, and intermediate tensor activations) stored unencrypted on disk until deleted.
+   * Enable only for development and diagnostics, never in production builds handling end-user data,
+   * and delete captures after inspection with [Session.deleteDebugCaptures] or
+   * [Conversation.deleteDebugCaptures].
+   *
+   * Note: This flag is read only when [Engine.initialize] is called. Changing this value will not
+   * affect any existing [Engine], [Conversation], or [Session] instances.
+   */
+  var enableDebugger: Boolean? = null
 }
 
 // Mark this annotation itself as requiring opt-in
