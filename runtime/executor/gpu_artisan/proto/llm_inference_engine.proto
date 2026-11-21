@@ -1,0 +1,290 @@
+// Copyright 2023 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// LINT: LEGACY_NAMES
+
+syntax = "proto3";
+
+package odml.infra.proto;
+
+import "runtime/executor/gpu_artisan/proto/prompt_template.proto";
+import "runtime/executor/gpu_artisan/proto/sampler_params.proto";
+import "runtime/executor/proto/constrained_decoding_options.proto";
+
+option java_package = "com.google.odml.infra.proto";
+option java_outer_classname = "LlmInferenceEngineProto";
+
+// Definition of a session is that it holds the configurations to process a
+// single input prompt. SessionConfig is to define the configuration for each
+// specific use case.
+message SessionConfig {
+  enum Backend {
+    // Unknown backend
+    UNSPECIFIED_BACKEND = 0;
+
+    // CPU backend with XNNPACK.
+    XNNPACK = 1;
+
+    // GPU backend with ML Drift.
+    ML_DRIFT = 2;
+
+    // MediaTek APU backend.
+    APU = 3;
+
+    // Vertex AI backend.
+    VERTEX_AI = 4;
+
+    // GOOGLE TENSOR backend.
+    GOOGLE_TENSOR = 5;
+
+    // LiteRT NPU backend.
+    NPU = 6;
+  }
+
+  message LoraParams {
+    // DEPRECATED. LoRA rank for sessions will be inferred from the weights
+    // file. For backends that require a fixed set of ranks defined during
+    // engine createion, use backend specific options.
+    uint32 lora_rank = 1 [deprecated = true];
+
+    // Path to the LoRA weights.
+    string lora_path = 2;
+
+    // Start token id prepended to the model prompt. This will overwrite the
+    // start_token_id defined in the llm_parameters in the base model's tflite
+    // metadata field. No start_token_id will be prepended if the value is -1.
+    int32 start_token_id = 3;
+
+    // A list of tokens that signals the decoder to stop.
+    repeated string stop_tokens = 4;
+  }
+
+  message XNNPACKOptions {
+    // Disable kv caching.
+    bool disable_kv_cache = 1;
+
+    // Number of threads. If this is set to 0, an internal default value (4)
+    // will be used.
+    uint32 num_threads = 2;
+  }
+
+  message MlDriftOptions {
+    // Number of decode steps per CPU sync.
+    int32 num_decode_steps_per_sync = 1;
+
+    bool enable_fast_tuning = 2;
+
+    bool enable_winograd_opt = 3;
+
+    // The number of input tokens to process at a time for batch processing.
+    uint32 sequence_batch_size = 4;
+
+    // Whether a low power GPU should be preferred.
+    bool use_low_power = 5;
+
+    // Whether texture weights should be preferred over buffers.
+    bool prefer_texture_weights = 6;
+
+    // Whether the backend should directly map host memory to the GPU if
+    // possible.
+    bool enable_host_mapped_pointer = 7;
+
+    // Performs f32 convolutions instead of any 8 bit convolutions.
+    bool disallow_8bit_convs = 13;
+
+    // Optional supported lora ranks for the base model. If not provided, no
+    // lora is supported for any session created with the engine.
+    repeated uint32 supported_lora_ranks = 8;
+
+    // Typically only scale LoRA weights by 1/lora_rank for Gemini v >= 2.
+    // However, there are exceptions such as Gemini Audio v1.5.
+    bool scale_lora = 14;
+
+    // Optional max top k, which is the max Top-K value supported for all
+    // sessions created with the engine. If a session with Top-K value larger
+    // than this is being asked to be created, it will be rejected(throw error).
+    // If not provided, the max top k will be 1, which means only greedy
+    // decoding is supported for any sessions created with this engine.
+    optional uint32 max_top_k = 9;
+
+    reserved 10;
+
+    // If true, waits for weights to upload to memery after initialization.
+    // Otherwise initialization may finish before weights have finished
+    // uploading which will push some of the weight upload time into input
+    // processing. This only has an effect on WebGPU path. Default is false,
+    // which means weights will not be waited for uploading. Please set this to
+    // true if you are benchmarking.
+    bool wait_for_weight_uploads = 11;
+
+    // Optional number of parallel decoding candidate streams. Default is 1.
+    optional uint32 num_output_candidates = 12;
+  }
+
+  message VertexAiOptions {
+    enum EndpointType {
+      // The default endpoint type is PROD.
+      DEFAULT = 0;
+      PROD = 1;
+      STAGING = 2;
+      AUTOPUSH = 3;
+    }
+
+    // The following fields define a Vertex AI endpoint within a GCloud project.
+    // For example, the prod hosted Gemini-Flash would be defined as:
+    // "PROD", "us-central1", "gemini-1.5-flash", "GCLOUD_PROJECT_ID".
+    EndpointType endpoint_type = 1;
+    string location = 2;
+    string model_id = 3;
+    string project_id = 4;
+  }
+
+  enum ActivationDataType {
+    // Use Float32 activation data type.
+    ACTIVATION_DATA_TYPE_F32 = 0;
+
+    // Use Float16 activation data type.
+    ACTIVATION_DATA_TYPE_F16 = 1;
+
+    // Use Int16 activation data type.
+    ACTIVATION_DATA_TYPE_I16 = 2;
+
+    // Use Int8 activation data type.
+    ACTIVATION_DATA_TYPE_I8 = 3;
+  }
+
+  // Only kept for backward compatibility (used in CPU/GPU calculator options).
+  // Once we create and store runner in LlmInferenceEngine, this is not needed.
+  // TODO: b/336657032 - remove in step 3.b
+  enum FakeWeightsMode {
+    // Don't use fake weights, read real weights from disk.
+    FAKE_WEIGHTS_NONE = 0;
+
+    // Replace all weights with INT8 fakes.
+    FAKE_WEIGHTS_8BITS_ALL_LAYERS = 1;
+
+    // Replace feedforward and embedding weights with INT4 fakes and replace
+    // attention weights with INT8 fakes.
+    FAKE_WEIGHTS_ATTN8_FFN4_EMB4 = 2;
+  }
+
+  message BenchmarkInfo {
+    // Sets the fixed number of input tokens to be processed. No matter how many
+    // number of the input tokens are provided by the original input prompt, if
+    // this value is greater than zero, the number of input tokens will be
+    // resized to this number. This is useful when running the benchmark to
+    // control the number of input tokens.
+    int32 input_token_limit = 1;
+
+    // If true, waits for the GPU to finish processing input before continuing
+    // to decoding.
+    bool wait_for_input_processing = 2;
+
+    // If true, waits for weights to upload after initialization. Otherwise
+    // initialization may finish before weights have finished uploading which
+    // will push some of the weight upload time into input processing.
+    bool wait_for_weight_uploads = 3;
+
+    // If true, enable the mediapipe profiling.
+    bool enable_profiling = 4;
+
+    // If true, collects benchmark numbers during the session's usage.
+    // Currently only supported for ML_DRIFT backend.
+    // TODO: b/333733822 - Support CPU path as well.
+    bool collect_benchmark_numbers = 5;
+  }
+
+  message GraphConfig {
+    // Whether to configure the graph to include the token cost calculator,
+    // which allows users to only compute the cost of a prompt.
+    bool include_token_cost_calculator = 1;
+
+    // Whether to configure the graph to include the vision modality.
+    bool enable_vision_modality = 2;
+
+    // Whether to configure the graph to include the audio modality.
+    bool enable_audio_modality = 3;
+
+    // Whether to use streaming audio for audio modality.
+    // This is only used when `enable_audio_modality` is true.
+    bool enable_streaming_audio = 5;
+
+    // Whether to configure the graph to include the probability output. If the
+    // score targets are provided, the graph will execute the scoring and output
+    // the probabilities; otherwise, the graph will execute the normal decoding.
+    bool enable_probability_output = 4;
+  }
+
+  message LMControllerOptions {
+    // By default, when stop tokens are found in every batch, the controller
+    // will only send a final control signal along with the tokens downstream
+    // if any of the batch token IDs aren't empty.
+    // If this is set to false, the default behavior is used. If set to true,
+    // the controller will still send the control signal when stop tokens are
+    // found in every batch, even if all batches contain nothing but the stop
+    // tokens. This can be useful to signal downstream calculators that a
+    // decode cycle has finished.
+    bool force_control_signal_on_decode_finished = 1;
+  }
+
+  // How many parallel decoding candidate streams there are.
+  uint32 num_output_candidates = 3;
+
+  reserved 1, 2, 4 to 8;
+
+  // Parameters for additional lora layer.
+  optional LoraParams lora_params = 9;
+
+  reserved 10 to 14;
+
+  // Benchmark configurations.
+  BenchmarkInfo benchmark_info = 15;
+
+  // Parameters used for sampling during decoding.
+  SamplerParameters sampler_params = 16;
+
+  // Parameters to customize the graph.
+  GraphConfig graph_config = 17;
+
+  // Maximum number of tokens for output, will stop predicting when the number
+  // is reached. Currently only supported for GPU and APU backend.
+  int32 max_output_tokens = 18;
+
+  // This overrides the `max_num_tokens` in the model settings, as LoRA models
+  // may have a different max_num_tokens. If set to null or 0, it will be
+  // ignored. Currently only supported for APU and CPU backend.
+  optional int32 max_num_tokens = 19;
+
+  // Prompt templates to be used for processing the prompt.
+  // If provided, the prompt templates will overwrite the original prompt
+  // templates that is extracted/predicted from the bundled model.
+  // Noticed that if the prompt_templates is provided, the original prompt
+  // templates will be set to the newly provided one, even if role specific
+  // prompt template is not provided.
+  optional PromptTemplates prompt_templates = 20;
+
+  // Options for constrained decoding.
+  optional litert.lm.proto.ConstrainedDecodingOptions
+      constrained_decoding_options = 21;
+
+  // Maximum sequence length of the prefill signatures allowed to be used.
+  // Invoking a prefill signature with long sequence length will result in a
+  // long waiting time. To ensure in-time cancellation, we may need to limit the
+  // maximum sequence length used for prefill.
+  // If not set, all prefill signatures are considered during prefill.
+  optional int32 max_prefill_sequence_length = 22;
+
+  // Whether speculative decoding is enabled.
+  bool enable_speculative_decoding = 23;
+}
