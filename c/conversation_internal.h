@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "c/conversation.h"
@@ -27,6 +28,7 @@
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/components/constrained_decoding/tool_choice.h"
 #include "runtime/conversation/conversation.h"
+#include "runtime/conversation/io_types.h"
 #include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine_settings.h"
 
@@ -71,6 +73,7 @@ struct LiteRtLmConversationConfig {
   std::string extra_context_json;
   std::string prompt_template;
   bool enable_constrained_decoding = false;
+  std::optional<std::vector<litert::lm::Channel>> channels;
   std::optional<bool> filter_channel_content_from_kv_cache;
   bool stream_tool_calls = false;
   std::string stream_tool_calls_channel_name = "tool_call";
