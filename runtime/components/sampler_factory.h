@@ -30,6 +30,18 @@ namespace litert::lm {
 
 // Creates a Sampler instance based on the provided parameters.
 //
+// For `Backend::GPU`, GPU sampling requires statically linking the sampler
+// target matching the active inference backend (for example,
+// `//runtime/components:default_static_gpu_samplers`).
+// `CreateSampler` inspects `env` for the active GPU delegate device options
+// (`kMetalDevice`, `kWebGpuDevice`, or `kOpenClDeviceId`, which are populated
+// automatically by LiteRT during model compilation) and selects the matching
+// GPU sampler, trying WebGPU before OpenCL if multiple GPU device options are
+// present. If no matching GPU sampler is available (`kUnavailable`, such as
+// missing static sampler linkage, no GPU device option in `env`, or an
+// unavailable WebGPU Dawn runtime), `CreateSampler` logs a warning and falls
+// back to the CPU `TopPSampler`.
+//
 // Args:
 //   backend: The backend implementation of the sampler (CPU / GPU / ...).
 //   batch_size: The batch size for the input logits.

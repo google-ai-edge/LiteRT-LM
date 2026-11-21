@@ -329,6 +329,9 @@ selects.config_setting_group(
     ],
 )
 
+# Note: `:android_webgpu` is planned to be removed completely. To run WebGPU on
+# Android, callers should omit the OpenCL library and provide the WebGPU library
+# instead.
 # Dynamic GPU accelerator shared libraries bundled as runtime data when
 # litert_runtime_link_mode=dynamic. Do not depend on this target directly; use
 # :default_gpu_accelerator instead.
