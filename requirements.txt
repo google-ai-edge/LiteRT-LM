@@ -50,7 +50,7 @@ mbstrdecoder==1.1.4
 more-itertools==11.0.2
 multidict==6.7.1
 multiprocess==0.70.19
-nltk==3.9.4
+nltk==3.10.0
 numpy==2.4.4
 pandas==3.0.2
 pathvalidate==3.3.1
