@@ -14,6 +14,7 @@
 
 #include "runtime/core/embedding_engine_impl.h"
 
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstddef>
@@ -42,12 +43,16 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
+#include "flatbuffers/vector.h"  // from @flatbuffers
 #include "litert/cc/litert_buffer_ref.h"  // from @litert
+#include "litert/cc/litert_common.h"  // from @litert
+#include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
+#include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
@@ -302,71 +307,138 @@ class FakeModelResources : public ModelResources {
 // Builds a dummy vision encoder model with one signature per entry in
 // `signature_keys`. Each signature takes `images` of shape
 // [1, num_tokens * 4, image_channels] and returns `features` of shape
-// [1, num_tokens, feature_dim]. The model only runs an ABS op, which resizes
-// `features` to the shape of `images` at runtime, so `image_channels` must be
-// equal to `feature_dim` for the model to produce `feature_dim`-sized
-// embeddings when it is run.
+// [1, num_tokens, feature_dim] via MEAN (over axes 1 and 2 with keep_dims=true)
+// followed by TILE, so the runtime output shape matches the declared output
+// shape for any `num_tokens`, `image_channels`, and `feature_dim`.
 std::vector<uint8_t> BuildDummyVisionModelBuffer(
     const std::vector<std::string>& signature_keys,
     const std::vector<int32_t>& num_tokens_vec, int feature_dim,
     int image_channels = 3) {
   flatbuffers::FlatBufferBuilder builder;
 
-  auto opcode =
-      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ABS);
-  auto opcodes_vec = builder.CreateVector({opcode});
+  const flatbuffers::Offset<tflite::OperatorCode> mean_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_MEAN);
+  const flatbuffers::Offset<tflite::OperatorCode> tile_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_TILE);
+  const flatbuffers::Offset<
+      flatbuffers::Vector<flatbuffers::Offset<tflite::OperatorCode>>>
+      opcodes_vec = builder.CreateVector({mean_opcode, tile_opcode});
+
+  std::vector<flatbuffers::Offset<tflite::Buffer>> buffers;
+  // Buffer 0: empty buffer for non-constant tensors.
+  buffers.push_back(tflite::CreateBuffer(builder));
+
+  // Buffer 1: constant reduction axes {1, 2} shared by all subgraphs.
+  constexpr std::array<int32_t, 2> kReduceAxes = {1, 2};
+  buffers.push_back(tflite::CreateBuffer(
+      builder,
+      builder.CreateVector(reinterpret_cast<const uint8_t*>(kReduceAxes.data()),
+                           sizeof(kReduceAxes))));
 
   std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
   std::vector<flatbuffers::Offset<tflite::SignatureDef>> sig_defs;
 
   for (size_t i = 0; i < signature_keys.size(); ++i) {
-    int32_t num_tokens = num_tokens_vec[i];
-    std::vector<int32_t> image_dims = {1, num_tokens * 4, image_channels};
-    std::vector<int32_t> output_dims = {1, num_tokens, feature_dim};
+    const int32_t num_tokens = num_tokens_vec[i];
+    const std::vector<int32_t> image_dims = {1, num_tokens * 4, image_channels};
+    const std::vector<int32_t> axes_dims = {2};
+    const std::vector<int32_t> reduced_dims = {1, 1, 1};
+    const std::vector<int32_t> shape_dims = {3};
+    const std::vector<int32_t> output_dims = {1, num_tokens, feature_dim};
 
-    auto image_tensor = tflite::CreateTensor(
-        builder, builder.CreateVector(image_dims), tflite::TensorType_FLOAT32,
-        /*buffer=*/0, builder.CreateString(absl::StrCat("images_", i)));
-    auto features_tensor = tflite::CreateTensor(
-        builder, builder.CreateVector(output_dims), tflite::TensorType_FLOAT32,
-        /*buffer=*/0, builder.CreateString(absl::StrCat("features_", i)));
-    auto tensors_vec = builder.CreateVector({image_tensor, features_tensor});
+    const uint32_t shape_buffer_index = static_cast<uint32_t>(buffers.size());
+    buffers.push_back(tflite::CreateBuffer(
+        builder,
+        builder.CreateVector(
+            reinterpret_cast<const uint8_t*>(output_dims.data()),
+            output_dims.size() * sizeof(int32_t))));
 
-    std::vector<int32_t> op_inputs = {0};
-    std::vector<int32_t> op_outputs = {1};
-    auto op = tflite::CreateOperator(builder, /*opcode_index=*/0,
-                                     builder.CreateVector(op_inputs),
-                                     builder.CreateVector(op_outputs));
-    auto ops_vec = builder.CreateVector({op});
+    const flatbuffers::Offset<tflite::Tensor> image_tensor =
+        tflite::CreateTensor(builder, builder.CreateVector(image_dims),
+                             tflite::TensorType_FLOAT32, /*buffer=*/0,
+                             builder.CreateString(absl::StrCat("images_", i)));
+    const flatbuffers::Offset<tflite::Tensor> axes_tensor =
+        tflite::CreateTensor(builder, builder.CreateVector(axes_dims),
+                             tflite::TensorType_INT32, /*buffer=*/1,
+                             builder.CreateString(absl::StrCat("axes_", i)));
+    const flatbuffers::Offset<tflite::Tensor> reduced_tensor =
+        tflite::CreateTensor(builder, builder.CreateVector(reduced_dims),
+                             tflite::TensorType_FLOAT32, /*buffer=*/0,
+                             builder.CreateString(absl::StrCat("reduced_", i)));
+    const flatbuffers::Offset<tflite::Tensor> shape_tensor =
+        tflite::CreateTensor(
+            builder, builder.CreateVector(shape_dims), tflite::TensorType_INT32,
+            /*buffer=*/shape_buffer_index,
+            builder.CreateString(absl::StrCat("out_shape_", i)));
+    const flatbuffers::Offset<tflite::Tensor> features_tensor =
+        tflite::CreateTensor(
+            builder, builder.CreateVector(output_dims),
+            tflite::TensorType_FLOAT32, /*buffer=*/0,
+            builder.CreateString(absl::StrCat("features_", i)));
+    const flatbuffers::Offset<
+        flatbuffers::Vector<flatbuffers::Offset<tflite::Tensor>>>
+        tensors_vec = builder.CreateVector({image_tensor, axes_tensor,
+                                            reduced_tensor, shape_tensor,
+                                            features_tensor});
 
-    std::vector<int32_t> sg_inputs = {0};
-    std::vector<int32_t> sg_outputs = {1};
-    auto subgraph = tflite::CreateSubGraph(
-        builder, tensors_vec, builder.CreateVector(sg_inputs),
-        builder.CreateVector(sg_outputs), ops_vec,
-        builder.CreateString(absl::StrCat("subgraph_", i)));
+    const std::vector<int32_t> mean_inputs = {0, 1};
+    const std::vector<int32_t> mean_outputs = {2};
+    const flatbuffers::Offset<tflite::Operator> mean_op =
+        tflite::CreateOperator(
+            builder, /*opcode_index=*/0, builder.CreateVector(mean_inputs),
+            builder.CreateVector(mean_outputs),
+            tflite::BuiltinOptions_ReducerOptions,
+            tflite::CreateReducerOptions(builder, /*keep_dims=*/true).Union());
+
+    const std::vector<int32_t> tile_inputs = {2, 3};
+    const std::vector<int32_t> tile_outputs = {4};
+    const flatbuffers::Offset<tflite::Operator> tile_op =
+        tflite::CreateOperator(builder, /*opcode_index=*/1,
+                               builder.CreateVector(tile_inputs),
+                               builder.CreateVector(tile_outputs));
+
+    const flatbuffers::Offset<
+        flatbuffers::Vector<flatbuffers::Offset<tflite::Operator>>>
+        ops_vec = builder.CreateVector({mean_op, tile_op});
+
+    const std::vector<int32_t> sg_inputs = {0};
+    const std::vector<int32_t> sg_outputs = {4};
+    const flatbuffers::Offset<tflite::SubGraph> subgraph =
+        tflite::CreateSubGraph(
+            builder, tensors_vec, builder.CreateVector(sg_inputs),
+            builder.CreateVector(sg_outputs), ops_vec,
+            builder.CreateString(absl::StrCat("subgraph_", i)));
     subgraphs.push_back(subgraph);
 
-    auto image_map =
+    const flatbuffers::Offset<tflite::TensorMap> image_map =
         tflite::CreateTensorMap(builder, builder.CreateString("images"), 0);
-    auto features_map =
-        tflite::CreateTensorMap(builder, builder.CreateString("features"), 1);
-    auto inputs_map_vec = builder.CreateVector({image_map});
-    auto outputs_map_vec = builder.CreateVector({features_map});
+    const flatbuffers::Offset<tflite::TensorMap> features_map =
+        tflite::CreateTensorMap(builder, builder.CreateString("features"), 4);
+    const flatbuffers::Offset<
+        flatbuffers::Vector<flatbuffers::Offset<tflite::TensorMap>>>
+        inputs_map_vec = builder.CreateVector({image_map});
+    const flatbuffers::Offset<
+        flatbuffers::Vector<flatbuffers::Offset<tflite::TensorMap>>>
+        outputs_map_vec = builder.CreateVector({features_map});
 
-    auto sig_def = tflite::CreateSignatureDef(
-        builder, inputs_map_vec, outputs_map_vec,
-        builder.CreateString(signature_keys[i]), /*subgraph_index=*/i);
+    const flatbuffers::Offset<tflite::SignatureDef> sig_def =
+        tflite::CreateSignatureDef(
+            builder, inputs_map_vec, outputs_map_vec,
+            builder.CreateString(signature_keys[i]), /*subgraph_index=*/i);
     sig_defs.push_back(sig_def);
   }
 
-  auto subgraphs_vec = builder.CreateVector(subgraphs);
-  auto sig_defs_vec = builder.CreateVector(sig_defs);
+  const flatbuffers::Offset<
+      flatbuffers::Vector<flatbuffers::Offset<tflite::SubGraph>>>
+      subgraphs_vec = builder.CreateVector(subgraphs);
+  const flatbuffers::Offset<
+      flatbuffers::Vector<flatbuffers::Offset<tflite::SignatureDef>>>
+      sig_defs_vec = builder.CreateVector(sig_defs);
+  const flatbuffers::Offset<
+      flatbuffers::Vector<flatbuffers::Offset<tflite::Buffer>>>
+      buffers_vec = builder.CreateVector(buffers);
 
-  auto buffer = tflite::CreateBuffer(builder);
-  auto buffers_vec = builder.CreateVector({buffer});
-
-  auto model = tflite::CreateModel(
+  const flatbuffers::Offset<tflite::Model> model = tflite::CreateModel(
       builder, /*version=*/3, opcodes_vec, subgraphs_vec,
       builder.CreateString("dummy_vision_model"), buffers_vec,
       /*metadata_buffer=*/0, /*metadata=*/0, sig_defs_vec);
@@ -3822,6 +3894,72 @@ TEST(EmbeddingEngineImplTest,
       StatusIs(absl::StatusCode::kInvalidArgument,
                HasSubstr("min_vision_tokens_per_image (140) cannot be greater "
                          "than vision_tokens_per_image (70)")));
+}
+
+// Tests that every signature in BuildDummyVisionModelBuffer() produces runtime
+// output shapes matching its declared flatbuffer output shapes and runs with
+// buffers sized from those declared shapes.
+TEST(EmbeddingEngineImplTest,
+     DummyVisionModelDeclaredOutputShapeMatchesRuntimeShape) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<OwnedEnvironment> env,
+                       CreateTestEnvironment());
+
+  struct DummyModelConfig {
+    std::vector<std::string> signature_keys;
+    std::vector<int32_t> num_tokens;
+    int feature_dim;
+    int image_channels;
+  };
+  const std::vector<DummyModelConfig> configs = {
+      {{"vision_70", "vision_140"}, {70, 140}, /*feature_dim=*/64,
+       /*image_channels=*/3},
+      {{"vision_70"}, {70}, /*feature_dim=*/512, /*image_channels=*/512},
+  };
+
+  for (const DummyModelConfig& config : configs) {
+    const std::vector<uint8_t> vision_buffer = BuildDummyVisionModelBuffer(
+        config.signature_keys, config.num_tokens, config.feature_dim,
+        config.image_channels);
+    LITERT_ASSERT_OK_AND_ASSIGN(::litert::Options options,
+                                ::litert::Options::Create());
+    LITERT_ASSERT_OK(
+        options.SetHardwareAccelerators(::litert::HwAccelerators::kCpu));
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        ::litert::CompiledModel compiled_model,
+        ::litert::CompiledModel::Create(
+            env->env,
+            ::litert::BufferRef<uint8_t>(vision_buffer.data(),
+                                         vision_buffer.size()),
+            options));
+
+    for (size_t sig_idx = 0; sig_idx < config.signature_keys.size();
+         ++sig_idx) {
+      LITERT_ASSERT_OK_AND_ASSIGN(
+          ::litert::RankedTensorType declared_output,
+          compiled_model.GetOutputTensorType(sig_idx, "features"));
+      EXPECT_THAT(declared_output.Layout().Dimensions(),
+                  ElementsAre(1, config.num_tokens[sig_idx],
+                              config.feature_dim));
+
+      LITERT_ASSERT_OK_AND_ASSIGN(
+          std::vector<::litert::Layout> runtime_outputs,
+          compiled_model.GetOutputTensorLayouts(sig_idx,
+                                                /*update_allocation=*/true));
+      ASSERT_EQ(runtime_outputs.size(), 1);
+      EXPECT_THAT(runtime_outputs[0].Dimensions(),
+                  ElementsAre(1, config.num_tokens[sig_idx],
+                              config.feature_dim));
+
+      LITERT_ASSERT_OK_AND_ASSIGN(
+          std::vector<::litert::TensorBuffer> input_buffers,
+          compiled_model.CreateInputBuffers(sig_idx));
+      LITERT_ASSERT_OK_AND_ASSIGN(
+          std::vector<::litert::TensorBuffer> output_buffers,
+          compiled_model.CreateOutputBuffers(sig_idx));
+      LITERT_ASSERT_OK(
+          compiled_model.Run(sig_idx, input_buffers, output_buffers));
+    }
+  }
 }
 }  // namespace
 }  // namespace litert::lm
