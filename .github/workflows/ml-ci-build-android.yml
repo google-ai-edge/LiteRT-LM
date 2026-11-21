@@ -134,13 +134,15 @@ jobs:
         run: echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
 
       - name: Run bazel build for Android.
+        # @litert//litert/vendors/qualcomm/dispatch:dispatch_api_so is not built here: it needs the
+        # QAIRT SDK zip from softwarecenter.qualcomm.com, which now returns HTTP 403 to CI runners.
+        # Add it back once @qairt is fetchable again.
         run: |
           bazelisk build --config=github_actions_bazel_cache --config=android_x86_64 \
             --deleted_packages=swift \
             //... \
             //runtime/engine:litert_lm_main \
             @litert//litert/vendors/mediatek/dispatch:dispatch_api_so \
-            @litert//litert/vendors/qualcomm/dispatch:dispatch_api_so \
             -- \
             -//python/... \
             -//kotlin/java/com/google/ai/edge/litertlm/example/... \
