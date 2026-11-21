@@ -89,9 +89,16 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
+    name = "_experimental_flags",
+    srcs = ["_experimental_flags.py"],
+    visibility = ["//visibility:private"],
+)
+
+pytype_strict_library(
     name = "engine",
     srcs = ["engine.py"],
     deps = [
+        ":_experimental_flags",
         ":_ffi",
         ":_messages",
         ":conversation",
@@ -133,6 +140,7 @@ pytype_strict_library(
     name = "litert_lm",
     srcs = ["__init__.py"],
     deps = [
+        ":_experimental_flags",
         ":_ffi",
         ":_messages",
         ":benchmark",

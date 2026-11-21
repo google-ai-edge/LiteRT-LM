@@ -410,6 +410,7 @@ class EngineTest(LiteRtLmTestBase):
     mock_set_enable_ynnpack.assert_called_once_with(mock.ANY, False)
 
   def test_engine_init_with_enable_debugger(self):
+    self.assertIsNone(litert_lm.ExperimentalFlags.enable_debugger)
     lib = litert_lm._ffi._get_lib()
     orig_fn = lib.litert_lm_experimental_engine_settings_set_enable_debugger
 
@@ -428,18 +429,22 @@ class EngineTest(LiteRtLmTestBase):
         backend=litert_lm.Backend.CPU(),
         cache_dir=":nocache",
     )
-    self.assertIsNone(engine.enable_debugger)
+    self.assertIsNone(engine._enable_debugger)
     mock_set_enable_debugger.assert_not_called()
 
     for enable_debugger in (True, False):
       with self.subTest(enable_debugger=enable_debugger):
-        engine = litert_lm.Engine(
-            self.model_path,
-            backend=litert_lm.Backend.CPU(),
-            enable_debugger=enable_debugger,
-            cache_dir=self.create_tempdir().full_path,
-        )
-        self.assertEqual(engine.enable_debugger, enable_debugger)
+        with mock.patch.object(
+            litert_lm.ExperimentalFlags,
+            "enable_debugger",
+            enable_debugger,
+        ):
+          engine = litert_lm.Engine(
+              self.model_path,
+              backend=litert_lm.Backend.CPU(),
+              cache_dir=self.create_tempdir().full_path,
+          )
+        self.assertEqual(engine._enable_debugger, enable_debugger)
         mock_set_enable_debugger.assert_called_once_with(
             mock.ANY, enable_debugger
         )

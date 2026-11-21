@@ -49,7 +49,7 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
     self.mock_engine = mock.MagicMock()
 
     # Pre-condition: the engine has the debugger enabled and a cache directory.
-    self.mock_engine.enable_debugger = True
+    self.mock_engine._enable_debugger = True
     self.mock_engine.cache_dir = "/tmp/fake_cache_root"
 
     # Instantiate the target Session abstraction under test using positional
@@ -62,7 +62,7 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
 
   def test_get_debug_artifacts_warns_when_debugger_disabled(self):
     """Verifies get_debug_artifacts warns and returns None when disabled."""
-    self.mock_engine.enable_debugger = None
+    self.mock_engine._enable_debugger = None
 
     with warnings.catch_warnings(record=True) as captured_warnings:
       warnings.simplefilter("always")
@@ -72,7 +72,10 @@ class LiteRtLmSessionDebugArtifactsTest(absltest.TestCase):
       self.assertIsNone(result)
       self.assertLen(captured_warnings, 1)
       self.assertTrue(issubclass(captured_warnings[0].category, RuntimeWarning))
-      self.assertIn("enable_debugger=True", str(captured_warnings[0].message))
+      self.assertIn(
+          "ExperimentalFlags.enable_debugger = True",
+          str(captured_warnings[0].message),
+      )
     self.mock_lib.litert_lm_experimental_session_get_debug_info.assert_not_called()
 
   def test_get_debug_artifacts_invalid_session(self):
@@ -200,7 +203,7 @@ class LiteRtLmConversationDebugArtifactsTest(absltest.TestCase):
     self.mock_lib = mock.MagicMock()
     self.mock_ptr = ctypes.c_void_p(67890)
     self.mock_engine = mock.MagicMock()
-    self.mock_engine.enable_debugger = True
+    self.mock_engine._enable_debugger = True
     self.mock_engine.cache_dir = "/tmp/fake_cache_root"
 
     self.conversation = litert_lm.conversation.Conversation(
@@ -211,7 +214,7 @@ class LiteRtLmConversationDebugArtifactsTest(absltest.TestCase):
 
   def test_get_debug_artifacts_warns_when_debugger_disabled(self):
     """Verifies get_debug_artifacts warns and returns None when disabled."""
-    self.mock_engine.enable_debugger = False
+    self.mock_engine._enable_debugger = False
 
     with warnings.catch_warnings(record=True) as captured_warnings:
       warnings.simplefilter("always")
@@ -222,7 +225,7 @@ class LiteRtLmConversationDebugArtifactsTest(absltest.TestCase):
       self.assertLen(captured_warnings, 1)
       self.assertTrue(issubclass(captured_warnings[0].category, RuntimeWarning))
       self.assertIn(
-          "enable_debugger=True",
+          "ExperimentalFlags.enable_debugger = True",
           str(captured_warnings[0].message),
       )
     self.mock_lib.litert_lm_experimental_conversation_get_session_debug_info.assert_not_called()

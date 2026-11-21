@@ -474,13 +474,6 @@ class AbstractEngine(abc.ABC):
         generation, keep at least one prefill signature and "decode". When MTP
         is enabled, make sure "verify" is also included. If None, every
         signature of the model is used.
-      enable_debugger: Experimental. Whether to enable the AI Edge Debugger,
-        which captures per-token traces and, on CPU/GPU, intermediate
-        activations under `<cache_dir>/litert_lm_debugger/<session_id>/`.
-        Requires `cache_dir` set to a writable directory (not ":nocache" or
-        ":memory"); otherwise engine creation fails. Not supported when weights
-        are streamed. If None, use the native engine's default (off). Captures
-        hold unencrypted user data; enable only for development or diagnostics.
   """
 
   model_path: str
@@ -498,7 +491,9 @@ class AbstractEngine(abc.ABC):
   enable_ynnpack: bool | None = None
   max_vision_tokens_per_image: int | None = None
   selected_signatures: collections.abc.Sequence[str] | None = None
-  enable_debugger: bool | None = None
+  _enable_debugger: bool | None = dataclasses.field(
+      default=None, init=False, repr=False, compare=False
+  )
 
   def __enter__(self) -> AbstractEngine:
     """Initializes the engine resources."""
@@ -1177,10 +1172,11 @@ def get_debug_artifacts(
   if not engine:
     return None
 
-  if not engine.enable_debugger:
+  if not engine._enable_debugger:  # pylint: disable=protected-access
     warnings.warn(
         "LiteRT-LM Debugger is disabled for this engine. To capture debug "
-        "artifacts, create the Engine with enable_debugger=True.",
+        "artifacts, set ExperimentalFlags.enable_debugger = True before "
+        "creating the Engine.",
         RuntimeWarning,
         stacklevel=3,
     )

@@ -23,6 +23,7 @@ import warnings
 
 from . import interfaces
 from . import tools as litert_tools
+from ._experimental_flags import ExperimentalFlags
 from ._ffi import _get_lib
 from ._ffi import ActivationDataType
 from ._ffi import call_checked
@@ -78,7 +79,6 @@ class Engine(interfaces.AbstractEngine):
       enable_ynnpack: bool | None = None,
       max_vision_tokens_per_image: int | None = None,
       selected_signatures: collections.abc.Sequence[str] | None = None,
-      enable_debugger: bool | None = None,
       **kwargs,
   ):
     if isinstance(selected_signatures, str):
@@ -107,10 +107,10 @@ class Engine(interfaces.AbstractEngine):
         enable_ynnpack=enable_ynnpack,
         max_vision_tokens_per_image=max_vision_tokens_per_image,
         selected_signatures=selected_signatures,
-        enable_debugger=enable_debugger,
         **kwargs,
     )
 
+    self._enable_debugger = ExperimentalFlags.enable_debugger
     self._lib = _get_lib()
     self._engine_ptr = None
 
@@ -251,12 +251,12 @@ class Engine(interfaces.AbstractEngine):
           settings,
           self.enable_ynnpack,
       )
-    if self.enable_debugger is not None:
+    if self._enable_debugger is not None:
       call_checked(
           lib,
           "litert_lm_experimental_engine_settings_set_enable_debugger",
           settings,
-          self.enable_debugger,
+          self._enable_debugger,
       )
 
     lora_rank = (

@@ -19,6 +19,7 @@ import warnings as _warnings
 
 # pylint: disable=g-importing-member
 
+from ._experimental_flags import ExperimentalFlags
 from ._ffi import ActivationDataType
 from ._ffi import LiteRtLmBackendType
 from ._ffi import LiteRtLmConstraintProviderType
@@ -101,6 +102,7 @@ __all__ = (
     "EmbeddingOptions",
     "EmbeddingResponse",
     "Engine",
+    "ExperimentalFlags",
     "InputOverflowStrategy",
     "LiteRtLmBackendType",
     "LiteRtLmConstraintProviderType",
