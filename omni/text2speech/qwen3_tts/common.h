@@ -23,31 +23,31 @@
 namespace litert::omni::tts {
 namespace qwen3_tts {
 
-constexpr int kTtsBos = 151672;
-constexpr int kTtsEos = 151673;
-constexpr int kTtsPad = 151671;
+inline constexpr int kTtsBos = 151672;
+inline constexpr int kTtsEos = 151673;
+inline constexpr int kTtsPad = 151671;
 
-constexpr int kCodecVocab = 3072;
-constexpr int kCodecPad = 2148;
-constexpr int kCodecBos = 2149;
-constexpr int kCodecEos = 2150;
-constexpr int kCodecThink = 2154;
-constexpr int kCodecNoThink = 2155;
-constexpr int kCodecThinkBos = 2156;
-constexpr int kCodecThinkEos = 2157;
+inline constexpr int kCodecVocab = 3072;
+inline constexpr int kCodecPad = 2148;
+inline constexpr int kCodecBos = 2149;
+inline constexpr int kCodecEos = 2150;
+inline constexpr int kCodecThink = 2154;
+inline constexpr int kCodecNoThink = 2155;
+inline constexpr int kCodecThinkBos = 2156;
+inline constexpr int kCodecThinkEos = 2157;
 
-constexpr int kHiddenDim = 1024;
-constexpr int kNumCodeGroups = 16;
+inline constexpr int kHiddenDim = 1024;
+inline constexpr int kNumCodeGroups = 16;
 // Vocabulary size of each residual codebook predicted by the MTP drafter.
-constexpr int kMtpVocab = 2048;
+inline constexpr int kMtpVocab = 2048;
 // Prefix of the per-codebook LM head signatures (`head_0` .. `head_14`) in the
 // MTP drafter model.
-constexpr absl::string_view kMtpHeadPrefix = "head_";
-constexpr int kFrameChunkSize = 75;
-constexpr int kVocoderOverlapContext = 25;
-constexpr int kAudioSampleRateHz = 24000;
-constexpr float kNegInf = -1e9f;
-constexpr absl::string_view kPromptTemplate =
+inline constexpr absl::string_view kMtpHeadPrefix = "head_";
+inline constexpr int kFrameChunkSize = 75;
+inline constexpr int kVocoderOverlapContext = 25;
+inline constexpr int kAudioSampleRateHz = 24000;
+inline constexpr float kNegInf = -1e9f;
+inline constexpr absl::string_view kPromptTemplate =
     "<|im_start|>assistant\n%s<|im_end|>\n<|im_start|>assistant\n";
 }  // namespace qwen3_tts
 

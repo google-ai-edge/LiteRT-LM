@@ -32,10 +32,10 @@ namespace litert::omni::tts::kokoro {
 // =============================================================================
 
 // Default target sequence length for bucketing.
-constexpr int kDefaultBucketSize = 128;
+inline constexpr int kDefaultBucketSize = 128;
 
 // Capacity divisor threshold when searching backwards for chunk split points.
-constexpr int kSplitCapacityDivisor = 2;
+inline constexpr int kSplitCapacityDivisor = 2;
 
 // =============================================================================
 // Voice Style Embedding Constants
@@ -43,21 +43,21 @@ constexpr int kSplitCapacityDivisor = 2;
 
 // Number of token embeddings in the voice pack style table (510 token
 // embeddings).
-constexpr int kVoicePackNumTokens = 510;
+inline constexpr int kVoicePackNumTokens = 510;
 
 // Maximum token index in the 510x256 voice pack embedding table (0..509).
-constexpr int kMaxVoiceTokens = 509;
+inline constexpr int kMaxVoiceTokens = 509;
 
 // Total embedding dimension per voice style token (256 floats).
-constexpr int kVoiceEmbeddingDim = 256;
+inline constexpr int kVoiceEmbeddingDim = 256;
 
 // Dimension of style vector slice passed to the prosody predictor (first 128
 // floats).
-constexpr int kStyleSliceDim = 128;
+inline constexpr int kStyleSliceDim = 128;
 
 // Total float count of a pre-extracted voice pack embedding file (510 * 256 =
 // 130,560).
-constexpr int kVoicePackSize = kVoicePackNumTokens * kVoiceEmbeddingDim;
+inline constexpr int kVoicePackSize = kVoicePackNumTokens * kVoiceEmbeddingDim;
 
 // =============================================================================
 // Token IDs in Kokoro Phoneme Vocabulary
@@ -65,16 +65,16 @@ constexpr int kVoicePackSize = kVoicePackNumTokens * kVoiceEmbeddingDim;
 
 // BOS (Beginning of Sequence) and EOS (End of Sequence) token ID in Kokoro
 // vocabulary.
-constexpr int kBosTokenId = 0;
-constexpr int kEosTokenId = 0;
+inline constexpr int kBosTokenId = 0;
+inline constexpr int kEosTokenId = 0;
 
 // Whitespace delimiter token ID in Kokoro vocabulary (' ').
-constexpr int kSpaceTokenId = 16;
+inline constexpr int kSpaceTokenId = 16;
 
 // Range of sentence and clause punctuation token IDs in Kokoro vocabulary
 // (1..6: ';', ':', ',', '.', '!', '?').
-constexpr int kMinPunctuationTokenId = 1;
-constexpr int kMaxPunctuationTokenId = 6;
+inline constexpr int kMinPunctuationTokenId = 1;
+inline constexpr int kMaxPunctuationTokenId = 6;
 
 // =============================================================================
 // Tensor & Feature Dimensions
@@ -82,18 +82,18 @@ constexpr int kMaxPunctuationTokenId = 6;
 
 // Expanded phoneme text embeddings feature dimension (formerly t_en: 640
 // floats).
-constexpr int kExpandedTextEmbeddingDim = 640;
+inline constexpr int kExpandedTextEmbeddingDim = 640;
 
 // Acoustic feature representation tensor dimension (formerly asr: 512 floats).
-constexpr int kAcousticFeatureDim = 512;
+inline constexpr int kAcousticFeatureDim = 512;
 
 // Combined pitch (F0) and energy (N) auxiliary contour dimension (f0_n: 1024
 // floats).
-constexpr int kF0NDim = 1024;
+inline constexpr int kF0NDim = 1024;
 
 // Maximum number of output speech acoustic frames supported (512 frames).
 // Kept for backward compatibility with stage implementations.
-constexpr int kMaxSpeechFrames = 512;
+inline constexpr int kMaxSpeechFrames = 512;
 
 // Recovers the acoustic frame capacity baked into an `acoustic_features`
 // tensor, whose static shape is [1, kAcousticFeatureDim, max_frames].
@@ -111,7 +111,7 @@ constexpr int FrameCapacityFromPackedSize(size_t packed_size_bytes) {
 // slice and the tail of the sentence is never spoken. Measured English speech
 // averages ~2.5 frames per phoneme token and reaches ~2.7 on long clauses, so 3
 // leaves headroom without wasting much of the token budget.
-constexpr int kFramesPerTokenBudget = 3;
+inline constexpr int kFramesPerTokenBudget = 3;
 
 // TODO(b/538727793): refactor to configurable parameters.
 // =============================================================================
@@ -119,23 +119,23 @@ constexpr int kFramesPerTokenBudget = 3;
 // =============================================================================
 
 // Output audio sampling rate in Hz (24kHz).
-constexpr int kSampleRate = 24000;
+inline constexpr int kSampleRate = 24000;
 
 // Audio hop size multiplier from speech frames to time-domain PCM samples
 // (24000 / 40 = 600).
-constexpr int kAudioHop = 600;
+inline constexpr int kAudioHop = 600;
 
 // Number of frequency bins in inverse short-time Fourier transform (iSTFT).
-constexpr int kIstftBins = 11;
+inline constexpr int kIstftBins = 11;
 
 // Window frame length in samples for iSTFT synthesis.
-constexpr int kIstftFrameLen = 20;
+inline constexpr int kIstftFrameLen = 20;
 
 // Hop size in samples between consecutive iSTFT synthesis frames.
-constexpr int kIstftHop = 5;
+inline constexpr int kIstftHop = 5;
 
 // Overlap-add sum normalization factor for Hann synthesis window with hop=5.
-constexpr float kHannOverlapAddScale = 1.5f;
+inline constexpr float kHannOverlapAddScale = 1.5f;
 
 // =============================================================================
 // Slice Join Trimming
@@ -144,20 +144,21 @@ constexpr float kHannOverlapAddScale = 1.5f;
 // Amplitude, relative to a slice's own peak, below which a sample counts as
 // silence when trimming an artificial slice join. -40 dB is well under any
 // voiced or fricative energy but still above the vocoder's noise floor.
-constexpr float kSliceJoinSilenceRatio = 0.01f;
+inline constexpr float kSliceJoinSilenceRatio = 0.01f;
 
 // Silence preserved on each side of a trimmed join (5 ms at 24 kHz). Cutting
 // exactly at the first suprathreshold sample clips plosive onsets and makes the
 // seam audible as a click, so a short lead-in is kept.
-constexpr int kSliceJoinMarginMs = 5;
-constexpr int kSliceJoinMarginSamples = kSampleRate * kSliceJoinMarginMs / 1000;
+inline constexpr int kSliceJoinMarginMs = 5;
+inline constexpr int kSliceJoinMarginSamples =
+    kSampleRate * kSliceJoinMarginMs / 1000;
 
 // Silence preserved after a join that landed on punctuation (400 ms at 24 kHz).
 // The text does ask for a pause there, but a clause-length one; without a cap
 // the join would instead inherit the much longer silence the model emits at the
 // end of an utterance.
-constexpr int kSlicePunctuationPauseMs = 400;
-constexpr int kSlicePunctuationPauseSamples =
+inline constexpr int kSlicePunctuationPauseMs = 400;
+inline constexpr int kSlicePunctuationPauseSamples =
     kSampleRate * kSlicePunctuationPauseMs / 1000;
 
 // One slice of a chunk's phoneme sequence, bounded by capacity, plus join
@@ -175,7 +176,7 @@ std::vector<TokenSlice> SliceTokenIds(absl::Span<const int> token_ids,
                                       int max_capacity);
 
 // Sentinel for an edge that must be left exactly as the model produced it.
-constexpr int kKeepEdgeIntact = -1;
+inline constexpr int kKeepEdgeIntact = -1;
 
 // Caps the near-silence at the head and/or tail of one slice of PCM.
 //
@@ -202,7 +203,7 @@ int TailKeepSamples(SliceJoin join);
 
 // Voice used when no voice is requested, or when the requested voice is
 // missing from the model.
-constexpr absl::string_view kDefaultVoiceName = "af_heart";
+inline constexpr absl::string_view kDefaultVoiceName = "af_heart";
 
 // Reduces a voice identifier to its bare voice name by dropping any directory
 // components and a trailing ".bin" extension, so that "voices/af_heart.bin"

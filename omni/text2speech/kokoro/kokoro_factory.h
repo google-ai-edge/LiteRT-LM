@@ -40,15 +40,15 @@ namespace litert::omni::tts {
 // table. What precedes it is the language code, so the Mandarin table ships as
 // the "cmn-textnorm" section. See omni/text2speech/text_normalizer.h for the
 // format.
-constexpr absl::string_view kTextNormSectionSuffix = "-textnorm";
+inline constexpr absl::string_view kTextNormSectionSuffix = "-textnorm";
 
 // Suffix of a GenericBinaryData section holding a packed CJK lexicon blob
 // (e.g. "ja-lexicon", "zh-lexicon").
-constexpr absl::string_view kLexiconSectionSuffix = "-lexicon";
+inline constexpr absl::string_view kLexiconSectionSuffix = "-lexicon";
 
 // Name of the GenericBinaryData section holding the Traditional -> Simplified
 // Chinese conversion table. See kokoro/traditional_chinese_converter.h.
-constexpr absl::string_view kTraditionalChineseSectionName = "zh-t2s";
+inline constexpr absl::string_view kTraditionalChineseSectionName = "zh-t2s";
 
 // Compiles and populates all Kokoro-82M LiteRT models into shared
 // ModelResources.

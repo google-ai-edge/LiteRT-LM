@@ -24,7 +24,7 @@ namespace litert::omni {
 
 // Default input audio sample rate in Hz across Omni sessions (e.g. ASR,
 // Any2Any).
-constexpr int kDefaultInputSampleRateHz = 16000;
+inline constexpr int kDefaultInputSampleRateHz = 16000;
 
 // Sentinel input indicating the end of the input stream.
 struct EndOfInput {};
