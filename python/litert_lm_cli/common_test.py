@@ -196,6 +196,60 @@ class CommonInferenceOptionsTest(parameterized.TestCase):
     self.assertEqual(result.exit_code, 0)
     self.assertIn('ringbuffers_local_attention: None', result.output)
 
+  def test_head_chunked_attention_mib_options(self):
+    @click.command()
+    @common.common_inference_options
+    def dummy_cmd(**kwargs):
+      val = kwargs.get('head_chunked_attention_mib')
+      click.echo(f'head_chunked_attention_mib: {val}')
+
+    runner = CliRunner()
+
+    for val in ('-1', '0', '512'):
+      result = runner.invoke(dummy_cmd, ['--head-chunked-attention-mib', val])
+      self.assertEqual(result.exit_code, 0)
+      self.assertIn(f'head_chunked_attention_mib: {val}', result.output)
+
+    result = runner.invoke(dummy_cmd, [])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('head_chunked_attention_mib: None', result.output)
+
+    result = runner.invoke(dummy_cmd, ['--head-chunked-attention-mib', 'abc'])
+    self.assertNotEqual(result.exit_code, 0)
+
+    help_result = runner.invoke(dummy_cmd, ['--help'])
+    self.assertEqual(help_result.exit_code, 0)
+    self.assertNotIn('--head-chunked-attention-mib', help_result.output)
+
+  def test_kv_cache_type_options(self):
+    @click.command()
+    @common.common_inference_options
+    def dummy_cmd(**kwargs):
+      click.echo(f"kv_cache_type: {kwargs.get('kv_cache_type')}")
+
+    runner = CliRunner()
+
+    for raw, expected in (
+        ('INT8', 'INT8'),
+        ('int8', 'INT8'),
+        ('DEFAULT', 'DEFAULT'),
+        ('default', 'DEFAULT'),
+    ):
+      result = runner.invoke(dummy_cmd, ['--kv-cache-type', raw])
+      self.assertEqual(result.exit_code, 0)
+      self.assertIn(f'kv_cache_type: {expected}', result.output)
+
+    result = runner.invoke(dummy_cmd, [])
+    self.assertEqual(result.exit_code, 0)
+    self.assertIn('kv_cache_type: None', result.output)
+
+    result = runner.invoke(dummy_cmd, ['--kv-cache-type', 'fp16'])
+    self.assertNotEqual(result.exit_code, 0)
+
+    help_result = runner.invoke(dummy_cmd, ['--help'])
+    self.assertEqual(help_result.exit_code, 0)
+    self.assertNotIn('--kv-cache-type', help_result.output)
+
   def test_gpu_decode_steps_per_sync_options(self):
     @click.command()
     @common.common_inference_options

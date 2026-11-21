@@ -299,6 +299,103 @@ class ModelTest(parameterized.TestCase):
         model.resolve_ringbuffers_local_attention(value, mock_model), expected
     )
 
+  @parameterized.named_parameters(
+      (
+          "unset_artisan_gpu",
+          None,
+          True,
+          litert_lm.Backend.GPU(),
+          False,
+          None,
+          False,
+      ),
+      (
+          "int8_artisan_gpu",
+          "INT8",
+          True,
+          litert_lm.Backend.GPU(),
+          False,
+          litert_lm.KvCacheType.INT8,
+          False,
+      ),
+      (
+          "default_artisan_gpu",
+          "DEFAULT",
+          True,
+          litert_lm.Backend.GPU(),
+          False,
+          litert_lm.KvCacheType.DEFAULT,
+          False,
+      ),
+      (
+          "int8_non_artisan_gpu_warns",
+          "INT8",
+          False,
+          litert_lm.Backend.GPU(),
+          False,
+          litert_lm.KvCacheType.DEFAULT,
+          True,
+      ),
+      (
+          "int8_cpu_warns",
+          "int8",
+          True,
+          litert_lm.Backend.CPU(),
+          False,
+          litert_lm.KvCacheType.DEFAULT,
+          True,
+      ),
+      (
+          "int8_android_warns",
+          "INT8",
+          True,
+          litert_lm.Backend.GPU(),
+          True,
+          litert_lm.KvCacheType.DEFAULT,
+          True,
+      ),
+      (
+          "default_non_artisan_no_warning",
+          "DEFAULT",
+          False,
+          litert_lm.Backend.CPU(),
+          False,
+          litert_lm.KvCacheType.DEFAULT,
+          False,
+      ),
+  )
+  @mock.patch.object(model.click, "echo")
+  @mock.patch.object(model, "is_gpu_artisan_model")
+  def test_resolve_kv_cache_type(
+      self,
+      value,
+      is_artisan,
+      backend_val,
+      is_android,
+      expected,
+      expect_warning,
+      mock_is_gpu_artisan_model,
+      mock_echo,
+  ):
+    mock_is_gpu_artisan_model.return_value = is_artisan
+    mock_model = mock.Mock(spec=model.Model)
+    mock_model.model_id = "dummy_model_id"
+    mock_model.model_path = "dummy_path"
+
+    result = model.resolve_kv_cache_type(
+        value, mock_model, backend_val, is_android=is_android
+    )
+    self.assertEqual(result, expected)
+    if expect_warning:
+      mock_echo.assert_called_once()
+      self.assertIn(
+          "INT8 KV cache is not supported for this model",
+          mock_echo.call_args.args[0],
+      )
+      self.assertTrue(mock_echo.call_args.kwargs.get("err"))
+    else:
+      mock_echo.assert_not_called()
+
 
 class ParseBackendWithConfigTest(parameterized.TestCase):
 

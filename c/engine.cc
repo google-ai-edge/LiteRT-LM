@@ -70,6 +70,7 @@ using ::litert::lm::c::ParseOptionalBackend;
 using ::litert::lm::c::RawEnumValue;
 using ::litert::lm::c::SetExecutorCacheDirs;
 using ::litert::lm::c::ToEngineInputData;
+using ::litert::lm::c::UpdateMainBackendConfig;
 
 absl::AnyInvocable<void(absl::StatusOr<litert::lm::Responses>)> CreateCallback(
     LiteRtLmStreamCallback callback, void* callback_data) {
@@ -177,26 +178,6 @@ absl::StatusOr<int> ToTurnIndex(size_t index) {
         absl::StrFormat("Turn index %d is out of range.", index));
   }
   return static_cast<int>(index);
-}
-
-template <typename ConfigT, typename Fn>
-LiteRtLmStatusCode UpdateMainBackendConfig(LiteRtLmEngineSettings* settings,
-                                           absl::string_view setting_name,
-                                           Fn&& mutate) {
-  if (!IsValidEngineSettings(settings)) {
-    return kLiteRtLmStatusInvalidArgument;
-  }
-  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
-  absl::StatusOr<ConfigT> config =
-      main_settings.MutableBackendConfig<ConfigT>();
-  if (!config.ok()) {
-    ABSL_LOG(WARNING) << "Failed to get backend config for " << setting_name
-                      << ": " << config.status();
-    return kLiteRtLmStatusOk;
-  }
-  mutate(*config);
-  main_settings.SetBackendConfig(*config);
-  return kLiteRtLmStatusOk;
 }
 
 absl::StatusOr<std::shared_ptr<litert::lm::ScopedFile>> OpenScopedLoraFile(

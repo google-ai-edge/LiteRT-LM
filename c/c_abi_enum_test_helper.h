@@ -46,6 +46,9 @@ LiteRtLmStatusCode c_abi_test_speculative_decoding_config_set_mode(
 LiteRtLmStatusCode c_abi_test_engine_settings_set_activation_data_type(
     LiteRtLmEngineSettings* settings, int raw_type);
 
+LiteRtLmStatusCode c_abi_test_experimental_engine_settings_set_kv_cache_type(
+    LiteRtLmEngineSettings* settings, int raw_type);
+
 LiteRtLmStatusCode c_abi_test_conversation_optional_args_set_constraint(
     LiteRtLmConversationOptionalArgs* optional_args, int raw_constraint_type,
     const char* constraint_string);

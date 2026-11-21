@@ -74,6 +74,15 @@
           "minimum": 1,
           "$comment": "Added in version 0.15.0"
         },
+        "head_chunked_attention_mib": {
+          "type": "integer",
+          "$comment": "Added in version 0.20.0"
+        },
+        "kv_cache_type": {
+          "type": "string",
+          "enum": ["DEFAULT", "INT8", "default", "int8"],
+          "$comment": "Added in version 0.20.0"
+        },
         "speculative_decoding": {
           "oneOf": [
             {"type": "string", "enum": ["on", "off", "adaptive"]},

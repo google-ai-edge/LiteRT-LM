@@ -306,6 +306,91 @@ class EngineTest(LiteRtLmTestBase):
 
     mock_set_ringbuffers.assert_called_once_with(mock.ANY, True)
 
+  def test_engine_init_with_head_chunked_attention_mib(self):
+    lib = litert_lm._ffi._get_lib()
+    orig_fn = (
+        lib.litert_lm_experimental_engine_settings_set_head_chunked_attention_mib
+    )
+
+    mock_set_head_chunked = self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_experimental_engine_settings_set_head_chunked_attention_mib",
+            autospec=True,
+            side_effect=orig_fn,
+        )
+    )
+
+    # Default (None) does not call the C setter.
+    litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        cache_dir=":nocache",
+    )
+    mock_set_head_chunked.assert_not_called()
+
+    for value in (-1, 0, 512):
+      mock_set_head_chunked.reset_mock()
+      litert_lm.Engine(
+          self.model_path,
+          backend=litert_lm.Backend.CPU(),
+          head_chunked_attention_mib=value,
+          cache_dir=":nocache",
+      )
+      mock_set_head_chunked.assert_called_once_with(mock.ANY, value)
+
+  def test_kv_cache_type_from_str(self):
+    self.assertEqual(
+        litert_lm.KvCacheType.from_str("DEFAULT"),
+        litert_lm.KvCacheType.DEFAULT,
+    )
+    self.assertEqual(
+        litert_lm.KvCacheType.from_str("default"),
+        litert_lm.KvCacheType.DEFAULT,
+    )
+    self.assertEqual(
+        litert_lm.KvCacheType.from_str("INT8"),
+        litert_lm.KvCacheType.INT8,
+    )
+    self.assertEqual(
+        litert_lm.KvCacheType.from_str("int8"),
+        litert_lm.KvCacheType.INT8,
+    )
+    self.assertIsNone(litert_lm.KvCacheType.from_str("invalid"))
+
+  def test_engine_init_with_kv_cache_type(self):
+    lib = litert_lm._ffi._get_lib()
+    orig_fn = lib.litert_lm_experimental_engine_settings_set_kv_cache_type
+
+    mock_set_kv_cache_type = self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_experimental_engine_settings_set_kv_cache_type",
+            autospec=True,
+            side_effect=orig_fn,
+        )
+    )
+
+    litert_lm.Engine(
+        self.model_path,
+        backend=litert_lm.Backend.CPU(),
+        cache_dir=":nocache",
+    )
+    mock_set_kv_cache_type.assert_not_called()
+
+    for value in (
+        litert_lm.KvCacheType.DEFAULT,
+        litert_lm.KvCacheType.INT8,
+    ):
+      mock_set_kv_cache_type.reset_mock()
+      litert_lm.Engine(
+          self.model_path,
+          backend=litert_lm.Backend.CPU(),
+          kv_cache_type=value,
+          cache_dir=":nocache",
+      )
+      mock_set_kv_cache_type.assert_called_once_with(mock.ANY, value.value)
+
   def test_engine_init_with_selected_signatures(self):
     lib = litert_lm._ffi._get_lib()
     selections = []
@@ -872,6 +957,81 @@ class EngineTest(LiteRtLmTestBase):
       benchmark.run()
 
       mock_set_num_threads.assert_called_once_with(mock.ANY, 4)
+
+  def test_benchmark_class_with_head_chunked_attention_mib(self):
+    lib = litert_lm._ffi._get_lib()
+    orig_fn = (
+        lib.litert_lm_experimental_engine_settings_set_head_chunked_attention_mib
+    )
+    mock_set_head_chunked = self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_experimental_engine_settings_set_head_chunked_attention_mib",
+            autospec=True,
+            side_effect=orig_fn,
+        )
+    )
+
+    benchmark_default = litert_lm.Benchmark(
+        self.model_path,
+        litert_lm.Backend.CPU(),
+        prefill_tokens=10,
+        decode_tokens=10,
+        cache_dir=":nocache",
+    )
+    benchmark_default.run()
+    mock_set_head_chunked.assert_not_called()
+
+    for value in (-1, 0, 512):
+      mock_set_head_chunked.reset_mock()
+      benchmark = litert_lm.Benchmark(
+          self.model_path,
+          litert_lm.Backend.CPU(),
+          prefill_tokens=10,
+          decode_tokens=10,
+          cache_dir=":nocache",
+          head_chunked_attention_mib=value,
+      )
+      benchmark.run()
+      mock_set_head_chunked.assert_called_once_with(mock.ANY, value)
+
+  def test_benchmark_class_with_kv_cache_type(self):
+    lib = litert_lm._ffi._get_lib()
+    orig_fn = lib.litert_lm_experimental_engine_settings_set_kv_cache_type
+    mock_set_kv_cache_type = self.enter_context(
+        mock.patch.object(
+            lib,
+            "litert_lm_experimental_engine_settings_set_kv_cache_type",
+            autospec=True,
+            side_effect=orig_fn,
+        )
+    )
+
+    benchmark_default = litert_lm.Benchmark(
+        self.model_path,
+        litert_lm.Backend.CPU(),
+        prefill_tokens=10,
+        decode_tokens=10,
+        cache_dir=":nocache",
+    )
+    benchmark_default.run()
+    mock_set_kv_cache_type.assert_not_called()
+
+    for value in (
+        litert_lm.KvCacheType.DEFAULT,
+        litert_lm.KvCacheType.INT8,
+    ):
+      mock_set_kv_cache_type.reset_mock()
+      benchmark = litert_lm.Benchmark(
+          self.model_path,
+          litert_lm.Backend.CPU(),
+          prefill_tokens=10,
+          decode_tokens=10,
+          cache_dir=":nocache",
+          kv_cache_type=value,
+      )
+      benchmark.run()
+      mock_set_kv_cache_type.assert_called_once_with(mock.ANY, value.value)
 
   def test_benchmark_class_with_enable_speculative_decoding(self):
     lib = litert_lm._ffi._get_lib()

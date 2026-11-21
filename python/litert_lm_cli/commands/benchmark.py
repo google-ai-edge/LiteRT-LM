@@ -47,6 +47,8 @@ def run_benchmark(
     cpu_thread_count: int | None = None,
     activation_data_type: litert_lm.ActivationDataType | None = None,
     ringbuffers_local_attention: bool | None = None,
+    head_chunked_attention_mib: int | None = None,
+    kv_cache_type: litert_lm.KvCacheType | str | None = None,
     gpu_decode_steps_per_sync: int | None = None,
     enable_ynnpack: bool | None = None,
     runs: int = 1,
@@ -85,6 +87,9 @@ def run_benchmark(
     enable_ynnpack = model.resolve_config_option(
         enable_ynnpack, model_obj, "enable_ynnpack"
     )
+    head_chunked_attention_mib = model.resolve_config_option(
+        head_chunked_attention_mib, model_obj, "head_chunked_attention_mib"
+    )
 
     backend_val = model.parse_backend(
         backend,
@@ -93,6 +98,12 @@ def run_benchmark(
         gpu_decode_steps_per_sync=gpu_decode_steps_per_sync,
     )
     assert backend_val is not None
+    kv_cache_type_val = model.resolve_kv_cache_type(
+        kv_cache_type,
+        model_obj,
+        backend_val,
+        is_android=is_android,
+    )
     cache_dir_val = common.cache_dir_value_from_cache_mode(cache)
 
     # For CLI benchmarking, we default to enabling ringbuffers when they are
@@ -122,6 +133,8 @@ def run_benchmark(
           max_num_tokens=max_num_tokens,
           activation_data_type=activation_data_type_val,
           use_ringbuffers_local_attention=ringbuffers_local_attention,
+          head_chunked_attention_mib=head_chunked_attention_mib,
+          kv_cache_type=kv_cache_type_val,
           enable_ynnpack=enable_ynnpack,
       )
 
@@ -255,6 +268,8 @@ def benchmark(
     cpu_thread_count: int | None = None,
     activation_data_type: str | None = None,
     ringbuffers_local_attention: bool | None = None,
+    head_chunked_attention_mib: int | None = None,
+    kv_cache_type: litert_lm.KvCacheType | str | None = None,
     gpu_decode_steps_per_sync: int | None = None,
     enable_ynnpack: bool | None = None,
     runs: int = 1,
@@ -281,6 +296,10 @@ def benchmark(
     activation_data_type: The activation data type to use for inference.
     ringbuffers_local_attention: Whether to use ringbuffers for local attention
       KV cache to minimize memory usage.
+    head_chunked_attention_mib: Target size in MiB for splitting prefill
+      attention scores across query-head chunks on supported GPU models.
+    kv_cache_type: KV cache quantization type ('DEFAULT' or 'INT8') for
+      supported Artisan GPU models.
     gpu_decode_steps_per_sync: The number of decode steps per sync for GPU
       backend. Only applied to supported GPU models. Otherwise, ignored.
     enable_ynnpack: Whether to delegate supported CPU operations to YNNPACK
@@ -330,6 +349,8 @@ def benchmark(
           else None
       ),
       ringbuffers_local_attention=ringbuffers_local_attention,
+      head_chunked_attention_mib=head_chunked_attention_mib,
+      kv_cache_type=kv_cache_type,
       gpu_decode_steps_per_sync=gpu_decode_steps_per_sync,
       enable_ynnpack=enable_ynnpack,
       runs=runs,

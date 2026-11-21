@@ -145,6 +145,21 @@ class ActivationDataType(enum.IntEnum):
     return mapping.get(val.lower())
 
 
+class KvCacheType(enum.IntEnum):
+  """Experimental KV cache quantization type for inference."""
+
+  DEFAULT = 0
+  INT8 = 1
+
+  @classmethod
+  def from_str(cls, val: str) -> KvCacheType | None:
+    mapping = {
+        "default": cls.DEFAULT,
+        "int8": cls.INT8,
+    }
+    return mapping.get(val.lower())
+
+
 class LiteRtLmConstraintType(enum.IntEnum):
   NONE = 0
   REGEX = 1
@@ -1204,6 +1219,20 @@ def _setup_lib_signatures(lib):
   lib.litert_lm_experimental_engine_settings_set_enable_debugger.argtypes = [
       ctypes.c_void_p,
       ctypes.c_bool,
+  ]
+  lib.litert_lm_experimental_engine_settings_set_head_chunked_attention_mib.restype = (
+      ctypes.c_int
+  )
+  lib.litert_lm_experimental_engine_settings_set_head_chunked_attention_mib.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int32,
+  ]
+  lib.litert_lm_experimental_engine_settings_set_kv_cache_type.restype = (
+      ctypes.c_int
+  )
+  lib.litert_lm_experimental_engine_settings_set_kv_cache_type.argtypes = [
+      ctypes.c_void_p,
+      ctypes.c_int,
   ]
   lib.litert_lm_experimental_session_get_debug_info.restype = ctypes.c_int
   lib.litert_lm_experimental_session_get_debug_info.argtypes = [

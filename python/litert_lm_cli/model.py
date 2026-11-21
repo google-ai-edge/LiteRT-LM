@@ -452,6 +452,64 @@ def resolve_ringbuffers_local_attention(
   return None
 
 
+def resolve_kv_cache_type(
+    value: litert_lm.KvCacheType | str | None,
+    model_obj: Model | None,
+    backend_val: litert_lm.Backend | None,
+    *,
+    is_android: bool = False,
+) -> litert_lm.KvCacheType | None:
+  """Resolves kv_cache_type from CLI/config and warns if INT8 is unsupported.
+
+  Args:
+    value: Explicit value passed by CLI/user (if any).
+    model_obj: Model instance (if available).
+    backend_val: Resolved main backend instance.
+    is_android: Whether execution targets Android via ADB.
+
+  Returns:
+    The resolved `litert_lm.KvCacheType`, falling back to `KvCacheType.DEFAULT`
+    with a warning if `KvCacheType.INT8` was selected on a non-Artisan-GPU
+    model, or None if unset.
+
+  Raises:
+    ValueError: If `value` or the configured `kv_cache_type` is invalid.
+  """
+  raw_opt = resolve_config_option(value, model_obj, "kv_cache_type")
+  if raw_opt is None:
+    return None
+  if isinstance(raw_opt, litert_lm.KvCacheType):
+    resolved = raw_opt
+  elif isinstance(raw_opt, str):
+    resolved = litert_lm.KvCacheType.from_str(raw_opt)
+    if resolved is None:
+      raise ValueError(
+          f"Invalid kv_cache_type: {raw_opt!r}. Expected 'DEFAULT' or 'INT8'."
+      )
+  else:
+    raise ValueError(
+        f"Invalid kv_cache_type: {raw_opt!r}. Expected 'DEFAULT' or 'INT8'."
+    )
+
+  if resolved == litert_lm.KvCacheType.INT8 and (
+      is_android
+      or not isinstance(backend_val, litert_lm.Backend.GPU)
+      or model_obj is None
+      or not is_gpu_artisan_model(model_obj.model_path)
+  ):
+    click.echo(
+        click.style(
+            "Warning: INT8 KV cache is not supported for this model;"
+            " continuing with default KV cache.",
+            fg="yellow",
+        ),
+        err=True,
+    )
+    return litert_lm.KvCacheType.DEFAULT
+
+  return resolved
+
+
 @dataclasses.dataclass
 class Model:
   """Represents a LiteRT-LM model.

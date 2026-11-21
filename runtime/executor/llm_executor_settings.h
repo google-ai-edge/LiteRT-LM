@@ -41,6 +41,13 @@
 
 namespace litert::lm {
 
+// KV cache quantization type on global attention layers for supported models.
+enum class KvCacheType {
+  DEFAULT = 0,
+  INT8 = 1,
+};
+std::ostream& operator<<(std::ostream& os, const KvCacheType& kv_cache_type);
+
 struct GpuArtisanConfig {
   // Number of output candidates.
   uint32_t num_output_candidates = 1;
@@ -107,6 +114,16 @@ struct GpuArtisanConfig {
   // local attention. Prevents instantaneous rewinding, but saves a lot of
   // memory, especially for large models.
   bool use_autosized_ringbuffers = false;
+
+  // Target size in MiB for splitting multi-token GQA prefill attention scores
+  // across query-head chunks to reduce peak intermediate score buffer size.
+  // Negative values disable chunking, 0 uses the default target (768 MiB), and
+  // positive values specify the per-chunk target size in MiB.
+  int32_t head_chunked_attention_mib = -1;
+
+  // KV cache quantization type on global attention layers for supported models
+  // when static range quantization is not used.
+  KvCacheType kv_cache_type = KvCacheType::DEFAULT;
 
   // Number of draft tokens for speculative decoding.
   // 0 selects automatic default gamma (2).

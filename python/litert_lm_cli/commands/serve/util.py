@@ -276,6 +276,10 @@ def get_or_initialize_server_engine(
       if activation_data_type_str
       else None
   )
+  head_chunked_attention_mib = model.resolve_config_option(
+      None, m, "head_chunked_attention_mib"
+  )
+  kv_cache_type = model.resolve_kv_cache_type(None, m, resolved_backend)
 
   click.echo(
       click.style(f"Initializing engine for model: {m.model_path}", fg="cyan")
@@ -293,6 +297,8 @@ def get_or_initialize_server_engine(
       activation_data_type=activation_data_type,
       enable_benchmark=True,
       use_ringbuffers_local_attention=True,
+      head_chunked_attention_mib=head_chunked_attention_mib,
+      kv_cache_type=kv_cache_type,
   )
   engine.__enter__()
   server.litert_lm_engine = engine

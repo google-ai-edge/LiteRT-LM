@@ -24,6 +24,7 @@
 #include "c/embedding_engine.h"
 #include "c/engine.h"
 #include "c/error_reporter.h"
+#include "c/experimental.h"
 #include "c/model_info.h"
 
 LiteRtLmStatusCode c_abi_test_set_min_log_level(int raw_level) {
@@ -53,6 +54,13 @@ LiteRtLmStatusCode c_abi_test_engine_settings_set_activation_data_type(
     LiteRtLmEngineSettings* settings, int raw_type) {
   return litert_lm_engine_settings_set_activation_data_type(
       settings, (LiteRtLmActivationDataType)raw_type);
+}
+
+LiteRtLmStatusCode
+c_abi_test_experimental_engine_settings_set_kv_cache_type(
+    LiteRtLmEngineSettings* settings, int raw_type) {
+  return litert_lm_experimental_engine_settings_set_kv_cache_type(
+      settings, (LiteRtLmKvCacheType)raw_type);
 }
 
 LiteRtLmStatusCode c_abi_test_conversation_optional_args_set_constraint(

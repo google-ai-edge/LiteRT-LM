@@ -179,6 +179,16 @@ TEST(LlmExecutorConfigTest, ModelAssets) {
   EXPECT_EQ(oss.str(), expected_output);
 }
 
+TEST(LlmExecutorConfigTest, KvCacheType) {
+  std::stringstream oss;
+  oss << KvCacheType::DEFAULT;
+  EXPECT_EQ(oss.str(), "DEFAULT");
+
+  oss.str("");
+  oss << KvCacheType::INT8;
+  EXPECT_EQ(oss.str(), "INT8");
+}
+
 GpuArtisanConfig CreateGpuArtisanConfig() {
   GpuArtisanConfig config;
   config.num_output_candidates = 1;
@@ -189,12 +199,16 @@ GpuArtisanConfig CreateGpuArtisanConfig() {
   config.max_top_k = 40;
   config.enable_decode_logits = true;
   config.use_submodel = true;
+  config.head_chunked_attention_mib = 512;
+  config.kv_cache_type = KvCacheType::INT8;
   config.num_draft_tokens = 2;
   return config;
 }
 
 TEST(LlmExecutorConfigTest, GpuArtisanConfig) {
   GpuArtisanConfig default_config;
+  EXPECT_EQ(default_config.head_chunked_attention_mib, -1);
+  EXPECT_EQ(default_config.kv_cache_type, KvCacheType::DEFAULT);
   EXPECT_EQ(default_config.num_draft_tokens, 0);
 
   GpuArtisanConfig config = CreateGpuArtisanConfig();
@@ -214,6 +228,8 @@ use_submodel: 1
                    kExpectedPreferTextureWeightsString, R"(
 set_enable_host_mapped_pointer: 1
 disallow_8bit_convs: 1
+head_chunked_attention_mib: 512
+kv_cache_type: INT8
 num_draft_tokens: 2
 )");
   EXPECT_EQ(oss.str(), expected_output);
@@ -249,6 +265,8 @@ use_submodel: 1
       kExpectedPreferTextureWeightsString, R"(
 set_enable_host_mapped_pointer: 1
 disallow_8bit_convs: 1
+head_chunked_attention_mib: 512
+kv_cache_type: INT8
 num_draft_tokens: 2
 
 max_tokens: 1024
@@ -328,6 +346,8 @@ use_submodel: 1
       kExpectedPreferTextureWeightsString, R"(
 set_enable_host_mapped_pointer: 1
 disallow_8bit_convs: 1
+head_chunked_attention_mib: 512
+kv_cache_type: INT8
 num_draft_tokens: 2
 
 max_tokens: 1024

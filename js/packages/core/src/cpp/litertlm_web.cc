@@ -358,6 +358,10 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
       .value("INT8", litert::lm::ActivationDataType::INT8);
   emscripten::register_optional<litert::lm::ActivationDataType>();
 
+  emscripten::enum_<litert::lm::KvCacheType>("KvCacheType")
+      .value("DEFAULT", litert::lm::KvCacheType::DEFAULT)
+      .value("INT8", litert::lm::KvCacheType::INT8);
+
   emscripten::class_<litert::lm::ModelAssets>("ModelAssets")
       .class_function(
           "createStreaming",
@@ -513,7 +517,10 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
              &litert::lm::GpuArtisanConfig::enable_external_embeddings)
       .field("use_submodel", &litert::lm::GpuArtisanConfig::use_submodel)
       .field("use_autosized_ringbuffers",
-             &litert::lm::GpuArtisanConfig::use_autosized_ringbuffers);
+             &litert::lm::GpuArtisanConfig::use_autosized_ringbuffers)
+      .field("head_chunked_attention_mib",
+             &litert::lm::GpuArtisanConfig::head_chunked_attention_mib)
+      .field("kv_cache_type", &litert::lm::GpuArtisanConfig::kv_cache_type);
 
   emscripten::value_object<litert::lm::AdvancedSettings>("AdvancedSettings")
       .field("prefill_batch_sizes", &getPrefills, &setPrefills)

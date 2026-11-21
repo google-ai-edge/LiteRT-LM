@@ -32,6 +32,7 @@ import warnings
 from ._ffi import ActivationDataType
 from ._ffi import create_optional_checked
 from ._ffi import get_checked
+from ._ffi import KvCacheType
 from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import SpeculativeDecodingMode
 from ._messages import Contents
@@ -458,6 +459,17 @@ class AbstractEngine(abc.ABC):
         attention KV cache on supported models to minimize memory usage. When
         disabled, memory is allocated for the full context length, enabling
         instant rewinding at higher memory cost.
+      head_chunked_attention_mib: Experimental. Target size in MiB for splitting
+        multi-token GQA prefill attention scores across query-head chunks on
+        supported GPU models. Negative values disable chunking, 0 uses the
+        default target (768 MiB), and positive values set the target size in
+        MiB. If None, use the native engine's default.
+      kv_cache_type: Experimental. KV cache quantization type
+        (`KvCacheType.DEFAULT` or `KvCacheType.INT8`) on global attention layers
+        for supported Artisan GPU models when static range quantization is not
+        used. If `KvCacheType.INT8` is chosen for a non-Artisan-GPU model, a
+        warning is logged and execution continues with the default KV cache. If
+        None, use the native engine's default.
       enable_ynnpack: Whether YNNPACK should delegate supported operations
         before XNNPACK. If None, use the native engine's default.
       max_vision_tokens_per_image: Maximum number of vision tokens per image.
@@ -488,6 +500,8 @@ class AbstractEngine(abc.ABC):
   lora_rank_config: LoraRankConfig | None = None
   activation_data_type: ActivationDataType | None = None
   use_ringbuffers_local_attention: bool | None = None
+  head_chunked_attention_mib: int | None = None
+  kv_cache_type: KvCacheType | None = None
   enable_ynnpack: bool | None = None
   max_vision_tokens_per_image: int | None = None
   selected_signatures: collections.abc.Sequence[str] | None = None
@@ -996,6 +1010,17 @@ class AbstractBenchmark(abc.ABC):
         attention KV cache on supported models to minimize memory usage. When
         disabled, memory is allocated for the full context length, enabling
         instant rewinding at higher memory cost.
+      head_chunked_attention_mib: Experimental. Target size in MiB for splitting
+        multi-token GQA prefill attention scores across query-head chunks on
+        supported GPU models. Negative values disable chunking, 0 uses the
+        default target (768 MiB), and positive values set the target size in
+        MiB. If None, use the native engine's default.
+      kv_cache_type: Experimental. KV cache quantization type
+        (`KvCacheType.DEFAULT` or `KvCacheType.INT8`) on global attention layers
+        for supported Artisan GPU models when static range quantization is not
+        used. If `KvCacheType.INT8` is chosen for a non-Artisan-GPU model, a
+        warning is logged and execution continues with the default KV cache. If
+        None, use the native engine's default.
       enable_ynnpack: Whether YNNPACK should delegate supported operations
         before XNNPACK. If None, use the native engine's default.
   """
@@ -1011,6 +1036,8 @@ class AbstractBenchmark(abc.ABC):
   prompt: str = "How are you"
   activation_data_type: ActivationDataType | None = None
   use_ringbuffers_local_attention: bool | None = None
+  head_chunked_attention_mib: int | None = None
+  kv_cache_type: KvCacheType | None = None
   enable_ynnpack: bool | None = None
 
   def __enter__(self) -> AbstractBenchmark:

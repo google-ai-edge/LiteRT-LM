@@ -167,6 +167,20 @@ class Benchmark(interfaces.AbstractBenchmark):
               settings,
               self.use_ringbuffers_local_attention,
           )
+        if self.head_chunked_attention_mib is not None:
+          call_checked(
+              lib,
+              "litert_lm_experimental_engine_settings_set_head_chunked_attention_mib",
+              settings,
+              self.head_chunked_attention_mib,
+          )
+        if self.kv_cache_type is not None:
+          call_checked(
+              lib,
+              "litert_lm_experimental_engine_settings_set_kv_cache_type",
+              settings,
+              self.kv_cache_type.value,
+          )
         if self.enable_ynnpack is not None:
           call_checked(
               lib,

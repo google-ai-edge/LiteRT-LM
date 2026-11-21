@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {ActivationDataType, Backend, fillWasmEngineSettingsFromEngineSettings, LiteRtLm, loadLiteRtLm, SpeculativeDecodingMode, unloadLiteRtLm, type Wasm, wasmEngineSettingsToEngineSettings} from '@litert-lm/core';
+import {ActivationDataType, Backend, fillWasmEngineSettingsFromEngineSettings, type GpuArtisanConfig, KvCacheType, LiteRtLm, loadLiteRtLm, SpeculativeDecodingMode, unloadLiteRtLm, type Wasm, wasmEngineSettingsToEngineSettings} from '@litert-lm/core';
 // Placeholder for internal dependency on trusted resource url
 
 import {Cleanup} from './cleanup.js';
@@ -143,6 +143,8 @@ describe('EngineSettings', () => {
                max_top_k: undefined,
                use_autosized_ringbuffers: undefined,
                supported_lora_ranks: undefined,
+               head_chunked_attention_mib: undefined,
+               kv_cache_type: undefined,
              },
            });
 
@@ -157,6 +159,8 @@ describe('EngineSettings', () => {
          enable_external_embeddings: false,
          use_submodel: false,
          use_autosized_ringbuffers: false,
+         head_chunked_attention_mib: -1,
+         kv_cache_type: KvCacheType.DEFAULT,
        });
        expect(omittedBackendConfig).toEqual(omittedMain);
        expect(emptyBackendConfig).toEqual(omittedMain);
@@ -214,6 +218,101 @@ describe('EngineSettings', () => {
                  Backend.GPU_ARTISAN, throwingWasm))
              .toThrow(allocError);
        } finally {
+         wasmSettings.delete();
+       }
+     });
+
+  it('round-trips head_chunked_attention_mib on GPU_ARTISAN', async () => {
+    for (const value of [-1, 0, 512]) {
+      const wasmSettings = unwrapWasmResult(
+          await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+              modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU_ARTISAN));
+      fillWasmEngineSettingsFromEngineSettings(
+          wasmSettings, {
+            model: '/path/to/model',
+            backend: Backend.GPU_ARTISAN,
+            mainExecutorSettings: {
+              backendConfig: {head_chunked_attention_mib: value},
+            },
+          },
+          Backend.GPU_ARTISAN, liteRtLm.liteRtLmWasm);
+      const gpuArtisanConfig =
+          wasmEngineSettingsToEngineSettings(wasmSettings)
+              .mainExecutorSettings.backendConfig as GpuArtisanConfig;
+      expect(gpuArtisanConfig.head_chunked_attention_mib).toBe(value);
+      wasmSettings.delete();
+    }
+  });
+
+  it('round-trips kv_cache_type on GPU_ARTISAN', async () => {
+    for (const value of [KvCacheType.INT8, KvCacheType.DEFAULT]) {
+      const wasmSettings = unwrapWasmResult(
+          await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+              modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU_ARTISAN));
+      fillWasmEngineSettingsFromEngineSettings(
+          wasmSettings, {
+            model: '/path/to/model',
+            backend: Backend.GPU_ARTISAN,
+            mainExecutorSettings: {
+              backendConfig: {kv_cache_type: value},
+            },
+          },
+          Backend.GPU_ARTISAN, liteRtLm.liteRtLmWasm);
+      const gpuArtisanConfig =
+          wasmEngineSettingsToEngineSettings(wasmSettings)
+              .mainExecutorSettings.backendConfig as GpuArtisanConfig;
+      expect(gpuArtisanConfig.kv_cache_type).toBe(value);
+      wasmSettings.delete();
+
+      const wasmTopLevel = unwrapWasmResult(
+          await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+              modelAssets, liteRtLm.liteRtLmWasm.Backend.GPU_ARTISAN));
+      fillWasmEngineSettingsFromEngineSettings(
+          wasmTopLevel, {
+            model: '/path/to/model',
+            backend: Backend.GPU_ARTISAN,
+            kvCacheType: value,
+          },
+          Backend.GPU_ARTISAN, liteRtLm.liteRtLmWasm);
+      const topLevelConfig =
+          wasmEngineSettingsToEngineSettings(wasmTopLevel)
+              .mainExecutorSettings.backendConfig as GpuArtisanConfig;
+      expect(topLevelConfig.kv_cache_type).toBe(value);
+      wasmTopLevel.delete();
+    }
+  });
+
+  it('warns and continues when KvCacheType.INT8 is selected on non-Artisan backends',
+     async () => {
+       const warnSpy = spyOn(console, 'warn');
+       for (const [wasmBackend, backend] of [
+                [liteRtLm.liteRtLmWasm.Backend.CPU, Backend.CPU],
+                [liteRtLm.liteRtLmWasm.Backend.GPU, Backend.GPU],
+       ] as const) {
+         const wasmSettings = unwrapWasmResult(
+             await liteRtLm.liteRtLmWasm.EngineSettings.createDefault(
+                 modelAssets, wasmBackend));
+         warnSpy.calls.reset();
+         fillWasmEngineSettingsFromEngineSettings(
+             wasmSettings, {
+               model: '/path/to/model',
+               backend,
+               kvCacheType: KvCacheType.INT8,
+             },
+             backend, liteRtLm.liteRtLmWasm);
+         expect(warnSpy).toHaveBeenCalledTimes(1);
+         expect(warnSpy.calls.mostRecent().args[0])
+             .toContain('INT8 KV cache is not supported for this model');
+
+         warnSpy.calls.reset();
+         fillWasmEngineSettingsFromEngineSettings(
+             wasmSettings, {
+               model: '/path/to/model',
+               backend,
+               kvCacheType: KvCacheType.DEFAULT,
+             },
+             backend, liteRtLm.liteRtLmWasm);
+         expect(warnSpy).not.toHaveBeenCalled();
          wasmSettings.delete();
        }
      });

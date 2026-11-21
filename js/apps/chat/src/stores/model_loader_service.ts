@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {ActivationDataType, Backend, Engine, type EngineSettings, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, type ModelInput, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
+import {ActivationDataType, Backend, Engine, type EngineSettings, getOrLoadGlobalLiteRtLm, GpuArtisanConfig, KvCacheType, type ModelInput, resolveModel, SpeculativeDecodingMode} from '@litert-lm/core';
 
 import {teeStream} from '../tee_stream.js';
 
@@ -101,6 +101,8 @@ export const CORE_GPU_ARTISAN_DEFAULTS: Readonly<GpuArtisanConfig> = {
   enable_external_embeddings: false,
   use_submodel: false,
   use_autosized_ringbuffers: false,
+  head_chunked_attention_mib: -1,
+  kv_cache_type: KvCacheType.DEFAULT,
 };
 
 type EngineOptionsInput = ModelSettings&ModelLists;

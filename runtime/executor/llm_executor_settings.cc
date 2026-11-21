@@ -62,6 +62,16 @@ bool LegacyEnableSpeculativeDecoding(const AdvancedSettings& settings) {
 
 }  // namespace
 
+std::ostream& operator<<(std::ostream& os, const KvCacheType& kv_cache_type) {
+  switch (kv_cache_type) {
+    case KvCacheType::DEFAULT:
+      return os << "DEFAULT";
+    case KvCacheType::INT8:
+      return os << "INT8";
+  }
+  return os << "UNKNOWN";
+}
+
 std::ostream& operator<<(std::ostream& os, const GpuArtisanConfig& config) {
   os << "num_output_candidates: " << config.num_output_candidates << "\n";
   os << "wait_for_weight_uploads: " << config.wait_for_weight_uploads << "\n";
@@ -78,6 +88,9 @@ std::ostream& operator<<(std::ostream& os, const GpuArtisanConfig& config) {
   os << "set_enable_host_mapped_pointer: "
      << config.set_enable_host_mapped_pointer << "\n";
   os << "disallow_8bit_convs: " << config.disallow_8bit_convs << "\n";
+  os << "head_chunked_attention_mib: " << config.head_chunked_attention_mib
+     << "\n";
+  os << "kv_cache_type: " << config.kv_cache_type << "\n";
   os << "num_draft_tokens: " << config.num_draft_tokens << "\n";
   return os;
 }

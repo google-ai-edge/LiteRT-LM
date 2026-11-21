@@ -323,6 +323,191 @@ class MainTest(absltest.TestCase):
     self.assertNotEqual(result.exit_code, 0)
     self.assertIn("Invalid value for '--activation-data-type'", result.output)
 
+  def _setup_mock_model(self, *, is_gpu_artisan: bool = True) -> None:
+    mock_from_model_ref = self.enter_context(
+        unittest.mock.patch.object(
+            run_cmd.model.Model, "from_model_reference", autospec=True
+        )
+    )
+    mock_model = unittest.mock.create_autospec(
+        run_cmd.model.Model,
+        instance=True,
+        model_id="my-model",
+        model_path="/path/to/my-model/model.litertlm",
+    )
+    mock_model.exists.return_value = True
+    mock_from_model_ref.return_value = mock_model
+    self.enter_context(
+        unittest.mock.patch.object(
+            run_cmd.model,
+            "is_gpu_artisan_model",
+            autospec=True,
+            return_value=is_gpu_artisan,
+        )
+    )
+    self.addCleanup(common.config._clear_cache)  # pylint: disable=protected-access
+
+  def test_run_gpu_artisan_flags_and_config_forwarding(self):
+    self._setup_mock_model(is_gpu_artisan=True)
+    mock_engine_cls = self.enter_context(
+        unittest.mock.patch.object(litert_lm, "Engine", autospec=True)
+    )
+    mock_engine = mock_engine_cls.return_value
+    mock_engine.__enter__.return_value = mock_engine
+
+    cfg_json = (
+        '{"models": {"my-model": {"head_chunked_attention_mib": 512,'
+        ' "kv_cache_type": "INT8"}}}'
+    )
+    runner = testing.CliRunner()
+    with runner.isolated_filesystem():
+      with open("cfg.json", "w", encoding="utf-8") as f:
+        f.write(cfg_json)
+
+      for extra_flags, expected_mib, expected_kv_cache_type in (
+          ([], 512, litert_lm.KvCacheType.INT8),
+          (
+              ["--head-chunked-attention-mib=0", "--kv-cache-type=DEFAULT"],
+              0,
+              litert_lm.KvCacheType.DEFAULT,
+          ),
+      ):
+        with self.subTest(extra_flags=extra_flags):
+          mock_engine_cls.reset_mock()
+          common.config._clear_cache()  # pylint: disable=protected-access
+          args = [
+              "run",
+              "my-model",
+              "--config=cfg.json",
+              "--backend=gpu",
+              "--prompt=hi",
+              *extra_flags,
+          ]
+          result = runner.invoke(main.cli, args)
+          self.assertEqual(result.exit_code, 0, result.output)
+          self.assertNotIn(
+              "INT8 KV cache is not supported for this model", result.output
+          )
+          mock_engine_cls.assert_called_once()
+          engine_kwargs = mock_engine_cls.call_args.kwargs
+          self.assertEqual(
+              engine_kwargs["head_chunked_attention_mib"], expected_mib
+          )
+          self.assertEqual(
+              engine_kwargs["kv_cache_type"], expected_kv_cache_type
+          )
+
+  def test_benchmark_gpu_artisan_flags_and_config_forwarding(self):
+    self._setup_mock_model(is_gpu_artisan=True)
+    mock_benchmark_cls = self.enter_context(
+        unittest.mock.patch.object(litert_lm, "Benchmark", autospec=True)
+    )
+    mock_benchmark = mock_benchmark_cls.return_value
+    mock_benchmark.__enter__.return_value = mock_benchmark
+    mock_benchmark.run.return_value = litert_lm.interfaces.BenchmarkInfo(
+        init_time_in_second=0.1,
+        time_to_first_token_in_second=0.05,
+        last_prefill_token_count=10,
+        last_prefill_tokens_per_second=100.0,
+        last_decode_token_count=10,
+        last_decode_tokens_per_second=50.0,
+    )
+
+    cfg_json = (
+        '{"models": {"my-model": {"head_chunked_attention_mib": 256,'
+        ' "kv_cache_type": "INT8"}}}'
+    )
+    runner = testing.CliRunner()
+    with runner.isolated_filesystem():
+      with open("cfg.json", "w", encoding="utf-8") as f:
+        f.write(cfg_json)
+
+      for extra_flags, expected_mib, expected_kv_cache_type in (
+          ([], 256, litert_lm.KvCacheType.INT8),
+          (
+              [
+                  "--head-chunked-attention-mib=-1",
+                  "--kv-cache-type=default",
+              ],
+              -1,
+              litert_lm.KvCacheType.DEFAULT,
+          ),
+      ):
+        with self.subTest(extra_flags=extra_flags):
+          mock_benchmark_cls.reset_mock()
+          common.config._clear_cache()  # pylint: disable=protected-access
+          args = [
+              "benchmark",
+              "my-model",
+              "--config=cfg.json",
+              "--backend=gpu",
+              "--skip-warmup",
+              *extra_flags,
+          ]
+          result = runner.invoke(main.cli, args)
+          self.assertEqual(result.exit_code, 0, result.output)
+          self.assertNotIn(
+              "INT8 KV cache is not supported for this model", result.output
+          )
+          mock_benchmark_cls.assert_called_once()
+          benchmark_kwargs = mock_benchmark_cls.call_args.kwargs
+          self.assertEqual(
+              benchmark_kwargs["head_chunked_attention_mib"], expected_mib
+          )
+          self.assertEqual(
+              benchmark_kwargs["kv_cache_type"], expected_kv_cache_type
+          )
+
+  def test_kv_cache_type_int8_warns_and_continues_on_non_artisan_model(self):
+    self._setup_mock_model(is_gpu_artisan=False)
+    mock_engine_cls = self.enter_context(
+        unittest.mock.patch.object(litert_lm, "Engine", autospec=True)
+    )
+    mock_engine = mock_engine_cls.return_value
+    mock_engine.__enter__.return_value = mock_engine
+
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        main.cli,
+        [
+            "run",
+            "my-model",
+            "--backend=gpu",
+            "--kv-cache-type=INT8",
+            "--prompt=hi",
+        ],
+    )
+    self.assertEqual(result.exit_code, 0, result.output)
+    self.assertIn(
+        "Warning: INT8 KV cache is not supported for this model; continuing"
+        " with default KV cache.",
+        result.output,
+    )
+    mock_engine_cls.assert_called_once()
+    self.assertEqual(
+        mock_engine_cls.call_args.kwargs["kv_cache_type"],
+        litert_lm.KvCacheType.DEFAULT,
+    )
+
+  def test_gpu_artisan_flags_invalid_values(self):
+    runner = testing.CliRunner()
+    for subcmd in ("run", "benchmark"):
+      result_mib = runner.invoke(
+          main.cli,
+          [subcmd, "my-model", "--head-chunked-attention-mib", "not_an_int"],
+      )
+      self.assertNotEqual(result_mib.exit_code, 0)
+      self.assertIn(
+          "Invalid value for '--head-chunked-attention-mib'", result_mib.output
+      )
+
+      result_kv = runner.invoke(
+          main.cli,
+          [subcmd, "my-model", "--kv-cache-type=maybe"],
+      )
+      self.assertNotEqual(result_kv.exit_code, 0)
+      self.assertIn("Invalid value for '--kv-cache-type'", result_kv.output)
+
   def test_run_thinking_budget_flag(self):
     with unittest.mock.patch(
         "litert_lm_cli.model.Model.from_model_reference",

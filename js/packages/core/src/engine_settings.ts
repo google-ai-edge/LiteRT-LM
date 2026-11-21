@@ -18,19 +18,21 @@ import {getGlobalLiteRtLm} from './global_litertlm.js';
 import {ModelInput} from './model_input.js';
 import {SpeculativeDecodingConfig, speculativeDecodingConfigToWasm, wasmSpeculativeDecodingConfigToConfig} from './speculative_decoding_config.js';
 import {RecursiveRequired} from './types.js';
-import {ActivationDataType, type AdvancedSettings, Backend, type CpuConfig, EngineSettings as WasmEngineSettings, GpuArtisanConfig as WasmGpuArtisanConfig, type GpuConfig, unwrapWasmResult} from './wasm_binding_types.js';
+import {ActivationDataType, type AdvancedSettings, Backend, type CpuConfig, EngineSettings as WasmEngineSettings, GpuArtisanConfig as WasmGpuArtisanConfig, type GpuConfig, KvCacheType, unwrapWasmResult} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray, fillEmscriptenVector} from './wasm_utils.js';
 
 // Re-export these types since they're already compatible with JS.
-export {ActivationDataType, AdvancedSettings, CpuConfig, GpuConfig};
+export {ActivationDataType, AdvancedSettings, CpuConfig, GpuConfig, KvCacheType};
 
 /**
  * LiteRT-LM GpuArtisanConfig
  */
 export interface GpuArtisanConfig extends
-    Omit<WasmGpuArtisanConfig, 'supported_lora_ranks'> {
-  // We replace the EmscriptenVector with a plain array for better JS interop.
+    Omit<WasmGpuArtisanConfig, 'supported_lora_ranks'|'kv_cache_type'> {
+  // We replace the EmscriptenVector and EmscriptenEnumElement with plain JS
+  // types for better JS interop.
   supported_lora_ranks: number[];
+  kv_cache_type: KvCacheType;
 }
 
 /**
@@ -72,6 +74,13 @@ export interface EngineSettings {
    * `Backend.CPU`.
    */
   activationDataType?: ActivationDataType;
+  /**
+   * Experimental. KV cache quantization type (`KvCacheType.DEFAULT` or
+   * `KvCacheType.INT8`) for global attention layers on supported Artisan GPU
+   * models. If `KvCacheType.INT8` is chosen for a non-Artisan-GPU model, a
+   * warning is logged and execution continues with the default KV cache.
+   */
+  kvCacheType?: KvCacheType;
   /**
    * Backend for the vision encoder. Can be `Backend.CPU` or `Backend.GPU`.
    * If unset, vision input is disabled.
@@ -134,9 +143,10 @@ export interface EngineSettings {
 }
 
 type OptionalEngineSettingsKeys =
-    'activationDataType'|'visionBackend'|'visionActivationDataType'|
-    'maxVisionTokensPerImage'|'minVisionTokensPerImage'|'audioBackend'|
-    'audioActivationDataType'|'speculativeDecodingConfig';
+    'activationDataType'|'kvCacheType'|'visionBackend'|
+    'visionActivationDataType'|'maxVisionTokensPerImage'|
+    'minVisionTokensPerImage'|'audioBackend'|'audioActivationDataType'|
+    'speculativeDecodingConfig';
 
 /**
  * EngineSettings with all defaults resolved. Fields that have no default
@@ -198,6 +208,17 @@ export function fillWasmEngineSettingsFromEngineSettings(
         engineSettings.minVisionTokensPerImage);
   }
 
+  const requestedKvCacheType = engineSettings.kvCacheType ??
+      (engineSettings.mainExecutorSettings?.backendConfig as
+           Partial<GpuArtisanConfig>|
+       undefined)
+          ?.kv_cache_type;
+  if (requestedKvCacheType === KvCacheType.INT8 &&
+      backend !== Backend.GPU_ARTISAN) {
+    console.warn(
+        'INT8 KV cache is not supported for this model; continuing with default KV cache.');
+  }
+
   if (engineSettings.mainExecutorSettings) {
     const mainExecutorSettings = engineSettings.mainExecutorSettings;
 
@@ -241,11 +262,17 @@ export function fillWasmEngineSettingsFromEngineSettings(
             fillEmscriptenVector(
                 partialGpuArtisanConfig.supported_lora_ranks, loraRanksVec);
           }
-          const {supported_lora_ranks: _, ...scalarOverrides} =
-              partialGpuArtisanConfig;
+          const {
+            supported_lora_ranks: _,
+            kv_cache_type: _kvCacheType,
+            ...scalarOverrides
+          } = partialGpuArtisanConfig;
           const wasmGpuArtisanConfig: WasmGpuArtisanConfig = {
             ...overlayDefined(baseGpuArtisanConfig, scalarOverrides),
             supported_lora_ranks: loraRanksVec,
+            ...(requestedKvCacheType !== undefined ?
+                    {kv_cache_type: {value: requestedKvCacheType}} :
+                    {}),
           };
           wasmExecutorSettings.setBackendConfigGpuArtisan(wasmGpuArtisanConfig);
         } finally {
@@ -261,6 +288,16 @@ export function fillWasmEngineSettingsFromEngineSettings(
       wasmExecutorSettings.setAdvancedSettings(
           overlayDefined(defaultAdv, mainExecutorSettings.advancedSettings));
     }
+  }
+
+  if (backend === Backend.GPU_ARTISAN &&
+      engineSettings.kvCacheType !== undefined &&
+      engineSettings.mainExecutorSettings?.backendConfig === undefined) {
+    const wasmGpuArtisanConfig =
+        unwrapWasmResult(wasmExecutorSettings.getBackendConfigGpuArtisan());
+    wasmGpuArtisanConfig.kv_cache_type = {value: engineSettings.kvCacheType};
+    wasmExecutorSettings.setBackendConfigGpuArtisan(wasmGpuArtisanConfig);
+    wasmGpuArtisanConfig.supported_lora_ranks.delete();
   }
 
   if (engineSettings.speculativeDecodingConfig !== undefined) {
@@ -309,6 +346,7 @@ export function wasmEngineSettingsToEngineSettings(
         ...wasmGpuArtisanConfig,
         supported_lora_ranks: consumeEmscriptenVectorToArray(
             wasmGpuArtisanConfig.supported_lora_ranks),
+        kv_cache_type: wasmGpuArtisanConfig.kv_cache_type.value,
       };
       backend = Backend.GPU_ARTISAN;
     }

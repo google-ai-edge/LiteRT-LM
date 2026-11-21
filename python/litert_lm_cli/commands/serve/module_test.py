@@ -77,6 +77,7 @@ mock_model_mod = mock.Mock(
         "Model",
         "parse_backend",
         "resolve_config_option",
+        "resolve_kv_cache_type",
         "speculative_decoding_config_from_mode",
     ]
 )
@@ -104,6 +105,7 @@ mock_model_mod.parse_backend = mock.Mock()
 mock_model_mod.resolve_config_option = mock.Mock(
     side_effect=lambda value, model_obj, config_key, label=None: value
 )
+mock_model_mod.resolve_kv_cache_type = mock.Mock(return_value=None)
 mock_model_mod.speculative_decoding_config_from_mode = mock.Mock(
     return_value=None
 )
@@ -149,6 +151,9 @@ class ServeTest(parameterized.TestCase):
     mock_model_mod.resolve_config_option.side_effect = (
         lambda value, model_obj, config_key, label=None: value
     )
+    mock_model_mod.resolve_kv_cache_type.reset_mock()
+    mock_model_mod.resolve_kv_cache_type.return_value = None
+    mock_model_mod.resolve_kv_cache_type.side_effect = None
 
   @parameterized.named_parameters(
       dict(
@@ -930,6 +935,74 @@ class ServeTest(parameterized.TestCase):
     self.assertEqual(
         kwargs.get("activation_data_type"),
         mock_litert_lm.ActivationDataType.FLOAT16,
+    )
+
+  def test_get_engine_head_chunked_attention_mib_from_config(self):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/gemma3-1b"
+    mock_m.model_id = "gemma3-1b"
+
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+    mock_model_mod.resolve_config_option.side_effect = (
+        lambda value, model_obj, config_key, label=None: (
+            512 if config_key == "head_chunked_attention_mib" else value
+        )
+    )
+
+    mock_engine_instance = mock.MagicMock(spec=interfaces.AbstractEngine)
+    mock_engine_instance.__enter__.return_value = mock_engine_instance
+    mock_litert_lm.Engine.return_value = mock_engine_instance
+
+    server = mock.MagicMock(spec=util.LiteRTLMServer)
+    server.litert_lm_engine = None
+    server.model_id = None
+    server.backend = None
+    server.max_num_tokens = None
+    server.vision_backend = None
+    server.audio_backend = None
+    server.activation_data_type = None
+
+    engine = util.get_or_initialize_server_engine(server, model_id="gemma3-1b")
+    self.assertEqual(engine, mock_engine_instance)
+    mock_litert_lm.Engine.assert_called_once()  # pyrefly: ignore[missing-attribute]
+    _, kwargs = mock_litert_lm.Engine.call_args  # pyrefly: ignore[missing-attribute]
+    self.assertEqual(kwargs.get("head_chunked_attention_mib"), 512)
+
+  def test_get_engine_kv_cache_type_from_config(self):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/gemma4-e2b"
+    mock_m.model_id = "gemma4-e2b"
+
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+    mock_model_mod.parse_backend.return_value = interfaces.Backend.GPU()
+    mock_model_mod.resolve_kv_cache_type.return_value = (
+        mock_litert_lm.KvCacheType.INT8
+    )
+
+    mock_engine_instance = mock.MagicMock(spec=interfaces.AbstractEngine)
+    mock_engine_instance.__enter__.return_value = mock_engine_instance
+    mock_litert_lm.Engine.return_value = mock_engine_instance
+
+    server = mock.MagicMock(spec=util.LiteRTLMServer)
+    server.litert_lm_engine = None
+    server.model_id = None
+    server.backend = None
+    server.max_num_tokens = None
+    server.vision_backend = None
+    server.audio_backend = None
+    server.activation_data_type = None
+
+    engine = util.get_or_initialize_server_engine(server, model_id="gemma4-e2b")
+    self.assertEqual(engine, mock_engine_instance)
+    mock_model_mod.resolve_kv_cache_type.assert_called_once_with(
+        None, mock_m, interfaces.Backend.GPU()
+    )
+    mock_litert_lm.Engine.assert_called_once()  # pyrefly: ignore[missing-attribute]
+    _, kwargs = mock_litert_lm.Engine.call_args  # pyrefly: ignore[missing-attribute]
+    self.assertEqual(
+        kwargs.get("kv_cache_type"), mock_litert_lm.KvCacheType.INT8
     )
 
   def test_normalize_embedding_input(self):

@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "absl/base/attributes.h"  // from @com_google_absl
+#include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "c/engine.h"
@@ -67,6 +68,29 @@ void SetExecutorCacheDirs(
     std::optional<VisionExecutorSettings>& vision_settings,
     std::optional<AudioExecutorSettings>& audio_settings,
     absl::string_view cache_dir);
+
+// Mutates `ConfigT` on `settings`'s main executor when `ConfigT` matches the
+// configured main backend, returning `kLiteRtLmStatusOk` as a no-op on other
+// backends and `kLiteRtLmStatusInvalidArgument` if `settings` is invalid.
+template <typename ConfigT, typename Fn>
+LiteRtLmStatusCode UpdateMainBackendConfig(LiteRtLmEngineSettings* settings,
+                                           absl::string_view setting_name,
+                                           Fn&& mutate) {
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
+  absl::StatusOr<ConfigT> config =
+      main_settings.MutableBackendConfig<ConfigT>();
+  if (!config.ok()) {
+    ABSL_LOG(WARNING) << "Failed to get backend config for " << setting_name
+                      << ": " << config.status();
+    return kLiteRtLmStatusOk;
+  }
+  mutate(*config);
+  main_settings.SetBackendConfig(*config);
+  return kLiteRtLmStatusOk;
+}
 
 // Invokes a C streaming callback with a single `LiteRtLmStreamChunk`.
 ABSL_ATTRIBUTE_NO_SANITIZE_CFI inline void EmitStreamChunk(

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import {type AdvancedSettings, Backend, type CpuConfig, type EngineSettings, type GpuArtisanConfig, type GpuConfig, SamplerType, type SessionConfig} from '@litert-lm/core';
+import {type AdvancedSettings, Backend, type CpuConfig, type EngineSettings, type GpuArtisanConfig, type GpuConfig, KvCacheType, SamplerType, type SessionConfig} from '@litert-lm/core';
 import {css, html, LitElement} from 'lit';
 import {customElement, property, state} from 'lit/decorators.js';
 
@@ -116,6 +116,8 @@ export class LitertLmSettingsEditor extends LitElement {
     enable_external_embeddings: false,
     use_submodel: false,
     use_autosized_ringbuffers: false,
+    head_chunked_attention_mib: -1,
+    kv_cache_type: KvCacheType.DEFAULT,
   };
 
   @state()
@@ -502,6 +504,29 @@ export class LitertLmSettingsEditor extends LitElement {
               this.gpuArtisanConfig.use_autosized_ringbuffers = val;
               this.requestUpdate();
             }, 'For low GPU memory with long contexts, use minimally sized ringbuffers for local attention. Prevents instantaneous rewinding, but saves a lot of memory, especially for large models.')}
+      ${
+        this.renderField(
+            'Head Chunked Attention (MiB)', config, loaded,
+            'head_chunked_attention_mib', 'number',
+            (val) => {
+              this.gpuArtisanConfig.head_chunked_attention_mib = val;
+              this.requestUpdate();
+            },
+            'Target size in MiB for splitting prefill attention scores across query-head chunks (-1 = off, 0 = 768 MiB default, > 0 = custom MiB).')}
+      <div class="config-field ${
+        isChanged(config, loaded, 'kv_cache_type') ? 'changed' : ''}"
+        title="KV cache quantization type on global attention layers when static range quantization is not used.">
+        <label>KV Cache Type</label>
+        <select .value=${config.kv_cache_type.toString()} @change=${
+        (e: Event) => {
+          this.gpuArtisanConfig.kv_cache_type =
+              Number((e.target as HTMLSelectElement).value) as KvCacheType;
+          this.requestUpdate();
+        }}>
+          <option value=${KvCacheType.DEFAULT}>DEFAULT</option>
+          <option value=${KvCacheType.INT8}>INT8</option>
+        </select>
+      </div>
     `;
   }
 

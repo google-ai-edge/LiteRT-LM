@@ -21,6 +21,7 @@ import warnings as _warnings
 
 from ._experimental_flags import ExperimentalFlags
 from ._ffi import ActivationDataType
+from ._ffi import KvCacheType
 from ._ffi import LiteRtLmBackendType
 from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import LiteRtLmModality
@@ -104,6 +105,7 @@ __all__ = (
     "Engine",
     "ExperimentalFlags",
     "InputOverflowStrategy",
+    "KvCacheType",
     "LiteRtLmBackendType",
     "LiteRtLmConstraintProviderType",
     "LiteRtLmModality",

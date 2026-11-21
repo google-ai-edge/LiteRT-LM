@@ -85,7 +85,9 @@ class ConfigTest(parameterized.TestCase):
         '{"default": {"audio_backend": "cpu", "vision_backend": "gpu",'
         ' "cache": "memory", "max_num_tokens": 1024, "temperature": 0.7,'
         ' "top_p": 0.9, "top_k": 40, "seed": 12345,'
-        ' "gpu_decode_steps_per_sync": 4, "speculative_decoding": true,'
+        ' "gpu_decode_steps_per_sync": 4, "head_chunked_attention_mib": 512,'
+        ' "kv_cache_type": "INT8",'
+        ' "speculative_decoding": true,'
         ' "thinking": true, "thinking_budget": 5, "activation_data_type":'
         ' "fp16"}}'
     )
@@ -102,6 +104,8 @@ class ConfigTest(parameterized.TestCase):
                 top_k=40,
                 seed=12345,
                 gpu_decode_steps_per_sync=4,
+                head_chunked_attention_mib=512,
+                kv_cache_type="INT8",
                 speculative_decoding=True,
                 thinking=True,
                 thinking_budget=5,
@@ -212,6 +216,34 @@ class ConfigTest(parameterized.TestCase):
           "default.gpu_decode_steps_per_sync: 0 is less than the minimum of 1",
       ),
       (
+          "head_chunked_attention_mib_not_int",
+          '{"default": {"head_chunked_attention_mib": "512"}}',
+          "default.head_chunked_attention_mib: '512' is not of type 'integer'",
+      ),
+      (
+          "head_chunked_attention_mib_float",
+          '{"default": {"head_chunked_attention_mib": 1.5}}',
+          "default.head_chunked_attention_mib: 1.5 is not of type 'integer'",
+      ),
+      (
+          "head_chunked_attention_mib_bool",
+          '{"default": {"head_chunked_attention_mib": true}}',
+          "default.head_chunked_attention_mib: True is not of type 'integer'",
+      ),
+      (
+          "kv_cache_type_not_string",
+          '{"default": {"kv_cache_type": true}}',
+          "default.kv_cache_type: True is not of type 'string'",
+      ),
+      (
+          "kv_cache_type_invalid_enum",
+          '{"default": {"kv_cache_type": "fp16"}}',
+          (
+              "default.kv_cache_type: 'fp16' is not one of ['DEFAULT', 'INT8',"
+              " 'default', 'int8']"
+          ),
+      ),
+      (
           "speculative_decoding_invalid",
           '{"default": {"speculative_decoding": "true"}}',
           (
@@ -313,13 +345,22 @@ class ConfigTest(parameterized.TestCase):
 
   def test_get_model_config_with_fallback_new_fields(self):
     self._write_config(
-        '{"default": {"audio_backend": "cpu", "temperature": 0.7},'
-        ' "models": {"m1": {"vision_backend": "gpu", "temperature": 0.2}}}'
+        '{"default": {"audio_backend": "cpu", "temperature": 0.7,'
+        ' "head_chunked_attention_mib": 512, "kv_cache_type": "INT8"},'
+        ' "models": {"m1": {"vision_backend": "gpu", "temperature": 0.2,'
+        ' "head_chunked_attention_mib": 0, "kv_cache_type": "DEFAULT"},'
+        ' "m2": {"vision_backend": "cpu"}}}'
     )
     result = config.get_model_config("m1")
     self.assertEqual(result.audio_backend, "cpu")
     self.assertEqual(result.vision_backend, "gpu")
     self.assertEqual(result.temperature, 0.2)
+    self.assertEqual(result.head_chunked_attention_mib, 0)
+    self.assertEqual(result.kv_cache_type, "DEFAULT")
+
+    fallback_result = config.get_model_config("m2")
+    self.assertEqual(fallback_result.head_chunked_attention_mib, 512)
+    self.assertEqual(fallback_result.kv_cache_type, "INT8")
 
   def test_get_config_unknown_key_ignored(self):
     self._write_config(
@@ -353,12 +394,19 @@ class ConfigTest(parameterized.TestCase):
                   "top_k": 40,
                   "seed": 12345,
                   "gpu_decode_steps_per_sync": 4,
+                  "head_chunked_attention_mib": -1,
+                  "kv_cache_type": "DEFAULT",
                   "speculative_decoding": True,
                   "thinking": True,
                   "thinking_budget": 5,
               },
               "models": {
-                  "m1": {"cpu_thread_count": 8, "cache": "disk"},
+                  "m1": {
+                      "cpu_thread_count": 8,
+                      "cache": "disk",
+                      "head_chunked_attention_mib": 0,
+                      "kv_cache_type": "int8",
+                  },
               },
           },
       ),
@@ -385,6 +433,22 @@ class ConfigTest(parameterized.TestCase):
       (
           "invalid_gpu_decode_steps_min",
           {"default": {"gpu_decode_steps_per_sync": 0}},
+      ),
+      (
+          "invalid_head_chunked_attention_mib_bool",
+          {"default": {"head_chunked_attention_mib": True}},
+      ),
+      (
+          "invalid_head_chunked_attention_mib_float",
+          {"default": {"head_chunked_attention_mib": 1.5}},
+      ),
+      (
+          "invalid_kv_cache_type_bool",
+          {"default": {"kv_cache_type": True}},
+      ),
+      (
+          "invalid_kv_cache_type_enum",
+          {"default": {"kv_cache_type": "fp8"}},
       ),
       (
           "invalid_speculative_mode",

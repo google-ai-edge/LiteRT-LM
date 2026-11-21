@@ -272,6 +272,32 @@ def common_inference_options(f):
       ),
   )(f)
   f = click.option(
+      "--head-chunked-attention-mib",
+      type=int,
+      default=None,
+      hidden=True,
+      help=(
+          "Target size in MiB for splitting prefill attention scores across"
+          " query-head chunks on supported GPU models. Negative values disable"
+          " chunking, 0 uses the default target (768 MiB), and positive values"
+          " set the target size in MiB. Note: This option is experimental and"
+          " may change or be removed."
+      ),
+  )(f)
+  f = click.option(
+      "--kv-cache-type",
+      type=click.Choice(["DEFAULT", "INT8"], case_sensitive=False),
+      default=None,
+      hidden=True,
+      help=(
+          "KV cache quantization type ('DEFAULT' or 'INT8'). 'INT8' enables"
+          " dynamic int8 KV cache quantization on global attention layers for"
+          " supported Artisan GPU models when static range quantization is not"
+          " used. Note: This option is experimental and may change or be"
+          " removed."
+      ),
+  )(f)
+  f = click.option(
       "--enable-ynnpack",
       is_flag=False,
       flag_value="true",

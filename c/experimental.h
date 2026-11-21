@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_C_EXPERIMENTAL_H_
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #if defined(__APPLE__)
 #include "api_export.h"      // NOLINT
@@ -110,6 +111,60 @@ LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_enable_debugger(
 LITERT_LM_C_API_EXPORT
 LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_gpu_use_ir_model(
     LiteRtLmEngineSettings* settings, bool use_ir_model);
+
+// Sets the target size in MiB for splitting multi-token GQA prefill attention
+// scores across query-head chunks to reduce peak intermediate score buffer
+// size.
+//
+// Negative values (e.g. -1, the default) disable head-chunked attention, 0
+// enables it with the default target size (768 MiB), and positive values enable
+// it with the specified per-chunk target size in MiB.
+//
+// Note: This setting is currently only supported by the GPU Artisan backend.
+// On other backends, this call has no effect and returns kLiteRtLmStatusOk.
+//
+// @param settings The engine settings.
+// @param head_chunked_attention_mib Target chunk size in MiB (< 0 disables,
+//   0 uses the 768 MiB default, > 0 sets the target in MiB).
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL. If the main backend is not the Artisan GPU backend,
+//   this call has no effect and returns kLiteRtLmStatusOk.
+//
+// Added in version 1.1.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode
+litert_lm_experimental_engine_settings_set_head_chunked_attention_mib(
+    LiteRtLmEngineSettings* settings, int32_t head_chunked_attention_mib);
+
+// KV cache quantization type for inference.
+//
+// Added in version 1.1.0.
+typedef enum {
+  // Uses the model/backend default KV cache representation.
+  kLiteRtLmKvCacheTypeDefault = 0,
+  // Uses dynamic INT8 KV cache quantization on global attention layers for
+  // supported Artisan GPU models when static range quantization is not used.
+  kLiteRtLmKvCacheTypeInt8 = 1,
+} LiteRtLmKvCacheType;
+
+// Sets the KV cache quantization type for the engine.
+//
+// `kLiteRtLmKvCacheTypeInt8` enables dynamic INT8 KV cache quantization on
+// global attention layers for supported Artisan GPU models when static range
+// quantization is not used. If `kLiteRtLmKvCacheTypeInt8` is selected for a
+// non-Artisan-GPU model or backend, a warning is logged and execution continues
+// as normal with the default KV cache.
+//
+// @param settings The engine settings.
+// @param kv_cache_type The KV cache type (`kLiteRtLmKvCacheTypeDefault` or
+//   `kLiteRtLmKvCacheTypeInt8`).
+// @return kLiteRtLmStatusOk on success, or kLiteRtLmStatusInvalidArgument if
+//   `settings` is NULL or `kv_cache_type` is not a valid `LiteRtLmKvCacheType`.
+//
+// Added in version 1.1.0.
+LITERT_LM_C_API_EXPORT
+LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_kv_cache_type(
+    LiteRtLmEngineSettings* settings, LiteRtLmKvCacheType kv_cache_type);
 
 // Opaque pointer for session debug info.
 // Use `litert_lm_experimental_session_debug_info_delete` to free memory.

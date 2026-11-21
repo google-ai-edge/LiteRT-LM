@@ -58,6 +58,21 @@ export type ActivationDataType =
     (typeof ActivationDataType)[keyof typeof ActivationDataType];
 
 /**
+ * Experimental KV cache quantization types for LiteRT-LM executors.
+ */
+export const KvCacheType = {
+  // Ideally, we'd pull these from the Wasm module, but we want them to be
+  // available in JS before the Wasm module is loaded.
+  DEFAULT: 0,
+  INT8: 1,
+} as const;
+
+/**
+ * A LiteRT-LM KvCacheType.
+ */
+export type KvCacheType = (typeof KvCacheType)[keyof typeof KvCacheType];
+
+/**
  * How speculative decoding (e.g. MTP) is used during decode.
  */
 export const SpeculativeDecodingMode = {
@@ -296,6 +311,16 @@ export declare interface GpuArtisanConfig {
   // local attention. Prevents instantaneous rewinding, but saves a lot of
   // memory, especially for large models.
   use_autosized_ringbuffers: boolean;
+
+  // Target size in MiB for splitting multi-token GQA prefill attention scores
+  // across query-head chunks to reduce peak intermediate score buffer size.
+  // Negative values disable chunking, 0 uses the default target (768 MiB), and
+  // positive values specify the per-chunk target size in MiB.
+  head_chunked_attention_mib: number;
+
+  // KV cache quantization type on global attention layers for supported models
+  // when static range quantization is not used.
+  kv_cache_type: EmscriptenEnumElement<KvCacheType>;
 }
 
 /**
@@ -748,6 +773,10 @@ export declare interface LiteRtLmWasm extends WasmModule {
     FLOAT32: ActivationDataType; FLOAT16: ActivationDataType;
     INT16: ActivationDataType;
     INT8: ActivationDataType;
+  }>;
+  KvCacheType: EmscriptenEnum<{
+    DEFAULT: KvCacheType;
+    INT8: KvCacheType;
   }>;
   SpeculativeDecodingMode: EmscriptenEnum<{
     OFF: SpeculativeDecodingMode; ON: SpeculativeDecodingMode;

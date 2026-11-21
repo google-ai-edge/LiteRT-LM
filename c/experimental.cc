@@ -14,8 +14,12 @@
 
 #include "c/experimental.h"
 
+#include <cstdint>
 #include <utility>
 
+#include "absl/log/absl_log.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "c/c_api_internal.h"
 #include "c/conversation.h"
 #include "c/conversation_internal.h"  // IWYU pragma: keep
@@ -28,6 +32,7 @@
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/executor_settings_base.h"  // IWYU pragma: keep
+#include "runtime/executor/llm_executor_settings.h"
 
 namespace {
 
@@ -35,6 +40,9 @@ using ::litert::lm::c::IsValidConversation;
 using ::litert::lm::c::IsValidEngine;
 using ::litert::lm::c::IsValidEngineSettings;
 using ::litert::lm::c::IsValidSession;
+using ::litert::lm::c::RawEnumValue;
+using ::litert::lm::c::ReturnError;
+using ::litert::lm::c::UpdateMainBackendConfig;
 
 }  // namespace
 
@@ -75,6 +83,49 @@ LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_gpu_use_ir_model(
     settings->settings->GetMutableAudioExecutorSettings()->SetUseIrModel(
         use_ir_model);
   }
+  return kLiteRtLmStatusOk;
+}
+
+LiteRtLmStatusCode
+litert_lm_experimental_engine_settings_set_head_chunked_attention_mib(
+    LiteRtLmEngineSettings* settings, int32_t head_chunked_attention_mib) {
+  return UpdateMainBackendConfig<litert::lm::GpuArtisanConfig>(
+      settings, "head_chunked_attention_mib",
+      [head_chunked_attention_mib](litert::lm::GpuArtisanConfig& config) {
+        config.head_chunked_attention_mib = head_chunked_attention_mib;
+      });
+}
+
+LiteRtLmStatusCode litert_lm_experimental_engine_settings_set_kv_cache_type(
+    LiteRtLmEngineSettings* settings, LiteRtLmKvCacheType kv_cache_type) {
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  litert::lm::KvCacheType cpp_kv_cache_type;
+  switch (RawEnumValue(kv_cache_type)) {
+    case kLiteRtLmKvCacheTypeDefault:
+      cpp_kv_cache_type = litert::lm::KvCacheType::DEFAULT;
+      break;
+    case kLiteRtLmKvCacheTypeInt8:
+      cpp_kv_cache_type = litert::lm::KvCacheType::INT8;
+      break;
+    default:
+      return ReturnError(absl::StatusCode::kInvalidArgument,
+                         "Unknown LiteRtLmKvCacheType.");
+  }
+  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
+  absl::StatusOr<litert::lm::GpuArtisanConfig> config =
+      main_settings.MutableBackendConfig<litert::lm::GpuArtisanConfig>();
+  if (!config.ok()) {
+    if (cpp_kv_cache_type == litert::lm::KvCacheType::INT8) {
+      ABSL_LOG(WARNING)
+          << "INT8 KV cache is not supported for this model; continuing with "
+             "default KV cache.";
+    }
+    return kLiteRtLmStatusOk;
+  }
+  config->kv_cache_type = cpp_kv_cache_type;
+  main_settings.SetBackendConfig(*config);
   return kLiteRtLmStatusOk;
 }
 

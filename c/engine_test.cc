@@ -31,6 +31,8 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/base/log_severity.h"  // from @com_google_absl
+#include "absl/log/scoped_mock_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
@@ -800,6 +802,106 @@ TEST(EngineCTest, SetUseRingbuffersLocalAttention) {
                      .GetBackendConfig<litert::lm::GpuArtisanConfig>();
   ASSERT_OK(config2);
   EXPECT_FALSE(config2->use_autosized_ringbuffers);
+}
+
+TEST(EngineCTest, SetHeadChunkedAttentionMib) {
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "gpu_artisan",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  auto default_config = settings->settings->GetMainExecutorSettings()
+                            .GetBackendConfig<litert::lm::GpuArtisanConfig>();
+  ASSERT_OK(default_config);
+  EXPECT_EQ(default_config->head_chunked_attention_mib, -1);
+
+  EXPECT_EQ(
+      litert_lm_experimental_engine_settings_set_head_chunked_attention_mib(
+          settings.get(), 0),
+      kLiteRtLmStatusOk);
+  auto config_default_on =
+      settings->settings->GetMainExecutorSettings()
+          .GetBackendConfig<litert::lm::GpuArtisanConfig>();
+  ASSERT_OK(config_default_on);
+  EXPECT_EQ(config_default_on->head_chunked_attention_mib, 0);
+
+  EXPECT_EQ(
+      litert_lm_experimental_engine_settings_set_head_chunked_attention_mib(
+          settings.get(), 512),
+      kLiteRtLmStatusOk);
+  auto config_custom = settings->settings->GetMainExecutorSettings()
+                           .GetBackendConfig<litert::lm::GpuArtisanConfig>();
+  ASSERT_OK(config_custom);
+  EXPECT_EQ(config_custom->head_chunked_attention_mib, 512);
+
+  EXPECT_EQ(
+      litert_lm_experimental_engine_settings_set_head_chunked_attention_mib(
+          settings.get(), -1),
+      kLiteRtLmStatusOk);
+  auto config_off = settings->settings->GetMainExecutorSettings()
+                        .GetBackendConfig<litert::lm::GpuArtisanConfig>();
+  ASSERT_OK(config_off);
+  EXPECT_EQ(config_off->head_chunked_attention_mib, -1);
+}
+
+TEST(EngineCTest, SetKvCacheType) {
+  const std::string task_path = "test_model_path_1";
+  EngineSettingsPtr settings(
+      CreateEngineSettings(task_path.c_str(), "gpu_artisan",
+                           /* vision_backend_str */ nullptr,
+                           /* audio_backend_str */ nullptr),
+      &litert_lm_engine_settings_delete);
+  ASSERT_NE(settings, nullptr);
+
+  auto default_config = settings->settings->GetMainExecutorSettings()
+                            .GetBackendConfig<litert::lm::GpuArtisanConfig>();
+  ASSERT_OK(default_config);
+  EXPECT_EQ(default_config->kv_cache_type, litert::lm::KvCacheType::DEFAULT);
+
+  EXPECT_EQ(litert_lm_experimental_engine_settings_set_kv_cache_type(
+                settings.get(), kLiteRtLmKvCacheTypeInt8),
+            kLiteRtLmStatusOk);
+  auto config1 = settings->settings->GetMainExecutorSettings()
+                     .GetBackendConfig<litert::lm::GpuArtisanConfig>();
+  ASSERT_OK(config1);
+  EXPECT_EQ(config1->kv_cache_type, litert::lm::KvCacheType::INT8);
+
+  EXPECT_EQ(litert_lm_experimental_engine_settings_set_kv_cache_type(
+                settings.get(), kLiteRtLmKvCacheTypeDefault),
+            kLiteRtLmStatusOk);
+  auto config2 = settings->settings->GetMainExecutorSettings()
+                     .GetBackendConfig<litert::lm::GpuArtisanConfig>();
+  ASSERT_OK(config2);
+  EXPECT_EQ(config2->kv_cache_type, litert::lm::KvCacheType::DEFAULT);
+}
+
+TEST(EngineCTest, SetKvCacheTypeInt8WarnsAndContinuesOnNonArtisanModels) {
+  for (const char* backend : {"cpu", "gpu"}) {
+    SCOPED_TRACE(backend);
+    EngineSettingsPtr settings(
+        CreateEngineSettings("test_model_path_1", backend,
+                             /* vision_backend_str */ nullptr,
+                             /* audio_backend_str */ nullptr),
+        &litert_lm_engine_settings_delete);
+    ASSERT_NE(settings, nullptr);
+
+    absl::ScopedMockLog log(absl::MockLogDefault::kIgnoreUnexpected);
+    EXPECT_CALL(log, Log(absl::LogSeverity::kWarning, testing::_,
+                         HasSubstr("INT8 KV cache is not supported")))
+        .Times(1);
+    log.StartCapturingLogs();
+
+    EXPECT_EQ(litert_lm_experimental_engine_settings_set_kv_cache_type(
+                  settings.get(), kLiteRtLmKvCacheTypeInt8),
+              kLiteRtLmStatusOk);
+    // DEFAULT on a non-Artisan model should not emit the warning.
+    EXPECT_EQ(litert_lm_experimental_engine_settings_set_kv_cache_type(
+                  settings.get(), kLiteRtLmKvCacheTypeDefault),
+              kLiteRtLmStatusOk);
+  }
 }
 
 TEST(EngineCTest, SetSelectedSignatures) {
@@ -3584,6 +3686,16 @@ TEST(EngineCStatusTest, ConstraintConfigSettersReturnStatus) {
       });
 }
 
+int SetHeadChunkedAttentionMibForTest(LiteRtLmEngineSettings* s) {
+  return litert_lm_experimental_engine_settings_set_head_chunked_attention_mib(
+      s, 512);
+}
+
+int SetKvCacheTypeForTest(LiteRtLmEngineSettings* s) {
+  return litert_lm_experimental_engine_settings_set_kv_cache_type(
+      s, kLiteRtLmKvCacheTypeInt8);
+}
+
 std::vector<std::pair<std::string, std::function<int(LiteRtLmEngineSettings*)>>>
 AllEngineSettingsSetters() {
   using E = LiteRtLmEngineSettings;
@@ -3688,6 +3800,8 @@ AllEngineSettingsSetters() {
          return litert_lm_engine_settings_set_use_ringbuffers_local_attention(
              s, true);
        }},
+      {"set_head_chunked_attention_mib", SetHeadChunkedAttentionMibForTest},
+      {"set_kv_cache_type", SetKvCacheTypeForTest},
       {"set_lora_rank",
        [](E* s) { return litert_lm_engine_settings_set_lora_rank(s, 8); }},
       {"set_audio_lora_rank",
@@ -5349,6 +5463,13 @@ TEST(EngineCStatusTest, BackendConfigMutatorsIgnoreMismatchedBackend) {
   EXPECT_EQ(litert_lm_engine_settings_set_use_ringbuffers_local_attention(
                 cpu_settings.get(), true),
             kLiteRtLmStatusOk);
+  EXPECT_EQ(
+      litert_lm_experimental_engine_settings_set_head_chunked_attention_mib(
+          cpu_settings.get(), 512),
+      kLiteRtLmStatusOk);
+  EXPECT_EQ(litert_lm_experimental_engine_settings_set_kv_cache_type(
+                cpu_settings.get(), kLiteRtLmKvCacheTypeInt8),
+            kLiteRtLmStatusOk);
 }
 
 TEST(EngineCStatusTest, OutOfRangeEnumsAcrossCAbiReturnInvalidArgument) {
@@ -5437,6 +5558,16 @@ TEST(EngineCStatusTest, OutOfRangeEnumsAcrossCAbiReturnInvalidArgument) {
               kLiteRtLmStatusInvalidArgument);
     EXPECT_THAT(litert_lm_get_last_error_message(),
                 HasSubstr("Unknown LiteRtLmConstraintProviderType"));
+  }
+
+  for (const int bad : {-1, 2, 99, 1024}) {
+    SCOPED_TRACE(bad);
+    litert_lm_clear_last_error();
+    EXPECT_EQ(c_abi_test_experimental_engine_settings_set_kv_cache_type(
+                  settings.get(), bad),
+              kLiteRtLmStatusInvalidArgument);
+    EXPECT_THAT(litert_lm_get_last_error_message(),
+                HasSubstr("Unknown LiteRtLmKvCacheType"));
   }
 }
 
