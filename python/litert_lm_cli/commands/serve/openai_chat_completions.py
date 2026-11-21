@@ -429,13 +429,18 @@ def handle_post_chat_completions(handler: Any) -> None:
     )
     return
 
-  # Parse tools if this is a chat completions request.
-  tools_data = body.get("tools")
-  tool_defs = (
-      [t for t in tools_data if t.get("type") == "function"]
-      if tools_data
-      else []
-  )
+  # Parse and validate tools and tool_choice before opening a conversation or
+  # writing HTTP 200 streaming headers.
+  try:
+    tool_defs, tool_names = openai_common.parse_tools(body)
+    tool_choice = openai_common.parse_tool_choice(body, tool_names)
+  except ValueError as e:
+    handler.send_error(
+        400,
+        "Invalid tools or tool_choice parameters: "
+        + "".join(traceback.format_exception_only(e)),
+    )
+    return
   tools = [_ProxyTool(t) for t in tool_defs]
 
   try:
@@ -478,7 +483,7 @@ def handle_post_chat_completions(handler: Any) -> None:
           max_completion_tokens=max_completion_tokens,
           stream_options=stream_options,
           response_format=response_format,
-          tool_choice=body.get("tool_choice"),
+          tool_choice=tool_choice,
       )
       save_assistant(assistant_message)
   except Exception as e:  # pylint: disable=broad-exception-caught
