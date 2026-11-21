@@ -307,6 +307,7 @@ class SessionAdvanced : public SessionInterface {
     SessionState state;
     absl::flat_hash_set<TaskId> last_task_ids;
     std::unique_ptr<ProcessedContext> processed_context = nullptr;
+    std::unique_ptr<AudioContext> audio_context = nullptr;
   };
 
   // The checkpoint map for the session.
