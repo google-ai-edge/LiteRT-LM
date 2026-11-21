@@ -158,6 +158,23 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
     audio_buffering_enabled_ = buffer_audio_input;
   }
 
+  // Returns whether front padding is enabled for the streaming audio encoder.
+  // Only affects streaming audio encoders. When enabled, `overlap_size`
+  // masked-out zero frames are prepended before the first chunk of each stream
+  // as left context. When disabled, no front padding is prepended.
+  //
+  // args: none.
+  // returns: true if front padding is enabled, false otherwise.
+  bool GetFrontPaddingEnabled() const;
+
+  // Sets whether front padding is enabled for the streaming audio encoder.
+  //
+  // args:
+  //   - front_padding_enabled: true to prepend `overlap_size` masked-out zero
+  //     frames before the first chunk of each stream, false to disable it.
+  // returns: none.
+  void SetFrontPaddingEnabled(bool front_padding_enabled);
+
  private:
   explicit AudioExecutorSettings(const ModelAssets& model_assets,
                                  int max_sequence_length, int num_threads)
@@ -170,6 +187,7 @@ class AudioExecutorSettings : public ExecutorSettingsBase {
   Backend adapter_backend_;
   int num_threads_ = 4;
   bool audio_buffering_enabled_ = false;
+  bool front_padding_enabled_ = true;
   uint32_t lora_rank_ = 0;
   std::vector<uint32_t> supported_lora_ranks_ = {};
 };
