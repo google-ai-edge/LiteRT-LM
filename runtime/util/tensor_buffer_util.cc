@@ -15,13 +15,16 @@
 #include "runtime/util/tensor_buffer_util.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -186,6 +189,52 @@ absl::StatusOr<size_t> LockedByteSpan(
   return *span_bytes;
 }
 
+constexpr int kNumDeviceTensorBufferCopyBackends =
+    static_cast<int>(DeviceTensorBufferCopyBackend::kMetal) + 1;
+
+// Device copy callbacks indexed by `DeviceTensorBufferCopyBackend`.
+std::atomic<DeviceTensorBufferCopyFn>
+    g_device_tensor_buffer_copy_fns[kNumDeviceTensorBufferCopyBackends] = {};
+
+std::atomic<DeviceTensorBufferCopyFn>& DeviceTensorBufferCopyFnSlot(
+    DeviceTensorBufferCopyBackend backend) {
+  return g_device_tensor_buffer_copy_fns[static_cast<int>(backend)];
+}
+
+// Returns the GPU memory backend shared by `dst` and `src`, or `std::nullopt`
+// if they are not both buffers of the same supported backend.
+std::optional<DeviceTensorBufferCopyBackend> GetDeviceTensorBufferCopyBackend(
+    const ::litert::TensorBuffer& dst, const ::litert::TensorBuffer& src) {
+  if (dst.IsWebGpuMemory() && src.IsWebGpuMemory()) {
+    return DeviceTensorBufferCopyBackend::kWebGpu;
+  }
+  if (dst.IsOpenClMemory() && src.IsOpenClMemory()) {
+    return DeviceTensorBufferCopyBackend::kOpenCl;
+  }
+  if (dst.IsMetalMemory() && src.IsMetalMemory()) {
+    return DeviceTensorBufferCopyBackend::kMetal;
+  }
+  return std::nullopt;
+}
+
+// TODO: b/582556349 - Call the LiteRT device copy API here once LiteRT provides
+// one, and remove the LiteRT-LM backend copy registry.
+absl::StatusOr<bool> TryCopyTensorBufferOnDevice(
+    const ::litert::Environment& env, ::litert::TensorBuffer& dst,
+    const ::litert::TensorBuffer& src) {
+  const std::optional<DeviceTensorBufferCopyBackend> backend =
+      GetDeviceTensorBufferCopyBackend(dst, src);
+  if (!backend.has_value()) {
+    return false;
+  }
+  DeviceTensorBufferCopyFn copy_fn =
+      DeviceTensorBufferCopyFnSlot(*backend).load(std::memory_order_acquire);
+  if (copy_fn == nullptr) {
+    return false;
+  }
+  return copy_fn(env, dst, src);
+}
+
 absl::StatusOr<::litert::TensorBuffer> CopyTensorBufferImpl(
     ::litert::Environment& env, const ::litert::TensorBuffer& tensor_buffer,
     const ::litert::RankedTensorType& dst_tensor_type,
@@ -198,6 +247,16 @@ absl::StatusOr<::litert::TensorBuffer> CopyTensorBufferImpl(
   const bool need_tail_zero = zero_tail_padding && dst_buffer_size > copy_bytes;
   if (copy_bytes == 0 && !need_tail_zero) {
     return output_tensor_buffer;
+  }
+  LITERT_ASSIGN_OR_RETURN(auto src_buffer_type, tensor_buffer.BufferType());
+  if (!need_tail_zero && src_buffer_type == dst_buffer_type &&
+      !UsesRawLinearLockMemory(dst_buffer_type)) {
+    ABSL_ASSIGN_OR_RETURN(
+        bool copied_on_device,
+        TryCopyTensorBufferOnDevice(env, output_tensor_buffer, tensor_buffer));
+    if (copied_on_device) {
+      return output_tensor_buffer;
+    }
   }
 
   LITERT_ASSIGN_OR_RETURN(
@@ -219,7 +278,80 @@ absl::StatusOr<::litert::TensorBuffer> CopyTensorBufferImpl(
   return output_tensor_buffer;
 }
 
+absl::Status CopyTensorBufferContentsImpl(const ::litert::Environment* env,
+                                          ::litert::TensorBuffer& dst,
+                                          const ::litert::TensorBuffer& src) {
+  if (dst.Get() == src.Get()) {
+    return absl::OkStatus();
+  }
+  LITERT_ASSIGN_OR_RETURN(const auto dst_type, dst.TensorType());
+  LITERT_ASSIGN_OR_RETURN(const auto src_type, src.TensorType());
+  if (dst_type.ElementType() != src_type.ElementType() ||
+      dst_type.Layout().Dimensions() != src_type.Layout().Dimensions()) {
+    return absl::InvalidArgumentError(
+        "Cannot copy TensorBuffer contents between mismatched tensor types.");
+  }
+  LITERT_ASSIGN_OR_RETURN(const auto dst_buffer_type, dst.BufferType());
+  LITERT_ASSIGN_OR_RETURN(const auto src_buffer_type, src.BufferType());
+  const bool dst_linear = UsesRawLinearLockMemory(dst_buffer_type);
+  const bool src_linear = UsesRawLinearLockMemory(src_buffer_type);
+  if (dst_linear && src_linear) {
+    if (dst_type != src_type) {
+      return absl::InvalidArgumentError(
+          "Cannot copy linear TensorBuffer contents between mismatched "
+          "strides.");
+    }
+  } else if ((dst_linear && dst_type.Layout().HasStrides()) ||
+             (src_linear && src_type.Layout().HasStrides())) {
+    return absl::InvalidArgumentError(
+        "Cannot copy between strided linear TensorBuffer and non-linear "
+        "device TensorBuffer.");
+  }
+  LITERT_ASSIGN_OR_RETURN(const size_t dst_buffer_size, dst.Size());
+  LITERT_ASSIGN_OR_RETURN(const size_t dst_packed_size, dst.PackedSize());
+  LITERT_ASSIGN_OR_RETURN(const size_t src_buffer_size, src.Size());
+  LITERT_ASSIGN_OR_RETURN(const size_t src_packed_size, src.PackedSize());
+  absl::StatusOr<size_t> copy_bytes = LockedByteSpan(
+      dst_type, dst_buffer_type, dst_packed_size, dst_buffer_size);
+  if (!copy_bytes.ok()) {
+    return copy_bytes.status();
+  }
+  absl::StatusOr<size_t> src_copy_bytes = LockedByteSpan(
+      src_type, src_buffer_type, src_packed_size, src_buffer_size);
+  if (!src_copy_bytes.ok()) {
+    return src_copy_bytes.status();
+  }
+  if (*copy_bytes != *src_copy_bytes) {
+    return absl::InvalidArgumentError(
+        "TensorBuffer locked byte spans do not match.");
+  }
+  if (*copy_bytes == 0) {
+    return absl::OkStatus();
+  }
+  if (env != nullptr && dst_buffer_type == src_buffer_type && !dst_linear) {
+    ABSL_ASSIGN_OR_RETURN(bool copied_on_device,
+                          TryCopyTensorBufferOnDevice(*env, dst, src));
+    if (copied_on_device) {
+      return absl::OkStatus();
+    }
+  }
+  LITERT_ASSIGN_OR_RETURN(auto src_lock_and_addr,
+                          ::litert::TensorBufferScopedLock::Create(
+                              src, ::litert::TensorBuffer::LockMode::kRead));
+  LITERT_ASSIGN_OR_RETURN(auto dst_lock_and_addr,
+                          ::litert::TensorBufferScopedLock::Create(
+                              dst, ::litert::TensorBuffer::LockMode::kWrite));
+  std::memcpy(dst_lock_and_addr.second, src_lock_and_addr.second, *copy_bytes);
+  return absl::OkStatus();
+}
+
 }  // namespace
+
+DeviceTensorBufferCopyFn RegisterDeviceTensorBufferCopyFn(
+    DeviceTensorBufferCopyBackend backend, DeviceTensorBufferCopyFn copy_fn) {
+  return DeviceTensorBufferCopyFnSlot(backend).exchange(
+      copy_fn, std::memory_order_acq_rel);
+}
 
 absl::StatusOr<int> NumSignificantDims(
     const ::litert::TensorBuffer& tensor_buffer) {
@@ -280,61 +412,13 @@ absl::StatusOr<::litert::TensorBuffer> CopyTensorBufferToHostMemory(
 
 absl::Status CopyTensorBufferContents(::litert::TensorBuffer& dst,
                                       const ::litert::TensorBuffer& src) {
-  if (dst.Get() == src.Get()) {
-    return absl::OkStatus();
-  }
-  LITERT_ASSIGN_OR_RETURN(const auto dst_type, dst.TensorType());
-  LITERT_ASSIGN_OR_RETURN(const auto src_type, src.TensorType());
-  if (dst_type.ElementType() != src_type.ElementType() ||
-      dst_type.Layout().Dimensions() != src_type.Layout().Dimensions()) {
-    return absl::InvalidArgumentError(
-        "Cannot copy TensorBuffer contents between mismatched tensor types.");
-  }
-  LITERT_ASSIGN_OR_RETURN(const auto dst_buffer_type, dst.BufferType());
-  LITERT_ASSIGN_OR_RETURN(const auto src_buffer_type, src.BufferType());
-  const bool dst_linear = UsesRawLinearLockMemory(dst_buffer_type);
-  const bool src_linear = UsesRawLinearLockMemory(src_buffer_type);
-  if (dst_linear && src_linear) {
-    if (dst_type != src_type) {
-      return absl::InvalidArgumentError(
-          "Cannot copy linear TensorBuffer contents between mismatched "
-          "strides.");
-    }
-  } else if ((dst_linear && dst_type.Layout().HasStrides()) ||
-             (src_linear && src_type.Layout().HasStrides())) {
-    return absl::InvalidArgumentError(
-        "Cannot copy between strided linear TensorBuffer and non-linear "
-        "device TensorBuffer.");
-  }
-  LITERT_ASSIGN_OR_RETURN(const size_t dst_buffer_size, dst.Size());
-  LITERT_ASSIGN_OR_RETURN(const size_t dst_packed_size, dst.PackedSize());
-  LITERT_ASSIGN_OR_RETURN(const size_t src_buffer_size, src.Size());
-  LITERT_ASSIGN_OR_RETURN(const size_t src_packed_size, src.PackedSize());
-  absl::StatusOr<size_t> copy_bytes = LockedByteSpan(
-      dst_type, dst_buffer_type, dst_packed_size, dst_buffer_size);
-  if (!copy_bytes.ok()) {
-    return copy_bytes.status();
-  }
-  absl::StatusOr<size_t> src_copy_bytes = LockedByteSpan(
-      src_type, src_buffer_type, src_packed_size, src_buffer_size);
-  if (!src_copy_bytes.ok()) {
-    return src_copy_bytes.status();
-  }
-  if (*copy_bytes != *src_copy_bytes) {
-    return absl::InvalidArgumentError(
-        "TensorBuffer locked byte spans do not match.");
-  }
-  if (*copy_bytes == 0) {
-    return absl::OkStatus();
-  }
-  LITERT_ASSIGN_OR_RETURN(auto src_lock_and_addr,
-                          ::litert::TensorBufferScopedLock::Create(
-                              src, ::litert::TensorBuffer::LockMode::kRead));
-  LITERT_ASSIGN_OR_RETURN(auto dst_lock_and_addr,
-                          ::litert::TensorBufferScopedLock::Create(
-                              dst, ::litert::TensorBuffer::LockMode::kWrite));
-  std::memcpy(dst_lock_and_addr.second, src_lock_and_addr.second, *copy_bytes);
-  return absl::OkStatus();
+  return CopyTensorBufferContentsImpl(/*env=*/nullptr, dst, src);
+}
+
+absl::Status CopyTensorBufferContents(const ::litert::Environment& env,
+                                      ::litert::TensorBuffer& dst,
+                                      const ::litert::TensorBuffer& src) {
+  return CopyTensorBufferContentsImpl(&env, dst, src);
 }
 
 }  // namespace litert::lm

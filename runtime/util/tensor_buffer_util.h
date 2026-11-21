@@ -38,7 +38,16 @@ absl::StatusOr<int> NumSignificantDims(
 absl::StatusOr<std::vector<int>> TensorBufferDims(
     const ::litert::TensorBuffer& tensor_buffer);
 
-// Creates a deep copy of the given tensor buffer.
+// Creates a deep copy of the given tensor buffer. Device buffers are copied on
+// the device when supported (e.g. WebGPU, OpenCL, or Metal buffers when linked
+// with the matching copy handler), otherwise through locked host memory.
+//
+// args:
+//   env: LiteRT environment used to allocate the copy and look up device/queue
+//     handles.
+//   tensor_buffer: source tensor buffer to copy.
+// returns: newly allocated TensorBuffer with identical buffer type, size, and
+//   contents, or an error status on failure.
 absl::StatusOr<litert::TensorBuffer> CopyTensorBuffer(
     litert::Environment& env, const litert::TensorBuffer& tensor_buffer);
 
@@ -48,11 +57,77 @@ absl::StatusOr<litert::TensorBuffer> CopyTensorBuffer(
 absl::StatusOr<litert::TensorBuffer> CopyTensorBufferToHostMemory(
     litert::Environment& env, const litert::TensorBuffer& tensor_buffer);
 
-// Copies the locked tensor payload from `src` into `dst` in place.
-// `src` and `dst` must have matching element type and dimensions; linear memory
-// buffers must also have matching strides.
+// Copies the locked tensor payload from `src` into `dst` in place using host
+// memory locks. `src` and `dst` must have matching element type and dimensions;
+// linear memory buffers must also have matching strides. Prefer the overload
+// taking `litert::Environment` when `dst` and `src` may be GPU device buffers.
+//
+// args:
+//   dst: destination tensor buffer updated in place.
+//   src: source tensor buffer to copy from.
+// returns: OK on success, or an error if tensor types, strides, or byte spans
+//   mismatch or if locking fails.
 absl::Status CopyTensorBufferContents(litert::TensorBuffer& dst,
                                       const litert::TensorBuffer& src);
+
+// Copies the tensor payload from `src` into `dst` in place without reallocating
+// `dst`. Device buffers of the same type are copied directly on the device
+// using handles from `env` when supported (e.g. WebGPU buffers when linked with
+// the WebGPU copy handler), otherwise through locked host memory. `src` and
+// `dst` must have matching element type and dimensions; linear memory buffers
+// must also have matching strides.
+//
+// args:
+//   env: LiteRT environment owning the device and queue handles.
+//   dst: destination tensor buffer updated in place.
+//   src: source tensor buffer to copy from.
+// returns: OK on success, or an error if tensor types, strides, or byte spans
+//   mismatch or if copying fails.
+absl::Status CopyTensorBufferContents(const litert::Environment& env,
+                                      litert::TensorBuffer& dst,
+                                      const litert::TensorBuffer& src);
+
+// TODO: b/582556349 - LiteRT has no public API to copy `TensorBuffer`
+// contents on the device, so LiteRT-LM implements device copies itself with
+// native GPU handles from `litert::Environment`. Once LiteRT provides a device
+// copy API (e.g. `TensorBuffer::CopyContentsFrom()`), switch
+// `CopyTensorBuffer` and `CopyTensorBufferContents` to it and delete this
+// registry and the backend implementations (`:webgpu_tensor_buffer_copy`)
+// instead of maintaining GPU-to-GPU copies in LiteRT-LM.
+//
+// Callback that copies the contents of `src` into `dst` on the device owned by
+// `env` without a round trip through host memory.
+//
+// args:
+//   env: LiteRT environment owning the device and command queue.
+//   dst: destination device tensor buffer.
+//   src: source device tensor buffer of the same buffer type and layout.
+// returns: true when the device copy succeeded, false when the caller should
+//   fall back to a locked host-memory copy, or an error status on failure.
+using DeviceTensorBufferCopyFn = absl::StatusOr<bool> (*)(
+    const litert::Environment& env, litert::TensorBuffer& dst,
+    const litert::TensorBuffer& src);
+
+// GPU memory backends that can register a `DeviceTensorBufferCopyFn`.
+enum class DeviceTensorBufferCopyBackend {
+  kWebGpu,
+  kOpenCl,
+  kMetal,
+};
+
+// Registers (or clears when `copy_fn` is nullptr) the callback used by
+// `CopyTensorBuffer` and `CopyTensorBufferContents` to copy `TensorBuffer`s of
+// the given GPU memory `backend` on the device without locking host staging
+// memory. Backend implementations (e.g. `:webgpu_tensor_buffer_copy`) register
+// themselves when linked.
+//
+// args:
+//   backend: GPU memory backend whose buffers `copy_fn` copies.
+//   copy_fn: device copy callback, or nullptr to disable.
+// returns: the previously registered callback for `backend` (or nullptr if
+//   none was set).
+DeviceTensorBufferCopyFn RegisterDeviceTensorBufferCopyFn(
+    DeviceTensorBufferCopyBackend backend, DeviceTensorBufferCopyFn copy_fn);
 
 // Struct to hold a TensorBuffer and a boolean indicating if the buffer is
 // wrapped around existing memory or if it owns the memory.

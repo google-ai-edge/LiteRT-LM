@@ -59,6 +59,10 @@ target_link_libraries(runtime_util_data_stream
 # ==============================================================================
 # Tensor Buffer Util
 # ==============================================================================
+# Note: `webgpu_tensor_buffer_copy.cc` is intentionally omitted in CMake builds
+# (matching `top_k_webgpu_sampler.cc` and `default_static_gpu_accelerator`), as
+# the CMake build disables GPU by default and does not fetch Dawn or
+# `ml_drift/webgpu`; `tensor_buffer_util.cc` falls back to locked host copies.
 add_litertlm_library(runtime_util_tensor_buffer_util STATIC
   tensor_buffer_util.cc
 )

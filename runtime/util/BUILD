@@ -369,6 +369,7 @@ cc_library(
     hdrs = ["tensor_buffer_util.h"],
     deps = [
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_element_type",
@@ -381,6 +382,35 @@ cc_library(
     ],
 )
 
+# TODO: b/582556349 - Remove once LiteRT provides a TensorBuffer device copy API;
+# use that API from `:tensor_buffer_util` instead.
+cc_library(
+    name = "webgpu_tensor_buffer_copy",
+    srcs = ["webgpu_tensor_buffer_copy.cc"],
+    hdrs = ["webgpu_tensor_buffer_copy.h"],
+    deps = [
+        ":tensor_buffer_util",
+        "//runtime/components:webgpu_dawn_shared_lib",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_macros",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@ml_drift//ml_drift/webgpu:spatial_tensor",
+        "@ml_drift//ml_drift/webgpu:webgpu_headers",
+        "@litert//litert/cc:litert_any",
+        "@litert//litert/c:litert_common",
+        "@litert//litert/cc:litert_environment_api",
+        "@litert//litert/cc:litert_environment_options",
+        "@litert//litert/cc:litert_layout",
+        "@litert//litert/cc:litert_event",
+        "@litert//litert/cc:litert_macros",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+    ],
+    alwayslink = 1,
+)
+
 cc_test(
     name = "tensor_buffer_util_test",
     srcs = ["tensor_buffer_util_test.cc"],
@@ -391,6 +421,8 @@ cc_test(
         ":test_utils",
         "@com_google_googletest//:gtest_main",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_element_type",
         "@litert//litert/cc:litert_environment",
@@ -399,6 +431,84 @@ cc_test(
         "@litert//litert/cc:litert_tensor_buffer",
         "@litert//litert/cc:litert_tensor_buffer_types",
         "@litert//litert/test:matchers",
+    ],
+)
+
+cc_test(
+    name = "webgpu_tensor_buffer_copy_test",
+    srcs = ["webgpu_tensor_buffer_copy_test.cc"],
+    tags = [
+        "noandroid",
+        "noios",
+        "nomsan",
+        "notsan",
+        "requires-mac-inputs:hard",
+    ],
+    # Links the static WebGPU accelerator, which does not register with
+    # libLiteRt.so/.dylib under litert_runtime_link_mode=dynamic.
+    target_compatible_with = select({
+        "@litert//litert:litert_runtime_link_mode_dynamic": [
+            "@platforms//:incompatible",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":tensor_buffer_util",
+        ":test_utils",
+        ":webgpu_tensor_buffer_copy",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "@ml_drift//ml_drift/webgpu:environment",
+        "@ml_drift//ml_drift/webgpu:webgpu_headers",
+        "@litert//litert/c:litert_event_type",
+        "@litert//litert/cc:litert_any",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_environment_options",
+        "@litert//litert/cc:litert_event",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator",  # buildcleaner: keep
+        "@litert//litert/test:matchers",
+    ],
+)
+
+cc_test(
+    name = "webgpu_tensor_buffer_copy_gpu_test",
+    srcs = ["webgpu_tensor_buffer_copy_gpu_test.cc"],
+    # Requires a real GPU and a statically linked WebGPU accelerator, so it is
+    # excluded from wildcard / OSS presubmit runs (e.g. OSS Presubmit-Mac with
+    # litert_runtime_link_mode=dynamic); run it explicitly on a GPU machine.
+    tags = [
+        "manual",
+        "noasan",
+        "nomsan",
+        "nopresubmit",
+        "notsan",
+        "nowindows",
+        "requires-gpu-sm90-full",
+    ],
+    deps = [
+        ":tensor_buffer_util",
+        ":test_utils",
+        ":webgpu_tensor_buffer_copy",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "@ml_drift//ml_drift/webgpu:environment",
+        "@litert//litert/c:litert_event_type",
+        "@litert//litert/cc:litert_any",
+        "@litert//litert/cc:litert_environment",
+        "@litert//litert/cc:litert_environment_options",
+        "@litert//litert/cc:litert_event",
+        "@litert//litert/cc:litert_ranked_tensor_type",
+        "@litert//litert/cc:litert_tensor_buffer",
+        "@litert//litert/cc:litert_tensor_buffer_types",
+        "@litert//litert/test:matchers",
+        "//runtime/executor:default_gpu_accelerator",
     ],
 )
 

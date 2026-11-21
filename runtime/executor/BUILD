@@ -357,6 +357,11 @@ cc_library(
     }),
     tags = ["manual"],
     visibility = ["//visibility:private"],
+    # Device TensorBuffer copies (e.g. `:webgpu_tensor_buffer_copy`) are
+    # intentionally not linked here: they cast the accelerator's native buffer
+    # handles, which must not cross the dynamically loaded accelerator library
+    # boundary, so dynamic builds keep the host-memory copy until LiteRT
+    # provides a TensorBuffer device copy API (b/582556349).
 )
 
 # Statically linked GPU accelerator libraries used by default when
@@ -368,12 +373,14 @@ cc_library(
     deps = select({
         ":android_webgpu": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_gpu_accelerator",
+            "//runtime/util:webgpu_tensor_buffer_copy",
         ],
         "@platforms//os:android": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_cl_gl_accelerator",
         ],
         ":ios_webgpu": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator",
+            "//runtime/util:webgpu_tensor_buffer_copy",
         ],
         ":macos_metal": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_metal_accelerator",
@@ -383,6 +390,7 @@ cc_library(
         ],
         "//conditions:default": [
             "@litert//litert/runtime/accelerators/gpu:ml_drift_webgpu_accelerator",
+            "//runtime/util:webgpu_tensor_buffer_copy",
         ],
     }),
 )

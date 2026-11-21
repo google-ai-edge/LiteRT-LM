@@ -389,8 +389,8 @@ absl::Status LitertState::RestoreLocalOrRecurrentState(
   for (const auto& [name, src_state_buffer] : src_bank) {
     auto it = dst_bank.find(name);
     RET_CHECK(it != dst_bank.end()) << "Missing state buffer: " << name;
-    ABSL_RETURN_IF_ERROR(
-        CopyTensorBufferContents(it->second.buffer, src_state_buffer.buffer));
+    ABSL_RETURN_IF_ERROR(CopyTensorBufferContents(env_, it->second.buffer,
+                                                  src_state_buffer.buffer));
   }
   return absl::OkStatus();
 }
@@ -433,14 +433,14 @@ bool LitertState::CanCopyContentsFrom(const LitertState& other) const {
 }
 
 absl::Status LitertState::CopyBankContents(
-    absl::flat_hash_map<std::string, StateBuffer>& dst,
+    const Environment& env, absl::flat_hash_map<std::string, StateBuffer>& dst,
     const absl::flat_hash_map<std::string, StateBuffer>& src) {
   RET_CHECK_EQ(dst.size(), src.size());
   for (auto& [name, state_buffer] : dst) {
     const auto it = src.find(name);
     RET_CHECK(it != src.end()) << "Missing state buffer: " << name;
     ABSL_RETURN_IF_ERROR(
-        CopyTensorBufferContents(state_buffer.buffer, it->second.buffer));
+        CopyTensorBufferContents(env, state_buffer.buffer, it->second.buffer));
   }
   return absl::OkStatus();
 }
@@ -460,7 +460,7 @@ absl::Status LitertState::CopyContentsFrom(const LitertState& other) {
   // bank is overwritten as `output_buffers` on the next `GetStateBuffers()`
   // run, and leaving `bank_1_is_input_` untouched keeps this state's bank
   // parity so subsequent runs bind the same buffers as before.
-  return CopyBankContents(ActiveInputBank(), other.ActiveInputBank());
+  return CopyBankContents(env_, ActiveInputBank(), other.ActiveInputBank());
 }
 
 bool LitertState::Contains(absl::string_view tensor_name) const {

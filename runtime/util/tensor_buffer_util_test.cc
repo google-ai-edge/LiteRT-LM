@@ -23,6 +23,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_matchers.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
@@ -384,6 +386,53 @@ TEST(TensorBufferUtilTest,
                                 maybe_wrapped.buffer.PackedSize());
     EXPECT_EQ(packed_size, 1536 * sizeof(float));
   }
+}
+
+absl::StatusOr<bool> DummyWebGpuCopyCallback(const Environment& env,
+                                             TensorBuffer& dst,
+                                             const TensorBuffer& src) {
+  return false;
+}
+
+TEST(TensorBufferUtilTest,
+     CopyTensorBufferContentsWithEnvironmentCopiesHostBuffers) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env, litert::Environment::Create({}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto src, CreateTensorBuffer<int32_t>({4}));
+  LITERT_ASSERT_OK_AND_ASSIGN(auto dst, CreateTensorBuffer<int32_t>({4}));
+  const std::vector<int32_t> values = {7, 14, 21, 28};
+  LITERT_ASSERT_OK(src.Write<int32_t>(values));
+
+  const auto* original_dst_handle = dst.Get();
+  ASSERT_OK(CopyTensorBufferContents(env, dst, src));
+  EXPECT_EQ(dst.Get(), original_dst_handle);
+  EXPECT_THAT(CopyFromTensorBuffer<int32_t>(dst),
+              IsOkAndHolds(ElementsAre(7, 14, 21, 28)));
+
+  // Copying a buffer into itself is a no-op.
+  ASSERT_OK(CopyTensorBufferContents(env, dst, dst));
+  EXPECT_THAT(CopyFromTensorBuffer<int32_t>(dst),
+              IsOkAndHolds(ElementsAre(7, 14, 21, 28)));
+}
+
+struct ScopedWebGpuCopyFnOverride {
+  DeviceTensorBufferCopyFn previous;
+
+  explicit ScopedWebGpuCopyFnOverride(DeviceTensorBufferCopyFn replacement)
+      : previous(RegisterDeviceTensorBufferCopyFn(
+            DeviceTensorBufferCopyBackend::kWebGpu, replacement)) {}
+
+  ~ScopedWebGpuCopyFnOverride() {
+    RegisterDeviceTensorBufferCopyFn(DeviceTensorBufferCopyBackend::kWebGpu,
+                                     previous);
+  }
+};
+
+TEST(TensorBufferUtilTest,
+     RegisterDeviceTensorBufferCopyFnReturnsPreviousCallback) {
+  ScopedWebGpuCopyFnOverride override_fn(&DummyWebGpuCopyCallback);
+  EXPECT_EQ(RegisterDeviceTensorBufferCopyFn(
+                DeviceTensorBufferCopyBackend::kWebGpu, override_fn.previous),
+            &DummyWebGpuCopyCallback);
 }
 
 }  // namespace

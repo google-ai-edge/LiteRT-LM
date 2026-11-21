@@ -164,11 +164,13 @@ class LitertState : public StateInterface {
   // the same name in the `dst` bank, without changing the buffer objects.
   //
   // args:
+  //   env: LiteRT environment owning device/queue handles for device copies.
   //   dst: the bank to copy into.
   //   src: the bank to copy from. Must have the same buffer names as `dst`.
   // returns: OK on success, or an error if the banks have different buffer
   //   names or a copy fails.
   static absl::Status CopyBankContents(
+      const Environment& env,
       absl::flat_hash_map<std::string, StateBuffer>& dst,
       const absl::flat_hash_map<std::string, StateBuffer>& src);
 
