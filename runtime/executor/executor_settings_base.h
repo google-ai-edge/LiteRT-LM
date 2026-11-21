@@ -451,6 +451,9 @@ class ExecutorSettingsBase {
   const std::string& GetLitertDispatchLibDir() const {
     return litert_dispatch_lib_dir_;
   }
+  const std::string& GetLitertCompilerLibDir() const {
+    return litert_compiler_lib_dir_;
+  }
 
   // Should be used by consumers who want to write to a single program cache
   // file. Same order of preference as `GetWeightCacheFile()`.
@@ -486,6 +489,9 @@ class ExecutorSettingsBase {
   }
   void SetLitertDispatchLibDir(const std::string& litert_dispatch_lib_dir) {
     litert_dispatch_lib_dir_ = litert_dispatch_lib_dir;
+  }
+  void SetLitertCompilerLibDir(const std::string& litert_compiler_lib_dir) {
+    litert_compiler_lib_dir_ = litert_compiler_lib_dir;
   }
 
   void SetScopedProgramCacheFile(
@@ -567,6 +573,11 @@ class ExecutorSettingsBase {
   // LiteRT dispatch library directory. If not set, the runtime will look for
   // the library in the path defined as the environment variables.
   std::string litert_dispatch_lib_dir_;
+
+  // LiteRT compiler plugin library directory. LiteRT only JIT-compiles models
+  // that are not compiled ahead of time when this is set; otherwise they run
+  // on the CPU.
+  std::string litert_compiler_lib_dir_;
 
   bool disable_weight_cache_ = false;
   bool disable_program_cache_ = false;

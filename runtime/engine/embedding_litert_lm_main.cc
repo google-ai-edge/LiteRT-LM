@@ -59,6 +59,10 @@ ABSL_FLAG(bool, use_mmap, false,
           "Whether to use memory-mapped file for model loading.");
 ABSL_FLAG(std::string, dispatch_library_dir, "",
           "Path to directory containing LiteRT dispatch libraries.");
+ABSL_FLAG(std::string, compiler_library_dir, "",
+          "Path to directory containing LiteRT compiler plugin libraries. If "
+          "set, models that are not compiled ahead of time are JIT-compiled "
+          "for the NPU. If not set, they run on the CPU.");
 ABSL_FLAG(int, num_warmup, 2, "Number of warmup iterations for benchmarking.");
 ABSL_FLAG(std::string, input_overflow_strategy, "truncate",
           "Input overflow strategy: error, truncate, or chunk_and_average.");
@@ -103,6 +107,7 @@ absl::Status MainHelper(int argc, char** argv) {
   settings.output_size = absl::GetFlag(FLAGS_output_size);
   settings.use_mmap = absl::GetFlag(FLAGS_use_mmap);
   settings.dispatch_library_dir = absl::GetFlag(FLAGS_dispatch_library_dir);
+  settings.compiler_library_dir = absl::GetFlag(FLAGS_compiler_library_dir);
   settings.num_warmup = absl::GetFlag(FLAGS_num_warmup);
   settings.num_iterations = absl::GetFlag(FLAGS_num_iterations);
   settings.input_overflow_strategy =

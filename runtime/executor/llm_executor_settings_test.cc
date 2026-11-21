@@ -260,6 +260,7 @@ cache_dir: )",
       kPathToCache, R"(
 cache_file: Not set
 litert_dispatch_lib_dir: Not set
+litert_compiler_lib_dir: Not set
 model_assets: model_path: )",
       kPathToModel1, R"(
 fake_weights_mode: FAKE_WEIGHTS_NONE
@@ -338,6 +339,7 @@ cache_dir: )",
       kPathToCache, R"(
 cache_file: Not set
 litert_dispatch_lib_dir: Not set
+litert_compiler_lib_dir: Not set
 model_assets: model_path: )",
       kPathToModel1, R"(
 fake_weights_mode: FAKE_WEIGHTS_NONE
@@ -532,6 +534,28 @@ TEST(LlmExecutorConfigTest, AdvancedSettingsWithEnableProfiling) {
   oss.str("");
   oss << settings;
   EXPECT_THAT(oss.str(), ::testing::HasSubstr("enable_profiling: 0"));
+}
+
+TEST(LlmExecutorConfigTest, LitertLibDirs) {
+  auto model_assets = ModelAssets::Create(kPathToModel1);
+  ASSERT_OK(model_assets);
+  ASSERT_OK_AND_ASSIGN(auto settings,
+                       LlmExecutorSettings::CreateDefault(
+                           *std::move(model_assets), Backend::NPU));
+  EXPECT_TRUE(settings.GetLitertCompilerLibDir().empty());
+
+  settings.SetLitertDispatchLibDir("/path/to/dispatch");
+  settings.SetLitertCompilerLibDir("/path/to/compiler");
+  EXPECT_EQ(settings.GetLitertCompilerLibDir(), "/path/to/compiler");
+
+  std::stringstream oss;
+  oss << settings;
+  EXPECT_THAT(
+      oss.str(),
+      ::testing::AllOf(
+          ::testing::HasSubstr("litert_dispatch_lib_dir: /path/to/dispatch\n"),
+          ::testing::HasSubstr(
+              "litert_compiler_lib_dir: /path/to/compiler\n")));
 }
 
 TEST(GetWeightCacheFileTest, CacheDirAndModelPath) {

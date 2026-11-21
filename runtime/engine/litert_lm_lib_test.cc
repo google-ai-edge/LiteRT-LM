@@ -810,6 +810,32 @@ TEST(LiteRtLmLibTest, CreateEngineSettings_CpuConfig) {
   EXPECT_EQ(cpu_config_or->prefill_chunk_size, 512);
 }
 
+TEST(LiteRtLmLibTest, CreateEngineSettings_LitertLibDirs) {
+  const auto model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/test_lm.litertlm";
+  LiteRtLmSettings settings;
+  settings.model_path = model_path.string();
+  settings.backend = "cpu";
+
+  ASSERT_OK_AND_ASSIGN(EngineSettings engine_settings,
+                       CreateEngineSettings(settings));
+  EXPECT_TRUE(engine_settings.GetMainExecutorSettings()
+                  .GetLitertDispatchLibDir()
+                  .empty());
+  EXPECT_TRUE(engine_settings.GetMainExecutorSettings()
+                  .GetLitertCompilerLibDir()
+                  .empty());
+
+  settings.litert_dispatch_lib_dir = "/path/to/dispatch";
+  settings.litert_compiler_lib_dir = "/path/to/compiler";
+  ASSERT_OK_AND_ASSIGN(engine_settings, CreateEngineSettings(settings));
+  EXPECT_EQ(engine_settings.GetMainExecutorSettings().GetLitertDispatchLibDir(),
+            "/path/to/dispatch");
+  EXPECT_EQ(engine_settings.GetMainExecutorSettings().GetLitertCompilerLibDir(),
+            "/path/to/compiler");
+}
+
 TEST(LiteRtLmLibTest, CreateEngineSettings_CustomBackendConfig) {
   RegisterCustomBackend("custom_test_backend");
   RegisterCustomBackend("other_custom_backend");

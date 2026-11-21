@@ -74,6 +74,16 @@ TEST(EmbeddingLiteRtLmLibTest, SetEmbeddingFlagSuccess) {
   EXPECT_TRUE(SetEmbeddingFlag(&settings, "num_iterations", "5").ok());
   EXPECT_EQ(settings.num_iterations, 5);
 
+  EXPECT_TRUE(
+      SetEmbeddingFlag(&settings, "dispatch_library_dir", "/path/to/dispatch")
+          .ok());
+  EXPECT_EQ(settings.dispatch_library_dir, "/path/to/dispatch");
+
+  EXPECT_TRUE(
+      SetEmbeddingFlag(&settings, "compiler_library_dir", "/path/to/compiler")
+          .ok());
+  EXPECT_EQ(settings.compiler_library_dir, "/path/to/compiler");
+
   EXPECT_EQ(settings.gpu_use_ir_model, std::nullopt);
   EXPECT_TRUE(SetEmbeddingFlag(&settings, "gpu_use_ir_model", "enabled").ok());
   EXPECT_THAT(settings.gpu_use_ir_model, Optional(true));
