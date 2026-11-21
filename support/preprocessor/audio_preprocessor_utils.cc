@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "absl/algorithm/container.h"  // from @com_google_absl
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -120,33 +121,58 @@ bool GetNextWindowOfSamples(const AudioPreprocessorConfig& config,
   }
 }
 
+namespace {
+
+// Frames `pcm_frames` into segments of length `config.GetFrameLength()`,
+// invoking `on_segment` for each full or zero-padded trailing frame while
+// updating `input_queue` and `samples_to_next_step` in place.
+absl::Status ForEachFramedSegment(
+    const AudioPreprocessorConfig& config, const std::vector<float>& pcm_frames,
+    std::vector<float>& input_queue, int& samples_to_next_step,
+    absl::FunctionRef<void(absl::Span<const float>)> on_segment) {
+  const int frame_length = config.GetFrameLength();
+  int input_start = 0;
+  while (GetNextWindowOfSamples(config, pcm_frames, input_start, input_queue,
+                                samples_to_next_step)) {
+    if (input_queue.size() != frame_length) {
+      return absl::InternalError(absl::StrCat(
+          "Input queue size is not equal to frame length: ", input_queue.size(),
+          " vs ", frame_length));
+    }
+    on_segment(input_queue);
+  }
+
+  if (!config.BufferLastFrame() && !input_queue.empty() &&
+      input_queue.size() < frame_length) {
+    input_queue.resize(frame_length, 0.0f);
+    on_segment(input_queue);
+    input_queue.clear();
+    if (config.GetSemicausalPadding()) {
+      samples_to_next_step = frame_length - config.GetHopLength();
+      input_queue.resize(config.GetHopLength(), 0.0f);
+    } else {
+      samples_to_next_step = frame_length;
+    }
+  }
+  return absl::OkStatus();
+}
+
+}  // namespace
+
 absl::StatusOr<std::vector<std::vector<float>>> GetFramedSegments(
     const AudioPreprocessorConfig& config, const std::vector<float>& pcm_frames,
     std::vector<float>& input_queue, int& samples_to_next_step) {
   std::vector<std::vector<float>> windowed_signals;
-  int input_start = 0;
-  while (GetNextWindowOfSamples(config, pcm_frames, input_start, input_queue,
-                                samples_to_next_step)) {
-    if (input_queue.size() != config.GetFrameLength()) {
-      return absl::InternalError(absl::StrCat(
-          "Input queue size is not equal to frame length: ", input_queue.size(),
-          " vs ", config.GetFrameLength()));
-    }
-    windowed_signals.push_back(input_queue);
+  if (absl::StatusOr<int> expected_frames = CountFramedSegments(
+          config, pcm_frames.size(), input_queue.size(), samples_to_next_step);
+      expected_frames.ok()) {
+    windowed_signals.reserve(*expected_frames);
   }
-
-  if (!config.BufferLastFrame() && !input_queue.empty() &&
-      input_queue.size() < config.GetFrameLength()) {
-    input_queue.resize(config.GetFrameLength(), 0.0f);
-    windowed_signals.push_back(input_queue);
-    input_queue.clear();
-    if (config.GetSemicausalPadding()) {
-      samples_to_next_step = config.GetFrameLength() - config.GetHopLength();
-      input_queue.resize(config.GetHopLength(), 0.0f);
-    } else {
-      samples_to_next_step = config.GetFrameLength();
-    }
-  }
+  ABSL_RETURN_IF_ERROR(ForEachFramedSegment(
+      config, pcm_frames, input_queue, samples_to_next_step,
+      [&](absl::Span<const float> segment) {
+        windowed_signals.emplace_back(segment.begin(), segment.end());
+      }));
   return windowed_signals;
 }
 
@@ -202,42 +228,90 @@ absl::StatusOr<Dimensions> GetPreprocessedAudioDimensionsForNumSamples(
   return Dimensions({1, num_frames, config.GetFrameLength()});
 }
 
+absl::Status ForEachWindowedSignalForFft(
+    const AudioPreprocessorConfig& config, absl::Span<const float> pcm_frames,
+    std::vector<float>& input_queue, int& samples_to_next_step,
+    absl::FunctionRef<void(absl::Span<const float>)> on_window) {
+  const int frame_length = config.GetFrameLength();
+  const int fft_length = config.GetFftLength();
+  const int hop_length = config.GetHopLength();
+  if (frame_length <= 0 || fft_length <= 0 || hop_length <= 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Frame length (", frame_length, "), FFT length (", fft_length,
+        "), and hop length (", hop_length, ") must be positive."));
+  }
+  if (samples_to_next_step <= 0) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "samples_to_next_step (", samples_to_next_step, ") must be positive."));
+  }
+  const auto padding_type = config.GetFftPaddingType();
+  if (padding_type != AudioPreprocessorConfig::FftPaddingType::kCenter &&
+      padding_type != AudioPreprocessorConfig::FftPaddingType::kRight) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported padding: ", padding_type));
+  }
+
+  int pad_left = 0;
+  int trim_left = 0;
+  int copy_len = frame_length;
+  if (frame_length < fft_length) {
+    if (padding_type == AudioPreprocessorConfig::FftPaddingType::kCenter) {
+      pad_left = (fft_length - frame_length) / 2;
+    }
+  } else if (frame_length > fft_length) {
+    copy_len = fft_length;
+    if (padding_type == AudioPreprocessorConfig::FftPaddingType::kCenter) {
+      trim_left = (frame_length - fft_length) / 2;
+    }
+  }
+
+  const float input_scale = config.GetInputScale();
+  const float pre_emphasis_factor = config.GetPreEmphasisFactor();
+  std::vector<float> scaled_pcm_frames(pcm_frames.size());
+  absl::c_transform(pcm_frames, scaled_pcm_frames.begin(),
+                    [input_scale](float x) { return x * input_scale; });
+
+  const std::vector<float> hanning_window = GetHanningWindow(
+      frame_length, config.GetPeriodicHanning(), config.GetNonZeroHanning());
+  std::vector<float> windowed_signal(fft_length, 0.0f);
+
+  // `windowed_signal` is zero-initialized once; `[pad_left, pad_left +
+  // copy_len)` is invariant and overwritten every frame while padding outside
+  // that range stays zero.
+  auto emit_frame = [&](absl::Span<const float> raw_frame) {
+    int start_i = 0;
+    if (trim_left == 0) {
+      const float pre_emphasized = raw_frame[0] * (1.0f - pre_emphasis_factor);
+      windowed_signal[pad_left] = pre_emphasized * hanning_window[0];
+      start_i = 1;
+    }
+    for (int i = start_i; i < copy_len; ++i) {
+      const int j = trim_left + i;
+      const float pre_emphasized =
+          raw_frame[j] - pre_emphasis_factor * raw_frame[j - 1];
+      windowed_signal[pad_left + i] = pre_emphasized * hanning_window[j];
+    }
+    on_window(windowed_signal);
+  };
+
+  return ForEachFramedSegment(config, scaled_pcm_frames, input_queue,
+                              samples_to_next_step, emit_frame);
+}
+
 absl::StatusOr<std::vector<std::vector<float>>> GetWindowedSignalsForFft(
     const AudioPreprocessorConfig& config, absl::Span<const float> pcm_frames,
     std::vector<float>& input_queue, int& samples_to_next_step) {
-  const float input_scale = config.GetInputScale();
-  const float pre_emphasis_factor = config.GetPreEmphasisFactor();
-  std::vector<float> scaled_pcm_frames(pcm_frames.size(), 0);
-  absl::c_transform(pcm_frames, scaled_pcm_frames.begin(),
-                    [&input_scale](float x) { return x * input_scale; });
-
-  LITERT_ASSIGN_OR_RETURN(auto raw_windowed_signals,
-                          GetFramedSegments(config, scaled_pcm_frames,
-                                            input_queue, samples_to_next_step));
-
   std::vector<std::vector<float>> windowed_signals;
-  windowed_signals.reserve(raw_windowed_signals.size());
-  for (int i = 0; i < raw_windowed_signals.size(); ++i) {
-    const auto& input_frame = raw_windowed_signals[i];
-    windowed_signals.push_back(std::vector<float>(config.GetFrameLength(), 0));
-    std::vector<float>& current_frame = windowed_signals.back();
-    current_frame[0] = input_frame[0] * (1 - pre_emphasis_factor);
-    for (int j = 1; j < config.GetFrameLength(); ++j) {
-      current_frame[j] =
-          input_frame[j] - pre_emphasis_factor * input_frame[j - 1];
-    }
+  if (absl::StatusOr<int> expected_frames = CountFramedSegments(
+          config, pcm_frames.size(), input_queue.size(), samples_to_next_step);
+      expected_frames.ok()) {
+    windowed_signals.reserve(*expected_frames);
   }
-  const std::vector<float> hanning_window =
-      GetHanningWindow(config.GetFrameLength(), config.GetPeriodicHanning(),
-                       config.GetNonZeroHanning());
-  for (int i = 0; i < windowed_signals.size(); ++i) {
-    std::vector<float>& current_frame = windowed_signals[i];
-    for (int j = 0; j < current_frame.size(); ++j) {
-      current_frame[j] *= hanning_window[j];
-    }
-    LITERT_RETURN_IF_ERROR(PadOrTruncateForFft(
-        config.GetFftLength(), config.GetFftPaddingType(), current_frame));
-  }
+  ABSL_RETURN_IF_ERROR(ForEachWindowedSignalForFft(
+      config, pcm_frames, input_queue, samples_to_next_step,
+      [&](absl::Span<const float> window) {
+        windowed_signals.emplace_back(window.begin(), window.end());
+      }));
   return windowed_signals;
 }
 

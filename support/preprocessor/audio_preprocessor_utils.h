@@ -17,6 +17,7 @@
 
 #include <vector>
 
+#include "absl/functional/function_ref.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -73,6 +74,24 @@ absl::StatusOr<Dimensions> GetPreprocessedAudioDimensionsForNumSamples(
 absl::StatusOr<std::vector<std::vector<float>>> GetWindowedSignalsForFft(
     const AudioPreprocessorConfig& config, absl::Span<const float> pcm_frames,
     std::vector<float>& input_queue, int& samples_to_next_step);
+
+// Streams each FFT-ready windowed frame (scaled, pre-emphasized, Hanning-
+// windowed, and padded/truncated to `config.GetFftLength()`) through
+// `on_window` using a single reusable frame buffer of size `fft_length`.
+//
+// Updates `input_queue` and `samples_to_next_step` in place to track streaming
+// framing state across calls (buffering partial trailing samples when
+// `config.BufferLastFrame()` is true, or zero-padding and resetting state when
+// false).
+//
+// The `absl::Span<const float>` passed to `on_window` aliases an internal
+// reusable buffer that is overwritten on the next `on_window` invocation and
+// invalidated when `ForEachWindowedSignalForFft` returns; callers that need to
+// retain frame data beyond a single callback invocation must copy it.
+absl::Status ForEachWindowedSignalForFft(
+    const AudioPreprocessorConfig& config, absl::Span<const float> pcm_frames,
+    std::vector<float>& input_queue, int& samples_to_next_step,
+    absl::FunctionRef<void(absl::Span<const float>)> on_window);
 
 // Converts power spectrograms to log Mel spectrograms using `mel_filterbank`
 // and `config`.
