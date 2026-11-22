@@ -157,9 +157,19 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
       const EmbeddingOptions& options) override;
 
   // Computes a batch of embedding responses for the given batch of requests.
+  //
+  // Text-only requests are passed to the embedding executor in groups of at
+  // most `kMaxTextRequestsPerExecutorBatch`, so that the executor can batch
+  // their text encoder runs while the memory held for pending requests stays
+  // bounded. Requests with image or audio inputs run as soon as they are
+  // processed.
   absl::StatusOr<std::vector<EmbeddingResponse>> ComputeEmbeddingBatch(
       const std::vector<std::vector<InputData>>& contents,
       const EmbeddingOptions& options) override;
+
+  // The maximum number of text-only requests that ComputeEmbeddingBatch passes
+  // to one `EmbeddingExecutorBase::ComputeEmbeddingBatch` call.
+  static constexpr size_t kMaxTextRequestsPerExecutorBatch = 64;
 
   // Returns the benchmark info of the engine.
   absl::optional<BenchmarkInfo> GetBenchmarkInfo() override;
@@ -191,7 +201,11 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
       const override;
 
   // Returns the selected text encoder signatures info if auto-selection was
-  // performed during engine creation, or nullopt otherwise.
+  // performed during engine creation, or nullopt otherwise. Includes both
+  // batch-size-1 signatures and any batched (`B > 1`) signatures in the
+  // selected length range (listed after the `B = 1` signatures; batched
+  // signatures may still be omitted at compile time if the backend falls back
+  // to `B = 1` only).
   const std::optional<SelectedTextSignaturesInfo>&
   GetSelectedTextSignaturesInfo() const override {
     return selected_text_signatures_info_;
@@ -218,6 +232,15 @@ class EmbeddingEngineImpl : public EmbeddingEngine {
 
   absl::StatusOr<EmbeddingResponse> ComputeEmbeddingInternal(
       const ExecutorInputs& inputs, const EmbeddingOptions& options);
+
+  // Returns the executor options for the given embedding options.
+  ComputeEmbeddingOptions GetComputeEmbeddingOptions(
+      const EmbeddingOptions& options) const;
+
+  // Converts an executor output into a response, applying the output size and
+  // normalization of `options`.
+  static absl::StatusOr<EmbeddingResponse> ToEmbeddingResponse(
+      EmbeddingOutput embedding_output, const EmbeddingOptions& options);
 
   // Compiles the vision encoder if it has not been compiled yet. Returns a
   // FailedPreconditionError if the engine cannot serve image inputs at all,

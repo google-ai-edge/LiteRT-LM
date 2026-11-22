@@ -27,9 +27,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "flatbuffers/buffer.h"  // from @flatbuffers
 #include "flatbuffers/flatbuffer_builder.h"  // from @flatbuffers
 #include "litert/c/litert_tensor_buffer_types.h"  // from @litert
@@ -40,11 +42,13 @@
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "litert/cc/litert_tensor_buffer_types.h"  // from @litert
 #include "litert/test/matchers.h"  // from @litert
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/embedding/embedding_executor_base.h"
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
@@ -68,6 +72,7 @@ using ::litert::lm::ExecutorTextData;
 using ::litert::lm::ModelAssets;
 using ::testing::ElementsAre;
 using ::testing::HasSubstr;
+using ::testing::IsEmpty;
 using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
@@ -305,8 +310,11 @@ class FakeEmbeddingModelResources : public ModelResources {
   using ModelResources::HasTFLiteModel;
 
   FakeEmbeddingModelResources(const litert::Model* embedder,
-                              const litert::Model* encoder)
-      : embedder_(embedder), encoder_(encoder) {}
+                              const litert::Model* encoder,
+                              const litert::Model* per_layer_embedder = nullptr)
+      : embedder_(embedder),
+        encoder_(encoder),
+        per_layer_embedder_(per_layer_embedder) {}
 
   bool HasTFLiteModel(proto::LlmMetadata::TfLiteModelType model_type) override {
     return HasTFLiteModel(TfLiteModelTypeToWireString(model_type));
@@ -318,6 +326,9 @@ class FakeEmbeddingModelResources : public ModelResources {
     }
     if (model_type_str == "tf_lite_text_encoder") {
       return encoder_ != nullptr;
+    }
+    if (model_type_str == "tf_lite_per_layer_embedder") {
+      return per_layer_embedder_ != nullptr;
     }
     return false;
   }
@@ -336,6 +347,10 @@ class FakeEmbeddingModelResources : public ModelResources {
     if (model_type_str == "tf_lite_text_encoder") {
       if (encoder_ != nullptr) return encoder_;
       return absl::NotFoundError("kTfLiteTextEncoder model not found.");
+    }
+    if (model_type_str == "tf_lite_per_layer_embedder") {
+      if (per_layer_embedder_ != nullptr) return per_layer_embedder_;
+      return absl::NotFoundError("kTfLitePerLayerEmbedder model not found.");
     }
     return absl::NotFoundError("Model type not found.");
   }
@@ -385,6 +400,7 @@ class FakeEmbeddingModelResources : public ModelResources {
  private:
   const litert::Model* embedder_;
   const litert::Model* encoder_;
+  const litert::Model* per_layer_embedder_;
 };
 
 TEST(EmbeddingLiteRtCompiledModelExecutorTest, CreateExecutor_Success) {
@@ -1400,6 +1416,962 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
   EXPECT_EQ(output.embedding.size(), 12 * 8);
   EXPECT_EQ(output.input_length, 24);
   EXPECT_EQ(output.truncated_length, 12);
+}
+
+// Builds an embedder that maps an int32 token id `t` to a float embedding of
+// shape [1, 1, embedding_dim] filled with `float(t) + offset`.
+std::vector<uint8_t> BuildCastEmbedderModelBuffer(int embedding_dim,
+                                                  float offset = 0.0f) {
+  flatbuffers::FlatBufferBuilder builder;
+
+  auto cast_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_CAST);
+  auto add_opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ADD);
+  auto opcodes_vec = builder.CreateVector({cast_opcode, add_opcode});
+
+  const std::vector<float> offsets(embedding_dim, offset);
+  const auto* offset_bytes = reinterpret_cast<const uint8_t*>(offsets.data());
+  auto empty_buffer = tflite::CreateBuffer(builder);
+  auto offsets_buffer = tflite::CreateBuffer(
+      builder,
+      builder.CreateVector(offset_bytes, offsets.size() * sizeof(float)));
+  auto buffers_vec = builder.CreateVector({empty_buffer, offsets_buffer});
+
+  const std::vector<int32_t> token_dims = {1};
+  const std::vector<int32_t> output_dims = {1, 1, embedding_dim};
+  auto token_tensor = tflite::CreateTensor(
+      builder, builder.CreateVector(token_dims), tflite::TensorType_INT32,
+      /*buffer=*/0, builder.CreateString("token"));
+  auto token_float_tensor = tflite::CreateTensor(
+      builder, builder.CreateVector(token_dims), tflite::TensorType_FLOAT32,
+      /*buffer=*/0, builder.CreateString("token_float"));
+  auto offsets_tensor = tflite::CreateTensor(
+      builder, builder.CreateVector(output_dims), tflite::TensorType_FLOAT32,
+      /*buffer=*/1, builder.CreateString("offsets"));
+  auto output_tensor = tflite::CreateTensor(
+      builder, builder.CreateVector(output_dims), tflite::TensorType_FLOAT32,
+      /*buffer=*/0, builder.CreateString("embedding"));
+  auto tensors_vec = builder.CreateVector(
+      {token_tensor, token_float_tensor, offsets_tensor, output_tensor});
+
+  auto cast_op = tflite::CreateOperator(builder, /*opcode_index=*/0,
+                                        builder.CreateVector<int32_t>({0}),
+                                        builder.CreateVector<int32_t>({1}));
+  auto add_op = tflite::CreateOperator(builder, /*opcode_index=*/1,
+                                       builder.CreateVector<int32_t>({1, 2}),
+                                       builder.CreateVector<int32_t>({3}));
+  auto ops_vec = builder.CreateVector({cast_op, add_op});
+
+  auto subgraph = tflite::CreateSubGraph(builder, tensors_vec,
+                                         builder.CreateVector<int32_t>({0}),
+                                         builder.CreateVector<int32_t>({3}),
+                                         ops_vec, builder.CreateString("main"));
+  auto subgraphs_vec = builder.CreateVector({subgraph});
+
+  auto input_map =
+      tflite::CreateTensorMap(builder, builder.CreateString("token"), 0);
+  auto output_map =
+      tflite::CreateTensorMap(builder, builder.CreateString("embedding"), 3);
+  auto sig_def = tflite::CreateSignatureDef(
+      builder, builder.CreateVector({input_map}),
+      builder.CreateVector({output_map}), builder.CreateString("embedder"),
+      /*subgraph_index=*/0);
+  auto sig_defs_vec = builder.CreateVector({sig_def});
+
+  auto model = tflite::CreateModel(
+      builder, /*version=*/3, opcodes_vec, subgraphs_vec,
+      builder.CreateString("cast_embedder_model"), buffers_vec,
+      /*metadata_buffer=*/0, /*metadata=*/0, sig_defs_vec);
+  tflite::FinishModelBuffer(builder, model);
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+// Options of `BuildBatchedSumEncoderModelBuffer` and `CreateSumModels`.
+struct SumEncoderOptions {
+  // 3 for an `input_mask` of shape [B, T, 1], 2 for [B, T].
+  int mask_rank = 3;
+  // Adds a `per_layer_embeddings` input of shape [B, T, embedding_dim], which
+  // is added to the embeddings.
+  bool with_per_layer_input = false;
+  // Adds the `per_layer_embeddings` input only to batched (B > 1) signatures.
+  bool with_batched_per_layer_input = false;
+  // Gives the batched signatures (B > 1) an `input_mask` with B + 1 rows, so
+  // that their tensors fail to allocate.
+  bool broken_batched_signatures = false;
+  // Gives the batched signatures (B > 1) an `input_mask` of shape
+  // [B, T, embedding_dim], which runs but is not a valid mask.
+  bool batched_mask_per_embedding_element = false;
+  // Makes the batched signatures (B > 1) output the unpooled [B, T, D]
+  // masked embeddings.
+  bool batched_unpooled_output = false;
+  // Gives every signature an empty list of outputs.
+  bool no_outputs = false;
+  // Offset that the cast embedder adds to every token, so that the default
+  // (token 0) embedding used for padding is `embedder_offset`.
+  float embedder_offset = 0.0f;
+  // Also creates a per-layer embedder (a cast embedder without offset).
+  bool with_per_layer_embedder = false;
+};
+
+// Builds a text encoder with one signature `encoder_{B}x{T}` per
+// (batch size, sequence length) pair. Each signature computes
+// `output[b, :] = sum_t(embeddings[b, t, :] + input_mask[b, t])`, i.e. the
+// sum of the embeddings plus the number of unmasked tokens of each row, which
+// does not depend on the padded length as long as padding embeddings are zero.
+// A non-positive batch size or sequence length is dynamic (and 1 at run time).
+std::vector<uint8_t> BuildBatchedSumEncoderModelBuffer(
+    const std::vector<std::pair<int32_t, int32_t>>& batch_and_seq_lengths,
+    int embedding_dim, const SumEncoderOptions& options = {}) {
+  flatbuffers::FlatBufferBuilder builder;
+
+  auto opcodes_vec = builder.CreateVector({
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ADD),
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_SUM),
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_RESHAPE),
+  });
+
+  // Buffer 1 holds the reduction axis (1) of SUM.
+  const int32_t axis = 1;
+  const auto* axis_bytes = reinterpret_cast<const uint8_t*>(&axis);
+  auto empty_buffer = tflite::CreateBuffer(builder);
+  auto axis_buffer = tflite::CreateBuffer(
+      builder, builder.CreateVector(axis_bytes, sizeof(axis)));
+  auto buffers_vec = builder.CreateVector({empty_buffer, axis_buffer});
+
+  // Tensor indices.
+  constexpr int32_t kEmbeddings = 0, kMask = 1, kMasked = 2, kAxis = 3,
+                    kEncodings = 4, kMask3d = 5, kPerLayer = 6,
+                    kEmbeddingsWithMask = 7;
+
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> sig_defs;
+  for (size_t i = 0; i < batch_and_seq_lengths.size(); ++i) {
+    const auto [batch, seq_len] = batch_and_seq_lengths[i];
+    const bool batched = batch > 1;
+    const int32_t runtime_batch = batch <= 0 ? 1 : batch;
+    const int32_t runtime_seq_len = seq_len <= 0 ? 1 : seq_len;
+    const int32_t mask_batch =
+        options.broken_batched_signatures && batched ? batch + 1 : batch;
+    const int32_t runtime_mask_batch = mask_batch <= 0 ? 1 : mask_batch;
+    const int32_t mask_last_dim =
+        options.batched_mask_per_embedding_element && batched ? embedding_dim
+                                                              : 1;
+    const bool has_per_layer_input =
+        options.with_per_layer_input ||
+        (options.with_batched_per_layer_input && batched);
+    const bool unpooled_output = options.batched_unpooled_output && batched;
+
+    // Creates a float tensor of shape `dims`, where the first two dimensions
+    // are the (possibly dynamic) `logical_batch` and `logical_seq_len`.
+    auto float_tensor = [&](const std::vector<int32_t>& dims,
+                            absl::string_view name, int32_t logical_batch,
+                            std::optional<int32_t> logical_seq_len =
+                                std::nullopt) {
+      std::vector<int32_t> shape_signature = dims;
+      bool dynamic = false;
+      if (logical_batch <= 0) {
+        shape_signature[0] = logical_batch;
+        dynamic = true;
+      }
+      if (logical_seq_len.has_value() && *logical_seq_len <= 0) {
+        shape_signature[1] = *logical_seq_len;
+        dynamic = true;
+      }
+      return tflite::CreateTensor(
+          builder, builder.CreateVector(dims), tflite::TensorType_FLOAT32,
+          /*buffer=*/0, builder.CreateString(std::string(name)),
+          /*quantization=*/0, /*is_variable=*/false, /*sparsity=*/0,
+          dynamic ? builder.CreateVector(shape_signature) : 0,
+          /*has_rank=*/dynamic);
+    };
+    const std::vector<int32_t> embeddings_dims = {
+        runtime_batch, runtime_seq_len, embedding_dim};
+    const std::vector<int32_t> mask_3d_dims = {runtime_mask_batch,
+                                               runtime_seq_len, mask_last_dim};
+    const std::vector<int32_t> mask_dims =
+        options.mask_rank == 2
+            ? std::vector<int32_t>{runtime_mask_batch, runtime_seq_len}
+            : mask_3d_dims;
+    auto tensors_vec = builder.CreateVector({
+        float_tensor(embeddings_dims, "embeddings", batch, seq_len),
+        float_tensor(mask_dims, "input_mask", mask_batch, seq_len),
+        float_tensor(embeddings_dims, "masked", batch, seq_len),
+        tflite::CreateTensor(builder, builder.CreateVector<int32_t>({1}),
+                             tflite::TensorType_INT32, /*buffer=*/1,
+                             builder.CreateString("axis")),
+        float_tensor({runtime_batch, embedding_dim}, "encodings", batch),
+        float_tensor(mask_3d_dims, "input_mask_3d", mask_batch, seq_len),
+        float_tensor(embeddings_dims, "per_layer_embeddings", batch, seq_len),
+        float_tensor(embeddings_dims, "embeddings_with_mask", batch, seq_len),
+    });
+
+    std::vector<flatbuffers::Offset<tflite::Operator>> ops;
+    int32_t mask_for_add = kMask;
+    if (options.mask_rank == 2) {
+      ops.push_back(tflite::CreateOperator(
+          builder, /*opcode_index=*/2, builder.CreateVector<int32_t>({kMask}),
+          builder.CreateVector<int32_t>({kMask3d}),
+          tflite::BuiltinOptions_ReshapeOptions,
+          tflite::CreateReshapeOptions(builder,
+                                       builder.CreateVector(mask_3d_dims))
+              .Union()));
+      mask_for_add = kMask3d;
+    }
+    // masked = embeddings + mask (+ per_layer_embeddings).
+    ops.push_back(tflite::CreateOperator(
+        builder, /*opcode_index=*/0,
+        builder.CreateVector<int32_t>({kEmbeddings, mask_for_add}),
+        builder.CreateVector<int32_t>(
+            {has_per_layer_input ? kEmbeddingsWithMask : kMasked})));
+    if (has_per_layer_input) {
+      ops.push_back(tflite::CreateOperator(
+          builder, /*opcode_index=*/0,
+          builder.CreateVector<int32_t>({kEmbeddingsWithMask, kPerLayer}),
+          builder.CreateVector<int32_t>({kMasked})));
+    }
+    const int32_t output = unpooled_output ? kMasked : kEncodings;
+    if (!unpooled_output) {
+      ops.push_back(tflite::CreateOperator(
+          builder, /*opcode_index=*/1,
+          builder.CreateVector<int32_t>({kMasked, kAxis}),
+          builder.CreateVector<int32_t>({kEncodings}),
+          tflite::BuiltinOptions_ReducerOptions,
+          tflite::CreateReducerOptions(builder, /*keep_dims=*/false).Union()));
+    }
+
+    std::vector<int32_t> sg_inputs = {kEmbeddings, kMask};
+    std::vector<flatbuffers::Offset<tflite::TensorMap>> input_maps = {
+        tflite::CreateTensorMap(builder, builder.CreateString("embeddings"),
+                                kEmbeddings),
+        tflite::CreateTensorMap(builder, builder.CreateString("input_mask"),
+                                kMask),
+    };
+    if (has_per_layer_input) {
+      sg_inputs.push_back(kPerLayer);
+      input_maps.push_back(tflite::CreateTensorMap(
+          builder, builder.CreateString("per_layer_embeddings"), kPerLayer));
+    }
+
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, tensors_vec, builder.CreateVector(sg_inputs),
+        options.no_outputs ? builder.CreateVector<int32_t>({})
+                           : builder.CreateVector<int32_t>({output}),
+        builder.CreateVector(ops),
+        builder.CreateString(absl::StrCat("subgraph_", i))));
+    std::vector<flatbuffers::Offset<tflite::TensorMap>> output_maps;
+    if (!options.no_outputs) {
+      output_maps.push_back(tflite::CreateTensorMap(
+          builder, builder.CreateString("encodings"), output));
+    }
+    const std::string signature_name =
+        batch <= 0 ? absl::StrCat("encoder_", seq_len)
+                   : absl::StrCat("encoder_", batch, "x", seq_len);
+    sig_defs.push_back(tflite::CreateSignatureDef(
+        builder, builder.CreateVector(input_maps),
+        builder.CreateVector(output_maps), builder.CreateString(signature_name),
+        /*subgraph_index=*/i));
+  }
+
+  auto model = tflite::CreateModel(
+      builder, /*version=*/3, opcodes_vec, builder.CreateVector(subgraphs),
+      builder.CreateString("batched_sum_encoder_model"), buffers_vec,
+      /*metadata_buffer=*/0, /*metadata=*/0, builder.CreateVector(sig_defs));
+  tflite::FinishModelBuffer(builder, model);
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+// Returns the sum of `tokens` plus their count, i.e. each element of the
+// output of the sum encoder for these tokens with the cast embedder.
+float ExpectedSumEncoding(const std::vector<int32_t>& tokens) {
+  float expected = tokens.size();
+  for (int32_t token : tokens) expected += std::max(token, 0);
+  return expected;
+}
+
+// Creates text-only executor inputs holding a copy of `tokens`.
+absl::StatusOr<ExecutorInputs> CreateTokenInputs(
+    Environment& env, const std::vector<int32_t>& tokens) {
+  auto buffer = TensorBuffer::CreateManaged(
+      env, ::litert::TensorBufferType::kHostMemory,
+      RankedTensorType(ElementType::Int32,
+                       Layout(Dimensions({static_cast<int>(tokens.size())}))),
+      tokens.size() * sizeof(int32_t));
+  if (!buffer.HasValue()) {
+    return absl::InternalError(buffer.Error().Message());
+  }
+  if (auto written = buffer->Write(absl::MakeConstSpan(tokens));
+      !written.HasValue()) {
+    return absl::InternalError(written.Error().Message());
+  }
+  return ExecutorInputs(ExecutorTextData(std::move(*buffer)), std::nullopt,
+                        std::nullopt);
+}
+
+// The cast embedder and a sum encoder, which must outlive the executors
+// created from them.
+struct SumModels {
+  std::vector<uint8_t> embedder_buf;
+  std::vector<uint8_t> encoder_buf;
+  std::vector<uint8_t> per_layer_embedder_buf;
+  std::optional<Model> embedder;
+  std::optional<Model> encoder;
+  std::optional<Model> per_layer_embedder;
+};
+
+constexpr int kSumEmbeddingDim = 8;
+
+// Returns `value` repeated for every element of a sum encoder output.
+std::vector<float> SumEncoderOutput(float value) {
+  return std::vector<float>(kSumEmbeddingDim, value);
+}
+
+absl::StatusOr<std::unique_ptr<SumModels>> CreateSumModels(
+    const std::vector<std::pair<int32_t, int32_t>>& batch_and_seq_lengths,
+    const SumEncoderOptions& options = {}) {
+  auto models = std::make_unique<SumModels>();
+  models->embedder_buf =
+      BuildCastEmbedderModelBuffer(kSumEmbeddingDim, options.embedder_offset);
+  models->encoder_buf = BuildBatchedSumEncoderModelBuffer(
+      batch_and_seq_lengths, kSumEmbeddingDim, options);
+  auto embedder = Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+      models->embedder_buf.data(), models->embedder_buf.size()));
+  auto encoder = Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+      models->encoder_buf.data(), models->encoder_buf.size()));
+  if (!embedder.HasValue() || !encoder.HasValue()) {
+    return absl::InternalError("Failed to create the test models.");
+  }
+  models->embedder = std::move(*embedder);
+  models->encoder = std::move(*encoder);
+  if (options.with_per_layer_embedder) {
+    models->per_layer_embedder_buf =
+        BuildCastEmbedderModelBuffer(kSumEmbeddingDim);
+    auto per_layer_embedder = Model::CreateFromBuffer(
+        litert::BufferRef<uint8_t>(models->per_layer_embedder_buf.data(),
+                                   models->per_layer_embedder_buf.size()));
+    if (!per_layer_embedder.HasValue()) {
+      return absl::InternalError("Failed to create the per-layer embedder.");
+    }
+    models->per_layer_embedder = std::move(*per_layer_embedder);
+  }
+  return models;
+}
+
+absl::StatusOr<std::unique_ptr<EmbeddingLiteRtCompiledModelExecutor>>
+CreateSumExecutor(Environment& env, const SumModels& models,
+                  std::vector<std::string> selected_signatures = {}) {
+  ABSL_ASSIGN_OR_RETURN(ModelAssets model_assets,
+                        ModelAssets::Create("dummy_model_path"));
+  ABSL_ASSIGN_OR_RETURN(EmbeddingExecutorSettings settings,
+                        EmbeddingExecutorSettings::CreateDefault(
+                            model_assets, /*backend=*/Backend::CPU));
+  settings.SetSelectedSignatures(std::move(selected_signatures));
+  return EmbeddingLiteRtCompiledModelExecutor::Create(
+      settings, env,
+      std::make_unique<FakeEmbeddingModelResources>(
+          &*models.embedder, &*models.encoder,
+          models.per_layer_embedder.has_value() ? &*models.per_layer_embedder
+                                                : nullptr));
+}
+
+absl::StatusOr<std::vector<ExecutorInputs>> CreateBatchInputs(
+    Environment& env, const std::vector<std::vector<int32_t>>& requests) {
+  std::vector<ExecutorInputs> batch_inputs;
+  for (const auto& tokens : requests) {
+    ABSL_ASSIGN_OR_RETURN(auto inputs, CreateTokenInputs(env, tokens));
+    batch_inputs.push_back(std::move(inputs));
+  }
+  return batch_inputs;
+}
+
+// Runs `ComputeEmbeddingBatch` with profiling, and returns the outputs and the
+// number of padded tokens that the text encoder processed.
+absl::StatusOr<std::pair<std::vector<EmbeddingOutput>, int64_t>>
+RunProfiledBatch(EmbeddingLiteRtCompiledModelExecutor& executor,
+                 const std::vector<ExecutorInputs>& batch_inputs,
+                 const ComputeEmbeddingOptions& options = {}) {
+  ABSL_RETURN_IF_ERROR(executor.StartProfiling());
+  ABSL_ASSIGN_OR_RETURN(auto outputs,
+                        executor.ComputeEmbeddingBatch(batch_inputs, options));
+  ABSL_ASSIGN_OR_RETURN(ExecutorStats stats, executor.StopProfiling());
+  return std::make_pair(
+      std::move(outputs),
+      stats.GetMetricAsInt64("(e2e) Embedding num padded tokens"));
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingBatch_BatchedSignature_MatchesSingleSequenceRuns) {
+  // `encoder_1x8` and `encoder_2x8` share the sequence length 8, and must not
+  // shadow each other.
+  ASSERT_OK_AND_ASSIGN(auto models, CreateSumModels({{1, 8}, {2, 4}, {2, 8}}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+  ASSERT_OK_AND_ASSIGN(auto input_dims, executor->GetExpectedInputDimension());
+  EXPECT_EQ(input_dims, (std::vector<int>{1, 8, kSumEmbeddingDim}));
+
+  const std::vector<std::vector<int32_t>> requests = {
+      {1, 2, 3}, {5}, {7, 11, 13, 17}};
+  ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+  ASSERT_OK_AND_ASSIGN(auto profiled_batch,
+                       RunProfiledBatch(*executor, batch_inputs));
+  auto& [outputs, padded_tokens] = profiled_batch;
+  // The two shortest requests run together on `encoder_2x4` (2 x 4 padded
+  // tokens) and the longest one alone on `encoder_1x8` (8 padded tokens),
+  // instead of 3 x 8 padded tokens without batching.
+  EXPECT_EQ(padded_tokens, 16);
+
+  ASSERT_EQ(outputs.size(), requests.size());
+  for (size_t i = 0; i < requests.size(); ++i) {
+    EXPECT_EQ(
+        outputs[i].embedding,
+        std::vector<float>(kSumEmbeddingDim, ExpectedSumEncoding(requests[i])))
+        << "request " << i;
+    EXPECT_EQ(outputs[i].input_length, requests[i].size());
+    EXPECT_EQ(outputs[i].num_chunks, 1);
+
+    ASSERT_OK_AND_ASSIGN(auto single_output,
+                         executor->ComputeEmbedding(batch_inputs[i]));
+    EXPECT_EQ(outputs[i].embedding, single_output.embedding) << "request " << i;
+  }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingBatch_TwoDimensionalMask_CascadesBatchSizes) {
+  // EmbeddingGemma v2 exports an `input_mask` of shape [B, T].
+  ASSERT_OK_AND_ASSIGN(auto models,
+                       CreateSumModels({{1, 8}, {2, 4}, {4, 4}},
+                                       SumEncoderOptions{.mask_rank = 2}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+  const std::vector<std::vector<int32_t>> requests = {
+      {1}, {2, 3}, {4, 5, 6}, {7, 8, 9, 10}, {11}, {12, 13}, {14, 15, 16}};
+  ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+  ASSERT_OK_AND_ASSIGN(auto profiled_batch,
+                       RunProfiledBatch(*executor, batch_inputs));
+  auto& [outputs, padded_tokens] = profiled_batch;
+  // 4 requests on `encoder_4x4`, 2 on `encoder_2x4` and 1 on `encoder_1x8`.
+  EXPECT_EQ(padded_tokens, 4 * 4 + 2 * 4 + 8);
+
+  ASSERT_EQ(outputs.size(), requests.size());
+  for (size_t i = 0; i < requests.size(); ++i) {
+    EXPECT_EQ(
+        outputs[i].embedding,
+        std::vector<float>(kSumEmbeddingDim, ExpectedSumEncoding(requests[i])))
+        << "request " << i;
+  }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingBatch_SkipsBatchedSignaturesWithMorePadding) {
+  // Running the 4 short requests on `encoder_4x16` would process 64 padded
+  // tokens instead of 4 x 4 on `encoder_1x4`.
+  ASSERT_OK_AND_ASSIGN(auto models,
+                       CreateSumModels({{1, 4}, {1, 16}, {4, 16}}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+  const std::vector<std::vector<int32_t>> requests = {
+      {1, 2}, {3, 4}, {5, 6}, {7, 8}};
+  ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+  ASSERT_OK_AND_ASSIGN(auto profiled_batch,
+                       RunProfiledBatch(*executor, batch_inputs));
+  auto& [outputs, padded_tokens] = profiled_batch;
+  EXPECT_EQ(padded_tokens, 4 * 4);
+  ASSERT_EQ(outputs.size(), requests.size());
+  for (size_t i = 0; i < requests.size(); ++i) {
+    EXPECT_EQ(
+        outputs[i].embedding,
+        std::vector<float>(kSumEmbeddingDim, ExpectedSumEncoding(requests[i])))
+        << "request " << i;
+  }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingBatch_MixedLengths_SkipsBatchedWhenTotalPaddingIncreases) {
+  ASSERT_OK_AND_ASSIGN(auto models,
+                       CreateSumModels({{1, 4}, {1, 16}, {4, 12}}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+  // 4 requests of lengths 2, 2, 2, 10: single-item padded tokens =
+  // 4 + 4 + 4 + 16 = 28, whereas `encoder_4x12` would process 4 * 12 = 48.
+  const std::vector<std::vector<int32_t>> mixed_requests = {
+      {1, 2},
+      {3, 4},
+      {5, 6},
+      {7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+  };
+  ASSERT_OK_AND_ASSIGN(auto mixed_inputs,
+                       CreateBatchInputs(env, mixed_requests));
+  ASSERT_OK_AND_ASSIGN(auto mixed_profiled,
+                       RunProfiledBatch(*executor, mixed_inputs));
+  EXPECT_EQ(mixed_profiled.second, 4 + 4 + 4 + 16);
+  ASSERT_EQ(mixed_profiled.first.size(), mixed_requests.size());
+  for (size_t i = 0; i < mixed_requests.size(); ++i) {
+    EXPECT_EQ(mixed_profiled.first[i].embedding,
+              SumEncoderOutput(ExpectedSumEncoding(mixed_requests[i])))
+        << "mixed request " << i;
+  }
+
+  // 4 requests of lengths 10, 10, 10, 10: 4 * 12 = 48 <= 16 + 16 + 16 + 16,
+  // so `encoder_4x12` is dispatched, which the padded token count (48 instead
+  // of 64) shows.
+  const std::vector<std::vector<int32_t>> equal_requests = {
+      {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+      {2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+      {3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+      {4, 5, 6, 7, 8, 9, 10, 11, 12, 13},
+  };
+  ASSERT_OK_AND_ASSIGN(auto equal_inputs,
+                       CreateBatchInputs(env, equal_requests));
+  ASSERT_OK_AND_ASSIGN(auto equal_profiled,
+                       RunProfiledBatch(*executor, equal_inputs));
+  EXPECT_EQ(equal_profiled.second, 4 * 12);
+  ASSERT_EQ(equal_profiled.first.size(), equal_requests.size());
+  for (size_t i = 0; i < equal_requests.size(); ++i) {
+    EXPECT_EQ(equal_profiled.first[i].embedding,
+              SumEncoderOutput(ExpectedSumEncoding(equal_requests[i])))
+        << "equal request " << i;
+  }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingBatch_MixedInputsKeepTheirOrder) {
+  ASSERT_OK_AND_ASSIGN(auto models, CreateSumModels({{1, 8}, {2, 4}}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+  const std::vector<std::vector<int32_t>> requests = {
+      {1, 2},
+      // Too long for any signature: truncated to 8 tokens on `encoder_1x8`.
+      {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+      {3, 4, 5},
+      // A negative (multimodal placeholder) token is never batched.
+      {6, -1},
+  };
+  ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+  ASSERT_OK_AND_ASSIGN(
+      auto profiled_batch,
+      RunProfiledBatch(
+          *executor, batch_inputs,
+          {.input_overflow_strategy = InputOverflowStrategy::kTruncate}));
+  auto& [outputs, padded_tokens] = profiled_batch;
+  // Requests 0 and 2 run together on `encoder_2x4`; 1 and 3 run alone on
+  // `encoder_1x8`.
+  EXPECT_EQ(padded_tokens, 2 * 4 + 8 + 8);
+
+  ASSERT_EQ(outputs.size(), requests.size());
+  EXPECT_EQ(
+      outputs[0].embedding,
+      std::vector<float>(kSumEmbeddingDim, ExpectedSumEncoding(requests[0])));
+  EXPECT_EQ(outputs[1].embedding,
+            std::vector<float>(kSumEmbeddingDim,
+                               ExpectedSumEncoding({1, 2, 3, 4, 5, 6, 7, 8})));
+  EXPECT_EQ(outputs[1].input_length, 10);
+  EXPECT_EQ(outputs[1].truncated_length, 8);
+  EXPECT_EQ(
+      outputs[2].embedding,
+      std::vector<float>(kSumEmbeddingDim, ExpectedSumEncoding(requests[2])));
+  EXPECT_EQ(
+      outputs[3].embedding,
+      std::vector<float>(kSumEmbeddingDim, ExpectedSumEncoding(requests[3])));
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingBatch_LongInputsFallBackToSingleSequenceRuns) {
+  ASSERT_OK_AND_ASSIGN(auto models, CreateSumModels({{1, 4}, {1, 8}, {2, 4}}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+  // Both requests are longer than `encoder_2x4`, so they run one at a time on
+  // `encoder_1x8`.
+  const std::vector<std::vector<int32_t>> requests = {{1, 2, 3, 4, 5},
+                                                      {6, 7, 8, 9, 10, 11}};
+  ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+  ASSERT_OK_AND_ASSIGN(auto profiled_batch,
+                       RunProfiledBatch(*executor, batch_inputs));
+  auto& [outputs, padded_tokens] = profiled_batch;
+  EXPECT_EQ(padded_tokens, 16);
+  ASSERT_EQ(outputs.size(), requests.size());
+  for (size_t i = 0; i < requests.size(); ++i) {
+    EXPECT_EQ(
+        outputs[i].embedding,
+        std::vector<float>(kSumEmbeddingDim, ExpectedSumEncoding(requests[i])))
+        << "request " << i;
+  }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingBatch_UnselectedBatchedSignaturesAreNotUsed) {
+  ASSERT_OK_AND_ASSIGN(auto models, CreateSumModels({{1, 8}, {2, 4}}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor,
+      CreateSumExecutor(env, *models, /*selected_signatures=*/{"encoder_1x8"}));
+
+  ASSERT_OK_AND_ASSIGN(auto batch_inputs,
+                       CreateBatchInputs(env, {{1, 2}, {3, 4}}));
+  ASSERT_OK_AND_ASSIGN(auto profiled_batch,
+                       RunProfiledBatch(*executor, batch_inputs));
+  auto& [outputs, padded_tokens] = profiled_batch;
+  EXPECT_EQ(padded_tokens, 2 * 8);
+  EXPECT_EQ(outputs.size(), 2);
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     Create_DynamicBatchDimension_RunsAsBatchSizeOne) {
+  ASSERT_OK_AND_ASSIGN(auto models, CreateSumModels({{-1, 8}}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+  EXPECT_THAT(
+      executor->GetSupportedVariants(),
+      ElementsAre(TextEncoderVariant{.batch_size = 1, .sequence_length = 8}));
+  ASSERT_OK_AND_ASSIGN(auto input_dims, executor->GetExpectedInputDimension());
+  EXPECT_EQ(input_dims, (std::vector<int>{-1, 8, kSumEmbeddingDim}));
+
+  const std::vector<std::vector<int32_t>> requests = {{1, 2, 3}, {4, 5}};
+  ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+  ASSERT_OK_AND_ASSIGN(auto single_output,
+                       executor->ComputeEmbedding(batch_inputs[0]));
+  EXPECT_EQ(
+      single_output.embedding,
+      std::vector<float>(kSumEmbeddingDim, ExpectedSumEncoding(requests[0])));
+
+  ASSERT_OK_AND_ASSIGN(auto profiled_batch,
+                       RunProfiledBatch(*executor, batch_inputs));
+  EXPECT_EQ(profiled_batch.second, 2 * 8);
+  ASSERT_EQ(profiled_batch.first.size(), requests.size());
+  for (size_t i = 0; i < requests.size(); ++i) {
+    EXPECT_EQ(
+        profiled_batch.first[i].embedding,
+        std::vector<float>(kSumEmbeddingDim, ExpectedSumEncoding(requests[i])))
+        << "request " << i;
+  }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     Create_OnlyBatchedSignatures_ReturnsFailedPrecondition) {
+  ASSERT_OK_AND_ASSIGN(auto models, CreateSumModels({{2, 8}}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  EXPECT_THAT(CreateSumExecutor(env, *models),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       HasSubstr("batch size 1")));
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     Create_BatchedSignaturesFailToLoad_FallsBackToSingleSignatures) {
+  ASSERT_OK_AND_ASSIGN(
+      auto models,
+      CreateSumModels({{1, 8}, {2, 4}},
+                      SumEncoderOptions{.broken_batched_signatures = true}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+  const std::vector<std::vector<int32_t>> requests = {{1, 2}, {3, 4}};
+  ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+  ASSERT_OK_AND_ASSIGN(auto profiled_batch,
+                       RunProfiledBatch(*executor, batch_inputs));
+  auto& [outputs, padded_tokens] = profiled_batch;
+  // Both requests run alone on `encoder_1x8`.
+  EXPECT_EQ(padded_tokens, 2 * 8);
+  ASSERT_EQ(outputs.size(), requests.size());
+  for (size_t i = 0; i < requests.size(); ++i) {
+    EXPECT_EQ(
+        outputs[i].embedding,
+        std::vector<float>(kSumEmbeddingDim, ExpectedSumEncoding(requests[i])))
+        << "request " << i;
+  }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingBatch_PerLayerInputWithoutEmbedder_ReturnsError) {
+  ASSERT_OK_AND_ASSIGN(
+      auto models,
+      CreateSumModels({{1, 8}, {2, 4}},
+                      SumEncoderOptions{.with_per_layer_input = true}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+  ASSERT_OK_AND_ASSIGN(auto batch_inputs,
+                       CreateBatchInputs(env, {{1, 2}, {3, 4}}));
+  EXPECT_THAT(
+      executor->ComputeEmbedding(batch_inputs[0]),
+      StatusIs(absl::StatusCode::kFailedPrecondition, HasSubstr("per-layer")));
+  EXPECT_THAT(
+      executor->ComputeEmbeddingBatch(batch_inputs),
+      StatusIs(absl::StatusCode::kFailedPrecondition, HasSubstr("per-layer")));
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     Create_BatchedSignaturesFailToLoad_InterleavedSignatures) {
+  // The export interleaves the batch sizes, so the batch size 1 signatures
+  // kept after the fallback have non-contiguous indices.
+  ASSERT_OK_AND_ASSIGN(
+      auto models,
+      CreateSumModels({{1, 4}, {2, 4}, {1, 8}, {2, 8}},
+                      SumEncoderOptions{.broken_batched_signatures = true}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+  EXPECT_THAT(
+      executor->GetSupportedVariants(),
+      ElementsAre(TextEncoderVariant{.batch_size = 1, .sequence_length = 4},
+                  TextEncoderVariant{.batch_size = 1, .sequence_length = 8}));
+
+  const std::vector<std::vector<int32_t>> requests = {
+      {1, 2}, {3, 4, 5, 6, 7, 8}, {9, 10}};
+  ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+  ASSERT_OK_AND_ASSIGN(auto profiled_batch,
+                       RunProfiledBatch(*executor, batch_inputs));
+  auto& [outputs, padded_tokens] = profiled_batch;
+  // Each request runs alone, on `encoder_1x4` or `encoder_1x8`.
+  EXPECT_EQ(padded_tokens, 4 + 8 + 4);
+  ASSERT_EQ(outputs.size(), requests.size());
+  for (size_t i = 0; i < requests.size(); ++i) {
+    EXPECT_EQ(outputs[i].embedding,
+              SumEncoderOutput(ExpectedSumEncoding(requests[i])))
+        << "request " << i;
+  }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingBatch_ReusedBatchedSignature_RewritesPaddingAndMask) {
+  // Padding uses the default (token 0) embedding, which is 100 here, so that
+  // it differs from zeros and from stale embeddings of an earlier run.
+  constexpr float kOffset = 100.0f;
+  ASSERT_OK_AND_ASSIGN(
+      auto models,
+      CreateSumModels({{1, 8}, {2, 8}},
+                      SumEncoderOptions{.embedder_offset = kOffset}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+  // Every position of the 8 padded positions contributes the offset: tokens
+  // as `t + offset` (plus 1 for the mask), padding as the default embedding.
+  auto expected = [&](const std::vector<int32_t>& tokens) {
+    return SumEncoderOutput(ExpectedSumEncoding(tokens) + 8 * kOffset);
+  };
+
+  // A long group, then a short group on the same `encoder_2x8` signature.
+  for (const std::vector<std::vector<int32_t>>& requests :
+       std::vector<std::vector<std::vector<int32_t>>>{
+           {{1, 2, 3, 4, 5, 6, 7}, {2, 3, 4, 5, 6, 7, 8}}, {{3}, {4}}}) {
+    ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+    ASSERT_OK_AND_ASSIGN(auto profiled_batch,
+                         RunProfiledBatch(*executor, batch_inputs));
+    auto& [outputs, padded_tokens] = profiled_batch;
+    EXPECT_EQ(padded_tokens, 2 * 8);
+    ASSERT_EQ(outputs.size(), requests.size());
+    for (size_t i = 0; i < requests.size(); ++i) {
+      EXPECT_EQ(outputs[i].embedding, expected(requests[i]))
+          << "request " << i << " of length " << requests[i].size();
+      ASSERT_OK_AND_ASSIGN(auto single_output,
+                           executor->ComputeEmbedding(batch_inputs[i]));
+      EXPECT_EQ(outputs[i].embedding, single_output.embedding);
+    }
+  }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingBatch_BatchedSignatureWithPerLayerEmbeddings) {
+  ASSERT_OK_AND_ASSIGN(
+      auto models,
+      CreateSumModels({{1, 8}, {2, 4}},
+                      SumEncoderOptions{.with_per_layer_input = true,
+                                        .with_per_layer_embedder = true}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+  const std::vector<std::vector<int32_t>> requests = {{1, 2}, {3, 4, 5}};
+  ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+  ASSERT_OK_AND_ASSIGN(auto profiled_batch,
+                       RunProfiledBatch(*executor, batch_inputs));
+  auto& [outputs, padded_tokens] = profiled_batch;
+  // Both requests run together on `encoder_2x4`.
+  EXPECT_EQ(padded_tokens, 2 * 4);
+  ASSERT_EQ(outputs.size(), requests.size());
+  for (size_t i = 0; i < requests.size(); ++i) {
+    // The per-layer embeddings add the tokens a second time.
+    float token_sum = 0;
+    for (int32_t token : requests[i]) token_sum += token;
+    EXPECT_EQ(outputs[i].embedding,
+              SumEncoderOutput(ExpectedSumEncoding(requests[i]) + token_sum))
+        << "request " << i;
+    ASSERT_OK_AND_ASSIGN(auto single_output,
+                         executor->ComputeEmbedding(batch_inputs[i]));
+    EXPECT_EQ(outputs[i].embedding, single_output.embedding);
+  }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     Create_DropsBatchedSignaturesThatCannotRun) {
+  const std::vector<std::pair<std::string, SumEncoderOptions>> cases = {
+      {"mask_per_embedding_element",
+       {.batched_mask_per_embedding_element = true}},
+      {"unpooled_output", {.batched_unpooled_output = true}},
+      {"per_layer_input_without_embedder",
+       {.with_batched_per_layer_input = true}},
+  };
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  for (const auto& [name, options] : cases) {
+    SCOPED_TRACE(name);
+    ASSERT_OK_AND_ASSIGN(auto models,
+                         CreateSumModels({{1, 8}, {2, 4}}, options));
+    ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+    const std::vector<std::vector<int32_t>> requests = {{1, 2}, {3, 4}};
+    ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+    ASSERT_OK_AND_ASSIGN(auto profiled_batch,
+                         RunProfiledBatch(*executor, batch_inputs));
+    auto& [outputs, padded_tokens] = profiled_batch;
+    // `encoder_2x4` is dropped, so both requests run alone on `encoder_1x8`.
+    EXPECT_EQ(padded_tokens, 2 * 8);
+    ASSERT_EQ(outputs.size(), requests.size());
+    for (size_t i = 0; i < requests.size(); ++i) {
+      EXPECT_EQ(outputs[i].embedding,
+                SumEncoderOutput(ExpectedSumEncoding(requests[i])))
+          << "request " << i;
+    }
+  }
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     Create_SkipsSignaturesWithInvalidSequenceLength) {
+  ASSERT_OK_AND_ASSIGN(auto models, CreateSumModels({{1, -1}, {1, 8}}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+  EXPECT_THAT(
+      executor->GetSupportedVariants(),
+      ElementsAre(TextEncoderVariant{.batch_size = 1, .sequence_length = 8}));
+
+  ASSERT_OK_AND_ASSIGN(auto inputs, CreateTokenInputs(env, {1, 2, 3}));
+  ASSERT_OK_AND_ASSIGN(auto output, executor->ComputeEmbedding(inputs));
+  EXPECT_EQ(output.embedding, SumEncoderOutput(ExpectedSumEncoding({1, 2, 3})));
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     Create_SignatureWithoutOutputs_ReturnsFailedPrecondition) {
+  ASSERT_OK_AND_ASSIGN(
+      auto models,
+      CreateSumModels({{1, 8}}, SumEncoderOptions{.no_outputs = true}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  EXPECT_THAT(CreateSumExecutor(env, *models),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       HasSubstr("has no output tensors")));
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingBatch_OverflowError_FailsBeforeAnyRun) {
+  ASSERT_OK_AND_ASSIGN(auto models, CreateSumModels({{1, 4}, {2, 4}}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+  // The first two requests would run on `encoder_2x4`, but the last one is
+  // too long.
+  ASSERT_OK_AND_ASSIGN(
+      auto batch_inputs,
+      CreateBatchInputs(env, {{1, 2}, {3, 4}, {1, 2, 3, 4, 5, 6}}));
+  ASSERT_OK(executor->StartProfiling());
+  EXPECT_THAT(
+      executor->ComputeEmbeddingBatch(
+          batch_inputs,
+          ComputeEmbeddingOptions{.input_overflow_strategy =
+                                      InputOverflowStrategy::kError}),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("exceeds maximum supported signature length")));
+  ASSERT_OK_AND_ASSIGN(ExecutorStats stats, executor->StopProfiling());
+  EXPECT_EQ(stats.GetMetricAsInt64("(e2e) Embedding num padded tokens"), 0);
+}
+
+TEST(GroupInputsForBatchedSignaturesTest, NoSignatures) {
+  EXPECT_THAT(GroupInputsForBatchedSignatures({1, 2}, {}, {}), IsEmpty());
+  EXPECT_THAT(GroupInputsForBatchedSignatures({1, 2}, {}, {{2, {{4, 1}}}}),
+              IsEmpty());
+  EXPECT_THAT(GroupInputsForBatchedSignatures({1, 2}, {{4, 0}}, {}), IsEmpty());
+  EXPECT_THAT(GroupInputsForBatchedSignatures({1, 2}, {{4, 0}}, {{2, {}}}),
+              IsEmpty());
+}
+
+TEST(GroupInputsForBatchedSignaturesTest, IgnoresInvalidBatchSizeOrLength) {
+  EXPECT_THAT(GroupInputsForBatchedSignatures(
+                  {1, 2}, /*single_signatures=*/{{4, 0}},
+                  /*batched_signatures=*/
+                  {{-1, {{4, 1}}}, {0, {{4, 2}}}, {1, {{4, 3}}}}),
+              IsEmpty());
+  EXPECT_THAT(GroupInputsForBatchedSignatures(
+                  {1, 2}, /*single_signatures=*/{{4, 0}},
+                  /*batched_signatures=*/{{2, {{-4, 1}, {0, 2}}}}),
+              IsEmpty());
+  EXPECT_THAT(GroupInputsForBatchedSignatures(
+                  {1, 2}, /*single_signatures=*/{{-4, 0}, {0, 1}},
+                  /*batched_signatures=*/{{2, {{4, 2}}}}),
+              IsEmpty());
+  // Valid batched entries still match alongside invalid ones.
+  EXPECT_THAT(
+      GroupInputsForBatchedSignatures(
+          {1, 2}, /*single_signatures=*/{{4, 0}},
+          /*batched_signatures=*/{{0, {{4, 1}}}, {1, {{4, 2}}}, {2, {{4, 3}}}}),
+      ElementsAre(BatchedTextEncoderGroup{.signature_index = 3,
+                                          .padded_sequence_length = 4,
+                                          .inputs = {0, 1}}));
+}
+
+TEST(GroupInputsForBatchedSignaturesTest, SkipsGroupsWithMorePadding) {
+  // The four 2-token inputs would process 4 x 16 padded tokens on
+  // `encoder_4x16` instead of 4 x 4 alone, but the four 10-token inputs fill
+  // `encoder_4x16` with as many padded tokens as alone.
+  EXPECT_THAT(
+      GroupInputsForBatchedSignatures({2, 10, 2, 10, 2, 10, 2, 10},
+                                      /*single_signatures=*/{{4, 0}, {16, 1}},
+                                      /*batched_signatures=*/{{4, {{16, 2}}}}),
+      ElementsAre(BatchedTextEncoderGroup{.signature_index = 2,
+                                          .padded_sequence_length = 16,
+                                          .inputs = {1, 3, 5, 7}}));
+}
+
+TEST(GroupInputsForBatchedSignaturesTest, PrefersLargerBatchesOnTies) {
+  // Input 1 is not batchable (0), and input 3 is longer than any batched
+  // signature.
+  EXPECT_THAT(
+      GroupInputsForBatchedSignatures(
+          {3, 0, 1, 9, 2, 4, 1}, /*single_signatures=*/{{8, 0}, {16, 4}},
+          /*batched_signatures=*/{{2, {{4, 1}, {8, 3}}}, {4, {{4, 2}}}}),
+      ElementsAre(BatchedTextEncoderGroup{.signature_index = 2,
+                                          .padded_sequence_length = 4,
+                                          .inputs = {2, 6, 4, 0}}));
+}
+
+TEST(GroupInputsForBatchedSignaturesTest, CascadesBatchSizes) {
+  EXPECT_THAT(GroupInputsForBatchedSignatures(
+                  {1, 2, 3, 4, 1, 2, 3}, /*single_signatures=*/{{8, 0}},
+                  /*batched_signatures=*/{{2, {{4, 1}}}, {4, {{4, 2}}}}),
+              ElementsAre(BatchedTextEncoderGroup{.signature_index = 2,
+                                                  .padded_sequence_length = 4,
+                                                  .inputs = {0, 4, 1, 5}},
+                          BatchedTextEncoderGroup{.signature_index = 1,
+                                                  .padded_sequence_length = 4,
+                                                  .inputs = {2, 6}}));
 }
 
 }  // namespace

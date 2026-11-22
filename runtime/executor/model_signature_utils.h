@@ -33,17 +33,25 @@ struct SignatureInfo {
   // Sequence length (tokens) for text encoders, or visual token count for
   // vision models.
   int length = 0;
+  // Number of sequences processed per run. Only set for text encoders with a
+  // `[batch_size, seq_len, embed_dim]` input; 1 otherwise.
+  int batch_size = 1;
   std::vector<int> input_shape;
   std::vector<int> output_shape;
 };
 
 // Result of text encoder signature selection.
 struct SelectedTextSignaturesInfo {
-  // The names of the loaded signatures.
+  // The names of the selected signatures (batch size 1 signatures first,
+  // followed by any batched `B > 1` signatures in the selected length range).
+  // Note: if compilation fails with batched signatures, the executor may fall
+  // back to loading only the batch size 1 subset.
   std::vector<std::string> signature_names;
-  // The sequence lengths of the loaded signatures.
+  // The sequence lengths of the selected signatures, parallel to
+  // `signature_names`. Batched text encoder signatures (`B > 1`) are listed
+  // after the batch size 1 signatures, so a length can appear more than once.
   std::vector<int> signature_lengths;
-  // The length of the longest loaded signature in the model.
+  // The length of the longest selected batch-size-1 signature.
   int max_signature_length = 0;
 };
 
@@ -93,12 +101,15 @@ absl::StatusOr<SelectedTextSignaturesInfo> SelectSignaturesByCapacity(
     std::optional<int> min_capacity = std::nullopt);
 
 // Selects the text encoder signatures to load based on the expected maximum
-// input length and optional minimum input length. Loads signatures for all
-// lengths in [`min_input_length`, `max_input_length`], plus the smallest
-// signature that can accommodate `max_input_length`. If `max_input_length`
-// is set and exceeds all available signatures, returns an error. If
-// `max_input_length` is not set, all signatures >= `min_input_length` are
-// loaded.
+// input length and optional minimum input length. Among the signatures with
+// batch size 1, loads those for all lengths in [`min_input_length`,
+// `max_input_length`], plus the smallest signature that can accommodate
+// `max_input_length`. If `max_input_length` is set and exceeds all available
+// batch size 1 signatures, returns an error. If `max_input_length` is not set,
+// all batch size 1 signatures >= `min_input_length` are loaded. Batched
+// signatures (batch size > 1) are also loaded if their length is within the
+// range of the selected batch size 1 signatures. Returns a
+// FailedPreconditionError if the model only has batched signatures.
 absl::StatusOr<SelectedTextSignaturesInfo> SelectTextEncoderSignatures(
     const std::vector<SignatureInfo>& signatures,
     std::optional<int> max_input_length = std::nullopt,
