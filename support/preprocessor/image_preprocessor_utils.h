@@ -103,6 +103,29 @@ absl::StatusOr<InputImage> CreateDryRunImage(
 using Uint8RowConverter =
     absl::FunctionRef<void(const uint8_t* src, float* dst, size_t num_pixels)>;
 
+// Populates one patch row of `num_pixels` interleaved float pixels
+// (`num_pixels * channels` floats) at `dst` from source image coordinates
+// `(src_h, src_w)` in batch element `batch_idx`.
+using PatchRowFiller =
+    absl::FunctionRef<void(int batch_idx, int src_h, int src_w, int num_pixels,
+                           int channels, float* dst)>;
+
+// Patchifies an image directly into the output "images" TensorBuffer by
+// invoking `fill_row` for each patch row, avoiding any intermediate full-image
+// float buffer.
+//
+// args:
+//   parameter: The image preprocess parameter containing the 4D target
+//     dimensions (batch, height, width, channels) and the patchify config.
+//   fill_row: Populates one patch row of float pixels into `dst`.
+//
+// returns:
+//   The InputImage containing the patchified "images" tensor and, if requested
+//   by the patchify config, the "positions_xy" patch positions tensor. Returns
+//   an error if the patchify config is missing or the dimensions are invalid.
+absl::StatusOr<InputImage> PatchifyImage(
+    const ImagePreprocessParameter& parameter, PatchRowFiller fill_row);
+
 // Patchifies uint8 image pixels straight into the float "images" tensor,
 // converting each patch row with `convert_row`. This fuses the uint8 -> float
 // conversion into patchification, so no intermediate float image is needed.
