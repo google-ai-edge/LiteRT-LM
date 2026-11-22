@@ -216,6 +216,7 @@ cc_library(
         "@litert//litert/cc/options:litert_gpu_options",
         "@litert//litert/cc/options:litert_mediatek_options",
         "@litert//litert/cc/options:litert_qualcomm_options",
+        "@litert//litert/tools/flags:options_parser_registry",
         "//runtime/components:model_resources",
         "//runtime/components:model_resources_litert_lm",
         "//runtime/components:model_resources_task",

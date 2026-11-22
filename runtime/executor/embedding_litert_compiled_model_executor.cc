@@ -235,6 +235,7 @@ EmbeddingLiteRtCompiledModelExecutor::CompileTextEncoder(
           SetNpuOptions(executor_settings.GetNpuOptions(), options));
       options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
                                       litert::HwAccelerators::kCpu);
+      RunVendorOptionsParsers(options);
       break;
     }
 #endif  // !defined(LITERT_DISABLE_NPU)

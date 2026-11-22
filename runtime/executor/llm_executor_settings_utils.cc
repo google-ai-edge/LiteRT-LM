@@ -273,6 +273,7 @@ absl::StatusOr<litert::Options> CreateCompilationOptions(
           advanced_settings.disable_delegate_clustering);
       compilation_options.SetHardwareAccelerators(HwAccelerators::kNpu |
                                                   HwAccelerators::kCpu);
+      RunVendorOptionsParsers(compilation_options);
       break;
     }
     case Backend::CPU: {
