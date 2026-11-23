@@ -251,8 +251,14 @@ alias(
 
 cc_import(
     name = "gemma_model_constraint_provider_dll_import",
-    interface_library = "//prebuilt/windows_x86_64:libGemmaModelConstraintProvider.lib",
-    shared_library = "//prebuilt/windows_x86_64:libGemmaModelConstraintProvider.dll",
+    interface_library = select({
+        "//build_config:windows_arm64": "//prebuilt/windows_arm64:libGemmaModelConstraintProvider.lib",
+        "//conditions:default": "//prebuilt/windows_x86_64:libGemmaModelConstraintProvider.lib",
+    }),
+    shared_library = select({
+        "//build_config:windows_arm64": "//prebuilt/windows_arm64:libGemmaModelConstraintProvider.dll",
+        "//conditions:default": "//prebuilt/windows_x86_64:libGemmaModelConstraintProvider.dll",
+    }),
     target_compatible_with = ["@platforms//os:windows"],
 )
 
