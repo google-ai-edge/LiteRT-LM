@@ -154,6 +154,74 @@ describe('AutoToolChat', () => {
            .toBeRejectedWithError(/Tool calling exceeded the recurring limit/);
      });
 
+  describe('end of turn', () => {
+    const tools: ToolWithImplementation[] = [
+      {name: 'loop_tool', description: 'Loops', execute: async () => ({})}
+    ];
+    const toolCallRound: Message = {
+      role: 'assistant',
+      tool_calls:
+          [{type: 'function', function: {name: 'loop_tool', arguments: {}}}],
+      finish_reason: 'stop',
+      executor_stats: null,
+    };
+    const lastRound: Message = {
+      role: 'assistant',
+      content: 'done',
+      finish_reason: 'max_tokens',
+      executor_stats: {module_name: 'LLM'},
+    };
+
+    it('is the last round\'s (sendMessage)', async () => {
+      const chat = new AutoToolChat({engine, tools});
+      engine.cachedConversation.queueResponse(toolCallRound);
+      engine.cachedConversation.queueResponse(lastRound);
+
+      const response = await chat.sendMessage('start');
+
+      expect(response.finish_reason).toBe('max_tokens');
+      expect(response.executor_stats as unknown).toEqual({module_name: 'LLM'});
+    });
+
+    it('is streamed only for the last round (sendMessageStreaming)',
+       async () => {
+         const chat = new AutoToolChat({engine, tools});
+         engine.cachedConversation.queueResponse(toolCallRound);
+         engine.cachedConversation.queueResponse(lastRound);
+
+         const chunks: Message[] = [];
+         for await (const chunk of chat.sendMessageStreaming('start')) {
+           chunks.push(chunk);
+         }
+
+         expect(chunks.length).toBe(2);
+         expect(chunks[0].content).toBe('done');
+         expect(chunks[0].finish_reason).toBeUndefined();
+         expect(chunks[1] as unknown).toEqual({
+           role: 'assistant',
+           finish_reason: 'max_tokens',
+           executor_stats: {module_name: 'LLM'},
+         });
+       });
+
+    it('is not streamed when the turn fails', async () => {
+      const chat = new AutoToolChat({engine, tools, recurringToolCallLimit: 1});
+      engine.cachedConversation.queueResponse(toolCallRound);
+
+      const chunks: Message[] = [];
+      const collectChunks = async () => {
+        for await (const chunk of chat.sendMessageStreaming('start')) {
+          chunks.push(chunk);
+        }
+      };
+
+      await expectAsync(collectChunks())
+          .toBeRejectedWithError(/Tool calling exceeded the recurring limit/);
+
+      expect(chunks).toEqual([]);
+    });
+  });
+
   it('throws an error if a tool is provided without an execute implementation',
      () => {
        const tools = [{

@@ -17,11 +17,19 @@
 // Placeholder for internal dependency on trusted resource url
 
 import {Conversation} from './conversation.js';
+import {ExecutorStats, Message} from './conversation_config.js';
 import {Engine} from './engine.js';
 import {loadLiteRtLm, unloadLiteRtLm} from './load_litertlm.js';
 import {Mutex} from './mutex.js';
 import {waitForWebGpuAdapter} from './testing/webgpu.js';
 import {Backend, Conversation as WasmConversation, Engine as WasmEngine, unwrapWasmResult} from './wasm_binding_types.js';
+
+const EXECUTOR_STATS: ExecutorStats = {
+  module_name: 'LLM',
+  metrics: {plain_steps: 1, mtp_rounds: 3},
+  latencies_us: {plain_step_time: 51234},
+  substats: [],
+};
 
 describe('Conversation', () => {
   let mockWasmConversation: jasmine.SpyObj<WasmConversation>;
@@ -136,6 +144,201 @@ describe('Conversation', () => {
     // Wait a bit to allow async executeGeneration to finish and potentially throw.
     await new Promise(resolve => setTimeout(resolve, 50));
   });
+
+  it('returns the end of turn with the response', async () => {
+    const conversation =
+        new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+
+    mockWasmConversation.sendMessage.and.resolveTo(JSON.stringify({
+      role: 'assistant',
+      content: 'hello',
+      finish_reason: 'stop',
+      executor_stats: EXECUTOR_STATS,
+    }));
+
+    const response = await conversation.sendMessage('hi');
+
+    expect(response.content).toBe('hello');
+    expect(response.finish_reason).toBe('stop');
+    expect(response.executor_stats as unknown).toEqual(EXECUTOR_STATS);
+  });
+
+  it('leaves the end-of-turn fields out of messages it sends', async () => {
+    const conversation =
+        new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+    mockWasmConversation.sendMessage.and.resolveTo(
+        JSON.stringify({role: 'assistant', content: 'hello'}));
+
+    await conversation.sendMessage({
+      role: 'assistant',
+      content: 'hello',
+      finish_reason: 'stop',
+      executor_stats: EXECUTOR_STATS,
+    });
+
+    expect(mockWasmConversation.sendMessage)
+        .toHaveBeenCalledWith(
+            JSON.stringify({role: 'assistant', content: 'hello'}), [], 0);
+  });
+
+  it('streams the end of turn as the last element', async () => {
+    const conversation =
+        new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+
+    mockWasmConversation.sendMessageAsync.and.callFake(
+        (messageJson, blobs, callback) => {
+          callback(
+              JSON.stringify({role: 'assistant', content: 'hello'}), false,
+              null);
+          callback(
+              JSON.stringify({
+                role: 'assistant',
+                finish_reason: 'max_tokens',
+                executor_stats: EXECUTOR_STATS,
+              }),
+              true, null);
+          return Promise.resolve();
+        });
+
+    const chunks: Message[] = [];
+    for await (const chunk of conversation.sendMessageStreaming('hi')) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.length).toBe(2);
+    expect(chunks[0].content).toBe('hello');
+    expect(chunks[0].finish_reason).toBeUndefined();
+    expect(chunks[1] as unknown).toEqual({
+      role: 'assistant',
+      finish_reason: 'max_tokens',
+      executor_stats: EXECUTOR_STATS,
+    });
+  });
+
+  it('streams no end of turn for the legacy null final chunk', async () => {
+    const conversation =
+        new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+    mockWasmConversation.sendMessageAsync.and.callFake(
+        (messageJson, blobs, callback) => {
+          callback(null, true, null);
+          return Promise.resolve();
+        });
+
+    const reader = conversation.sendMessageStreaming('hi').getReader();
+
+    expect((await reader.read()).done).toBeTrue();
+  });
+
+  it('parses the shared end-of-turn testdata', async () => {
+    // The tests of every binding parse this file, and the C++
+    // end_of_turn_test checks that it matches the writer.
+    const response = await fetch('/testdata/end_of_turn.json');
+    expect(response.ok).toBeTrue();
+    const endOfTurnJson = await response.text();
+    const conversation =
+        new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+    mockWasmConversation.sendMessageAsync.and.callFake(
+        (messageJson, blobs, callback) => {
+          callback(endOfTurnJson, true, null);
+          return Promise.resolve();
+        });
+
+    const chunks: Message[] = [];
+    for await (const chunk of conversation.sendMessageStreaming('hi')) {
+      chunks.push(chunk);
+    }
+
+    // Unknown keys like `future_field` pass through, like in sync responses.
+    expect(chunks.length).toBe(1);
+    expect(chunks[0] as unknown).toEqual({
+      role: 'assistant',
+      finish_reason: 'max_tokens',
+      executor_stats: {
+        module_name: 'LLM',
+        metrics: {plain_steps: 3, acceptance_rate: 0.5},
+        latencies_us: {plain_step_time: 51234},
+        substats: [{
+          module_name: 'Drafter',
+          metrics: {draft_steps: 2},
+          latencies_us: {},
+          substats: [],
+        }],
+      },
+      future_field: {ignored: [1]},
+    });
+  });
+
+  it('drops a malformed end of turn without failing the stream', async () => {
+    const conversation =
+        new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+    mockWasmConversation.sendMessageAsync.and.callFake(
+        (messageJson, blobs, callback) => {
+          callback(
+              JSON.stringify({role: 'assistant', content: 'hello'}), false,
+              null);
+          callback('not json', true, null);
+          return Promise.resolve();
+        });
+
+    const chunks: Message[] = [];
+    for await (const chunk of conversation.sendMessageStreaming('hi')) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.length).toBe(1);
+    expect(chunks[0].content).toBe('hello');
+  });
+
+  it('streams malformed executor stats as null', async () => {
+    const conversation =
+        new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+    mockWasmConversation.sendMessageAsync.and.callFake(
+        (messageJson, blobs, callback) => {
+          callback(
+              JSON.stringify({
+                role: 'assistant',
+                finish_reason: 'stop',
+                executor_stats: 3,
+              }),
+              true, null);
+          return Promise.resolve();
+        });
+
+    const chunks: Message[] = [];
+    for await (const chunk of conversation.sendMessageStreaming('hi')) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.length).toBe(1);
+    expect(chunks[0] as unknown).toEqual({
+      role: 'assistant',
+      finish_reason: 'stop',
+      executor_stats: null,
+    });
+  });
+
+  it('streams no end of turn when the turn fails after its final chunk',
+     async () => {
+       const conversation =
+           new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+       mockWasmConversation.sendMessageAsync.and.callFake(
+           (messageJson, blobs, callback) => {
+             callback(
+                 JSON.stringify({
+                   role: 'assistant',
+                   finish_reason: 'stop',
+                   executor_stats: null,
+                 }),
+                 true, null);
+             return Promise.resolve();
+           });
+       mockWasmEngine.waitUntilDone.and.rejectWith(
+           new Error('Execution failed'));
+
+       const reader = conversation.sendMessageStreaming('hi').getReader();
+
+       await expectAsync(reader.read()).toBeRejectedWithError('Execution failed');
+     });
 
   it('clones conversation properly and allows independent message sending',
      async () => {
@@ -315,6 +518,26 @@ describe('Conversation', () => {
       expect(createCustomSpy)
           .toHaveBeenCalledWith(
               mockWasmEngine, mockSessionConfig, false, false, true, '');
+    });
+
+    it('leaves the end-of-turn fields out of the preface', async () => {
+      const engine = createTestEngine(Backend.CPU);
+      await engine.createConversation({
+        preface: {
+          messages: [{
+            role: 'assistant',
+            content: 'hello',
+            finish_reason: 'stop',
+            executor_stats: EXECUTOR_STATS,
+          }],
+        },
+      });
+      expect(createCustomSpy)
+          .toHaveBeenCalledWith(
+              mockWasmEngine, mockSessionConfig, undefined, undefined,
+              undefined,
+              JSON.stringify(
+                  {messages: [{role: 'assistant', content: 'hello'}]}));
     });
   });
 
