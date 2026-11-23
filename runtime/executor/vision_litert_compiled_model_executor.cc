@@ -882,6 +882,13 @@ VisionLiteRtCompiledModelExecutor::EncodeInputMaps(
                        "buffer but got ",
                        adapter_output_tensor_buffers.size()));
     }
+    LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
+                            adapter_output_tensor_buffers[0].TensorType());
+    const auto& adapter_output_dimensions =
+        adapter_output_tensor_type.Layout().Dimensions();
+    RET_CHECK_GE(adapter_output_dimensions.size(), 2);
+    const int adapter_output_rows =
+        adapter_output_dimensions[adapter_output_dimensions.size() - 2];
     // Feed the adapter's `features` input from the encoder output. Any extra
     // adapter inputs are matched by name against the other encoder outputs.
     LITERT_ASSIGN_OR_RETURN(
@@ -899,11 +906,27 @@ VisionLiteRtCompiledModelExecutor::EncodeInputMaps(
     LITERT_ASSIGN_OR_RETURN(auto features_input_index,
                             vision_adapter_->GetCompiledModel().FindInputIndex(
                                 *adapter_signature_index, features_input_name));
+    // Without a mask, `num_patches` counts tokens, while an adapter that merges
+    // rows (e.g. LFM2 VL, 4 rows per token) needs all the rows of each token.
+    int adapter_rows_per_token = 1;
+    if (!mask_index.HasValue() && adapter_output_rows > 0) {
+      LITERT_ASSIGN_OR_RETURN(
+          auto adapter_features_tensor_type,
+          adapter_input_buffers[features_input_index].TensorType());
+      const auto& adapter_features_dimensions =
+          adapter_features_tensor_type.Layout().Dimensions();
+      RET_CHECK_GE(adapter_features_dimensions.size(), 2);
+      const int adapter_features_rows =
+          adapter_features_dimensions[adapter_features_dimensions.size() - 2];
+      adapter_rows_per_token =
+          std::max(1, adapter_features_rows / adapter_output_rows);
+    }
     LITERT_ASSIGN_OR_RETURN(const size_t encoder_output_num_elements,
                             encoder_output_tensor_type.Layout().NumElements());
-    const size_t features_elements_to_copy =
-        std::min(encoder_output_num_elements,
-                 static_cast<size_t>(num_patches) * encoder_output_dim);
+    const size_t rows_to_copy =
+        static_cast<size_t>(num_patches) * adapter_rows_per_token;
+    const size_t features_elements_to_copy = std::min(
+        encoder_output_num_elements, rows_to_copy * encoder_output_dim);
     const size_t copy_bytes = features_elements_to_copy * sizeof(float);
     TensorBuffer& adapter_features_buffer =
         adapter_input_buffers[features_input_index];
@@ -958,14 +981,8 @@ VisionLiteRtCompiledModelExecutor::EncodeInputMaps(
         adapter_input_buffers, adapter_output_tensor_buffers,
         kVisionAdapterInferenceLatency, latch));
 
-    LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
-                            adapter_output_tensor_buffers[0].TensorType());
-    const auto& adapter_output_dimensions =
-        adapter_output_tensor_type.Layout().Dimensions();
-    RET_CHECK_GE(adapter_output_dimensions.size(), 2);
     output_source_buffer = &adapter_output_tensor_buffers[0];
-    source_output_rows =
-        adapter_output_dimensions[adapter_output_dimensions.size() - 2];
+    source_output_rows = adapter_output_rows;
     output_dim =
         adapter_output_dimensions[adapter_output_dimensions.size() - 1];
   }

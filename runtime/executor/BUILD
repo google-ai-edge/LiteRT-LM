@@ -1181,6 +1181,7 @@ cc_test(
         "@litert//litert/test:matchers",
         "//runtime/components:model_resources",
         "//runtime/components:model_resources_litert_lm",
+        "//runtime/proto:llm_metadata_cc_proto",
         "//runtime/util:litert_lm_loader",
         "//runtime/util:scoped_file",
         "//runtime/util:test_utils",
