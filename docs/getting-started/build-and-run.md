@@ -104,12 +104,22 @@ Building on Windows requires several prerequisites to be installed first.
 
 #### Prerequisites
 
-1.  **Visual Studio 2022** - Download from
+1.  **Visual Studio 2022 or 2026** - Download from
     https://visualstudio.microsoft.com/downloads/ and install. Make sure it
-    install the MSVC toolchain for all users, usually under this directory
-    C:\Program Files.
+    installs the MSVC toolchain for all users, usually under `C:\Program Files`.
+    Bazel 7.6.1 does not auto-detect Visual Studio 2026 (VS 18); if you use
+    Visual Studio 2026, point `BAZEL_VC` at its `VC` directory before building:
+
+    ```powershell
+    $Env:BAZEL_VC = "C:\Program Files\Microsoft Visual Studio\18\Community\VC"
+    ```
+
+    (Replace `Community` with `Professional`, `Enterprise`, or `BuildTools` as
+    appropriate.)
 2.  **Git for Windows** - Install from https://git-scm.com/download/win
-    (includes Git Bash needed for flatbuffer generation scripts).
+    (includes Git Bash needed for flatbuffer generation scripts). If Bazel
+    cannot locate Git Bash automatically, set
+    `$Env:BAZEL_SH = "C:\Program Files\Git\bin\bash.exe"`.
 3.  **Python 3.13** - Download from https://www.python.org/downloads/ and
     install for all users.
 4.  **Bazel** - Install using Windows Package Manager (winget): `powershell
@@ -135,8 +145,8 @@ $Env:MODEL_PATH = "C:\path\to\your_model.litertlm"
 Build the binary:
 
 ```powershell
-# Build litert_lm_main for Windows.
-bazelisk build //runtime/engine:litert_lm_main --config=windows
+# Build litert_lm_main for Windows x86_64.
+bazelisk build //runtime/engine:litert_lm_main --config=windows_x86_64
 ```
 
 Run the binary (make sure you run the following command in **powershell**):
@@ -147,6 +157,31 @@ bazel-bin\runtime\engine\litert_lm_main.exe `
     --backend=cpu `
     --model_path=$Env:MODEL_PATH
 ```
+
+#### Windows ARM64 (Snapdragon)
+
+`litert_lm_main` can also be built for Windows ARM64 devices (e.g., Snapdragon X
+series laptops) with the MSVC ARM64 toolchain, either natively on an ARM64
+device or cross-compiled from an x86_64 Windows host using the same config:
+
+```powershell
+bazelisk build //runtime/engine:litert_lm_main --config=windows_arm64
+```
+
+When cross-compiling on an x86_64 Windows host, make sure Visual Studio has the
+*MSVC C++ ARM64/ARM64EC build tools* component
+(`Microsoft.VisualStudio.Component.VC.Tools.ARM64`) selected in Visual Studio
+Installer alongside the *Desktop development with C++* workload.
+
+To check that a cross-compiled binary targets ARM64 (from a Visual Studio
+Developer Prompt):
+
+```powershell
+dumpbin /headers bazel-bin\runtime\engine\litert_lm_main.exe | findstr machine
+```
+
+Copy `bazel-bin\runtime\engine\litert_lm_main.exe`, together with the `.dll`
+files next to it, to the Windows ARM64 device and run it there as shown above.
 
 </details>
 

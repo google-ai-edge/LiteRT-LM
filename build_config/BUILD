@@ -59,6 +59,14 @@ config_setting(
 )
 
 config_setting(
+    name = "windows_arm64",
+    constraint_values = [
+        "@platforms//os:windows",
+        "@platforms//cpu:arm64",
+    ],
+)
+
+config_setting(
     name = "ios_arm64",
     values = { "apple_platform_type": "ios", "cpu": "ios_arm64",},
 )
