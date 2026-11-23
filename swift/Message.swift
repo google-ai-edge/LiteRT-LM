@@ -23,6 +23,96 @@ public enum Role: String {
   case tool
 }
 
+/// One pre-decoded frame of `Content.videoFrames`.
+///
+/// LiteRT-LM does not decode video containers; decode and sample frames in the application and pass
+/// them here. The runtime handles resizing and patchification.
+public struct VideoFrame: Hashable, Sendable {
+  /// The image payload of a video frame.
+  public enum Source: Hashable, Sendable {
+    /// Encoded image bytes (e.g. JPEG or PNG).
+    case imageData(Data)
+    /// Absolute path to an encoded image file.
+    case imageFile(String)
+    /// Raw RGB888 HWC uint8 pixels (`width * height * 3` bytes), sent without re-encoding.
+    case pixels(data: Data, width: Int, height: Int)
+  }
+
+  /// The frame's image payload.
+  public let source: Source
+
+  /// Presentation time of the frame in the source video, in seconds (non-negative). If `nil`, the
+  /// runtime uses `index / fps`.
+  public let timestamp: Double?
+
+  /// Creates a `VideoFrame` from an encoded or raw image source.
+  public init(source: Source, timestamp: Double? = nil) {
+    if let timestamp {
+      precondition(
+        timestamp.isFinite && timestamp.sign == .plus,
+        "Video frame timestamp must be a non-negative finite number.")
+    }
+    if case .pixels(let data, let width, let height) = source {
+      guard let expectedBytes = Self.expectedRgbByteCount(width: width, height: height) else {
+        preconditionFailure("Video frame width and height must be positive and not overflow.")
+      }
+      precondition(
+        data.count == expectedBytes,
+        "Video frame pixels must have width * height * 3 bytes.")
+    }
+    self.source = source
+    self.timestamp = timestamp
+  }
+
+  /// Returns `width * height * 3` when `width > 0`, `height > 0`, and the product does not overflow
+  /// `Int`; otherwise returns `nil`.
+  static func expectedRgbByteCount(width: Int, height: Int) -> Int? {
+    guard width > 0 && height > 0 else { return nil }
+    let (pixelCount, pixelOverflow) = width.multipliedReportingOverflow(by: height)
+    guard !pixelOverflow else { return nil }
+    let (byteCount, byteOverflow) = pixelCount.multipliedReportingOverflow(by: 3)
+    return byteOverflow ? nil : byteCount
+  }
+
+  /// Creates a `VideoFrame` from encoded image bytes (e.g. JPEG or PNG).
+  public static func imageData(_ data: Data, timestamp: Double? = nil) -> VideoFrame {
+    VideoFrame(source: .imageData(data), timestamp: timestamp)
+  }
+
+  /// Creates a `VideoFrame` from an absolute path to an encoded image file.
+  public static func imageFile(_ path: String, timestamp: Double? = nil) -> VideoFrame {
+    VideoFrame(source: .imageFile(path), timestamp: timestamp)
+  }
+
+  /// Creates a `VideoFrame` from raw RGB888 HWC uint8 pixels (`width * height * 3` bytes).
+  public static func pixels(
+    _ data: Data, width: Int, height: Int, timestamp: Double? = nil
+  ) -> VideoFrame {
+    VideoFrame(source: .pixels(data: data, width: width, height: height), timestamp: timestamp)
+  }
+
+  /// Convert to JSON format. Used internally.
+  var toJson: [String: Any] {
+    var dict: [String: Any]
+    switch source {
+    case .imageData(let bytes):
+      dict = ["blob": bytes.base64EncodedString()]
+    case .imageFile(let absPath):
+      dict = ["path": absPath]
+    case .pixels(let data, let width, let height):
+      dict = [
+        "pixels": data.base64EncodedString(),
+        "width": width,
+        "height": height,
+      ]
+    }
+    if let timestamp {
+      dict["timestamp"] = timestamp
+    }
+    return dict
+  }
+}
+
 /// Represents a content in the `Message` of the conversation.
 ///
 /// Example Usage:
@@ -44,6 +134,11 @@ public enum Content {
   case audioFile(String)
   /// Tool response.
   case toolResponse(name: String, response: Any, id: String = "")
+  /// Video provided as pre-decoded frames sampled by the caller.
+  ///
+  /// Requires a model whose metadata reports the Video input modality. The runtime handles
+  /// resizing, patchification, and temporal frame grouping.
+  case videoFrames([VideoFrame], fps: Double? = nil)
 
   /// Convert to JSON format. Used internally.
   var toJson: [String: Any] {
@@ -66,6 +161,19 @@ public enum Content {
       ]
       if !id.isEmpty {
         dict["id"] = id
+      }
+      return dict
+    case .videoFrames(let frames, let fps):
+      precondition(!frames.isEmpty, "A video must have at least one frame.")
+      if let fps {
+        precondition(fps.isFinite && fps > 0, "Video fps must be a positive finite number.")
+      }
+      var dict: [String: Any] = [
+        "type": "video",
+        "frames": frames.map { $0.toJson },
+      ]
+      if let fps {
+        dict["fps"] = fps
       }
       return dict
     }

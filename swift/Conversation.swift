@@ -735,6 +735,37 @@ public final class Conversation: Sendable {
             } else if let blob = item["blob"] as? String, let data = Data(base64Encoded: blob) {
               contents.append(.audioData(data))
             }
+          case "video":
+            if let frameItems = item["frames"] as? [[String: Any]] {
+              var videoFrames: [VideoFrame] = []
+              for frameItem in frameItems {
+                let timestamp = (frameItem["timestamp"] as? NSNumber)?.doubleValue
+                if let timestamp, !timestamp.isFinite || timestamp.sign == .minus {
+                  continue
+                }
+                if let path = frameItem["path"] as? String {
+                  videoFrames.append(.imageFile(path, timestamp: timestamp))
+                } else if let blob = frameItem["blob"] as? String,
+                  let data = Data(base64Encoded: blob)
+                {
+                  videoFrames.append(.imageData(data, timestamp: timestamp))
+                } else if let pixels = frameItem["pixels"] as? String,
+                  let data = Data(base64Encoded: pixels),
+                  let width = (frameItem["width"] as? NSNumber)?.intValue,
+                  let height = (frameItem["height"] as? NSNumber)?.intValue,
+                  let expectedBytes = VideoFrame.expectedRgbByteCount(width: width, height: height),
+                  data.count == expectedBytes
+                {
+                  videoFrames.append(
+                    .pixels(data, width: width, height: height, timestamp: timestamp))
+                }
+              }
+              let fps = (item["fps"] as? NSNumber)?.doubleValue
+              let isValidFps = fps.map { $0.isFinite && $0 > 0 } ?? true
+              if !videoFrames.isEmpty && isValidFps {
+                contents.append(.videoFrames(videoFrames, fps: fps))
+              }
+            }
           default: break
           }
         }

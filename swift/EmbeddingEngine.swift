@@ -412,6 +412,14 @@ public actor EmbeddingEngine {
     case .toolResponse:
       throw LiteRTLMError.embeddingEngine(
         .failedToCreateInputData("Tool responses are not supported for embeddings"))
+    case .videoFrames:
+      // Embedding models (e.g., EmbeddingGemma) can work with video frames, but EmbeddingEngine
+      // does not yet support `.videoFrames` natively. Pass individual frames as `.imageData` or
+      // `.imageFile` inputs instead.
+      throw LiteRTLMError.embeddingEngine(
+        .failedToCreateInputData(
+          "Video frames are not yet natively supported by EmbeddingEngine; pass individual frames as image inputs instead."
+        ))
     }
   }
 }
