@@ -159,6 +159,12 @@ TEST_F(WebGpuTensorBufferCopyNullBackendTest,
   const RankedTensorType tensor_type = MakeRankedTensorType<float>({4});
   constexpr size_t kBufferBytes = 4 * sizeof(float);
 
+  // Declare custom events before `src` and `dst` so they outlive the
+  // `LiteRtEventT` handles released by `~TensorBuffer()`.
+  std::atomic<int> wait_count{0};
+  CountingCustomEvent src_custom_event(&wait_count);
+  CountingCustomEvent dst_custom_event(&wait_count);
+
   LITERT_ASSERT_OK_AND_ASSIGN(
       TensorBuffer src,
       TensorBuffer::CreateManaged(*env_, TensorBufferType::kWebGpuBufferPacked,
@@ -168,9 +174,6 @@ TEST_F(WebGpuTensorBufferCopyNullBackendTest,
       TensorBuffer::CreateManaged(*env_, TensorBufferType::kWebGpuBufferPacked,
                                   tensor_type, kBufferBytes));
 
-  std::atomic<int> wait_count{0};
-  CountingCustomEvent src_custom_event(&wait_count);
-  CountingCustomEvent dst_custom_event(&wait_count);
   LITERT_ASSERT_OK_AND_ASSIGN(
       Event src_event, Event::CreateManaged(*env_, Event::Type::kCustom));
   LITERT_ASSERT_OK(src_event.SetCustomEvent(&src_custom_event));
