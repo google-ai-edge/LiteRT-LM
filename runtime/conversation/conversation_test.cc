@@ -1071,6 +1071,61 @@ TEST(ConversationSingleThreadedTest, SendMessageNotFittingInContextFails) {
   EXPECT_THAT(conversation->GetHistory(), testing::SizeIs(4));
 }
 
+TEST_P(ConversationTest, SendMessageLongerThanContextFails) {
+  constexpr int kMaxNumTokens = 30;
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
+  ASSERT_OK_AND_ASSIGN(auto engine_settings, EngineSettings::CreateDefault(
+                                                 model_assets, Backend::CPU));
+  engine_settings.GetMutableMainExecutorSettings().SetCacheDir(":nocache");
+  engine_settings.GetMutableMainExecutorSettings().SetMaxNumTokens(
+      kMaxNumTokens);
+  ASSERT_OK_AND_ASSIGN(auto engine,
+                       EngineFactory::CreateDefault(engine_settings));
+
+  ASSERT_OK_AND_ASSIGN(
+      auto config,
+      ConversationConfig::Builder()
+          .SetEnableConstrainedDecoding(enable_constrained_decoding_)
+          .SetPrefillPrefaceOnInit(prefill_preface_on_init_)
+          .Build(*engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*engine, config));
+
+  std::string long_text = "Hello";
+  for (int i = 0; i < kMaxNumTokens; ++i) {
+    absl::StrAppend(&long_text, " Hello");
+  }
+  Message long_message = {{"role", "user"}, {"content", long_text}};
+  ASSERT_OK_AND_ASSIGN(int long_message_tokens,
+                       conversation->CountTokens({long_message}));
+  ASSERT_GE(long_message_tokens, kMaxNumTokens);
+
+  // A message longer than the context window must be rejected, must not be
+  // added to the history and must not make the next message fail.
+  EXPECT_THAT(conversation->SendMessage(long_message),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(conversation->GetHistory(), testing::IsEmpty());
+  Message user_message = {{"role", "user"}, {"content", "Hello"}};
+  ASSERT_OK(
+      conversation
+          ->SendMessage(user_message, OptionalArgs{.max_output_tokens = 1})
+          .status());
+  EXPECT_THAT(conversation->GetHistory(), testing::SizeIs(2));
+
+  // That next message is prefilled like the first message of a conversation.
+  ASSERT_OK_AND_ASSIGN(auto new_conversation,
+                       Conversation::Create(*engine, config));
+  ASSERT_OK(
+      new_conversation
+          ->SendMessage(user_message, OptionalArgs{.max_output_tokens = 1})
+          .status());
+  ASSERT_OK_AND_ASSIGN(int tokens, conversation->GetTokenCount());
+  ASSERT_OK_AND_ASSIGN(int new_conversation_tokens,
+                       new_conversation->GetTokenCount());
+  EXPECT_EQ(tokens, new_conversation_tokens);
+}
+
 TEST_P(ConversationTest, SendMessageGemma3Template) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create(GetTestdataPath(kTestLlmPath)));

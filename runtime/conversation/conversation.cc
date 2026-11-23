@@ -87,13 +87,22 @@ absl::Status IgnoreEmptyInputError(const absl::Status& status) {
   return IsEmptyInputError(status) ? absl::OkStatus() : status;
 }
 
+// Returns whether `status` is the error with which `Tasks::Prefill()` refuses
+// an input that alone is longer than the context window.
+bool IsInputTooLongError(const absl::Status& status) {
+  return absl::IsInvalidArgument(status) &&
+         absl::StrContains(status.message(), "Input token ids are too long");
+}
+
 // Returns whether a prefill did not run because its input does not fit in the
-// context window. This is the case when the context window has no space left
-// for the input, or when it was already full: the prefill then inherits the
-// `kMaxNumTokensReached` end state of the decode that filled it.
+// context window. This is the case when the input is longer than the context
+// window, when the context window has no space left for the input, or when it
+// was already full: the prefill then inherits the `kMaxNumTokensReached` end
+// state of the decode that filled it.
 bool IsContextWindowFull(const absl::StatusOr<Responses>& responses) {
   if (!responses.ok()) {
-    return absl::IsResourceExhausted(responses.status());
+    return absl::IsResourceExhausted(responses.status()) ||
+           IsInputTooLongError(responses.status());
   }
   return responses->GetTaskState() == TaskState::kMaxNumTokensReached;
 }
