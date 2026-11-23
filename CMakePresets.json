@@ -43,6 +43,47 @@
         "LITERTLM_CC_NDK": "$env{HOME}/android-ndk/android-ndk-r28b/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang",
         "LITERTLM_CXX_NDK": "$env{HOME}/android-ndk/android-ndk-r28b/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang++"
       }
+    },
+    {
+      "name": "windows-x64",
+      "displayName": "Windows x64 (MSVC, Ninja, Release)",
+      "description": "Builds LiteRT-LM for Windows x64. Run from a Visual Studio developer shell: vcvarsall.bat amd64.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake/build/${presetName}",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL",
+        "LITERTLM_CC": "cl",
+        "LITERTLM_CXX": "cl",
+        "LITERTLM_WINDOWS_TARGET_ARCH": "x64",
+        "LITERTLM_RUST_TARGET": "x86_64-pc-windows-msvc"
+      }
+    },
+    {
+      "name": "windows-arm64",
+      "displayName": "Windows ARM64 (MSVC, Ninja, Release)",
+      "description": "Builds LiteRT-LM for Windows ARM64 (Snapdragon). Run from a Visual Studio developer shell: vcvarsall.bat arm64 on an ARM64 device, or vcvarsall.bat amd64_arm64 on an x64 host together with -DLITERTLM_HOST_PROTOC and -DLITERTLM_HOST_FLATC.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake/build/${presetName}",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL",
+        "LITERTLM_CC": "cl",
+        "LITERTLM_CXX": "cl",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/litertlm_windows_arm64.toolchain.cmake",
+        "LITERTLM_WINDOWS_TARGET_ARCH": "ARM64",
+        "LITERTLM_RUST_TARGET": "aarch64-pc-windows-msvc"
+      }
     }
   ]
 }

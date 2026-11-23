@@ -18,6 +18,18 @@ include("${LITERTLM_TOKENIZERS_PACKAGE_DIR}/tokenizers_config.cmake")
 set(LITERTLM_TOKENIZERS_TAG "c586c52f93f7b060753bd2388eb96a105cb7374d"
   CACHE STRING "Tokenizers-cpp git tag")
 
+# MSVC ABI (cl.exe / clang-cl): force-include <cstdint> with /FI instead of
+# -include, and tell the patcher which Rust target the bundled crate must be
+# built for.
+set(LITERTLM_TOKENIZERS_PLATFORM_ARGS "")
+set(LITERTLM_TOKENIZERS_PATCH_ARGS "")
+if(LITERTLM_MSVC_FRONTEND)
+  list(APPEND LITERTLM_TOKENIZERS_PLATFORM_ARGS
+    "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS} /FIcstdint")
+  list(APPEND LITERTLM_TOKENIZERS_PATCH_ARGS
+    "-DLITERTLM_RUST_TARGET=${LITERTLM_RUST_TARGET}")
+endif()
+
 message(STATUS "tokenizers-cpp not found. Configuring external build...")
 ExternalProject_Add(
   tokenizers-cpp_external
@@ -60,8 +72,10 @@ ExternalProject_Add(
     "-DLITERTLM_TENSORFLOW_SRC_DIR=${LITERTLM_TENSORFLOW_SRC_DIR}"
     "-DLITERTLM_FLATC_EXECUTABLE=${LITERTLM_FLATC_EXECUTABLE}"
     "-DLITERTLM_PATCHES_DIR=${LITERTLM_PATCHES_DIR}"
+    ${LITERTLM_TOKENIZERS_PATCH_ARGS}
     -P "${LITERTLM_CMAKE_PACKAGES_DIR}/tokenizers/tokenizers_patcher.cmake"
   CMAKE_ARGS
+    ${LITERTLM_EP_PLATFORM_ARGS}
     ${LITERTLM_TOOLCHAIN_FILE}
     ${LITERTLM_TOOLCHAIN_ARGS}
     "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
@@ -96,6 +110,7 @@ ExternalProject_Add(
     "-DLITERTLM_FLATC_EXECUTABLE=${LITERTLM_FLATC_EXECUTABLE}"
     "-DLITERTLM_PATCHES_DIR=${LITERTLM_PATCHES_DIR}"
     "-DLITERTLM_MODULES_DIR=${LITERTLM_MODULES_DIR}"
+    ${LITERTLM_TOKENIZERS_PLATFORM_ARGS}
 
 
 )
@@ -126,4 +141,15 @@ set(_tokenizers_lib_paths
   "${LITERTLM_TOKENIZERS_BUILD_DIR}/libtokenizers_c.a"
   "${LITERTLM_TOKENIZERS_BUILD_DIR}/libtokenizers_cpp.a"
 )
+if(LITERTLM_MSVC_FRONTEND)
+  # MSVC ABI: tokenizers_c.lib / tokenizers_cpp.lib. Each entry lists, '|'
+  # separated, the places the archive can land in; the link step takes the
+  # first one that exists (see scripts/windows_write_link_rsp.cmake). Cargo
+  # writes the Rust archive to <target-dir>/release, or to
+  # <target-dir>/<triple>/release when a target triple is passed.
+  set(_tokenizers_lib_paths
+    "${LITERTLM_TOKENIZERS_BUILD_DIR}/tokenizers_c.lib|${LITERTLM_TOKENIZERS_BUILD_DIR}/release/tokenizers_c.lib|${LITERTLM_TOKENIZERS_BUILD_DIR}/${LITERTLM_RUST_TARGET}/release/tokenizers_c.lib"
+    "${LITERTLM_TOKENIZERS_BUILD_DIR}/tokenizers_cpp.lib"
+  )
+endif()
 #---

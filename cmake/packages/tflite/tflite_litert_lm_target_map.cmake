@@ -44,9 +44,6 @@ set(LITERTLM_TFLITE_TARGET_MAP
     "tflite::tensorflow-lite=${LITERTLM_TFLITE_BUILD_DIR}/libtensorflow-lite${CMAKE_STATIC_LIBRARY_SUFFIX}"
     "tflite::tflite_profiling=${LITERTLM_TFLITE_BUILD_DIR}/libtflite_profiling${CMAKE_STATIC_LIBRARY_SUFFIX}"
     "tflite::xnnpack-delegate=${LITERTLM_TFLITE_BUILD_DIR}/libxnnpack-delegate${CMAKE_STATIC_LIBRARY_SUFFIX}"
-    "tflite::model_runtime_info_proto=${LITERTLM_TFLITE_BUILD_DIR}/profiling/proto/libmodel_runtime_info_proto${CMAKE_STATIC_LIBRARY_SUFFIX}"
-    "tflite::profiling_info_proto=${LITERTLM_TFLITE_BUILD_DIR}/profiling/proto/libprofiling_info_proto${CMAKE_STATIC_LIBRARY_SUFFIX}"
     "tflite::pthreadpool=${LITERTLM_TFLITE_BUILD_DIR}/pthreadpool/libpthreadpool${CMAKE_STATIC_LIBRARY_SUFFIX}"
-    "tflite::benchmark_result_proto=${LITERTLM_TFLITE_BUILD_DIR}/tools/benchmark/proto/libbenchmark_result_proto${CMAKE_STATIC_LIBRARY_SUFFIX}"
     CACHE INTERNAL "Mapping of tflite targets"
 )

@@ -19,9 +19,13 @@
 # Macosx options
 #     darwin_arm64:
 #
+# Windows options:
+#     windows_x86_64:         Windows x86_64 with AVX2 (MSVC).
+#     windows_arm64:          Windows ARM64 native or cross-compiled (MSVC).
+#
 # Compiler options:
 #     avx_linux:              Build with avx instruction set on linux.
-#     avx_win:                Build with avx instruction set on windows
+#     avx_win:                Build with avx instruction set on windows.
 #
 # Other build options:
 #     short_logs:       Only log errors during build, skip warnings.
@@ -382,7 +386,7 @@ build:windows --spawn_strategy=local
 build:windows --host_copt=/Iexternal/com_google_protobuf/src
 
 # Use Git Bash for genrules
-build:windows --shell_executable="C:/Program Files/Git/bin/bash.exe"
+# BAZEL_SH or the command line supplies the installed shell location.
 
 # Verbose failure logs when something goes wrong
 build:windows --verbose_failures
@@ -406,9 +410,22 @@ build:avx_linux --copt=-mavx
 build:avx_linux --host_copt=-mavx
 build:avx_win --copt=/arch:AVX
 
-# Assume AVX2 x86_64 platforms for linux and windows.
+# Assume AVX2 x86_64 platforms for linux and windows x86_64.
 build:linux_x86_64 --copt=-mavx2
-build:windows --copt=/arch:AVX2
+build:windows_x86_64 --copt=/arch:AVX2
+
+# Windows ARM64 (e.g. Snapdragon X series) with MSVC, supporting both native
+# ARM64 hosts and cross-compilation from x86_64 Windows hosts. Bazel
+# auto-detects --host_cpu from the host machine, while --platforms and --cpu
+# target ARM64 and keep exec tools on the host toolchain. --cpu is still needed
+# by deps that select on it (e.g. XNNPACK's build_config:windows_arm64). cl.exe
+# has no ACLE support for the fp16-vector and SME kernels.
+build:windows_arm64 --cpu=arm64_windows
+build:windows_arm64 --platforms=@litert//platforms:windows_arm64
+build:windows_arm64 --extra_toolchains=@local_config_cc//:cc-toolchain-arm64_windows
+build:windows_arm64 --define=xnn_enable_arm_fp16_vector=false
+build:windows_arm64 --define=xnn_enable_arm_sme=false
+build:windows_arm64 --define=xnn_enable_arm_sme2=false
 
 # Enable all targets in XLA
 build:cpu_cross --define=with_cross_compiler_support=true

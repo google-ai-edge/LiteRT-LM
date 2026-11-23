@@ -18,6 +18,16 @@ if(NOT DEFINED SRC_DIR OR NOT DEFINED REPO_URL OR NOT DEFINED TAG)
   message(FATAL_ERROR "[LiteRTLM] shallow_git_fetch requires SRC_DIR, REPO_URL, and TAG")
 endif()
 
+# External dependencies built from source do not need Git LFS binaries; skip
+# LFS smudge filters so checkouts succeed even if system gitconfig sets
+# filter.lfs.required=true and the git binary used by CMake has no git-lfs.
+set(ENV{GIT_LFS_SKIP_SMUDGE} "1")
+set(_litertlm_git_no_lfs
+  -c filter.lfs.smudge=
+  -c filter.lfs.process=
+  -c filter.lfs.required=false
+)
+
 if(NOT EXISTS "${SRC_DIR}/.git")
   file(MAKE_DIRECTORY "${SRC_DIR}")
   execute_process(
@@ -40,13 +50,13 @@ endif()
 
 message(STATUS "[LiteRTLM] Fetching shallow ref ${TAG} from ${REPO_URL} into ${SRC_DIR}")
 execute_process(
-  COMMAND git fetch --depth 1 origin "${TAG}"
+  COMMAND git ${_litertlm_git_no_lfs} fetch --depth 1 origin "${TAG}"
   WORKING_DIRECTORY "${SRC_DIR}"
   COMMAND_ERROR_IS_FATAL ANY
 )
 
 execute_process(
-  COMMAND git checkout --force FETCH_HEAD
+  COMMAND git ${_litertlm_git_no_lfs} checkout --force FETCH_HEAD
   WORKING_DIRECTORY "${SRC_DIR}"
   COMMAND_ERROR_IS_FATAL ANY
 )
@@ -60,7 +70,7 @@ execute_process(
 if(EXISTS "${SRC_DIR}/.gitmodules")
   message(STATUS "[LiteRTLM] Updating submodules with depth 1 in ${SRC_DIR}")
   execute_process(
-    COMMAND git submodule update --init --recursive --depth 1
+    COMMAND git ${_litertlm_git_no_lfs} submodule update --init --recursive --depth 1
     WORKING_DIRECTORY "${SRC_DIR}"
     COMMAND_ERROR_IS_FATAL ANY
   )

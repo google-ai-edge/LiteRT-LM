@@ -41,11 +41,17 @@ set(LITERTLM_FLATBUFFERS_DIR
 set(LITERTLM_FLATBUFFERS_CMAKE_CONFIG_FILE
     "${LITERTLM_FLATBUFFERS_LIB_DIR}/cmake/flatbuffers/flatbuffers-config.cmake"
     CACHE INTERNAL "")
+# This file is also included from cmake -P patchers and from third-party
+# builds, so the host suffix is derived here rather than taken from a helper.
+set(_litertlm_flatc_exe_suffix "")
+if(CMAKE_HOST_WIN32)
+    set(_litertlm_flatc_exe_suffix ".exe")
+endif()
 set(LITERTLM_FLATBUFFERS_FLATC_EXECUTABLE
-    "${LITERTLM_FLATBUFFERS_BIN_DIR}/flatc"
+    "${LITERTLM_FLATBUFFERS_BIN_DIR}/flatc${_litertlm_flatc_exe_suffix}"
     CACHE INTERNAL "")
 set(LITERTLM_FLATC_EXECUTABLE
-    "${LITERTLM_FLATBUFFERS_BIN_DIR}/flatc"
+    "${LITERTLM_FLATBUFFERS_BIN_DIR}/flatc${_litertlm_flatc_exe_suffix}"
     CACHE INTERNAL "")
 set(LITERTLM_FLATBUFFERS_AGGREGATE_PATH
     "${LITERTLM_FLATBUFFERS_PACKAGE_DIR}/flatbuffers_aggregate.cmake"

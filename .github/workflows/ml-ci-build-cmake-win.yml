@@ -1,0 +1,347 @@
+# Copyright 2026 The ODML Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Builds LiteRT-LM for Windows ARM64 (e.g. Snapdragon X series) with CMake.
+#
+# There is no Windows ARM64 runner, so this cross-compiles with MSVC on the
+# x86_64 Windows runner:
+#
+#   1. From an x64 developer shell (vcvarsall.bat amd64), the `windows-x64`
+#      preset builds the tools that have to run during the build (protoc,
+#      flatc).
+#   2. From an ARM64 cross developer shell (vcvarsall.bat amd64_arm64), the
+#      `windows-arm64` preset builds litert_lm_main.exe with those host tools.
+#
+# The ARM64 binary cannot run on this runner: the job checks that it is an
+# ARM64 PE image and uploads it for testing on a device. Afterwards, and without
+# failing the job, it builds the whole x64 tree and runs the pytest sanity
+# checks against it.
+
+name: "ML-CI-Win-CMake"
+on:
+  push:
+    tags:
+    - v*.*.*
+  pull_request:
+    branches:
+    - main
+  workflow_dispatch:  # Manual trigger
+
+defaults:
+  run:
+    shell: powershell
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/check-pr-state.yml
+
+  presubmit:
+    needs: gate
+    if: needs.gate.outputs.should_skip != 'true'
+    # This check is required by name, so keep the name unique across workflows.
+    name: "Presubmit-CMake-Windows-ARM64"
+    runs-on: windows-x86-n2-16
+    # Copybara waits at most 4 hours for the presubmit.
+    timeout-minutes: 220
+    permissions:
+      id-token: write  # Required to get the OIDC token for WIF (model download).
+      contents: read
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 16
+      CARGO_INCREMENTAL: 0
+      GIT_LFS_SKIP_SMUDGE: "1"
+      # MSVC tools are limited to 260-character paths and the dependency trees
+      # nest deeply, so everything is built under a short root.
+      SHORT_ROOT: C:/t
+      X64_BUILD_DIR: C:/t/x64
+      ARM64_BUILD_DIR: C:/t/a64
+      MODEL_KEY: gemma-4-E2B-it.litertlm
+      MODEL_PATH: ./models/gemma4
+      GCS_MODEL_URL: gs://litert-lm-cicd/models/gemma4/gemma-4-E2B-it.litertlm
+      HF_MODEL_URL: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm
+      # Clear ANDROID_NDK_HOME and its fallback ANDROID_NDK_ROOT as Windows_x64 has NDK where jobs
+      # don't have permission for androidndk rules to create symlinks.
+      ANDROID_NDK_HOME:
+      ANDROID_NDK_ROOT:
+    steps:
+      - name: Install Git
+        run: |
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+          Set-ExecutionPolicy Bypass -Scope Process -Force
+          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+            Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          }
+          $env:Path += ";$env:ALLUSERSPROFILE\chocolatey\bin"
+          choco install git --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw "choco install git failed" }
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Git\cmd"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Git\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Git\mingw64\bin"
+
+      - name: Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          persist-credentials: false
+
+      - name: Set up short build paths and Git long path support
+        run: |
+          $shortRoot = $env:SHORT_ROOT.Replace('/', '\')
+          $tempDir = "$shortRoot\_tmp"
+          $homeDir = "$shortRoot\_home"
+          $gitConfigDir = "$homeDir\.config\git"
+          New-Item -ItemType Directory -Force -Path $tempDir, $gitConfigDir | Out-Null
+          $gitIgnoreFile = "$gitConfigDir\ignore"
+          $gitAttrFile = "$gitConfigDir\attributes"
+          New-Item -ItemType File -Force -Path $gitIgnoreFile, $gitAttrFile | Out-Null
+          # The dependencies cloned during the build (TensorFlow in particular)
+          # contain paths longer than 260 characters.
+          $gitConfigText = @(
+            "[core]",
+            "`tlongpaths = true",
+            "`texcludesFile = $env:SHORT_ROOT/_home/.config/git/ignore",
+            "`tattributesFile = $env:SHORT_ROOT/_home/.config/git/attributes"
+          )
+          Set-Content -LiteralPath "$homeDir\.gitconfig" -Value $gitConfigText -Encoding ASCII
+          Set-Content -LiteralPath "$gitConfigDir\config" -Value $gitConfigText -Encoding ASCII
+          Add-Content -Path $env:GITHUB_ENV -Value "HOME=$homeDir" -Encoding utf8
+          Add-Content -Path $env:GITHUB_ENV -Value "XDG_CONFIG_HOME=$env:SHORT_ROOT/_home/.config" -Encoding utf8
+          Add-Content -Path $env:GITHUB_ENV -Value "GIT_CONFIG_GLOBAL=$env:SHORT_ROOT/_home/.gitconfig" -Encoding utf8
+          Add-Content -Path $env:GITHUB_ENV -Value "TMP=$tempDir" -Encoding utf8
+          Add-Content -Path $env:GITHUB_ENV -Value "TEMP=$tempDir" -Encoding utf8
+
+      - name: Install CMake, Ninja and pytest
+        run: |
+          $python = (Get-Command python -ErrorAction Stop).Source
+          Write-Host "Using Python at $python"
+          Add-Content -Path $env:GITHUB_ENV -Value "PYTHON_EXE=$python" -Encoding utf8
+          & $python -m pip install --break-system-packages cmake==3.28.3 ninja==1.11.1.4 pytest==8.3.4
+          if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+          $scriptsDir = & $python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+          Add-Content -Path $env:GITHUB_PATH -Value "$scriptsDir"
+          $env:PATH = "$scriptsDir;$env:PATH"
+          cmake --version
+          ninja --version
+
+      - name: Set up JDK (ANTLR code generation)
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Rust with the Windows ARM64 target
+        run: |
+          Invoke-WebRequest -Uri "https://win.rustup.rs" -OutFile "$env:TEMP\rustup-init.exe"
+          & "$env:TEMP\rustup-init.exe" -y --default-host x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "rustup-init failed" }
+          $cargoBin = "$env:USERPROFILE\.cargo\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value "$cargoBin"
+          & "$cargoBin\rustup.exe" target add aarch64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "rustup target add failed" }
+          & "$cargoBin\rustc.exe" --version
+
+      - name: Ensure MSVC ARM64 build tools are installed
+        run: |
+          $vsPath = if ($env:BAZEL_VS -and (Test-Path $env:BAZEL_VS)) {
+            (Get-Item $env:BAZEL_VS).FullName
+          } elseif ($env:BAZEL_VC -and (Test-Path $env:BAZEL_VC)) {
+            Split-Path -Parent (Get-Item $env:BAZEL_VC).FullName
+          } else {
+            (Get-ChildItem -Path "C:\Program Files*\Microsoft Visual Studio\*\*" -Directory -ErrorAction SilentlyContinue |
+              Where-Object { Test-Path (Join-Path $_.FullName "VC\Auxiliary\Build\vcvarsall.bat") } |
+              Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          }
+          if (-not $vsPath) {
+            throw "Visual Studio installation with vcvarsall.bat not found."
+          }
+          if (-not (Get-ChildItem -Path "$vsPath\VC\Tools\MSVC\*\bin\Hostx64\arm64\cl.exe" -ErrorAction SilentlyContinue)) {
+            $setupExe = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe"
+            if (-not (Test-Path $setupExe)) { throw "Visual Studio Installer not found at $setupExe" }
+            $proc = Start-Process -FilePath $setupExe -ArgumentList @(
+              "modify", "--installPath", "`"$vsPath`"",
+              "--add", "Microsoft.VisualStudio.Component.VC.Tools.ARM64",
+              "--quiet", "--wait", "--norestart", "--nocache"
+            ) -Wait -PassThru
+            if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+              throw "Visual Studio Installer failed with exit code $($proc.ExitCode)"
+            }
+            if (-not (Get-ChildItem -Path "$vsPath\VC\Tools\MSVC\*\bin\Hostx64\arm64\cl.exe" -ErrorAction SilentlyContinue)) {
+              throw "MSVC ARM64 build tools still not found under $vsPath after installation."
+            }
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "VS_INSTALL_PATH=$vsPath" -Encoding utf8
+
+      # Step 1: the tools that run on this machine during the ARM64 build.
+      # ENABLE_CCACHE=OFF: do not pick up a compiler cache from the runner image;
+      # none has been validated with cl.exe for this build yet.
+      - name: Build host tools (x64 protoc and flatc)
+        run: |
+          $vcvars = Join-Path $env:VS_INSTALL_PATH "VC\Auxiliary\Build\vcvarsall.bat"
+          $script = Join-Path $env:TEMP "build_host_tools.cmd"
+          $lines = @(
+            "@echo off",
+            "call `"$vcvars`" amd64 || exit /b 1",
+            "cd /d `"$env:GITHUB_WORKSPACE`" || exit /b 1",
+            "cmake --preset windows-x64 -B `"$env:X64_BUILD_DIR`" -DENABLE_CCACHE=OFF || exit /b 1",
+            "cmake --build `"$env:X64_BUILD_DIR`" --target prebuild || exit /b 1"
+          )
+          Set-Content -LiteralPath $script -Value $lines -Encoding ASCII
+          & cmd.exe /d /c $script | Write-Output
+          if ($LASTEXITCODE -ne 0) {
+            throw "Building the x64 host tools failed with exit code $LASTEXITCODE"
+          }
+          foreach ($tool in @("$env:X64_BUILD_DIR/ext/protobuf/install/bin/protoc.exe",
+                              "$env:X64_BUILD_DIR/ext/flatbuffers/install/bin/flatc.exe")) {
+            if (-not (Test-Path -LiteralPath $tool)) {
+              throw "Host tool missing after the x64 prebuild: $tool"
+            }
+            Write-Host "Host tool: $tool"
+          }
+
+      # Step 2: the ARM64 build, with the ARM64 cross compiler on PATH and the
+      # x64 host tools from step 1.
+      - name: Cross-build LiteRT-LM for Windows ARM64
+        run: |
+          $vcvars = Join-Path $env:VS_INSTALL_PATH "VC\Auxiliary\Build\vcvarsall.bat"
+          $script = Join-Path $env:TEMP "build_win_arm64.cmd"
+          $lines = @(
+            "@echo off",
+            "call `"$vcvars`" amd64_arm64 || exit /b 1",
+            "cd /d `"$env:GITHUB_WORKSPACE`" || exit /b 1",
+            "cmake --preset windows-arm64 -B `"$env:ARM64_BUILD_DIR`" -DENABLE_CCACHE=OFF -DLITERTLM_HOST_PROTOC=`"$env:X64_BUILD_DIR/ext/protobuf/install/bin/protoc.exe`" -DLITERTLM_HOST_FLATC=`"$env:X64_BUILD_DIR/ext/flatbuffers/install/bin/flatc.exe`" || exit /b 1",
+            "cmake --build `"$env:ARM64_BUILD_DIR`" || exit /b 1"
+          )
+          Set-Content -LiteralPath $script -Value $lines -Encoding ASCII
+          & cmd.exe /d /c $script | Write-Output
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows ARM64 CMake build failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Verify and stage the Windows ARM64 binary
+        run: |
+          $exe = "$env:ARM64_BUILD_DIR/litert_lm/build/litert_lm_main.exe".Replace('/', '\')
+          if (-not (Test-Path -LiteralPath $exe)) {
+            throw "Expected Windows ARM64 build artifact missing: $exe"
+          }
+
+          $out = "dist\cmake_windows_arm64"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          Copy-Item -LiteralPath $exe -Destination "$out\litert_lm_main.exe" -Force
+          # Shared libraries the executable needs, if any, sit next to it.
+          Get-ChildItem -Path (Join-Path (Split-Path -Parent $exe) "*.dll") -ErrorAction SilentlyContinue | Copy-Item -Destination $out -Force
+
+          # ARM64 binaries cannot run on this x86_64 runner; verify PE machine type (0xAA64).
+          $binaries = Get-ChildItem -Path "$out\*" -File -Include *.exe, *.dll
+          if (-not $binaries) { throw "No staged Windows ARM64 binaries found in $out" }
+          foreach ($bin in $binaries) {
+            $bytes = [System.IO.File]::ReadAllBytes($bin.FullName)
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne 0xAA64) {
+              throw "$($bin.Name): expected ARM64 PE (0xAA64), got 0x$($machine.ToString('X4'))"
+            }
+            $hash = (Get-FileHash -LiteralPath $bin.FullName -Algorithm SHA256).Hash
+            Write-Host ("{0}  {1} ({2} bytes, ARM64)" -f $hash, $bin.Name, $bin.Length)
+          }
+
+      - name: Upload the Windows ARM64 binary
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+        with:
+          name: litert-lm-cmake-windows-arm64
+          path: dist/cmake_windows_arm64/
+          if-no-files-found: error
+
+      # Everything below exercises the x64 CMake build, which can run on this
+      # machine. It is not required to pass yet: failures are reported without
+      # failing the job.
+      - name: Build LiteRT-LM for Windows x64
+        id: build-x64
+        continue-on-error: true
+        timeout-minutes: 80
+        run: |
+          $vcvars = Join-Path $env:VS_INSTALL_PATH "VC\Auxiliary\Build\vcvarsall.bat"
+          $script = Join-Path $env:TEMP "build_win_x64.cmd"
+          $lines = @(
+            "@echo off",
+            "call `"$vcvars`" amd64 || exit /b 1",
+            "cd /d `"$env:GITHUB_WORKSPACE`" || exit /b 1",
+            "cmake --build `"$env:X64_BUILD_DIR`" || exit /b 1"
+          )
+          Set-Content -LiteralPath $script -Value $lines -Encoding ASCII
+          & cmd.exe /d /c $script | Write-Output
+          if ($LASTEXITCODE -ne 0) {
+            throw "Windows x64 CMake build failed with exit code $LASTEXITCODE"
+          }
+          # tools/pytest looks for the binary under cmake/build/<build-name>.
+          $x64BuildDir = $env:X64_BUILD_DIR.Replace('/', '\')
+          New-Item -ItemType Directory -Path "cmake\build" -Force | Out-Null
+          & cmd.exe /d /c mklink /J "cmake\build\windows-x64" "$x64BuildDir" | Write-Output
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not link cmake\build\windows-x64 to $x64BuildDir"
+          }
+
+      - name: Set up Google Cloud SDK
+        id: gcloud
+        if: steps.build-x64.outcome == 'success'
+        continue-on-error: true
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Download Model
+        id: model
+        if: steps.build-x64.outcome == 'success' && steps.gcloud.outcome == 'success'
+        continue-on-error: true
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if (-not (Test-Path $env:MODEL_PATH)) {
+            New-Item -ItemType Directory -Path $env:MODEL_PATH -Force | Out-Null
+          }
+
+          Write-Host "Attempting to download from GCS..."
+          gcloud storage cp "$env:GCS_MODEL_URL" "$env:MODEL_PATH/$env:MODEL_KEY"
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "Model not found in GCS. Falling back to Hugging Face..."
+
+            if (-not $env:HF_TOKEN) {
+              Write-Host "Error: HF_TOKEN is missing or empty."
+              exit 1
+            }
+
+            Write-Host "Downloading model from Hugging Face..."
+            curl.exe --http1.1 -L -C - --retry 5 --retry-delay 3 --retry-all-errors -f `
+              --oauth2-bearer "$env:HF_TOKEN" `
+              -o "$env:MODEL_PATH/$env:MODEL_KEY" `
+              "$env:HF_MODEL_URL"
+
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "Error: Failed to download model from Hugging Face."
+              exit 1
+            }
+          }
+
+      - name: Run pytest (Windows x64)
+        if: steps.build-x64.outcome == 'success' && steps.model.outcome == 'success'
+        continue-on-error: true
+        # Execute pytest via the python module (-m) to bypass missing pytest.exe PATH issues
+        run: |
+          & $env:PYTHON_EXE -m pytest tools/pytest/ --build-name=windows-x64 --backend=cpu --model-path="$env:MODEL_PATH/$env:MODEL_KEY" --build-system=cmake

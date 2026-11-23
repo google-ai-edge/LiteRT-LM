@@ -22,6 +22,30 @@ setup_external_install_structure("${LITERTLM_SENTENCEPIECE_INSTALL_PREFIX}")
 
 set(LITERTLM_SENTENCEPIECE_TAG "v0.2.2" CACHE STRING "Sentencepiece git tag")
 
+# MSVC ABI: Protobuf's archive is libprotobuf.lib, and SentencePiece must keep
+# the DLL C runtime like the rest of the build.
+set(LITERTLM_SENTENCEPIECE_PLATFORM_ARGS "")
+if(LITERTLM_MSVC_FRONTEND)
+  litertlm_normalize_static_lib_path(_litertlm_spm_protobuf_lib
+    "${LITERTLM_PROTOBUF_LIB_DIR}/libprotobuf.a")
+  list(APPEND LITERTLM_SENTENCEPIECE_PLATFORM_ARGS
+    "-DProtobuf_LITE_LIBRARY=${_litertlm_spm_protobuf_lib}"
+    "-DProtobuf_LIBRARY=${_litertlm_spm_protobuf_lib}"
+    "-DSPM_ENABLE_MSVC_MT_BUILD=OFF")
+endif()
+
+set(LITERTLM_SENTENCEPIECE_BUILD_ARGS "")
+if(WIN32 OR CMAKE_GENERATOR MATCHES "Ninja")
+  # CONFIGURE_COMMAND starts with `cmake -E env`, so ExternalProject does not
+  # recognize it as a CMake configure step and defaults BUILD_COMMAND to `make`,
+  # which fails under Ninja on Windows. Keep the default on Unix Makefiles so
+  # $(MAKE) preserves the jobserver.
+  set(LITERTLM_SENTENCEPIECE_BUILD_ARGS
+    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR>
+    INSTALL_COMMAND ${CMAKE_COMMAND} --install <BINARY_DIR>
+  )
+endif()
+
   ExternalProject_Add(
     sentencepiece_external
     DEPENDS
@@ -53,6 +77,8 @@ set(LITERTLM_SENTENCEPIECE_TAG "v0.2.2" CACHE STRING "Sentencepiece git tag")
     CONFIGURE_COMMAND
       ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
       ${CMAKE_COMMAND} -S ${LITERTLM_SENTENCEPIECE_SRC_DIR} -B ${LITERTLM_SENTENCEPIECE_BUILD_DIR}
+      ${LITERTLM_EP_GENERATOR_ARGS}
+      ${LITERTLM_EP_PLATFORM_ARGS}
       ${LITERTLM_TOOLCHAIN_FILE}
       ${LITERTLM_TOOLCHAIN_ARGS}
       "-DLITERTLM_ORCHESTRATION_PHASE=${LITERTLM_ORCHESTRATION_PHASE}"
@@ -109,7 +135,8 @@ set(LITERTLM_SENTENCEPIECE_TAG "v0.2.2" CACHE STRING "Sentencepiece git tag")
       "-DPROTOBUF_PACKAGE_DIR=${LITERTLM_PROTOBUF_PACKAGE_DIR}"
       "-DPROTO_LIB_DIR=${LITERTLM_PROTOBUF_LIB_DIR}"
       "-DPROTO_SRC_DIR=${LITERTLM_PROTOBUF_SRC_DIR}"
-
+      ${LITERTLM_SENTENCEPIECE_PLATFORM_ARGS}
+    ${LITERTLM_SENTENCEPIECE_BUILD_ARGS}
   )
   if(LITERTLM_GENERATE_TARGET_MAP)
     ExternalProject_Add_Step(sentencepiece_external generate_target_map

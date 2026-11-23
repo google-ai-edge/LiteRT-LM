@@ -912,6 +912,7 @@ cc_library(
         "//build_config:linux_x86_64": ["//prebuilt/linux_x86_64:libwebgpu_dawn.so"],
         "//build_config:linux_arm64": ["//prebuilt/linux_arm64:libwebgpu_dawn.so"],
         "@platforms//os:macos": ["//prebuilt/macos_arm64:libwebgpu_dawn.dylib"],
+        "//build_config:windows_arm64": ["//prebuilt/windows_arm64:webgpu_dawn.dll"],
         "@platforms//os:windows": ["//prebuilt/windows_x86_64:webgpu_dawn.dll"],
         "//conditions:default": [],
     }),

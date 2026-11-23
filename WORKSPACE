@@ -20,6 +20,54 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 load("//:android_ndk_env.bzl", "check_android_ndk_env", "stub_local_config_android")
 
+# TODO(b/579585878): Upstream the Windows ARM64 fix and remove this pinned
+# override once TENSORFLOW_REF includes it.
+# Combined I8MM/BF16 microkernels require both features to be enabled.
+# Keep the commit pinned in sync with `@org_tensorflow`'s `xnnpack` workspace.
+http_archive(
+    name = "XNNPACK",
+    patch_strip = 1,
+    patches = ["//third_party/xnnpack:windows_arm64.patch"],
+    sha256 = "1c94d80ff3069b3510e54b41a2c82729a4053724a682fcb09840af296dcaa07c",
+    strip_prefix = "XNNPACK-08cc38b61f7589f84e91c6e343e0f130ae3279ca",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/google/XNNPACK/archive/08cc38b61f7589f84e91c6e343e0f130ae3279ca.zip",
+        "https://github.com/google/XNNPACK/archive/08cc38b61f7589f84e91c6e343e0f130ae3279ca.zip",
+    ],
+)
+
+# TODO(b/579585878): Upstream the Windows ARM64 fix and remove this pinned
+# override once TENSORFLOW_REF includes it.
+# Keep the pinned cpuinfo source in sync with `@org_tensorflow`, applying its
+# existing MSVC array-argument compatibility macro consistently to the ARM cache
+# implementation.
+http_archive(
+    name = "cpuinfo",
+    patch_strip = 1,
+    patches = ["//third_party/cpuinfo:windows_arm64.patch"],
+    sha256 = "60f758240032413a31d288e7c76e8a3a81e869c8d6ce05869ad799b33e7b0a63",
+    strip_prefix = "cpuinfo-783a616b2197d7e48d6507210d1d0009fbf1f590",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/pytorch/cpuinfo/archive/783a616b2197d7e48d6507210d1d0009fbf1f590.zip",
+        "https://github.com/pytorch/cpuinfo/archive/783a616b2197d7e48d6507210d1d0009fbf1f590.zip",
+    ],
+)
+
+# TODO(b/579585878): Upstream the Windows ARM64 fix and remove this pinned
+# override once TENSORFLOW_REF includes it.
+# Use LiteRT's MSVC ARM64-compatible BUILD for the same pinned FarmHash source.
+# TensorFlow's default BUILD applies its MSVC compatibility define only to x64.
+http_archive(
+    name = "farmhash_archive",
+    build_file = "@litert//third_party/farmhash:farmhash.BUILD",
+    sha256 = "18392cf0736e1d62ecbb8d695c31496b6507859e8c75541d7ad0ba092dc52115",
+    strip_prefix = "farmhash-0d859a811870d10f53a594927d0d0b97573ad06d",
+    urls = [
+        "https://storage.googleapis.com/mirror.tensorflow.org/github.com/google/farmhash/archive/0d859a811870d10f53a594927d0d0b97573ad06d.tar.gz",
+        "https://github.com/google/farmhash/archive/0d859a811870d10f53a594927d0d0b97573ad06d.tar.gz",
+    ],
+)
+
 # Declared before `rules_shell_dependencies()` and `apple_rules_dependencies()`
 # because those macros also declare `bazel_skylib`, and the first declaration of
 # a repository wins. The pinned TensorFlow expects 1.9.0: its `@rules_cc` uses
@@ -409,6 +457,8 @@ rust_register_toolchains(
         "aarch64-apple-ios-sim",
         "x86_64-linux-android",
         "x86_64-apple-darwin",
+        # Windows ARM64 is cross-compiled from an x86_64 Windows host.
+        "aarch64-pc-windows-msvc",
     ],
 )
 
@@ -474,6 +524,7 @@ crates_repository(
     name = "cxxbridge_cmd_deps",
     cargo_lockfile = "//cxxbridge_cmd:Cargo.lock",
     manifests = ["@cxxbridge_cmd//:Cargo.toml"],
+    supported_platform_triples = SUPPORTED_PLATFORM_TRIPLES,
 )
 
 load("@cxxbridge_cmd_deps//:defs.bzl", cxxbridge_cmd_deps = "crate_repositories")

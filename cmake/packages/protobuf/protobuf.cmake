@@ -20,6 +20,25 @@ setup_external_install_structure("${LITERTLM_PROTOBUF_INSTALL_PREFIX}")
 
 set(LITERTLM_PROTOBUF_TAG "v36.1" CACHE STRING "Protobuf git tag")
 
+# MSVC ABI: make Protobuf use the DLL C runtime (/MD) like the rest of the
+# build, whatever its own default is.
+set(LITERTLM_PROTOBUF_PLATFORM_ARGS "")
+if(LITERTLM_MSVC_FRONTEND)
+  list(APPEND LITERTLM_PROTOBUF_PLATFORM_ARGS "-Dprotobuf_MSVC_STATIC_RUNTIME=OFF")
+endif()
+
+set(LITERTLM_PROTOBUF_BUILD_ARGS "")
+if(WIN32 OR CMAKE_GENERATOR MATCHES "Ninja")
+  # CONFIGURE_COMMAND starts with `cmake -E env`, so ExternalProject does not
+  # recognize it as a CMake configure step and defaults BUILD_COMMAND to `make`,
+  # which fails under Ninja on Windows. Keep the default on Unix Makefiles so
+  # $(MAKE) preserves the jobserver.
+  set(LITERTLM_PROTOBUF_BUILD_ARGS
+    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR>
+    INSTALL_COMMAND ${CMAKE_COMMAND} --install <BINARY_DIR>
+  )
+endif()
+
 include(ExternalProject)
 if(NOT EXISTS "${LITERTLM_PROTOBUF_CONFIG_CMAKE_FILE}")
   message(STATUS "Protobuf not found. Configuring external build...")
@@ -51,6 +70,8 @@ if(NOT EXISTS "${LITERTLM_PROTOBUF_CONFIG_CMAKE_FILE}")
     CONFIGURE_COMMAND
       ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
       ${CMAKE_COMMAND} -S ${LITERTLM_PROTOBUF_SRC_DIR} -B ${LITERTLM_PROTOBUF_BUILD_DIR}
+      ${LITERTLM_EP_GENERATOR_ARGS}
+      ${LITERTLM_EP_PLATFORM_ARGS}
       ${LITERTLM_TOOLCHAIN_FILE}
       ${LITERTLM_TOOLCHAIN_ARGS}
       "-DLITERTLM_ORCHESTRATION_PHASE=${LITERTLM_ORCHESTRATION_PHASE}"
@@ -82,6 +103,8 @@ if(NOT EXISTS "${LITERTLM_PROTOBUF_CONFIG_CMAKE_FILE}")
       "-Dabsl_DIR=${LITERTLM_ABSL_INSTALL_PREFIX}/lib/cmake/absl"
       "-DGTest_DIR=${LITERTLM_GTEST_INSTALL_PREFIX}/lib/cmake/GTest"
       "-DProtobuf_DIR=${LITERTLM_PROTOBUF_INSTALL_PREFIX}/lib/cmake/Protobuf"
+      ${LITERTLM_PROTOBUF_PLATFORM_ARGS}
+    ${LITERTLM_PROTOBUF_BUILD_ARGS}
   )
   if(LITERTLM_GENERATE_TARGET_MAP)
     ExternalProject_Add_Step(protobuf_external generate_target_map

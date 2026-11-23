@@ -14,6 +14,10 @@
 
 # WARNING: Do not use anything from macros.cmake in this file.
 
+# Platform helpers (MSVC ABI detection, Windows archive names). No-ops for
+# every other toolchain.
+include("${CMAKE_CURRENT_LIST_DIR}/litertlm_platform.cmake")
+
 function(verify_install target_name config_path)
     ExternalProject_Add_Step(${target_name} step_verify_install
         COMMAND ${CMAKE_COMMAND} -E echo "Verifying installation..."
@@ -122,6 +126,10 @@ function(kvp_parse_map MAP_VAR KEYS_OUT VALS_OUT)
     set(_KVP_KEYS "")
     set(_KVP_VALS "")
 
+    # The maps spell archives the Linux way (lib<name>.a); translate them for
+    # the MSVC ABI (cl.exe and clang-cl), where they are <name>.lib.
+    litertlm_is_msvc_frontend(_kvp_msvc_frontend)
+
     foreach(_entry IN ITEMS ${MAP_VAR})
         # Find the delimiter
         string(FIND "${_entry}" "=" _pos)
@@ -138,6 +146,14 @@ function(kvp_parse_map MAP_VAR KEYS_OUT VALS_OUT)
         math(EXPR _val_start "${_pos} + 1")
         string(SUBSTRING "${_entry}" ${_val_start} -1 _val)
         string(STRIP "${_val}" _val)
+
+        if(_kvp_msvc_frontend)
+            litertlm_normalize_static_lib_path(_val "${_val}")
+            if("${_val}" STREQUAL "")
+                # Not produced on this platform.
+                continue()
+            endif()
+        endif()
 
         # 3. Synchronized storage
         list(APPEND _KVP_KEYS "${_key}")
