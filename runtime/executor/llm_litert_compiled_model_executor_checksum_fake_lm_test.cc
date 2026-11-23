@@ -876,6 +876,71 @@ TEST_P(FakeLmDraftVerificationTest, ConstraintAcceptsTheDraftsThatFollowIt) {
               ElementsAre(ElementsAre(kForcedTokens[num_forced])));
 }
 
+TEST_P(FakeLmExecutorTest, UpdateRuntimeConfigUpdatesSessionSampler) {
+  ASSERT_OK(Prefill({3, 1, 4}));
+  // Lazily initialize the session sampler under the initial greedy config.
+  ASSERT_NO_FATAL_FAILURE(DecodeAndExpectFakeLmTokens(/*num_steps=*/1));
+
+  // Switch to high-temperature top-p sampling via UpdateRuntimeConfig, as
+  // ResourceManager does when switching between cloned sessions.
+  proto::SamplerParameters sampled_params;
+  sampled_params.set_type(proto::SamplerParameters::TOP_P);
+  sampled_params.set_k(kFakeLmVocabSize);
+  sampled_params.set_p(1.0f);
+  sampled_params.set_temperature(10.0f);
+  ASSERT_OK_AND_ASSIGN(RuntimeConfig greedy_config,
+                       executor_->GetRuntimeConfig());
+  RuntimeConfig sampled_config = greedy_config;
+  sampled_config.sampler_params = sampled_params;
+  ASSERT_OK(executor_->UpdateRuntimeConfig(sampled_config));
+
+  RandomState random_state = RandomState::FromSeed(42);
+  ExecutorDecodeParams sampled_decode;
+  sampled_decode.SetRandomState(&random_state);
+  bool saw_non_greedy_token = false;
+  for (int step = 0; step < 8; ++step) {
+    ASSERT_OK_AND_ASSIGN(auto output_tokens, executor_->Decode(sampled_decode));
+    ASSERT_EQ(output_tokens.size(), 1);
+    ASSERT_EQ(output_tokens[0].size(), 1);
+    const int token = output_tokens[0][0];
+    if (token != FakeLmNextToken(context_)) {
+      saw_non_greedy_token = true;
+    }
+    context_.push_back(token);
+  }
+  EXPECT_TRUE(saw_non_greedy_token);
+
+  // Switching back to greedy must reconfigure the sampler so greedy decode
+  // works without a RandomState and matches the deterministic argmax again.
+  ASSERT_OK(executor_->UpdateRuntimeConfig(greedy_config));
+  ASSERT_NO_FATAL_FAILURE(DecodeAndExpectFakeLmTokens(/*num_steps=*/2));
+
+  // Switching to an unset sampler_params must also default to greedy.
+  RuntimeConfig unset_config = greedy_config;
+  unset_config.sampler_params = std::nullopt;
+  ASSERT_OK(executor_->UpdateRuntimeConfig(unset_config));
+  ASSERT_NO_FATAL_FAILURE(DecodeAndExpectFakeLmTokens(/*num_steps=*/2));
+}
+
+TEST_P(FakeLmExecutorTest, UpdateRuntimeConfigRejectsInvalidSamplerParams) {
+  ASSERT_OK(Prefill({3, 1, 4}));
+  // Initialize the session sampler so UpdateRuntimeConfig validates through it.
+  ASSERT_NO_FATAL_FAILURE(DecodeAndExpectFakeLmTokens(/*num_steps=*/1));
+  ASSERT_OK_AND_ASSIGN(RuntimeConfig greedy_config,
+                       executor_->GetRuntimeConfig());
+
+  RuntimeConfig invalid_config = greedy_config;
+  proto::SamplerParameters invalid_params;
+  invalid_params.set_type(proto::SamplerParameters::TOP_P);
+  invalid_params.set_k(0);
+  invalid_params.set_p(1.0f);
+  invalid_params.set_temperature(1.0f);
+  invalid_config.sampler_params = invalid_params;
+
+  EXPECT_THAT(executor_->UpdateRuntimeConfig(invalid_config),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     FakeLms, FakeLmExecutorTest,
     ::testing::Values(

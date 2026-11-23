@@ -142,12 +142,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
     return llm_context_->runtime_config();
   }
 
-  // Updates the runtime configuration.
+  // Updates the runtime configuration, keeping the session sampler and MTP
+  // verifier in sync if already initialized.
   absl::Status UpdateRuntimeConfig(
-      const RuntimeConfig& runtime_config) override {
-    llm_context_->runtime_config() = runtime_config;
-    return absl::OkStatus();
-  }
+      const RuntimeConfig& runtime_config) override;
 
   // Gets the runtime state.
   absl::StatusOr<RuntimeState> GetRuntimeState() const override {
@@ -157,11 +155,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   // Updates the runtime state. The resource manager calls this, instead of
   // `RestoreContext()`, to switch to a session that shares the processed
   // context of the current one (e.g. a clone of it).
-  absl::Status UpdateRuntimeState(const RuntimeState& runtime_state) override {
-    llm_context_->runtime_state() = runtime_state;
-    OnContextSwitch();
-    return absl::OkStatus();
-  }
+  absl::Status UpdateRuntimeState(const RuntimeState& runtime_state) override;
 
   // Sets the current step of the executor.
   absl::Status SetCurrentStep(int new_step) override;
@@ -487,7 +481,7 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // Drops the executor state that belongs to the previous context, when
   // `RestoreContext()` or `UpdateRuntimeState()` switches to another one.
-  void OnContextSwitch();
+  absl::Status OnContextSwitch();
 
   // Prepares the first decode step.
   // When output_batch_size_ > 1, It broadcasts KV cache buffers to

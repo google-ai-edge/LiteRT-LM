@@ -868,6 +868,95 @@ TEST(LlmLiteRtCompiledModelExecutorStaticTest,
   EXPECT_EQ(fake_sampler_ptr->inference_called_count(), 4);
 }
 
+class SamplerInputHandlingResetTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    auto model_path =
+        std::filesystem::path(::testing::SrcDir()) / kTestStaticModelPath;
+    ASSERT_OK_AND_ASSIGN(model_resources_, CreateExecutorModelResourcesLitertLm(
+                                               model_path.string()));
+    ASSERT_OK_AND_ASSIGN(auto model_assets,
+                         ModelAssets::Create(model_path.string()));
+    ASSERT_OK_AND_ASSIGN(
+        auto executor_settings,
+        LlmExecutorSettings::CreateDefault(model_assets, Backend::CPU));
+    executor_settings.SetCacheDir(":nocache");
+    executor_settings.SetMaxNumTokens(kMaxNumTokens);
+    executor_settings.SetAdvancedSettings(AdvancedSettings{
+        .sampler_handles_input = true,
+    });
+    ::litert::lm::CpuConfig config;
+    config.number_of_threads = kNumThreads;
+    executor_settings.SetBackendConfig(config);
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        env_, Environment::Create(std::vector<Environment::Option>()));
+    ASSERT_OK_AND_ASSIGN(executor_,
+                         LlmLiteRtCompiledModelExecutorStatic::Create(
+                             executor_settings, *env_, *model_resources_));
+    ASSERT_NE(executor_, nullptr);
+
+    auto fake_sampler = std::make_unique<FakeSamplerWithInputHandling>();
+    fake_sampler_ptr_ = fake_sampler.get();
+    TestableLlmLiteRtCompiledModelExecutorStatic::
+        SetSamplerWithInputHandlingForTest(executor_.get(),
+                                           std::move(fake_sampler));
+
+    ExecutorInputs inputs;
+    const std::vector<int> prompt_tokens = {1, 2, 3};
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto input_tokens_buffer,
+        CopyToTensorBuffer<int>(absl::MakeSpan(prompt_tokens), {1, 3}));
+    inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
+    ASSERT_OK(executor_->Prefill(inputs));
+  }
+
+  std::unique_ptr<ModelResources> model_resources_;
+  std::optional<Environment> env_;
+  std::unique_ptr<LlmLiteRtCompiledModelExecutorStatic> executor_;
+  FakeSamplerWithInputHandling* fake_sampler_ptr_ = nullptr;
+};
+
+TEST_F(SamplerInputHandlingResetTest, ResetOnUpdateRuntimeState) {
+  ASSERT_OK(executor_->Decode());
+  ASSERT_OK_AND_ASSIGN(RuntimeState cloned_state, executor_->GetRuntimeState());
+  ASSERT_OK(executor_->Decode());
+  EXPECT_TRUE(fake_sampler_ptr_->HandlesInput());
+
+  // Switching to a cloned session via UpdateRuntimeState must also reset
+  // sampler input handling so pre-fetched decode logits from the previous
+  // session cannot be reused.
+  const int reset_count_before = fake_sampler_ptr_->reset_count();
+  ASSERT_OK(executor_->UpdateRuntimeState(cloned_state));
+  EXPECT_GT(fake_sampler_ptr_->reset_count(), reset_count_before);
+  EXPECT_FALSE(fake_sampler_ptr_->HandlesInput());
+}
+
+TEST_F(SamplerInputHandlingResetTest,
+       ResetOnUpdateRuntimeConfigWhenOutputHeadsChanges) {
+  ASSERT_OK(executor_->Decode());
+  EXPECT_TRUE(fake_sampler_ptr_->HandlesInput());
+
+  ASSERT_OK_AND_ASSIGN(RuntimeConfig config, executor_->GetRuntimeConfig());
+  const int reset_count_before = fake_sampler_ptr_->reset_count();
+
+  // Updating sampler_params without changing output_heads keeps input handling.
+  proto::SamplerParameters sampled_params;
+  sampled_params.set_type(proto::SamplerParameters::TOP_P);
+  sampled_params.set_k(4);
+  sampled_params.set_p(1.0f);
+  sampled_params.set_temperature(1.0f);
+  config.sampler_params = sampled_params;
+  ASSERT_OK(executor_->UpdateRuntimeConfig(config));
+  EXPECT_EQ(fake_sampler_ptr_->reset_count(), reset_count_before);
+  EXPECT_TRUE(fake_sampler_ptr_->HandlesInput());
+
+  // Changing output_heads resets sampler input handling.
+  config.output_heads = 2;
+  ASSERT_OK(executor_->UpdateRuntimeConfig(config));
+  EXPECT_GT(fake_sampler_ptr_->reset_count(), reset_count_before);
+  EXPECT_FALSE(fake_sampler_ptr_->HandlesInput());
+}
+
 TEST(LlmLiteRtCompiledModelExecutorStaticTest,
      ErrorOnInvalidSampledTokenId_True) {
   auto model_path =

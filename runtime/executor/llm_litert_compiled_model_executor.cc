@@ -665,11 +665,34 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::PrepareFirstPrefillAfterDecode(
   return absl::OkStatus();
 }
 
-void LlmLiteRtCompiledModelExecutorBase::OnContextSwitch() {
+absl::Status LlmLiteRtCompiledModelExecutorBase::OnContextSwitch() {
   // The drafter's activations and the adaptive policy's content estimates come
   // from the previous context's decode steps.
   mtp_primed_ = false;
   speculative_decoding_controller_.OnContextSwitch();
+  if (sampler_ != nullptr && sampler_->HandlesInput()) {
+    ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorBase::UpdateRuntimeConfig(
+    const RuntimeConfig& runtime_config) {
+  const int previous_output_heads =
+      llm_context_->runtime_config().output_heads.value_or(1);
+  llm_context_->runtime_config() = runtime_config;
+  ABSL_RETURN_IF_ERROR(UpdateSamplerConfig());
+  if (previous_output_heads != runtime_config.output_heads.value_or(1) &&
+      sampler_ != nullptr && sampler_->HandlesInput()) {
+    ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status LlmLiteRtCompiledModelExecutorBase::UpdateRuntimeState(
+    const RuntimeState& runtime_state) {
+  llm_context_->runtime_state() = runtime_state;
+  return OnContextSwitch();
 }
 
 absl::Status LlmLiteRtCompiledModelExecutorBase::PrefillInternal(
@@ -1831,10 +1854,7 @@ LlmLiteRtCompiledModelExecutorBase::CloneContext() const {
 absl::Status LlmLiteRtCompiledModelExecutorBase::RestoreContext(
     std::unique_ptr<LlmContext> context_data) {
   llm_context_ = std::move(context_data);
-  OnContextSwitch();
-  if (sampler_ != nullptr && sampler_->HandlesInput()) {
-    ABSL_RETURN_IF_ERROR(SetSamplerInputHandling(/*reset=*/true));
-  }
+  ABSL_RETURN_IF_ERROR(OnContextSwitch());
 
   // A context at step 0 has no state of its own: reset the state buffers
   // instead of restoring them.
@@ -1915,13 +1935,13 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
   proto::SamplerParameters sampler_params = ResolveExecutorSamplerParams(
       llm_context_->runtime_config().sampler_params);
 
-  gpu_sampler_max_top_k_ = sampler_params.k();
-
+  const int sampler_top_k = sampler_params.k();
   ABSL_ASSIGN_OR_RETURN(
       sampler_,
       CreateExecutorSampler(executor_settings_.GetBackend(), sampler_backend,
                             output_heads, std::move(sampler_params), env_,
                             /*sequence_size=*/1, vocab_size, data_type));
+  gpu_sampler_max_top_k_ = sampler_top_k;
 
   // The sampler can feed the sampled token straight into the next decode step
   // only when the decode signature looks up the token embedding in the graph.
@@ -1931,9 +1951,10 @@ absl::Status LlmLiteRtCompiledModelExecutorBase::InitializeSampler(
   // Speculative decoding runs its own draft / verify passes after sampling,
   // so it must not race with a decode step the sampler already started.
   const bool speculative_decoding_off =
-      resources_ == nullptr ||
-      executor_settings_.GetEffectiveSpeculativeDecodingMode() ==
-          SpeculativeDecodingMode::kOff;
+      mtp_drafter_ == nullptr &&
+      (resources_ == nullptr ||
+       executor_settings_.GetEffectiveSpeculativeDecodingMode() ==
+           SpeculativeDecodingMode::kOff);
 
   // If the sampler can handle input, prepare the input tensors for it.
   bool sampler_handles_input = true;
