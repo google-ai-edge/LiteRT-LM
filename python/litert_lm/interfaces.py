@@ -786,7 +786,9 @@ class AbstractConversation(abc.ABC):
           to the tool responses sent back to the model.
 
     Returns:
-        A Message containing the model's response.
+        A Message containing the model's response. Its `finish_reason` and
+        `executor_stats` tell how the turn ended; with automatic tool calling,
+        they are those of the last tool-call round.
     """
 
   @abc.abstractmethod
@@ -830,7 +832,12 @@ class AbstractConversation(abc.ABC):
           to the tool responses sent back to the model.
 
     Returns:
-        An iterator yielding Message chunks of the model's response.
+        An iterator yielding Message chunks of the model's response. When the
+        turn ends, the last element is a Message without content whose
+        `finish_reason` (and `executor_stats`) tell how it ended; with
+        automatic tool calling, only the last tool-call round yields one. A
+        cancelled or failed turn has no such element. Conversations that can't
+        tell how a turn ended (e.g. ADB conversations) don't yield it either.
     """
 
   @abc.abstractmethod

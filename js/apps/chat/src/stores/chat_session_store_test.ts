@@ -223,6 +223,18 @@ describe('ChatSessionStore', () => {
     expect(chatSessionStore.isGenerating).toBeFalse();
   });
 
+  it('sendMessage does not count the end of the turn as a token', async () => {
+    await chatSessionStore.createConversationSession();
+    fakeEngine.cachedConversation!.queueResponse(
+        {role: 'assistant', content: 'Hi', finish_reason: 'stop'});
+
+    await chatSessionStore.sendMessage('Hello model');
+
+    expect(chatSessionStore.messages[1].text).toBe('Hi');
+    // Without benchmark counts, each streamed chunk counts as a token.
+    expect(chatSessionStore.messages[1].tokensCount).toBe('1');
+  });
+
   it('sendMessage sends media in the order they were placed', async () => {
     await chatSessionStore.createConversationSession();
     const imageBlob =

@@ -499,6 +499,62 @@ class ServeOpenAIStreamingTest(absltest.TestCase):
       )
       self.assertEqual(res_body["choices"][0]["message"]["content"], "Hi")
 
+  def test_openai_chat_completions_full_context_window_finishes_with_length(
+      self,
+  ):
+    mock_engine = mock.create_autospec(litert_lm.AbstractEngine, instance=True)
+    mock_conv = mock.create_autospec(
+        litert_lm.AbstractConversation, instance=True
+    )
+    mock_conv.__enter__.return_value = mock_conv
+    mock_conv.__exit__.return_value = False
+    mock_engine.create_conversation.return_value = mock_conv
+    mock_get_engine = self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler, "_get_engine", autospec=True
+        )
+    )
+    mock_get_engine.return_value = mock_engine
+    mock_conv.get_benchmark_info.side_effect = RuntimeError("No usage")
+    mock_conv.send_message_async.side_effect = lambda *args, **kwargs: iter([
+        litert_lm.Message.model(litert_lm.Contents.of("Hi")),
+        # The context window filled up and ended the turn.
+        litert_lm.Message.from_json(
+            {"role": "assistant", "finish_reason": "max_tokens"}
+        ),
+    ])
+
+    for stream in (False, True):
+      with self.subTest(stream=stream):
+        data = json.dumps({
+            "model": "gemma3",
+            "messages": [{"role": "user", "content": "Say hi"}],
+            "stream": stream,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://localhost:{self.port}/v1/chat/completions",
+            data=data,
+            headers={"Content-Type": "application/json"},
+        )
+
+        with urllib.request.urlopen(req) as response:
+          body = response.read().decode("utf-8")
+        if stream:
+          chunks = [
+              json.loads(line[len("data: ") :])
+              for line in body.split("\n")
+              if line.startswith("data: ") and line != "data: [DONE]"
+          ]
+          self.assertEqual(
+              [c["choices"][0]["delta"].get("content") for c in chunks],
+              [None, "Hi", None],
+          )
+          choice = chunks[-1]["choices"][0]
+        else:
+          choice = json.loads(body)["choices"][0]
+          self.assertEqual(choice["message"]["content"], "Hi")
+        self.assertEqual(choice["finish_reason"], "length")
+
 
 if __name__ == "__main__":
   absltest.main()

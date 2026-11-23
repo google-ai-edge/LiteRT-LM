@@ -32,6 +32,7 @@ from ._ffi import set_min_log_severity
 from ._ffi import SpeculativeDecodingMode
 from ._messages import Content
 from ._messages import Contents
+from ._messages import ExecutorStats
 from ._messages import Message
 from ._messages import Role
 from ._messages import ToolCall
@@ -103,6 +104,7 @@ __all__ = (
     "EmbeddingOptions",
     "EmbeddingResponse",
     "Engine",
+    "ExecutorStats",
     "ExperimentalFlags",
     "InputOverflowStrategy",
     "KvCacheType",

@@ -469,8 +469,14 @@ internal object LiteRtLmJni {
      */
     fun onMessage(messageJsonString: String)
 
-    /** Called when the message stream is done. */
-    fun onDone()
+    /**
+     * Called when the message stream is done.
+     *
+     * @param endOfTurnJson The end-of-turn message in JSON string format, e.g. `{"role":
+     *   "assistant", "finish_reason": "stop", "executor_stats": {...}}`, or null if the turn ended
+     *   without one.
+     */
+    fun onDone(endOfTurnJson: String?)
 
     /**
      * Called when an error occurs.

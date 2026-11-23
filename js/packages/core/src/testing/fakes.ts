@@ -35,17 +35,17 @@ export class ConversationFake implements ChatInterface {
 
   /**
    * Enqueues a message that the fake will return on the next call to
-   * sendMessage or sendMessageStreaming. Can be called multiple times.
+   * sendMessage or sendMessageStreaming. Can be called multiple times. Like
+   * `Conversation`, a stream yields a message with a `finish_reason` as two
+   * elements: the message without it, then the end of the turn.
    */
   queueResponse(message: Message) {
     this.nextResponses.push(message);
   }
 
   private popNextResponse(): Message {
-    if (this.nextResponses.length > 0) {
-      return this.nextResponses.shift()!;
-    }
-    return {role: 'assistant', content: 'hello from fake'};
+    return this.nextResponses.shift() ??
+        {role: 'assistant', content: 'hello from fake'};
   }
 
   private appendInput(message: MessageLike) {
@@ -67,9 +67,17 @@ export class ConversationFake implements ChatInterface {
     this.appendInput(message);
     return new ReadableStream<Message>({
       start: (controller) => {
-        const newMessage = this.popNextResponse();
+        const {finish_reason, executor_stats, ...newMessage} =
+            this.popNextResponse();
         this.history.push(newMessage);
         controller.enqueue(newMessage);
+        if (finish_reason != null) {
+          controller.enqueue({
+            role: 'assistant',
+            finish_reason,
+            executor_stats: executor_stats ?? null,
+          });
+        }
         controller.close();
       }
     });

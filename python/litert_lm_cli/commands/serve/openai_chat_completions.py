@@ -238,12 +238,17 @@ def _handle_chat_completions(
     text_parts = []
     tool_calls = []
     reasoning_tokens = 0
+    litert_finish_reason = None
     for chunk in conv.send_message_async(
         prompt,
         max_output_tokens=max_completion_tokens,
         response_format=response_format,
         tool_choice=tool_choice,
     ):
+      if chunk.finish_reason is not None:
+        # The content-less message that ends the turn.
+        litert_finish_reason = chunk.finish_reason
+        continue
       if chunk.channels:
         reasoning_tokens += 1
       for content in chunk.contents:
@@ -282,7 +287,10 @@ def _handle_chat_completions(
                     else {}
                 ),
             },
-            "finish_reason": "tool_calls" if openai_tool_calls else "stop",
+            "finish_reason": openai_common.openai_finish_reason(
+                has_tool_calls=bool(openai_tool_calls),
+                litert_finish_reason=litert_finish_reason,
+            ),
         }],
         "usage": openai_common.compute_token_usage(
             conv, reasoning_tokens=reasoning_tokens

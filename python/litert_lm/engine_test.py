@@ -815,10 +815,8 @@ class EngineTest(LiteRtLmTestBase):
       self.assertIsInstance(message, litert_lm.Message)
       self.assertEqual(str(message), self._EXPECTED_RESPONSE)
 
-      # The returned message also carries the end of the turn.
-      self.assertIn(message.pop("finish_reason"), ("stop", "max_tokens"))
-      self.assertIn("executor_stats", message)
-      message.pop("executor_stats")
+      # The returned message also tells how the turn ended.
+      self.assertIn(message.finish_reason, ("stop", "max_tokens"))
       expected_message = {
           "role": "assistant",
           "content": [{"type": "text", "text": self._EXPECTED_RESPONSE}],
@@ -843,11 +841,15 @@ class EngineTest(LiteRtLmTestBase):
     ):
       self.assertIsNotNone(engine)
       self.assertIsNotNone(conversation)
-      stream = conversation.send_message_async("Hello world!")
-      text_pieces = self._extract_text(stream)
+      *chunks, end_of_turn = conversation.send_message_async("Hello world!")
+      text_pieces = self._extract_text(chunks)
 
       self.assertEqual("".join(text_pieces), self._EXPECTED_RESPONSE)
       self.assertLen(text_pieces, 6)
+      self.assertTrue(all(chunk.finish_reason is None for chunk in chunks))
+      # The stream ends with a message without content that ends the turn.
+      self.assertEqual(end_of_turn, {"role": "assistant"})
+      self.assertIn(end_of_turn.finish_reason, ("stop", "max_tokens"))
 
   def test_conversation_send_message_async_cancel(self):
     with (
@@ -1563,9 +1565,6 @@ class EngineTest(LiteRtLmTestBase):
 
         orig_second = conversation.send_message("world")
         cloned_second = cloned.send_message("world")
-        # The executor stats hold timings, which differ between the two turns.
-        orig_second.pop("executor_stats", None)
-        cloned_second.pop("executor_stats", None)
         self.assertEqual(orig_second, cloned_second)
 
   def test_conversation_clone_after_original_closed(self):

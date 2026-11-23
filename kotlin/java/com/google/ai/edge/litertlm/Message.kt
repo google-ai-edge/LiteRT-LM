@@ -31,6 +31,17 @@ enum class Role(val value: String) {
 /**
  * Represents a message in the conversation. A message contains a [Role], a [Content] list, and an
  * optional list of [ToolCall].
+ *
+ * The message that ends a turn of the model has [finishReason] set: the response of
+ * [Conversation.sendMessage], or the last, content-less message of a stream.
+ *
+ * @property finishReason Why the turn ended, or null if this message doesn't end a turn (messages
+ *   that you build and stream chunks before the last one). "stop" means the model finished its
+ *   response or reached `maxOutputToken`; "max_tokens" means the conversation filled the engine's
+ *   context window (`EngineConfig.maxNumTokens`), which cut the response off. More values may be
+ *   added, so treat unknown ones as the end of the turn too.
+ * @property executorStats The executor stats of the turn that this message ends, or null if it
+ *   doesn't end a turn or the turn has none.
  */
 class Message
 internal constructor(
@@ -38,9 +49,14 @@ internal constructor(
   val contents: Contents = Contents.empty(),
   val toolCalls: List<ToolCall> = emptyList(),
   val channels: Map<String, String> = emptyMap(),
+  val finishReason: String? = null,
+  val executorStats: ExecutorStats? = null,
 ) {
 
-  /** Convert to [JsonObject]. Used internally. */
+  /**
+   * Convert to [JsonObject]. Used internally. The end-of-turn fields are left out, as they describe
+   * a response and are never sent back to the model.
+   */
   internal fun toJson() =
     JsonObject().apply {
       addProperty("role", role.value)

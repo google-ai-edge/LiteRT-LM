@@ -316,6 +316,94 @@ class ServeTest(parameterized.TestCase):
         expected,
     )
 
+  @parameterized.named_parameters(
+      ("tool_calls", True, "max_tokens", "tool_calls"),
+      ("context_window_full", False, "max_tokens", "length"),
+      ("stop", False, "stop", "stop"),
+      ("unknown", False, "something_new", "stop"),
+      ("no_end_of_turn", False, None, "stop"),
+  )
+  def test_openai_finish_reason(
+      self, has_tool_calls, litert_finish_reason, expected
+  ):
+    self.assertEqual(
+        openai_common.openai_finish_reason(
+            has_tool_calls=has_tool_calls,
+            litert_finish_reason=litert_finish_reason,
+        ),
+        expected,
+    )
+
+  def test_gemini_handlers_report_full_context_window_as_max_tokens(self):
+    answer = {"role": "assistant", "content": [{"type": "text", "text": "Hi"}]}
+    end_of_turn = {
+        "role": "assistant",
+        "finish_reason": "max_tokens",
+        "executor_stats": None,
+    }
+    mock_conv = mock.create_autospec(
+        interfaces.AbstractConversation, instance=True
+    )
+    mock_conv.__enter__.return_value = mock_conv
+    mock_conv.__exit__.return_value = False
+    mock_conv.send_message.return_value = mock_litert_lm.Message.from_json(
+        answer | end_of_turn
+    )
+    mock_conv.send_message_async.return_value = [
+        mock_litert_lm.Message.from_json(answer),
+        mock_litert_lm.Message.from_json(end_of_turn),
+    ]
+    mock_engine_instance = mock.create_autospec(
+        interfaces.AbstractEngine, instance=True
+    )
+    mock_engine_instance.create_conversation.return_value = mock_conv
+    self.enter_context(
+        mock.patch.object(
+            gemini_handler.GeminiHandler,
+            "_get_engine",
+            autospec=True,
+            return_value=mock_engine_instance,
+        )
+    )
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), gemini_handler.GeminiHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def post(method: str) -> str:
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1beta/models/gemma3:{method}",
+          data=json.dumps(
+              {"contents": [{"role": "user", "parts": [{"text": "Hi"}]}]}
+          ).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req) as resp:
+        self.assertEqual(resp.status, 200)
+        return resp.read().decode("utf-8")
+
+    try:
+      body = json.loads(post("generateContent"))
+      self.assertEqual(body["candidates"][0]["finishReason"], "MAX_TOKENS")
+
+      events = [
+          json.loads(line.removeprefix("data: "))
+          for line in post("streamGenerateContent").splitlines()
+          if line.startswith("data: ")
+      ]
+      # The end-of-turn message isn't streamed as a chunk of its own; the final
+      # chunk reports it.
+      self.assertLen(events, 2)
+      self.assertEqual(
+          events[0]["candidates"][0]["content"]["parts"], [{"text": "Hi"}]
+      )
+      self.assertNotIn("finishReason", events[0]["candidates"][0])
+      self.assertEqual(events[1]["candidates"][0]["finishReason"], "MAX_TOKENS")
+    finally:
+      server.shutdown()
+      thread.join()
+
   def test_get_engine_caching(self):
     mock_model = mock.Mock(spec_set=["exists", "model_path"])
     mock_model.exists.return_value = True

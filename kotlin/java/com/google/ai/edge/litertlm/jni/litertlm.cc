@@ -1645,7 +1645,8 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
   }
   jmethodID on_message_mid =
       env->GetMethodID(callback_class, "onMessage", "(Ljava/lang/String;)V");
-  jmethodID on_complete_mid = env->GetMethodID(callback_class, "onDone", "()V");
+  jmethodID on_complete_mid =
+      env->GetMethodID(callback_class, "onDone", "(Ljava/lang/String;)V");
   jmethodID on_error_mid =
       env->GetMethodID(callback_class, "onError", "(ILjava/lang/String;)V");
   env->DeleteLocalRef(callback_class);
@@ -1683,7 +1684,13 @@ LITERTLM_JNIEXPORT void JNICALL JNI_METHOD(nativeSendMessageAsync)(
 
         if (message.ok()) {
           if (litert::lm::IsEndOfTurnMessage(*message)) {
-            env->CallVoidMethod(callback_global, on_complete_mid);
+            // A null message (the legacy end-of-turn marker) is passed as null.
+            ScopedLocalRef<jstring> end_of_turn_jstr(
+                env, message->is_null()
+                         ? nullptr
+                         : NewStringStandardUTF(env, message->dump()));
+            env->CallVoidMethod(callback_global, on_complete_mid,
+                                end_of_turn_jstr.get());
             on_done_fn();
           } else {
             std::string message_str = message->dump();

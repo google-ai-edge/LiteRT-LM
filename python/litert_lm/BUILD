@@ -226,6 +226,19 @@ py_test(
 )
 
 py_test(
+    name = "end_of_turn_test",
+    srcs = ["end_of_turn_test.py"],
+    data = ["//runtime/testdata:end_of_turn_json"],
+    tags = ["nowindows"],
+    deps = [
+        ":litert_lm",
+        "@absl_py//absl/flags",
+        "@absl_py//absl/testing:absltest",
+    ],
+    imports = [".."],
+)
+
+py_test(
     name = "messages_test",
     srcs = ["messages_test.py"],
     tags = ["nowindows"],
