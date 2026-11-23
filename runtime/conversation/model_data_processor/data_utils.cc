@@ -72,7 +72,10 @@ absl::StatusOr<std::unique_ptr<MemoryMappedFile>> LoadItemData(
     return nullptr;
   }
   if (item["type"] == "text") {
-    return InMemoryFile::Create(item["text"]);
+    if (!item.contains("text") || !item["text"].is_string()) {
+      return absl::InvalidArgumentError("Text item `text` must be a string.");
+    }
+    return InMemoryFile::Create(item["text"].get<std::string>());
   } else if (item["type"] == "image" || item["type"] == "audio") {
     if (!item.contains("path") && !item.contains("blob")) {
       return absl::InvalidArgumentError(
