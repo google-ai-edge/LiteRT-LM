@@ -240,6 +240,32 @@ conversation.sendMessageAsync("What is the capital of France?")
     .collect { print(it.toString()) }
 ```
 
+**How the turn ended:**
+
+The message that ends a turn has a `finishReason`: the response of
+`sendMessage`, or the last message of a stream, which has no content and comes
+right before `onDone()` or the end of the Flow. A turn that fails or is
+cancelled has no such message. The message also has the turn's `executorStats`,
+e.g. speculative decoding rounds and accepted draft tokens, or null when the
+turn has none. `finishReason` is one of:
+
+*   `"stop"`: the model finished its response, or the response reached
+    `maxOutputToken`.
+*   `"max_tokens"`: the conversation filled the engine's context window
+    (`EngineConfig.maxNumTokens`), which cut the response off.
+
+More values may be added, so treat unknown ones as the end of the turn too.
+
+```kotlin
+conversation.sendMessageAsync("What is the capital of France?").collect { message ->
+    if (message.finishReason == null) {
+        print(message)
+    } else {
+        println("\nMTP rounds: ${message.executorStats?.metrics?.get("mtp_rounds")}")
+    }
+}
+```
+
 ### 5. Multi-Modality
 
 Note: This only works with models with multi-modality support, e.g., the

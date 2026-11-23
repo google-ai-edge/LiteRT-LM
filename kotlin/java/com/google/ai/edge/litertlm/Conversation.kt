@@ -35,7 +35,11 @@ import kotlinx.coroutines.flow.callbackFlow
  * // Send a message and get the response.
  * val response = conversation.sendMessage("Hello world")
  *
- * // Send a message async with response chunks as Kotlin Flow.
+ * // How the turn ended, e.g. its finish reason and executor stats.
+ * println(response.finishReason)
+ *
+ * // Send a message async with response chunks as Kotlin Flow. The last message has no content and
+ * // says how the turn ended.
  * conversation.sendMessageAsync("Hello world").collect { print(it) }
  *
  * // Send a message async with response chunks as a callback.
@@ -110,7 +114,8 @@ class Conversation(
    * @param toolChoice Optional choice of whether and which tools the model may call for this
    *   message. It is only used if the conversation has tools and was created with
    *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
-   * @return The model's response message.
+   * @return The model's response message. Its [Message.finishReason] and [Message.executorStats]
+   *   say how the turn ended.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
    * @throws LiteRtLmJniException if an error occurs during the native call.
@@ -197,7 +202,8 @@ class Conversation(
    * @param toolChoice Optional choice of whether and which tools the model may call for this
    *   message. It is only used if the conversation has tools and was created with
    *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
-   * @return The model's response message.
+   * @return The model's response message. Its [Message.finishReason] and [Message.executorStats]
+   *   say how the turn ended.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
    * @throws LiteRtLmJniException if an error occurs during the native call.
@@ -247,7 +253,8 @@ class Conversation(
    * @param toolChoice Optional choice of whether and which tools the model may call for this
    *   message. It is only used if the conversation has tools and was created with
    *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
-   * @return The model's response message.
+   * @return The model's response message. Its [Message.finishReason] and [Message.executorStats]
+   *   say how the turn ended.
    * @throws IllegalStateException if the conversation is not alive, if the native layer returns an
    *   invalid response, or if the tool call limit is exceeded.
    * @throws LiteRtLmJniException if an error occurs during the native call.
@@ -475,7 +482,8 @@ class Conversation(
    * @param toolChoice Optional choice of whether and which tools the model may call for this
    *   message. It is only used if the conversation has tools and was created with
    *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
-   * @return A Flow of messages representing the model's response.
+   * @return A Flow of messages representing the model's response. The last message has no content
+   *   and says how the turn ended, see [Message.finishReason].
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
@@ -537,7 +545,8 @@ class Conversation(
    * @param toolChoice Optional choice of whether and which tools the model may call for this
    *   message. It is only used if the conversation has tools and was created with
    *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
-   * @return A Flow of messages representing the model's response.
+   * @return A Flow of messages representing the model's response. The last message has no content
+   *   and says how the turn ended, see [Message.finishReason].
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
@@ -584,7 +593,8 @@ class Conversation(
    * @param toolChoice Optional choice of whether and which tools the model may call for this
    *   message. It is only used if the conversation has tools and was created with
    *   [ExperimentalFlags.enableConversationConstrainedDecoding] set to true.
-   * @return A Flow of messages representing the model's response.
+   * @return A Flow of messages representing the model's response. The last message has no content
+   *   and says how the turn ended, see [Message.finishReason].
    * @throws IllegalStateException if the conversation has already been closed or the content is
    *   empty.
    */
@@ -682,7 +692,7 @@ class Conversation(
       return handleToolCalls(toolCalls)
     }
 
-    override fun onDone() {
+    override fun onDone(endOfTurnJson: String?) {
       if (!pendingToolCalls.isEmpty) {
         if (toolCallCount >= RECURRING_TOOL_CALL_LIMIT) {
           callback.onError(
@@ -721,7 +731,19 @@ class Conversation(
           callback.onError(e)
         }
       } else {
-        // If no pending action, then call onDone to the original user callback.
+        // The turn really ended, so its end-of-turn message is the last one the caller gets. The
+        // end-of-turn of a tool call round is dropped above, as the turn goes on. This runs on the
+        // native callback thread, so a malformed end-of-turn is dropped instead of throwing, which
+        // would crash the app and skip onDone().
+        val endOfTurn =
+          try {
+            endOfTurnJson?.let { jsonToMessage(JsonParser.parseString(it).asJsonObject) }
+          } catch (_: RuntimeException) {
+            null
+          }
+        if (endOfTurn?.finishReason != null) {
+          callback.onMessage(endOfTurn)
+        }
         callback.onDone()
       }
     }
@@ -855,7 +877,8 @@ class Conversation(
      */
     private const val RECURRING_TOOL_CALL_LIMIT = 25
 
-    private fun jsonToMessage(messageJsonObject: JsonObject): Message {
+    /** Converts a message from the native layer to a [Message]. Internal for testing. */
+    internal fun jsonToMessage(messageJsonObject: JsonObject): Message {
       val contents = mutableListOf<Content>()
 
       if (messageJsonObject.has("content")) {
@@ -893,7 +916,22 @@ class Conversation(
         }
       }
 
-      return Message.model(Contents.of(contents), toolCalls, channels)
+      // A null `finish_reason` counts as missing, like in the native layer. Executor stats are only
+      // kept on a message that ends a turn.
+      val finishReason = messageJsonObject.get("finish_reason")?.asStringOrNull()
+      return Message(
+        Role.MODEL,
+        Contents.of(contents),
+        toolCalls,
+        channels,
+        finishReason = finishReason,
+        executorStats =
+          if (finishReason != null) {
+            messageJsonObject.objectOrNull("executor_stats")?.let(::parseExecutorStats)
+          } else {
+            null
+          },
+      )
     }
   }
 }
@@ -904,9 +942,11 @@ interface MessageCallback {
    * Called when a new message chunk is available from the model.
    *
    * This method may be called multiple times for a single `sendMessageAsync` call as the model
-   * streams its response.
+   * streams its response. Its last call, right before [onDone], gets a message without content
+   * whose [Message.finishReason] and [Message.executorStats] say how the turn ended. A turn that
+   * fails has no such message.
    *
-   * @param contents The message chunk.
+   * @param message The message chunk.
    */
   fun onMessage(message: Message)
 
