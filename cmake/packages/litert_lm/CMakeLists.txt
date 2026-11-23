@@ -23,6 +23,11 @@ cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
 
 project(LiteRT-LM LANGUAGES C CXX)
 
+# cl.exe and clang-cl. Tested before any GNU/Clang check so that clang-cl,
+# which reports CMAKE_CXX_COMPILER_ID "Clang", never takes the GNU branches.
+include("${CMAKE_CURRENT_LIST_DIR}/../../modules/litertlm_platform.cmake")
+litertlm_is_msvc_frontend(LITERTLM_MSVC_FRONTEND)
+
 # --- CMake Settings ---
 if(NOT CMAKE_CXX_STANDARD)
     set(CMAKE_CXX_STANDARD 20)
@@ -31,7 +36,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.20 CACHE STRING "Required CMake policy version" FORCE)
+if(NOT LITERTLM_MSVC_FRONTEND)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fpermissive" CACHE STRING "Required CXX flags" FORCE)
+endif()
 
 if(CMAKE_CROSSCOMPILING)
   set(_litertlm_cross_compile "ON")
@@ -43,7 +50,9 @@ set(LITERTLM_CROSSCOMPILING "${_litertlm_cross_compile}" CACHE INTERNAL "LiteRTL
 
 set(ENV{VIRTUAL_ENV} "${LITERTLM_VENV_DIR}")
 
-if(LITERTLM_CROSSCOMPILING)
+if(LITERTLM_CROSSCOMPILING OR WIN32)
+  # Windows: litert_lm_main does not embed Python, and the import library of
+  # the host interpreter may not match the target architecture.
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   set(PYTHON3_LIB "")
 else()
@@ -53,11 +62,19 @@ endif()
 include_directories(SYSTEM "${LITERTLM_VENV_DIR}/include")
 
 message(STATUS "Using isolated Python: ${Python3_EXECUTABLE}")
+if(CMAKE_HOST_WIN32)
+set(LITERTLM_ENV_WRAPPER
+"VIRTUAL_ENV=${LITERTLM_VENV_DIR}"
+"--modify" "PATH=path_list_prepend:${LITERTLM_VENV_DIR}/Scripts"
+CACHE INTERNAL "LiteRT-LM: Environment variables for uv virtual environment"
+)
+else()
 set(LITERTLM_ENV_WRAPPER
 "VIRTUAL_ENV=${LITERTLM_VENV_DIR}"
 "PATH=${LITERTLM_VENV_DIR}/bin:$ENV{PATH}"
 CACHE INTERNAL "LiteRT-LM: Environment variables for uv virtual environment"
 )
+endif()
 set(LITERTLM_UV_ARGS
 "-DPython3_ROOT_DIR=${LITERTLM_VENV_DIR}"
 "-DPython3_FIND_VIRTUALENV=FIRST")
@@ -143,6 +160,60 @@ endif()
 if(DEFINED LITERTLM_RUST_LINKER_OVERRIDE AND DEFINED LITERTLM_CORROSION_LINKER_VAR)
   set(${LITERTLM_CORROSION_LINKER_VAR} "${LITERTLM_RUST_LINKER_OVERRIDE}" CACHE FILEPATH "Override Rust Linker")
   message(STATUS "[LiteRTLM] Routing Rust Corrosion Linker: ${LITERTLM_RUST_LINKER_OVERRIDE}")
+endif()
+
+# --- Windows (MSVC ABI: cl.exe or clang-cl)
+if(WIN32 AND LITERTLM_MSVC_FRONTEND)
+  # The target maps are resolved before any dependency is built; keep every
+  # entry here and let the link step drop the archives that were not built.
+  set(LITERTLM_TARGET_MAP_PRUNE_MISSING OFF)
+
+  # generate_target_map.cmake rewrites the checked-in *_target_map.cmake files
+  # in the source tree. On Windows that would replace them with MSVC archive
+  # names; kvp_parse_map() translates the checked-in maps instead.
+  set(LITERTLM_GENERATE_TARGET_MAP OFF)
+
+  # The compiler comes from the developer shell. Fail now, with the reason,
+  # instead of with LNK1112 (machine type mismatch) at the very end.
+  if(LITERTLM_WINDOWS_TARGET_ARCH AND CMAKE_CXX_COMPILER_ARCHITECTURE_ID)
+    string(TOUPPER "${LITERTLM_WINDOWS_TARGET_ARCH}" _litertlm_expected_arch)
+    string(TOUPPER "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}" _litertlm_actual_arch)
+    if(NOT _litertlm_expected_arch STREQUAL _litertlm_actual_arch)
+      message(FATAL_ERROR
+        "[LiteRTLM] ${CMAKE_CXX_COMPILER} targets ${CMAKE_CXX_COMPILER_ARCHITECTURE_ID} "
+        "but the build targets ${LITERTLM_WINDOWS_TARGET_ARCH}. Run the build from a "
+        "Visual Studio developer shell for ${LITERTLM_WINDOWS_TARGET_ARCH}.")
+    endif()
+  endif()
+
+  # Do not leave the Rust target to Corrosion's detection: pin it to the
+  # architecture the C++ compiler targets (or to LITERTLM_RUST_TARGET), so a
+  # cross-compiling developer shell cannot end up with Rust archives for the
+  # build machine.
+  litertlm_windows_rust_target(_litertlm_rust_target)
+  if(_litertlm_rust_target)
+    set(LITERTLM_RUST_TARGET "${_litertlm_rust_target}" CACHE STRING
+        "Rust target triple (e.g., aarch64-linux-android). Leave empty for host." FORCE)
+    set(Rust_CARGO_TARGET "${_litertlm_rust_target}" CACHE STRING
+        "Rust target triple used by Corrosion" FORCE)
+    message(STATUS "[LiteRTLM] Rust target: ${_litertlm_rust_target}")
+  endif()
+
+  # Forwarded to every ExternalProject so that all of them agree on the build
+  # type, the C runtime and the warning/charset flags. Projects configured
+  # through an explicit CONFIGURE_COMMAND also need the generator: without -G
+  # CMake falls back to Visual Studio.
+  set(LITERTLM_EP_PLATFORM_ARGS
+      "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+      "-DCMAKE_MSVC_RUNTIME_LIBRARY=${CMAKE_MSVC_RUNTIME_LIBRARY}"
+      "-DCMAKE_POLICY_DEFAULT_CMP0091=NEW"
+      "-DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}"
+      "-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
+  )
+  set(LITERTLM_EP_GENERATOR_ARGS "-G" "${CMAKE_GENERATOR}")
+  if(CMAKE_MAKE_PROGRAM)
+    list(APPEND LITERTLM_EP_GENERATOR_ARGS "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}")
+  endif()
 endif()
 
 set(LITERTLM_PROTO_FILES
@@ -239,7 +310,9 @@ option(LITERTLM_BUILD_TARGETS
     ON)
 
 # --- Compiler Flags
+if(NOT LITERTLM_MSVC_FRONTEND)
 add_compile_options("-fpermissive")
+endif()
 
 # --- Optional
 option(_unverified_targets "Builds executables that are still in progress" OFF)
@@ -321,6 +394,7 @@ function(ExternalProject_Add name)
         else()
             string(APPEND _call_args
                 " GIT_SHALLOW TRUE"
+                " GIT_CONFIG [===[filter.lfs.smudge=]===] [===[filter.lfs.process=]===] [===[filter.lfs.required=false]===]"
                 " UPDATE_COMMAND [===[]===]"
             )
         endif()
@@ -416,6 +490,11 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
     if(NOT LITERT_LM_ENABLE_FST_CONSTRAINTS)
         add_compile_definitions(LITERT_LM_FST_CONSTRAINTS_DISABLED)
     endif()
+    if(WIN32)
+        # The ANTLR runtime is linked statically; without this its headers
+        # declare every class __declspec(dllimport).
+        add_compile_definitions(ANTLR4CPP_STATIC)
+    endif()
 
     add_subdirectory("${LITERTLM_PROJECT_ROOT}/c" "${LITERTLM_GENERATED_SRC_DIR}/c")
     add_subdirectory("${LITERTLM_PROJECT_ROOT}/js" "${LITERTLM_GENERATED_SRC_DIR}/js")
@@ -437,9 +516,89 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
     target_include_directories(litert_lm_main PUBLIC
         ${LITERTLM_INCLUDE_PATHS})
 
+    if(NOT LITERTLM_MSVC_FRONTEND)
     target_link_options(litert_lm_main PRIVATE
     "LINKER:--export-dynamic-symbol=LiteRt*")
+    endif()
 
+    if(LITERTLM_MSVC_FRONTEND)
+    # --- Windows (cl.exe / clang-cl): see modules/windows_link.cmake ---
+    include("${LITERTLM_MODULES_DIR}/windows_link.cmake")
+
+    set(_litertlm_win_whole ${_litertlm_lib_paths})
+    set(_litertlm_win_libs
+        "${_litert_lib_paths}"
+        "${_tflite_lib_paths}"
+        "${_tokenizers_lib_paths}"
+        "${_sentencepiece_lib_paths}"
+        "${_re2_lib_paths}"
+        "${_flatbuffers_lib_paths}"
+        "${_protobuf_lib_paths}"
+        "${_absl_lib_paths}"
+        "${_cxxbridge_paths}"
+    )
+
+    if(LITERTLM_USE_PREBUILT_GEMMA_CONSTRAINT_PROVIDER)
+        # Replace the stub provider with the prebuilt DLL for this architecture.
+        litertlm_windows_prebuilt_gemma_provider(_litertlm_gemma_lib _litertlm_gemma_dll)
+        list(FILTER _litertlm_win_whole EXCLUDE REGEX "gemma_model_constraint_provider")
+        list(APPEND _litertlm_win_libs "${_litertlm_gemma_lib}")
+        add_custom_command(TARGET litert_lm_main POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_litertlm_gemma_dll}" "$<TARGET_FILE_DIR:litert_lm_main>"
+            COMMENT "[LiteRTLM] Copying libGemmaModelConstraintProvider.dll next to litert_lm_main"
+            VERBATIM)
+    endif()
+
+    if(QAIRT_HEADERS_DIR)
+        # Copy the Qualcomm NPU dispatch library built by litert_external next
+        # to litert_lm_main.exe so `--litert_dispatch_lib_dir` can point at the
+        # output directory directly.
+        set(_litertlm_qnn_dispatch_dll
+            "${LITERTLM_LITERT_BUILD_DIR}/vendors/qualcomm/dispatch/LiteRtDispatch_Qualcomm.dll")
+        add_custom_command(TARGET litert_lm_main POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_litertlm_qnn_dispatch_dll}" "$<TARGET_FILE_DIR:litert_lm_main>"
+            COMMENT "[LiteRTLM] Copying LiteRtDispatch_Qualcomm.dll next to litert_lm_main"
+            VERBATIM)
+    endif()
+
+    litertlm_windows_link_executable(litert_lm_main
+        WHOLE ${_litertlm_win_whole}
+        LIBS ${_litertlm_win_libs}
+        DEPENDS
+            litertlm_anchor
+            litert_external
+            tflite_external
+            tokenizers-cpp_external
+            sentencepiece_external
+            re2_external
+            flatbuffers_external
+            protobuf_external
+            absl_external
+            litertlm_cxx_bridge
+    )
+
+    # Rust: link Corrosion's imported targets rather than the archives by path,
+    # so the system libraries the Rust standard library needs (ws2_32, userenv,
+    # ntdll, bcrypt, ...) come with them.
+    target_link_libraries(litert_lm_main
+        PRIVATE
+            litertlm_cxx_bridge
+            litert_lm_deps
+
+            libpng_lib
+            kissfft_lib
+            miniaudio_lib
+            minizip_lib
+            minja_lib
+            highway_lib
+            zlib_lib
+            antlr_lib
+            LiteRTLM::nlohmann_json::nlohmann_json
+            opencl_headers_lib
+    )
+    else()
     # --- Toolchain-Specific Linker Flags ---
     set(_LITERTLM_LINK_MULTIDEF "")
     set(_LITERTLM_LINK_GROUP_START "")
@@ -481,12 +640,6 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
             set(_LITERTLM_LINK_WHOLE_END "-Wl,--no-whole-archive")
             set(_LITERTLM_SYSLIBS "-lz" "-lrt" "-lpthread" "-ldl")
         endif()
-    elseif(MSVC)
-        # Windows Linker
-        set(_LITERTLM_LINK_MULTIDEF "/FORCE:MULTIPLE")
-        set(_LITERTLM_LINK_WHOLE_START "/WHOLEARCHIVE")
-        set(_LITERTLM_LINK_WHOLE_END "")
-        set(_LITERTLM_SYSLIBS "") # MSVC defaults usually cover this
     endif()
 
     separate_arguments(_LITERTLM_ODML_EXPANDED_LIST NATIVE_COMMAND "${_LITERTLM_ODML_PAYLOAD}")
@@ -520,6 +673,7 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
             ${_LITERTLM_SYSLIBS}
             ${_LITERTLM_LINK_GROUP_END}
     )
+    endif()
 else()
     message(STATUS "[LiteRTLM] Skipping target layer build (LITERTLM_BUILD_TARGETS=OFF)")
 endif()

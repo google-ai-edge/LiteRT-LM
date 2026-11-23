@@ -17,11 +17,15 @@ function(generate_protobuf TARGET_NAME _root_path)
     set(GENERATED_SRCS)
     set(GENERATED_HDRS)
 
+    # This command has no output, so nothing ever runs it; skip on Windows
+    # hosts where Ninja rejects custom commands with an empty OUTPUT.
+    if(NOT CMAKE_HOST_WIN32)
     add_custom_command(
         OUTPUT ""
         COMMAND ${LITERTLM_HOST_PROTOC}
         ARGS --version
     )
+    endif()
 
     set(_proto_include_args -I "${_root_path}")
     if(DEFINED LITERTLM_PROTOBUF_INSTALL_PREFIX)

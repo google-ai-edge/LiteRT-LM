@@ -53,12 +53,24 @@ if(ENABLE_UV)
       message(STATUS "[LiteRTLM] LITERTLM_PYTHON_DIR: ${LITERTLM_PYTHON_DIR}")
       set(LITERTLM_PYTHON_DIR ${LITERTLM_PYTHON_DIR} CACHE PATH "")
       set(LITERTLM_PYTHON_INCLUDE_DIR ${LITERTLM_PYTHON_DIR}/include CACHE PATH "")
-      set(LITERTLM_PYTHON_BIN_DIR "${LITERTLM_PYTHON_DIR}/bin" CACHE PATH "")
-      set(LITERTLM_PYTHON_LIB_DIR "${LITERTLM_PYTHON_DIR}/lib" CACHE PATH "")
+      if(CMAKE_HOST_WIN32)
+        # Expected layout of uv's managed CPython on Windows: python.exe at
+        # the root of the install, import libraries under libs/. Not yet
+        # exercised (ENABLE_UV is OFF by default).
+        set(LITERTLM_PYTHON_BIN_DIR "${LITERTLM_PYTHON_DIR}" CACHE PATH "")
+        set(LITERTLM_PYTHON_LIB_DIR "${LITERTLM_PYTHON_DIR}/libs" CACHE PATH "")
 
-      file(GLOB LITERTLM_PYTHON_EXE
-          "${LITERTLM_PYTHON_BIN_DIR}/python3${CMAKE_EXECUTABLE_SUFFIX}"
-      )
+        file(GLOB LITERTLM_PYTHON_EXE
+            "${LITERTLM_PYTHON_BIN_DIR}/python.exe"
+        )
+      else()
+        set(LITERTLM_PYTHON_BIN_DIR "${LITERTLM_PYTHON_DIR}/bin" CACHE PATH "")
+        set(LITERTLM_PYTHON_LIB_DIR "${LITERTLM_PYTHON_DIR}/lib" CACHE PATH "")
+
+        file(GLOB LITERTLM_PYTHON_EXE
+            "${LITERTLM_PYTHON_BIN_DIR}/python3${CMAKE_EXECUTABLE_SUFFIX}"
+        )
+      endif()
       message(STATUS "[LiteRTLM] LITERTLM_PYTHON_EXE: ${LITERTLM_PYTHON_EXE}")
       set(LITERTLM_PYTHON_EXE ${LITERTLM_PYTHON_EXE} CACHE PATH "")
 
@@ -78,11 +90,22 @@ if(ENABLE_UV)
   endif()
 
   message(STATUS "Using isolated Python: ${Python3_EXECUTABLE}")
+  if(CMAKE_HOST_WIN32)
+    # A Windows venv keeps its launchers in Scripts/. PATH is a ';' separated
+    # list there, which is also CMake's list separator, so it cannot be passed
+    # through `cmake -E env NAME=VALUE`; let `--modify` prepend to it instead.
+    set(LITERTLM_ENV_WRAPPER
+      "VIRTUAL_ENV=${LITERTLM_VENV_DIR}"
+      "--modify" "PATH=path_list_prepend:${LITERTLM_VENV_DIR}/Scripts"
+      CACHE INTERNAL "LiteRT-LM: Environment variables for uv virtual environment"
+    )
+  else()
   set(LITERTLM_ENV_WRAPPER 
     "VIRTUAL_ENV=${LITERTLM_VENV_DIR}"
     "PATH=${LITERTLM_VENV_DIR}/bin:$ENV{PATH}"
     CACHE INTERNAL "LiteRT-LM: Environment variables for uv virtual environment"
   )
+  endif()
   set(LITERTLM_UV_ARGS 
     "-DPython3_ROOT_DIR=${LITERTLM_VENV_DIR}"
     "-DPython3_FIND_VIRTUALENV=FIRST")
@@ -185,6 +208,28 @@ else()
   set(LITERTLM_TARGET_CXX_COMPILER ${LITERTLM_HOST_CXX_COMPILER} CACHE PATH "LiteRT-LM: C++ compiler for prebuild phase")
 endif()
 
+# --- Platform arguments ---
+# Extra configure arguments and compiler flags for the two phases. On Linux,
+# macOS and for Android cross builds from those hosts the lists stay empty and
+# the flags stay `-w`; only cmake/modules/windows_orchestrator.cmake changes
+# them, and it is only included on a Windows build machine.
+set(LITERTLM_PREBUILD_PLATFORM_ARGS "")
+set(LITERTLM_TARGET_PLATFORM_ARGS "")
+set(LITERTLM_PREBUILD_CXX_FLAGS_ARGS "-DCMAKE_CXX_FLAGS=-w")
+set(LITERTLM_TARGET_CXX_FLAGS_ARGS "-DCMAKE_CXX_FLAGS=-w")
+set(LITERTLM_HOST_EXE_SUFFIX "")
+
+if(CMAKE_HOST_WIN32)
+  set(LITERTLM_HOST_EXE_SUFFIX ".exe")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/windows_orchestrator.cmake")
+endif()
+
+# Pre-extracted QAIRT / QNN headers for LiteRT's Qualcomm backend. Without it
+# LiteRT downloads the QAIRT SDK archive while configuring.
+if(QAIRT_HEADERS_DIR)
+  list(APPEND LITERTLM_TARGET_PLATFORM_ARGS "-DQAIRT_HEADERS_DIR=${QAIRT_HEADERS_DIR}")
+endif()
+
 
 include(ExternalProject)
 ExternalProject_Add(
@@ -204,6 +249,7 @@ ExternalProject_Add(
       ${LITERTLM_ENV_WRAPPER}
     ${CMAKE_COMMAND} -S <SOURCE_DIR> -B <BINARY_DIR>
       ${LITERTLM_UV_ARGS}
+      ${LITERTLM_PREBUILD_PLATFORM_ARGS}
       "-DCMAKE_INSTALL_PREFIX=${LITERTLM_PREBUILD_INSTALL_DIR}"
       "-DLITERTLM_ORCHESTRATION_PHASE=prebuild"
       "-DLITERTLM_PREBUILD_PHASE=LITERT_PREBUILD_PHASE"
@@ -213,7 +259,7 @@ ExternalProject_Add(
       "-DLITERTLM_BUILD_FETCH_CONTENT=OFF"
       "-DLITERTLM_BUILD_EXTERNAL_PROJECTS=OFF"
       "-DLITERTLM_BUILD_TARGETS=OFF"
-      "-DCMAKE_CXX_FLAGS=-w"
+      ${LITERTLM_PREBUILD_CXX_FLAGS_ARGS}
       "-DLITERTLM_BIN_EXT=${LITERTLM_BIN_EXT}"
       "-DLITERTLM_STATIC_LIB_EXT=${LITERTLM_STATIC_LIB_EXT}"
       "-DLITERTLM_DYN_LIB_EXT=${LITERTLM_DYN_LIB_EXT}"
@@ -229,13 +275,27 @@ ExternalProject_Add(
 
 # --- Host Tool Setup ---
 if(NOT DEFINED LITERTLM_HOST_PROTOC)
-    set(LITERTLM_HOST_PROTOC "${LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR}/protobuf/install/bin/protoc" CACHE PATH "")
+    set(LITERTLM_HOST_PROTOC "${LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR}/protobuf/install/bin/protoc${LITERTLM_HOST_EXE_SUFFIX}" CACHE PATH "")
     set(LITERTLM_HOST_PROTOC_BIN_DIR "${LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR}/protobuf/install/bin" CACHE PATH "")
 endif()
 
 if(NOT DEFINED LITERTLM_HOST_FLATC)
-    set(LITERTLM_HOST_FLATC "${LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR}/flatbuffers/install/bin/flatc" CACHE PATH "")
+    set(LITERTLM_HOST_FLATC "${LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR}/flatbuffers/install/bin/flatc${LITERTLM_HOST_EXE_SUFFIX}" CACHE PATH "")
     set(LITERTLM_HOST_FLATC_BIN_DIR "${LITERTLM_PREBUILD_EXTERNAL_PROJECT_DIR}/flatbuffers/install/bin" CACHE PATH "")
+endif()
+
+if(CMAKE_HOST_WIN32)
+    # When -DLITERTLM_HOST_PROTOC / -DLITERTLM_HOST_FLATC are given (required
+    # to cross compile for ARM64 on an x64 host) the matching *_BIN_DIR is not
+    # set above; derive it so the override works end to end.
+    if(NOT LITERTLM_HOST_PROTOC_BIN_DIR)
+        get_filename_component(_litertlm_host_tool_dir "${LITERTLM_HOST_PROTOC}" DIRECTORY)
+        set(LITERTLM_HOST_PROTOC_BIN_DIR "${_litertlm_host_tool_dir}" CACHE PATH "" FORCE)
+    endif()
+    if(NOT LITERTLM_HOST_FLATC_BIN_DIR)
+        get_filename_component(_litertlm_host_tool_dir "${LITERTLM_HOST_FLATC}" DIRECTORY)
+        set(LITERTLM_HOST_FLATC_BIN_DIR "${_litertlm_host_tool_dir}" CACHE PATH "" FORCE)
+    endif()
 endif()
 
 if(DEFINED CMAKE_TOOLCHAIN_FILE)
@@ -276,6 +336,7 @@ ExternalProject_Add(
       ${LITERTLM_TOOLCHAIN_ARGS}
       ${LITERTLM_TOOLCHAIN_FILE}  
       ${LITERTLM_UV_ARGS}
+      ${LITERTLM_TARGET_PLATFORM_ARGS}
       "-DCMAKE_INSTALL_PREFIX=${LITERTLM_INSTALL_DIR}"
       "-DCMAKE_C_COMPILER=${LITERTLM_TARGET_CC_COMPILER}"
       "-DCMAKE_CXX_COMPILER=${LITERTLM_TARGET_CXX_COMPILER}"
@@ -302,7 +363,7 @@ ExternalProject_Add(
       "-DLITERTLM_BUILD_EXTERNAL_PROJECTS=ON"
       "-DLITERTLM_BUILD_TARGETS=ON"
       "-DLITERTLM_GENERATE_TARGET_MAP=ON"
-      "-DCMAKE_CXX_FLAGS=-w"
+      ${LITERTLM_TARGET_CXX_FLAGS_ARGS}
       "-DLITERTLM_BIN_EXT=${LITERTLM_BIN_EXT}"
       "-DLITERTLM_STATIC_LIB_EXT=${LITERTLM_STATIC_LIB_EXT}"
       "-DLITERTLM_DYN_LIB_EXT=${LITERTLM_DYN_LIB_EXT}"

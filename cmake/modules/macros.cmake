@@ -117,6 +117,21 @@ macro(literlm_configure_component_interface prefix main_targets dependency_targe
 
     target_include_directories(${_target} SYSTEM INTERFACE ${include_dirs})
 
+    # cl.exe and clang-cl (the latter reports CXX_COMPILER_ID "Clang"): link.exe
+    # has no archive groups and there is no pthread library.
+    set(_component_msvc_frontend FALSE)
+    if(COMMAND litertlm_is_msvc_frontend)
+        litertlm_is_msvc_frontend(_component_msvc_frontend)
+    endif()
+
+    if(_component_msvc_frontend)
+    target_link_libraries(${_target} INTERFACE
+            ${main_targets}
+            ${dependency_targets}
+            LiteRTLM::absl::absl
+            LiteRTLM::protobuf::libprotobuf
+    )
+    else()
     target_link_libraries(${_target} INTERFACE
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wl,--start-group>
             ${main_targets}
@@ -126,6 +141,7 @@ macro(literlm_configure_component_interface prefix main_targets dependency_targe
         $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wl,--end-group>
         pthread
     )
+    endif()
 endmacro()
 
 macro(add_litertlm_library target_name lib_type)

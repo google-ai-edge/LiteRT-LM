@@ -41,14 +41,33 @@ done
 TEST_VENV="${WORKSPACE_ROOT}/python/litert_lm/test_venv"
 
 # Skip verification if cross-compiling for Android since we cannot run it on the Linux host
+IS_WINDOWS_ARM64_WHEEL=0
 for arg in "$@"; do
   if [[ "${arg}" == "--config=android" ]]; then
     echo "Skipping verification suite because wheel was built for Android."
     exit 0
   fi
+  if [[ "${arg}" == "--define=wheel_platform=windows_arm64" ]]; then
+    IS_WINDOWS_ARM64_WHEEL=1
+    # Skip verification if the Windows ARM64 wheel was packaged on a non-ARM64
+    # host (e.g. Windows x86_64), which cannot load ARM64 DLLs. Under x64 Git
+    # Bash on a Windows ARM64 device, PROCESSOR_ARCHITECTURE is AMD64 while
+    # PROCESSOR_ARCHITEW6432 is ARM64.
+    if [[ "${PROCESSOR_ARCHITECTURE:-}" != "ARM64" \
+      && "${PROCESSOR_ARCHITEW6432:-}" != "ARM64" ]]; then
+      echo "Skipping verification suite because wheel was built for Windows ARM64."
+      exit 0
+    fi
+  fi
 done
-# Run this Verification Suite isolated inside every target Python version
-for PY_VER in "3.10" "3.11" "3.12" "3.13" "3.14"; do
+# Run this Verification Suite isolated inside every target Python version.
+# Native ARM64 CPython binaries start at Python 3.11.
+if [[ "${IS_WINDOWS_ARM64_WHEEL}" -eq 1 ]]; then
+  PY_VERSIONS=("3.11" "3.12" "3.13" "3.14")
+else
+  PY_VERSIONS=("3.10" "3.11" "3.12" "3.13" "3.14")
+fi
+for PY_VER in "${PY_VERSIONS[@]}"; do
   echo "------------------------------------------------"
   echo "Setting up temporary virtual environment for Python ${PY_VER}..."
   echo "------------------------------------------------"

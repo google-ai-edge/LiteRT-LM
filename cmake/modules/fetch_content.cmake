@@ -14,6 +14,12 @@
 
 include(FetchContent)
 
+if(WIN32)
+  # Pre-seeds options of the dependencies below: Windows has no system zlib,
+  # and every archive must be static and use the DLL C runtime.
+  include("${LITERTLM_MODULES_DIR}/windows_fetch_content.cmake")
+endif()
+
 # --- ANTLR ---
 set(LITERTLM_ANTLR_SRC_DIR 
   ${CMAKE_BINARY_DIR}/_deps/antlr_lib-src/runtime/Cpp/runtime/src 
@@ -108,6 +114,9 @@ block()
   elseif(TARGET zlibstatic)
     get_target_property(ZLIB_INCLUDE_DIR zlibstatic INTERFACE_INCLUDE_DIRECTORIES)
     set(ZLIB_LIBRARY zlibstatic)
+  endif()
+  if(WIN32)
+    litertlm_windows_zlib_hints()
   endif()
 
   FetchContent_MakeAvailable(libpng_lib)
@@ -278,7 +287,7 @@ endif()
 
 # --- ZLIB ---
 set(LITERTLM_ZLIB_SRC_DIR ${LITERTLM_THIRD_PARTY_DIR}/zlib CACHE PATH "Path to zlib source directory")
-set(LITERTLM_ZLIB_TAG "master" CACHE STRING "ZLIB git tag")
+set(LITERTLM_ZLIB_TAG "v1.3.2" CACHE STRING "ZLIB git tag")
 FetchContent_Declare(
   zlib_lib
   GIT_REPOSITORY https://github.com/madler/zlib

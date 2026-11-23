@@ -20,6 +20,8 @@
 #include <gtest/gtest.h>
 #include "absl/flags/flag.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
+#include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 
@@ -67,6 +69,34 @@ TEST(BenchmarkAppendChunksFlagTest, DefaultsToZeroAndSupportsOverride) {
   absl::SetFlag(&FLAGS_benchmark_append_chunks, 4);
   EXPECT_EQ(absl::GetFlag(FLAGS_benchmark_append_chunks), 4);
   absl::SetFlag(&FLAGS_benchmark_append_chunks, 0);
+}
+
+TEST(ApplyLiteRtLibDirFlagsTest, LeavesUnsetWhenFlagsEmpty) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create("/model"));
+  ASSERT_OK_AND_ASSIGN(LlmExecutorSettings settings,
+                       LlmExecutorSettings::CreateDefault(
+                           std::move(model_assets), Backend::NPU));
+
+  absl::SetFlag(&FLAGS_litert_dispatch_lib_dir, "");
+  absl::SetFlag(&FLAGS_litert_compiler_lib_dir, "");
+  ApplyLiteRtLibDirFlags(settings);
+
+  EXPECT_EQ(settings.GetLitertDispatchLibDir(), "");
+  EXPECT_EQ(settings.GetLitertCompilerLibDir(), "");
+}
+
+TEST(ApplyLiteRtLibDirFlagsTest, AppliesNonEmptyDispatchAndCompilerDirs) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets, ModelAssets::Create("/model"));
+  ASSERT_OK_AND_ASSIGN(LlmExecutorSettings settings,
+                       LlmExecutorSettings::CreateDefault(
+                           std::move(model_assets), Backend::NPU));
+
+  absl::SetFlag(&FLAGS_litert_dispatch_lib_dir, "/custom/dispatch");
+  absl::SetFlag(&FLAGS_litert_compiler_lib_dir, "/custom/compiler");
+  ApplyLiteRtLibDirFlags(settings);
+
+  EXPECT_EQ(settings.GetLitertDispatchLibDir(), "/custom/dispatch");
+  EXPECT_EQ(settings.GetLitertCompilerLibDir(), "/custom/compiler");
 }
 
 }  // namespace
