@@ -15,6 +15,7 @@
 #include "runtime/util/model_type_utils.h"
 
 #include <array>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -22,9 +23,11 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
+#include "absl/strings/ascii.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/strings/substitute.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/proto/token.pb.h"
@@ -80,6 +83,40 @@ absl::StatusOr<proto::LlmModelType> CreateModelType(
   return model_type;
 }
 
+// Strips a trailing unclosed channel `start` delimiter (plus any trailing ASCII
+// whitespace) from `model_prefix`. Models that pre-open a reasoning channel at
+// the end of `prompt_templates.model.prefix` (for example,
+// `<|im_start|>assistant\n<think>\n`) want that tag in `add_generation_prompt`,
+// whereas completed assistant messages in history omit channel content and must
+// not leave an unclosed `<think>` tag before the answer text.
+std::string StripTrailingOpenChannelStart(
+    absl::string_view model_prefix, absl::Span<const proto::Channel> channels) {
+  if (model_prefix.empty() || channels.empty()) {
+    return std::string(model_prefix);
+  }
+  const absl::string_view trimmed =
+      absl::StripTrailingAsciiWhitespace(model_prefix);
+  const proto::Channel* matched_channel = nullptr;
+  for (const proto::Channel& channel : channels) {
+    if (channel.start().empty() || !absl::EndsWith(trimmed, channel.start())) {
+      continue;
+    }
+    if (!channel.end().empty() && absl::EndsWith(trimmed, channel.end()) &&
+        channel.end().size() >= channel.start().size()) {
+      continue;
+    }
+    if (matched_channel == nullptr ||
+        channel.start().size() > matched_channel->start().size()) {
+      matched_channel = &channel;
+    }
+  }
+  if (matched_channel == nullptr) {
+    return std::string(model_prefix);
+  }
+  return std::string(
+      trimmed.substr(0, trimmed.size() - matched_channel->start().size()));
+}
+
 }  // namespace
 
 absl::StatusOr<proto::LlmModelType> InferLlmModelType(
@@ -128,7 +165,10 @@ absl::StatusOr<proto::LlmModelType> InferLlmModelType(
 
 absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
     const proto::PromptTemplates& prompt_templates,
-    const proto::LlmModelType& llm_model_type) {
+    const proto::LlmModelType& llm_model_type,
+    absl::Span<const proto::Channel> channels) {
+  const std::string history_model_prefix = StripTrailingOpenChannelStart(
+      prompt_templates.model().prefix(), channels);
   switch (llm_model_type.model_type_case()) {
     case proto::LlmModelType::kFunctionGemma:
       return R"tmpl({{ bos_token }}
@@ -352,7 +392,7 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
           "{% endif -%}"
           "{%- endfor -%}"
           "{%- if add_generation_prompt %}$6{% endif -%}",
-          prompt_templates.user().prefix(), prompt_templates.model().prefix(),
+          prompt_templates.user().prefix(), history_model_prefix,
           prompt_templates.system().prefix(), prompt_templates.user().suffix(),
           prompt_templates.model().suffix(), prompt_templates.system().suffix(),
           prompt_templates.model().prefix());
@@ -378,7 +418,7 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
         "{% endif -%}"
         "{%- endfor -%}"
         "{%- if add_generation_prompt %}$6{% endif -%}",
-        prompt_templates.user().prefix(), prompt_templates.model().prefix(),
+        prompt_templates.user().prefix(), history_model_prefix,
         prompt_templates.system().prefix(), prompt_templates.user().suffix(),
         prompt_templates.model().suffix(), prompt_templates.system().suffix(),
         prompt_templates.model().prefix());
@@ -387,6 +427,14 @@ absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
     default:
       return absl::InvalidArgumentError("Unsupported model type for template.");
   }
+}
+
+absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
+    const proto::LlmMetadata& metadata) {
+  std::vector<proto::Channel> channels(metadata.channels().begin(),
+                                       metadata.channels().end());
+  return GetDefaultJinjaPromptTemplate(metadata.prompt_templates(),
+                                       metadata.llm_model_type(), channels);
 }
 
 absl::string_view GetModelTypeName(const proto::LlmModelType& model_type) {

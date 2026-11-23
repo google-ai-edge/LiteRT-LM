@@ -19,6 +19,7 @@
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/proto/llm_model_type.pb.h"
 #include "support/tokenizer/tokenizer.h"
@@ -34,10 +35,17 @@ absl::StatusOr<proto::LlmModelType> InferLlmModelType(
 
 // Get the default jinja prompt template for the given model type.
 // This is for backwards compatibility when the deprecated prompt_templates of
-// metadata field is used.
+// metadata field is used. When `channels` is provided and `model.prefix` ends
+// with an unclosed channel start delimiter (e.g. `<think>\n`), that trailing
+// delimiter is stripped from past assistant turns while remaining intact in
+// `add_generation_prompt`.
 absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
     const proto::PromptTemplates& prompt_templates,
-    const proto::LlmModelType& llm_model_type);
+    const proto::LlmModelType& llm_model_type,
+    absl::Span<const proto::Channel> channels = {});
+
+absl::StatusOr<std::string> GetDefaultJinjaPromptTemplate(
+    const proto::LlmMetadata& metadata);
 
 // Get the model type name for the given model type.
 absl::string_view GetModelTypeName(const proto::LlmModelType& model_type);

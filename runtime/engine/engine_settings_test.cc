@@ -2042,5 +2042,48 @@ TEST(EngineSettingsTest,
   EXPECT_EQ(updated_top_k_config.max_top_k, 128u);
 }
 
+TEST(EngineSettingsTest,
+     MaybeUpdateAndValidate_StripsOpenChannelFromHistoryModelPrefix) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_1"));
+  ASSERT_OK_AND_ASSIGN(EngineSettings settings,
+                       EngineSettings::CreateDefault(model_assets));
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+
+  proto::LlmMetadata metadata;
+  metadata.mutable_start_token()->mutable_token_ids()->add_ids(0);
+  metadata.mutable_llm_model_type()->mutable_generic_model();
+  metadata.mutable_prompt_templates()->mutable_user()->set_prefix(
+      "<|im_start|>user\n");
+  metadata.mutable_prompt_templates()->mutable_user()->set_suffix(
+      "<|im_end|>\n");
+  metadata.mutable_prompt_templates()->mutable_model()->set_prefix(
+      "<|im_start|>assistant\n<think>\n");
+  metadata.mutable_prompt_templates()->mutable_model()->set_suffix(
+      "<|im_end|>\n");
+  proto::Channel* thought_channel = metadata.add_channels();
+  thought_channel->set_channel_name("thought");
+  thought_channel->set_start("<think>");
+  thought_channel->set_end("</think>");
+
+  ASSERT_OK(settings.MaybeUpdateAndValidate(&tokenizer, &metadata));
+  ASSERT_TRUE(settings.GetLlmMetadata().has_value());
+  const std::string& jinja_tmpl =
+      settings.GetLlmMetadata()->jinja_prompt_template();
+  // Past assistant messages in history must not leave `<think>` unclosed, while
+  // `add_generation_prompt` still pre-opens `<think>\n` for live generation.
+  EXPECT_THAT(
+      jinja_tmpl,
+      testing::HasSubstr(
+          "{% elif message.role == 'assistant' %}<|im_start|>assistant\n{%"));
+  EXPECT_THAT(jinja_tmpl, testing::HasSubstr(
+                              "{%- if add_generation_prompt %}"
+                              "<|im_start|>assistant\n<think>\n{% endif -%}"));
+}
+
 }  // namespace
 }  // namespace litert::lm
