@@ -33,6 +33,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
+#include "models/json_schema_validator.h"
 #include "runtime/components/prompt_template.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
@@ -49,6 +50,8 @@ ABSL_FLAG(std::vector<std::string>, pbtext_files, {},
           "Comma-separated list of LlmMetadataProto.pbtext files to verify.");
 ABSL_FLAG(std::vector<std::string>, mirror_chat_templates, {},
           "Comma-separated list of mirror chat template files to verify.");
+ABSL_FLAG(std::string, input_schema, "",
+          "Optional path to JSON Schema file to validate input JSON files.");
 
 namespace litert::lm {
 namespace {
@@ -152,6 +155,64 @@ PromptTemplateInput ParseInputJson(const json& j) {
   return input;
 }
 
+absl::StatusOr<std::vector<std::filesystem::path>> ListJsonFiles(
+    const std::filesystem::path& input_dir) {
+  if (!std::filesystem::exists(input_dir)) {
+    return absl::NotFoundError(
+        absl::StrCat("Input directory does not exist: ", input_dir.string()));
+  }
+  std::vector<std::filesystem::path> json_files;
+  for (const std::filesystem::directory_entry& entry :
+       std::filesystem::directory_iterator(input_dir)) {
+    if (entry.is_regular_file() && entry.path().extension() == ".json") {
+      json_files.push_back(entry.path());
+    }
+  }
+  std::sort(json_files.begin(), json_files.end());
+  if (json_files.empty()) {
+    return absl::NotFoundError(absl::StrCat(
+        "No .json test input files found in input_dir: ", input_dir.string()));
+  }
+  return json_files;
+}
+
+TEST(ChatTemplateTestRunner, ValidateInputSchemas) {
+  const std::string input_dir_flag = absl::GetFlag(FLAGS_input_dir);
+  const std::string input_schema_flag = absl::GetFlag(FLAGS_input_schema);
+  if (input_dir_flag.empty() || input_schema_flag.empty()) {
+    GTEST_SKIP() << "Schema validation skipped (empty --input_dir or "
+                    "--input_schema).";
+  }
+
+  const std::filesystem::path schema_path = ResolvePath(input_schema_flag);
+  ASSERT_TRUE(std::filesystem::exists(schema_path))
+      << "Input schema file does not exist: " << schema_path;
+  ASSERT_OK_AND_ASSIGN(const std::string schema_str,
+                       ReadFileContents(schema_path));
+  const json schema = json::parse(schema_str, nullptr,
+                                  /*allow_exceptions=*/false);
+  ASSERT_FALSE(schema.is_discarded())
+      << "Failed to parse input schema JSON file: " << schema_path;
+
+  const std::filesystem::path input_dir = ResolvePath(input_dir_flag);
+  ASSERT_OK_AND_ASSIGN(const std::vector<std::filesystem::path> json_files,
+                       ListJsonFiles(input_dir));
+
+  for (const std::filesystem::path& json_path : json_files) {
+    ASSERT_OK_AND_ASSIGN(const std::string json_str,
+                         ReadFileContents(json_path));
+    const json instance =
+        json::parse(json_str, nullptr, /*allow_exceptions=*/false);
+    if (instance.is_discarded()) {
+      ADD_FAILURE() << "Failed to parse JSON file: " << json_path;
+      continue;
+    }
+    EXPECT_OK(ValidateJsonSchema(instance, schema))
+        << "Input JSON file failed schema validation (" << schema_path
+        << "): " << json_path;
+  }
+}
+
 TEST(ChatTemplateTestRunner, RenderAndCompareGoldens) {
   const std::string chat_template_flag = absl::GetFlag(FLAGS_chat_template);
   const std::string input_dir_flag = absl::GetFlag(FLAGS_input_dir);
@@ -167,23 +228,12 @@ TEST(ChatTemplateTestRunner, RenderAndCompareGoldens) {
   PromptTemplate prompt_template(template_content);
 
   if (!input_dir_flag.empty() && !golden_dir_flag.empty()) {
-    const auto input_dir = ResolvePath(input_dir_flag);
+    const std::filesystem::path input_dir = ResolvePath(input_dir_flag);
     const auto golden_dir_read = ResolvePath(golden_dir_flag);
     const auto golden_dir_write = ResolveSourcePath(golden_dir_flag);
 
-    ASSERT_TRUE(std::filesystem::exists(input_dir))
-        << "Input directory does not exist: " << input_dir;
-
-    std::vector<std::filesystem::path> json_files;
-    for (const auto& entry : std::filesystem::directory_iterator(input_dir)) {
-      if (entry.is_regular_file() && entry.path().extension() == ".json") {
-        json_files.push_back(entry.path());
-      }
-    }
-    std::sort(json_files.begin(), json_files.end());
-
-    ASSERT_GT(json_files.size(), 0)
-        << "No .json test input files found in input_dir: " << input_dir;
+    ASSERT_OK_AND_ASSIGN(const std::vector<std::filesystem::path> json_files,
+                         ListJsonFiles(input_dir));
 
     int test_count = 0;
     for (const auto& json_path : json_files) {

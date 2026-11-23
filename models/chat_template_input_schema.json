@@ -33,7 +33,8 @@
                       "description": "The text content. Required if type is 'text'."
                     }
                   },
-                  "required": ["type"]
+                  "required": ["type"],
+                  "additionalProperties": false
                 },
                 {
                   "type": "object",
@@ -51,7 +52,8 @@
                       "description": "The response payload returned by the tool."
                     }
                   },
-                  "required": ["type", "name", "response"]
+                  "required": ["type", "name", "response"],
+                  "additionalProperties": false
                 }
               ]
             }
@@ -87,14 +89,17 @@
                       ]
                     }
                   },
-                  "required": ["name"]
+                  "required": ["name"],
+                  "additionalProperties": false
                 }
               },
-              "required": ["function"]
+              "required": ["function"],
+              "additionalProperties": false
             }
           }
         },
-        "required": ["role"]
+        "required": ["role"],
+        "additionalProperties": false
       }
     },
     "tools": {
@@ -154,10 +159,12 @@
                 }
               }
             },
-            "required": ["name", "description"]
+            "required": ["name", "description"],
+            "additionalProperties": false
           }
         },
-        "required": ["type", "function"]
+        "required": ["type", "function"],
+        "additionalProperties": false
       }
     },
     "enable_thinking": {
@@ -173,5 +180,6 @@
       "description": "The beginning-of-sequence token."
     }
   },
-  "required": ["messages"]
+  "required": ["messages"],
+  "additionalProperties": false
 }

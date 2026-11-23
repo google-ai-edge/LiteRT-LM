@@ -33,6 +33,8 @@ def _resolve_data_srcs(path, glob_ext):
     else:
         return native.glob([path + "/*" + glob_ext, path + "/**/*" + glob_ext])
 
+_INPUT_SCHEMA = "//models:chat_template_input_schema.json"
+
 def chat_template_test(
         name,
         chat_template,
@@ -40,6 +42,7 @@ def chat_template_test(
         golden_dir = "testdata/golden",
         pbtext_files = [],
         mirror_chat_templates = [],
+        use_non_standard_inputs_and_api_might_not_work = False,
         tags = [],
         deps = [],
         data = [],
@@ -53,18 +56,22 @@ def chat_template_test(
       golden_dir: The directory containing golden expected rendered text files (<name>.txt).
       pbtext_files: Optional list of LlmMetadataProto.pbtext files to verify that their jinja_prompt_template matches chat_template.
       mirror_chat_templates: Optional list of chat templates mirroring chat_template to verify they are identical.
+      use_non_standard_inputs_and_api_might_not_work: If True, skips validating input JSON files against chat_template_input_schema.json.
       tags: Additional tags to pass to cc_test.
       deps: Additional C++ dependencies.
       data: Additional data dependencies.
       **kwargs: Additional keyword arguments passed to cc_test.
     """
-    data_files = [chat_template] + _resolve_data_srcs(input_dir, ".json") + _resolve_data_srcs(golden_dir, ".txt") + pbtext_files + mirror_chat_templates + data
+    schema_data = [_INPUT_SCHEMA] if input_dir and not use_non_standard_inputs_and_api_might_not_work else []
+    data_files = [chat_template] + _resolve_data_srcs(input_dir, ".json") + _resolve_data_srcs(golden_dir, ".txt") + pbtext_files + mirror_chat_templates + schema_data + data
 
     runner_args = [
         "--chat_template=" + _to_runfiles_path(chat_template),
     ]
     if input_dir:
         runner_args.append("--input_dir=" + _to_runfiles_path(input_dir))
+        if not use_non_standard_inputs_and_api_might_not_work:
+            runner_args.append("--input_schema=" + _to_runfiles_path(_INPUT_SCHEMA))
     if golden_dir:
         runner_args.append("--golden_dir=" + _to_runfiles_path(golden_dir))
 
