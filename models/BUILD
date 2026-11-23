@@ -13,6 +13,7 @@
 # limitations under the License.
 
 # [Google-internal load of `cc_library`]
+# [Google-internal load of `cc_test`]
 
 licenses(["notice"])
 
@@ -20,11 +21,44 @@ package(
     default_visibility = ["//visibility:public"],
 )
 
+exports_files([
+    "chat_template_input_schema.json",
+])
+
+cc_library(
+    name = "json_schema_validator",
+    testonly = True,
+    srcs = ["json_schema_validator.cc"],
+    hdrs = ["json_schema_validator.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@nlohmann_json//:json",
+    ],
+)
+
+cc_test(
+    name = "json_schema_validator_test",
+    srcs = ["json_schema_validator_test.cc"],
+    data = ["chat_template_input_schema.json"],
+    deps = [
+        ":json_schema_validator",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+        "//support/util:test_utils",
+    ],
+)
+
 cc_library(
     name = "chat_template_test_runner_lib",
     testonly = True,
     srcs = ["chat_template_test_runner.cc"],
     deps = [
+        ":json_schema_validator",
         "@com_google_googletest//:gtest_for_library",
         "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/flags:parse",
