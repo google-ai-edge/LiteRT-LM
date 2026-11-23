@@ -46,14 +46,19 @@ private let recurringToolCallLimit = 25
 /// // Send a message and get the response.
 /// let response = try conversation.sendMessage(Message("Hello world"))
 ///
-/// // Send a message async with response chunks as AsyncThrowingStream.
+/// // Send a message async with response chunks as AsyncThrowingStream. The last chunk has no
+/// // content and ends the turn.
 /// for try await chunk in conversation.sendMessageStream(Message("Hello world")) {
-///   print(chunk.text)
+///   if let finishReason = chunk.finishReason {
+///     print("Turn ended: \(finishReason)")
+///   } else {
+///     print(chunk.toString)
+///   }
 /// }
 /// ```
 ///
-/// This class facilitates interaction with the LiteRT-LM model by handling message sending
-/// and response reception.
+/// This class facilitates interaction with the LiteRT-LM model by handling message sending and
+/// response reception.
 public final class Conversation: Sendable {
   private let logger = Logger(
     subsystem: "com.google.ai.edge.litertlm.swift",
@@ -131,15 +136,18 @@ public final class Conversation: Sendable {
   /// - Parameter extraContext: The extra context to send to the model.
   /// - Parameter repetitionPenaltyConfig: Optional configuration for repetition penalty.
   /// - Parameter noRepeatNgramConfig: Optional configuration for no repeat ngram penalty.
-  /// - Parameter maxOutputTokens: Optional maximum number of tokens to generate per response. For thinking models, both thinking (reasoning) tokens and the final response tokens count towards this limit.
+  /// - Parameter maxOutputTokens: Optional maximum number of tokens to generate per response. For
+  ///   thinking models, both thinking (reasoning) tokens and the final response tokens count
+  ///   towards this limit.
   /// - Parameter thinkingConfig: Optional configuration for thinking/reasoning generation.
   /// - Parameter responseFormat: Optional response format for constrained decoding.
-  /// - Parameter toolChoice: Optional choice of whether and which tools the model may call for
-  ///   this message. It is only used if the conversation has tools and was created with
+  /// - Parameter toolChoice: Optional choice of whether and which tools the model may call for this
+  ///   message. It is only used if the conversation has tools and was created with
   ///   `ExperimentalFlags.enableConversationConstrainedDecoding` set to true.
-  /// - Returns: The model's response message.
-  /// - Throws: A `LiteRTLMError` if sending the message fails or the model
-  ///   returns an invalid response.
+  /// - Returns: The model's response message. Its `finishReason` and `executorStats` tell how the
+  ///   turn ended; with automatic tool calling, they're from the last round.
+  /// - Throws: A `LiteRTLMError` if sending the message fails or the model returns an invalid
+  ///   response.
   public func sendMessage(
     _ message: Message,
     extraContext: [String: Any]? = nil,
@@ -176,7 +184,9 @@ public final class Conversation: Sendable {
       )
 
       guard let toolCalls = responseJson["tool_calls"] as? [[String: Any]] else {
-        if responseJson["content"] != nil || responseJson["channels"] != nil {
+        if responseJson["content"] != nil || responseJson["channels"] != nil
+          || responseJson["finish_reason"] is String
+        {
           return try Conversation.jsonToMessage(responseString)
         } else {
           throw LiteRTLMError.conversation(.invalidResponse(responseString))
@@ -465,13 +475,17 @@ public final class Conversation: Sendable {
   /// - Parameter message: The message to send.
   /// - Parameter extraContext: The extra context to send to the model.
   /// - Parameter repetitionPenaltyConfig: Optional configuration for repetition penalty.
-  /// - Parameter maxOutputTokens: Optional maximum number of tokens to generate per response. For thinking models, both thinking (reasoning) tokens and the final response tokens count towards this limit.
+  /// - Parameter maxOutputTokens: Optional maximum number of tokens to generate per response. For
+  ///   thinking models, both thinking (reasoning) tokens and the final response tokens count
+  ///   towards this limit.
   /// - Parameter thinkingConfig: Optional configuration for thinking/reasoning generation.
   /// - Parameter responseFormat: Optional response format for constrained decoding.
-  /// - Parameter toolChoice: Optional choice of whether and which tools the model may call for
-  ///   this message. It is only used if the conversation has tools and was created with
+  /// - Parameter toolChoice: Optional choice of whether and which tools the model may call for this
+  ///   message. It is only used if the conversation has tools and was created with
   ///   `ExperimentalFlags.enableConversationConstrainedDecoding` set to true.
-  /// - Returns: An async throwing stream of `Message` chunks.
+  /// - Returns: An async throwing stream of `Message` chunks. The last element has no content; its
+  ///   `finishReason` and `executorStats` tell how the turn ended (with automatic tool calling,
+  ///   only the last round's). A turn that fails throws instead and has no such element.
   public func sendMessageStream(
     _ message: Message,
     extraContext: [String: Any]? = nil,
@@ -749,7 +763,9 @@ public final class Conversation: Sendable {
       }
     }
 
-    if contents.isEmpty && channels.isEmpty && toolCalls.isEmpty {
+    // A string `finish_reason` marks the message that ends a turn, which may have no content.
+    let finishReason = jsonObject["finish_reason"] as? String
+    if contents.isEmpty && channels.isEmpty && toolCalls.isEmpty && finishReason == nil {
       throw LiteRTLMError.message(.invalidContent)
     }
 
@@ -762,11 +778,18 @@ public final class Conversation: Sendable {
       role = Role(rawValue: roleRaw) ?? .user
     }
 
+    // Executor stats are only kept on a message that ends a turn.
+    var executorStats: ExecutorStats? = nil
+    if finishReason != nil, let statsJson = jsonObject["executor_stats"] as? [String: Any] {
+      executorStats = ExecutorStats(json: statsJson)
+    }
     return Message(
       contents: Contents(contents: contents),
       role: role,
       channels: channels,
-      toolCalls: toolCalls
+      toolCalls: toolCalls,
+      finishReason: finishReason,
+      executorStats: executorStats
     )
   }
 
@@ -843,6 +866,8 @@ private func streamCallback(
   let isFinal: Bool
   let errorMessage: UnsafePointer<CChar>?
   let responseJson: UnsafePointer<CChar>?
+  var finishReason: UnsafePointer<CChar>? = nil
+  var executorStatsJson: UnsafePointer<CChar>? = nil
   do {
     let makeError: (String) -> LiteRTLMError = { .conversation(.invalidResponse($0)) }
     isFinal = try LiteRTLMError.get(false, "litert_lm_stream_chunk_is_final", makeError) {
@@ -854,6 +879,15 @@ private func streamCallback(
     }
     responseJson = try LiteRTLMError.get(nil, "litert_lm_stream_chunk_get_text", makeError) {
       litert_lm_stream_chunk_get_text(chunk, $0)
+    }
+    // Only the final chunk of a turn that ended says how it ended.
+    if isFinal {
+      finishReason = try LiteRTLMError.get(
+        nil, "litert_lm_stream_chunk_get_finish_reason", makeError
+      ) { litert_lm_stream_chunk_get_finish_reason(chunk, $0) }
+      executorStatsJson = try LiteRTLMError.get(
+        nil, "litert_lm_stream_chunk_get_executor_stats_json", makeError
+      ) { litert_lm_stream_chunk_get_executor_stats_json(chunk, $0) }
     }
   } catch {
     endStream(context, userData, throwing: error)
@@ -933,6 +967,20 @@ private func streamCallback(
         Unmanaged<Conversation.StreamContext>.fromOpaque(userData).release()
       }
     } else {
+      // Only the last round ends the turn, so the earlier rounds' end is swallowed. Malformed
+      // stats don't fail the turn that already ended.
+      if let finishReason = finishReason {
+        var executorStats: ExecutorStats? = nil
+        if let executorStatsJson = executorStatsJson {
+          do {
+            executorStats = try ExecutorStats(jsonString: String(cString: executorStatsJson))
+          } catch {
+            logger.error("Failed to parse executor stats JSON: \(error.localizedDescription)")
+          }
+        }
+        context.continuation.yield(
+          Message(finishReason: String(cString: finishReason), executorStats: executorStats))
+      }
       endStream(context, userData)
     }
   }

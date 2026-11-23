@@ -29,6 +29,7 @@ LITERT_LM_SWIFT_SRCS = [
     "EmbeddingEngine.swift",
     "EmbeddingEngineConfig.swift",
     "Engine.swift",
+    "ExecutorStats.swift",
     "ExperimentalFlags.swift",
     "LiteRTLMError.swift",
     "Message.swift",
@@ -55,6 +56,7 @@ swift_library(
     features = ["-swift.enable_v6"],
     module_name = "LiteRTLM",
     deps = [
+
 
 
         "@litert//litert/cc/options:litert_cpu_options",
@@ -131,6 +133,7 @@ swift_library(
     testonly = True,
     srcs = ["MessageTests.swift"],
     copts = ["-enable-testing"],
+    data = ["//runtime/testdata:end_of_turn_json"],
     deps = [
         ":LiteRT_LM_Swift",
 
@@ -302,6 +305,7 @@ ios_unit_test(
 
 ios_unit_test(
     name = "LiteRT_LM_Message_Tests",
+    data = ["//runtime/testdata:end_of_turn_json"],
     minimum_os_version = "15.0",
     # The ios_unit_test depends on the swift_library containing the test code.
     deps = [
