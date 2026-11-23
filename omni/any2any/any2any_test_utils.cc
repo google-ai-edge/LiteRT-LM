@@ -28,6 +28,7 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/base/casts.h"  // from @com_google_absl
 #include "absl/log/absl_check.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_macros.h"  // from @com_google_absl
@@ -103,15 +104,32 @@ std::string BuildMinimalTfliteModelBuffer(
     ABSL_CHECK_EQ(out.type, tflite::TensorType_FLOAT32);
     size_t num_elems = 1;
     for (int32_t d : out.dims) {
+      ABSL_CHECK_GE(d, 0);
       num_elems *= static_cast<size_t>(d);
     }
-    std::vector<uint8_t> zero_bytes(num_elems * sizeof(float), 0);
+    std::vector<uint8_t> const_a_bytes(num_elems * sizeof(float), 0);
+    std::vector<uint8_t> const_b_bytes(num_elems * sizeof(float), 0);
+    if (!out.float_values.empty()) {
+      ABSL_CHECK_EQ(out.float_values.size(), num_elems);
+      static_assert(sizeof(float) == sizeof(uint32_t),
+                    "TFLite FLOAT32 packing requires 32-bit float.");
+      for (size_t i = 0; i < num_elems; ++i) {
+        // TFLite FlatBuffer tensor buffers store FLOAT32 values in
+        // little-endian IEEE 754 byte order.
+        const uint32_t bits = absl::bit_cast<uint32_t>(out.float_values[i]);
+        const size_t offset = i * sizeof(float);
+        const_a_bytes[offset + 0] = static_cast<uint8_t>(bits & 0xFFu);
+        const_a_bytes[offset + 1] = static_cast<uint8_t>((bits >> 8) & 0xFFu);
+        const_a_bytes[offset + 2] = static_cast<uint8_t>((bits >> 16) & 0xFFu);
+        const_a_bytes[offset + 3] = static_cast<uint8_t>((bits >> 24) & 0xFFu);
+      }
+    }
     uint32_t buf_a_idx = static_cast<uint32_t>(buffers.size());
     buffers.push_back(
-        tflite::CreateBuffer(builder, builder.CreateVector(zero_bytes)));
+        tflite::CreateBuffer(builder, builder.CreateVector(const_a_bytes)));
     uint32_t buf_b_idx = static_cast<uint32_t>(buffers.size());
     buffers.push_back(
-        tflite::CreateBuffer(builder, builder.CreateVector(zero_bytes)));
+        tflite::CreateBuffer(builder, builder.CreateVector(const_b_bytes)));
 
     int32_t const_a_idx = static_cast<int32_t>(tensors.size());
     tensors.push_back(tflite::CreateTensor(

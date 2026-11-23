@@ -41,12 +41,17 @@ struct TestTensorSpec {
   std::string name;
   std::vector<int32_t> dims;
   tflite::TensorType type;
+  // Optional constant `float` values emitted for output tensors when non-empty.
+  // When set, `type` must be `tflite::TensorType_FLOAT32` and the element count
+  // must equal the product of `dims`. Ignored for input tensors.
+  std::vector<float> float_values = {};
 };
 
 // Builds a minimal executable TFLite FlatBuffer model with the requested
-// signature input and output tensor specifications (all outputs emit zeros).
-// Output tensors must use `tflite::TensorType_FLOAT32`, matching the
-// unquantized `ADD` op synthesized for each output.
+// signature input and output tensor specifications. Output tensors emit
+// `out.float_values` when non-empty, or zeros otherwise. Output tensors must
+// use `tflite::TensorType_FLOAT32`, matching the unquantized `ADD` op
+// synthesized for each output.
 std::string BuildMinimalTfliteModelBuffer(
     absl::Span<const TestTensorSpec> inputs,
     absl::Span<const TestTensorSpec> outputs);

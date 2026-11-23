@@ -19,13 +19,16 @@
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 
 namespace litert::omni {
 
-// Validates that `buffer` has `ElementType::Float32`, `expected_elements`
-// elements in its layout, and a packed byte size equal to
-// `expected_elements * sizeof(float)`.
+// Validates that `buffer` has `ElementType::Float32` and `expected_elements`
+// total elements in its layout.
+//
+// Equivalent to calling `ValidateTensorBuffer(buffer, ElementType::Float32,
+// expected_elements, buffer_name)`.
 //
 // args
 // - buffer: TensorBuffer to validate.
@@ -37,6 +40,22 @@ namespace litert::omni {
 absl::Status ValidateFloatBuffer(const TensorBuffer& buffer,
                                  size_t expected_elements,
                                  absl::string_view buffer_name);
+
+// Validates that `buffer` has `expected_type` and `expected_elements` total
+// elements in its layout.
+//
+// args
+// - buffer: TensorBuffer to validate.
+// - expected_type: Expected element type of `buffer`.
+// - expected_elements: Expected total number of elements in `buffer`'s layout.
+// - buffer_name: Human-readable buffer description included in error messages.
+//
+// returns
+// - absl::OkStatus() if valid, or absl::InvalidArgumentError otherwise.
+absl::Status ValidateTensorBuffer(const TensorBuffer& buffer,
+                                  ElementType expected_type,
+                                  size_t expected_elements,
+                                  absl::string_view buffer_name);
 
 }  // namespace litert::omni
 

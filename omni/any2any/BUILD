@@ -336,6 +336,7 @@ cc_library(
     deps = [
         ":io_types",
         "@com_google_googletest//:gtest_for_library",
+        "@com_google_absl//absl/base",
         "@com_google_absl//absl/log:absl_check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",
@@ -353,6 +354,22 @@ cc_library(
         "//schema/core:litertlm_header_schema",
         "//schema/core:litertlm_section",
         "//support/util:convert_tensor_buffer",
+        "@litert//tflite/schema:schema_fbs",
+    ],
+)
+
+cc_test(
+    name = "any2any_test_utils_test",
+    srcs = ["any2any_test_utils_test.cc"],
+    deps = [
+        ":any2any_test_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/types:span",
+        "@litert//litert/cc:litert_compiled_model",
+        "@litert//litert/cc:litert_environment",
+        "//omni/base:model_utils",
+        "//runtime/executor:executor_settings_base",
+        "//support/util:test_utils",
         "@litert//tflite/schema:schema_fbs",
     ],
 )

@@ -33,6 +33,7 @@ namespace litert::omni {
 namespace {
 
 using ::absl_testing::StatusIs;
+using ::testing::HasSubstr;
 
 TEST(TensorUtilsTest, ValidateFloatBufferChecksTypeAndCapacity) {
   auto env = Environment::Create({});
@@ -56,6 +57,43 @@ TEST(TensorUtilsTest, ValidateFloatBufferChecksTypeAndCapacity) {
   ASSERT_TRUE(int_buf.HasValue());
 
   EXPECT_THAT(ValidateFloatBuffer(*int_buf, /*expected_elements=*/8, "hidden"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(TensorUtilsTest, ValidateTensorBufferChecksTypeAndElementCount) {
+  auto env = Environment::Create({});
+  ASSERT_TRUE(env.HasValue());
+
+  RankedTensorType float_type(ElementType::Float32, Layout(Dimensions({2, 3})));
+  auto float_buf = TensorBuffer::CreateManaged(
+      *env, TensorBufferType::kHostMemory, std::move(float_type),
+      /*buffer_size=*/6 * sizeof(float));
+  ASSERT_TRUE(float_buf.HasValue());
+
+  EXPECT_OK(ValidateTensorBuffer(*float_buf, ElementType::Float32,
+                                 /*expected_elements=*/6, "embeds"));
+  EXPECT_THAT(ValidateTensorBuffer(*float_buf, ElementType::Int32,
+                                   /*expected_elements=*/6, "embeds"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("embeds buffer element type")));
+  EXPECT_THAT(ValidateTensorBuffer(*float_buf, ElementType::Float32,
+                                   /*expected_elements=*/4, "embeds"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("embeds buffer element count")));
+
+  RankedTensorType int_type(ElementType::Int32, Layout(Dimensions({1, 5})));
+  auto int_buf = TensorBuffer::CreateManaged(
+      *env, TensorBufferType::kHostMemory, std::move(int_type),
+      /*buffer_size=*/5 * sizeof(int32_t));
+  ASSERT_TRUE(int_buf.HasValue());
+
+  EXPECT_OK(ValidateTensorBuffer(*int_buf, ElementType::Int32,
+                                 /*expected_elements=*/5, "token_ids"));
+  EXPECT_THAT(ValidateTensorBuffer(*int_buf, ElementType::Int64,
+                                   /*expected_elements=*/5, "token_ids"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(ValidateTensorBuffer(*int_buf, ElementType::Int32,
+                                   /*expected_elements=*/10, "token_ids"),
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 

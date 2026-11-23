@@ -23,6 +23,32 @@ cc_library(
 )
 
 cc_library(
+    name = "custom_model_utils",
+    hdrs = ["custom_model_utils.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "custom_model_utils_test",
+    srcs = ["custom_model_utils_test.cc"],
+    deps = [
+        ":custom_model_utils",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "//runtime/proto:any2any_model_type_cc_proto",
+        "//runtime/proto:image_gen_model_type_cc_proto",
+        "//runtime/proto:speech2text_model_type_cc_proto",
+        "//runtime/proto:text2speech_model_type_cc_proto",
+        "//support/util:test_utils",
+    ],
+)
+
+cc_library(
     name = "model_resources",
     srcs = ["model_resources.cc"],
     hdrs = ["model_resources.h"],

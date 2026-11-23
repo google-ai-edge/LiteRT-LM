@@ -29,22 +29,28 @@ namespace litert::omni {
 absl::Status ValidateFloatBuffer(const TensorBuffer& buffer,
                                  size_t expected_elements,
                                  absl::string_view buffer_name) {
+  return ValidateTensorBuffer(buffer, ElementType::Float32, expected_elements,
+                              buffer_name);
+}
+
+absl::Status ValidateTensorBuffer(const TensorBuffer& buffer,
+                                  ElementType expected_type,
+                                  size_t expected_elements,
+                                  absl::string_view buffer_name) {
   LITERT_ASSIGN_OR_RETURN(const RankedTensorType tensor_type,
                           buffer.TensorType());
-  if (tensor_type.ElementType() != ElementType::Float32) {
+  if (tensor_type.ElementType() != expected_type) {
     return absl::InvalidArgumentError(absl::StrFormat(
-        "%s buffer element type must be Float32.", buffer_name));
+        "%s buffer element type (%d) does not match expected (%d).",
+        buffer_name, static_cast<int>(tensor_type.ElementType()),
+        static_cast<int>(expected_type)));
   }
   LITERT_ASSIGN_OR_RETURN(const size_t num_elements,
                           tensor_type.Layout().NumElements());
-  LITERT_ASSIGN_OR_RETURN(const size_t packed_size, buffer.PackedSize());
-  if (num_elements != expected_elements ||
-      packed_size != expected_elements * sizeof(float)) {
+  if (num_elements != expected_elements) {
     return absl::InvalidArgumentError(absl::StrFormat(
-        "%s buffer capacity (%d elements, %d bytes) does not match expected "
-        "(%d elements, %d bytes).",
-        buffer_name, num_elements, packed_size, expected_elements,
-        expected_elements * sizeof(float)));
+        "%s buffer element count (%d) does not match expected (%d).",
+        buffer_name, num_elements, expected_elements));
   }
   return absl::OkStatus();
 }
