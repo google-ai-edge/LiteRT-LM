@@ -54,7 +54,8 @@ Here is a sample REPL chat app built with the JavaScript API:
     out.append(`\n>>> ${text}\nAI: `);
 
     for await (const chunk of chat.sendMessageStreaming(text)) {
-      out.append(chunk.content[0].text);
+      // The last chunk has no content, only how the turn ended.
+      if (chunk.content) out.append(chunk.content[0].text);
     }
   };
 </script>
@@ -181,13 +182,36 @@ response = await conversation.sendMessage({role: 'user', content: '...'});
 const stream = conversation.sendMessageStreaming('Tell me a long story.');
 
 for await (const chunk of stream) {
-  // Chunks are Records containing pieces of the response
-  for (const item of chunk.content) {
+  // Chunks are Records containing pieces of the response. The last one has no
+  // content (see below).
+  for (const item of chunk.content ?? []) {
     if (item.type === 'text') {
       console.log(item.text);
     }
   }
 }
+```
+
+#### How the Turn Ended
+
+The message that ends a turn has a `finish_reason`, which is how you detect the
+end of a turn. That's the message `sendMessage` returns, or the last element of
+the stream, which has no content. `finish_reason` is one of:
+
+*   `'stop'`: the model finished its response, or the response reached
+    `SessionConfig.maxOutputTokens`.
+*   `'max_tokens'`: the conversation filled the engine's context window
+    (`mainExecutorSettings.maxNumTokens`), which cut the response off.
+*   `'appended'`: the message was appended without a response.
+
+The final message also has an `executor_stats` property with statistics about
+the run (such as speculative decoding rounds and accepted draft tokens), or
+`null` when none are available. Failed or cancelled turns do not emit an
+end-of-turn message. With `AutoToolChat`, only the last round emits one.
+
+```ts
+const response = await conversation.sendMessage('What is the capital of France?');
+console.log(response.executor_stats?.metrics?.['mtp_rounds']);
 ```
 
 #### Cancel Generation

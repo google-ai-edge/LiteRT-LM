@@ -681,6 +681,8 @@ export class ChatSessionStore {
 
         const {done, value} = await reader.read();
         if (done) break;
+        // The last element only says how the turn ended; it isn't a token.
+        if (value.finish_reason != null) continue;
 
         if (value && value.channels &&
             typeof value.channels['thought'] === 'string') {

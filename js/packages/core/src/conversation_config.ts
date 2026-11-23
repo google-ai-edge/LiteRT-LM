@@ -164,13 +164,41 @@ export declare interface Message {
   content?: string|ContentPart[];
   channels?: Record<string, string>;
   tool_calls?: ToolCall[];
-  [key: string]: JsonValue|ContentPart[]|undefined;
+  /**
+   * Set only on the message that ends a turn: the response of `sendMessage`,
+   * or the last element of a `sendMessageStreaming` stream, which has no
+   * content. It's how callers detect the end of a turn:
+   *
+   * - 'stop': the model finished its response, or the response reached
+   *   `SessionConfig.maxOutputTokens`.
+   * - 'max_tokens': the conversation filled the engine's context window
+   *   (`mainExecutorSettings.maxNumTokens`), which cut the response off.
+   * - 'appended': the message was appended without a response.
+   */
+  finish_reason?: 'stop'|'max_tokens'|'appended';
+  /**
+   * The executor stats of the turn, set next to `finish_reason`, or null if the
+   * turn has none.
+   */
+  executor_stats?: ExecutorStats|null;
+  [key: string]: JsonValue|ContentPart[]|ExecutorStats|undefined;
 }
 
 /**
  * Types that can be used as a Message in the conversation.
  */
 export type MessageLike = string|Message;
+
+/** Executor stats of a turn. */
+export declare interface ExecutorStats {
+  readonly module_name?: string;
+  /** Counters, e.g. `plain_steps` or `mtp_num_accepted_tokens`. */
+  readonly metrics?: Readonly<Record<string, number>>;
+  /** Latencies in whole microseconds. */
+  readonly latencies_us?: Readonly<Record<string, number>>;
+  /** Stats of submodules. */
+  readonly substats?: readonly ExecutorStats[];
+}
 
 /**
  * Preface is the initial messages, tools and extra context for the

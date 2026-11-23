@@ -125,6 +125,11 @@ export class AutoToolChat implements ChatInterface {
     return this.baseConversation;
   }
 
+  /**
+   * Sends a message and runs tool calls until the model responds without
+   * one. Returns that last response, with its `finish_reason` and
+   * `executor_stats`.
+   */
   async sendMessage(message: MessageLike): Promise<Message> {
     if (this.isBusy) {
       throw new Error(BUSY_MESSAGE);
@@ -160,6 +165,11 @@ export class AutoToolChat implements ChatInterface {
     }
   }
 
+  /**
+   * Streams the responses of every round, without their tool calls. Only the
+   * last round ends the turn, so the other rounds' end-of-turn elements are
+   * dropped and the stream ends with the last round's.
+   */
   sendMessageStreaming(message: MessageLike):
       ReadableStream<Message> {
     if (this.isBusy) {
@@ -186,6 +196,7 @@ export class AutoToolChat implements ChatInterface {
           }
           iteration++;
           let toolCalls: ToolCall[] = [];
+          let endOfRound: Message|undefined;
 
           try {
             const conversation = await this.getConversation();
@@ -198,7 +209,9 @@ export class AutoToolChat implements ChatInterface {
                 break;
               }
 
-              if (chunk.tool_calls && chunk.tool_calls.length > 0) {
+              if (chunk.finish_reason != null) {
+                endOfRound = chunk;
+              } else if (chunk.tool_calls && chunk.tool_calls.length > 0) {
                 toolCalls = toolCalls.concat(chunk.tool_calls);
                 // Omit the tool_calls property before enqueuing to the user
                 const cleanValue = {...chunk};
@@ -228,6 +241,9 @@ export class AutoToolChat implements ChatInterface {
           }
 
           this.isBusy = false;
+          if (endOfRound) {
+            controller.enqueue(endOfRound);
+          }
           controller.close();
         };
 

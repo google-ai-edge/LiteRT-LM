@@ -39,6 +39,29 @@ from .utils import thinking_config_to_params
 _RECURRING_TOOL_CALL_LIMIT = 25
 
 
+def _end_of_turn_message(
+    finish_reason: str, executor_stats_json: str | None
+) -> Message:
+  """Builds the content-less message that ends a `send_message_async` stream.
+
+  Args:
+    finish_reason: Why the turn ended (e.g. "stop" or "max_tokens").
+    executor_stats_json: Optional JSON string of executor stats; if None, empty,
+      or invalid JSON, `executor_stats` on the returned message is None.
+  """
+  executor_stats = None
+  if executor_stats_json:
+    try:
+      executor_stats = json.loads(executor_stats_json)
+    except json.JSONDecodeError:
+      logging.warning("Invalid executor stats: %s", executor_stats_json)
+  return Message.from_json({
+      "role": "assistant",
+      "finish_reason": finish_reason,
+      "executor_stats": executor_stats,
+  })
+
+
 class Conversation(interfaces.AbstractConversation):
   """Conversation wrapper for the LiteRT-LM C API."""
 
@@ -473,13 +496,14 @@ class Conversation(interfaces.AbstractConversation):
       finally:
         self._delete_optional_args(optional_args_ptr)
 
-      if not self.automatic_tool_calling:
-        return Message.from_json(response_dict)
-
-      if "tool_calls" in response_dict:
-        self._check_tool_call_rounds(tool_call_rounds)
-      tool_responses = self._handle_tool_calls(response_dict)
+      if self.automatic_tool_calling:
+        if "tool_calls" in response_dict:
+          self._check_tool_call_rounds(tool_call_rounds)
+        tool_responses = self._handle_tool_calls(response_dict)
+      else:
+        tool_responses = None
       if not tool_responses:
+        # The response of the last round also tells how the turn ended.
         return Message.from_json(response_dict)
 
       tool_call_rounds += 1
@@ -523,6 +547,8 @@ class Conversation(interfaces.AbstractConversation):
       msg_json = json.dumps(current_message)
       ctx_json = json.dumps(getattr(self, "extra_context", {}))
 
+      # A queue per round, so that the callback of an abandoned stream can't
+      # leak chunks into a newer turn.
       q = queue.Queue()
 
       def callback(unused_data, chunk_ptr):
@@ -550,7 +576,31 @@ class Conversation(interfaces.AbstractConversation):
                 ctypes.c_bool,
                 chunk_ptr,
             )
-            q.put((chunk.decode("utf-8") if chunk else "", is_final))
+            # Only the final chunk tells how the turn ended. Copy it now: the
+            # chunk is only valid during the callback.
+            finish_reason = None
+            executor_stats_json = None
+            if is_final:
+              finish_reason = get_checked(
+                  self._lib,
+                  "litert_lm_stream_chunk_get_finish_reason",
+                  ctypes.c_char_p,
+                  chunk_ptr,
+              )
+              executor_stats_json = get_checked(
+                  self._lib,
+                  "litert_lm_stream_chunk_get_executor_stats_json",
+                  ctypes.c_char_p,
+                  chunk_ptr,
+              )
+            q.put((
+                chunk.decode("utf-8") if chunk else "",
+                is_final,
+                finish_reason.decode("utf-8") if finish_reason else None,
+                executor_stats_json.decode("utf-8")
+                if executor_stats_json
+                else None,
+            ))
         except Exception as e:  # pylint: disable=broad-exception-caught
           q.put(e)
 
@@ -587,6 +637,7 @@ class Conversation(interfaces.AbstractConversation):
         raise RuntimeError("litert_lm_conversation_send_message_stream failed")
 
       full_response_for_tools = None
+      end_of_turn = None
       while True:
         item = q.get()
         if isinstance(item, Exception):
@@ -597,7 +648,7 @@ class Conversation(interfaces.AbstractConversation):
           ):
             break
           raise item
-        chunk_str, is_final = item
+        chunk_str, is_final, finish_reason, executor_stats_json = item
         if chunk_str:
           try:
             msg_dict = json.loads(chunk_str)
@@ -636,15 +687,22 @@ class Conversation(interfaces.AbstractConversation):
                 "content": [{"type": "text", "text": chunk_str}],
             })
         if is_final:
+          if finish_reason:
+            end_of_turn = _end_of_turn_message(
+                finish_reason, executor_stats_json
+            )
           break
 
-      if not full_response_for_tools:
-        break
-
-      if "tool_calls" in full_response_for_tools:
-        self._check_tool_call_rounds(tool_call_rounds)
-      tool_responses = self._handle_tool_calls(full_response_for_tools)
+      if full_response_for_tools:
+        if "tool_calls" in full_response_for_tools:
+          self._check_tool_call_rounds(tool_call_rounds)
+        tool_responses = self._handle_tool_calls(full_response_for_tools)
+      else:
+        tool_responses = None
       if not tool_responses:
+        # Only the last round ends the turn; the others' ends are swallowed.
+        if end_of_turn is not None:
+          yield end_of_turn
         break
       tool_call_rounds += 1
       current_message = tool_responses

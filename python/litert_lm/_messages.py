@@ -21,6 +21,7 @@ import collections.abc
 import dataclasses
 import enum
 import json
+import math
 from typing import Any, Mapping, Sequence
 
 
@@ -352,6 +353,80 @@ class Contents(list[Content]):
     return cls(contents)
 
 
+def _is_number(value: Any) -> bool:
+  return (
+      isinstance(value, (int, float))
+      and not isinstance(value, bool)
+      and math.isfinite(value)
+  )
+
+
+def _is_int(value: Any) -> bool:
+  return isinstance(value, int) and not isinstance(value, bool)
+
+
+@dataclasses.dataclass(frozen=True)
+class ExecutorStats:
+  """Executor stats of a turn, e.g. speculative decoding counters.
+
+  Metric and latency names depend on the executor and may change.
+
+  Attributes:
+      module_name: The module the stats are for, e.g. "LLM".
+      metrics: Counters and ratios by name, e.g. "acceptance_rate".
+      latencies_in_microseconds: Latencies in microseconds by name.
+      substats: The stats of the module's submodules, e.g. the drafter.
+  """
+
+  module_name: str = ""
+  metrics: collections.abc.Mapping[str, int | float] = dataclasses.field(
+      default_factory=dict
+  )
+  latencies_in_microseconds: collections.abc.Mapping[str, int] = (
+      dataclasses.field(default_factory=dict)
+  )
+  substats: tuple[ExecutorStats, ...] = ()
+
+  @classmethod
+  def from_json(cls, data: collections.abc.Mapping[str, Any]) -> ExecutorStats:
+    """Parses the `executor_stats` JSON object, ignoring malformed fields."""
+    metrics = data.get("metrics")
+    latencies_us = data.get("latencies_us")
+    substats = data.get("substats")
+    module_name = data.get("module_name")
+    return cls(
+        module_name=module_name if isinstance(module_name, str) else "",
+        metrics={
+            str(key): value
+            for key, value in (
+                metrics.items()
+                if isinstance(metrics, collections.abc.Mapping)
+                else ()
+            )
+            if _is_number(value)
+        },
+        latencies_in_microseconds={
+            str(key): value
+            for key, value in (
+                latencies_us.items()
+                if isinstance(latencies_us, collections.abc.Mapping)
+                else ()
+            )
+            if _is_int(value)
+        },
+        substats=tuple(
+            cls.from_json(substat)
+            for substat in (substats if isinstance(substats, list) else ())
+            if isinstance(substat, collections.abc.Mapping)
+        ),
+    )
+
+
+# The keys of the message that ends a turn. They describe the turn rather than
+# the message, so they are parsed into properties and never sent back.
+_END_OF_TURN_KEYS = ("finish_reason", "executor_stats")
+
+
 # NOTE: Inherits from `dict[str, Any]` for backward compatibility with existing
 # callers expecting a `Mapping`. Please migrate to `Message` attributes (e.g.,
 # `role`, `contents`, `tool_calls`, `channels`), as `dict` support may be
@@ -372,6 +447,8 @@ class Message(dict[str, Any]):
   _has_role: bool
   _raw_content: Any
   _extra_fields: dict[str, Any]
+  _finish_reason: str | None
+  _executor_stats: ExecutorStats | None
 
   def __init__(
       self,
@@ -384,6 +461,8 @@ class Message(dict[str, Any]):
     super().__setattr__("_has_role", True)
     super().__setattr__("_raw_content", None)
     super().__setattr__("_extra_fields", {})
+    super().__setattr__("_finish_reason", None)
+    super().__setattr__("_executor_stats", None)
     super().__setattr__("role", role)
     super().__setattr__(
         "contents", contents if contents is not None else Contents.empty()
@@ -496,6 +575,31 @@ class Message(dict[str, Any]):
         f" tool_calls={self.tool_calls!r}, channels={self.channels!r})"
     )
 
+  @property
+  def finish_reason(self) -> str | None:
+    """Why the turn ended, set only on the message that ends a turn.
+
+    That message is the one `send_message` returns, or the last element of the
+    `send_message_async` stream, which has no content. A set `finish_reason` is
+    how callers detect the end of a turn. "stop": the model finished its
+    response, or the response reached `max_output_tokens`. "max_tokens": the
+    conversation filled the engine's context window (`max_num_tokens`), which
+    cut the response off. "appended": the message was appended without a
+    response. Other values may be added; they also mean the turn ended.
+
+    None on every other message, including the ones the caller builds.
+    """
+    return self._finish_reason
+
+  @property
+  def executor_stats(self) -> ExecutorStats | None:
+    """The executor stats of the turn this message ends, or None.
+
+    Only set on a message with a `finish_reason`, and only when the executor
+    reports stats.
+    """
+    return self._executor_stats
+
   @classmethod
   def _parse_json_fields(cls, data: collections.abc.Mapping[str, Any]) -> tuple[
       Role,
@@ -597,6 +701,7 @@ class Message(dict[str, Any]):
         k: v
         for k, v in data.items()
         if k not in ("role", "content", "tool_calls", "channels")
+        and k not in _END_OF_TURN_KEYS
     }
 
     return (
@@ -630,6 +735,17 @@ class Message(dict[str, Any]):
     msg._has_role = has_role
     msg._raw_content = raw_content
     msg._extra_fields = extra_fields
+    finish_reason = data.get("finish_reason")
+    executor_stats = data.get("executor_stats")
+    msg._finish_reason = (
+        finish_reason if isinstance(finish_reason, str) else None
+    )
+    # Executor stats are only kept on a message that ends a turn.
+    msg._executor_stats = None
+    if msg._finish_reason is not None and isinstance(
+        executor_stats, collections.abc.Mapping
+    ):
+      msg._executor_stats = ExecutorStats.from_json(executor_stats)
     msg._sync_dict()
     return msg
 

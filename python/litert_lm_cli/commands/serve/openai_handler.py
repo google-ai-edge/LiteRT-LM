@@ -126,12 +126,17 @@ class OpenAIHandler(util.CORSRequestHandler):
       all_tool_calls: list[dict[str, Any]] = []
       has_tool_calls = False
       reasoning_tokens = 0
+      litert_finish_reason = None
       for chunk in conv.send_message_async(
           prompt,
           max_output_tokens=max_completion_tokens,
           response_format=response_format,
           tool_choice=tool_choice,
       ):
+        if chunk.finish_reason is not None:
+          # The content-less message that ends the turn.
+          litert_finish_reason = chunk.finish_reason
+          continue
         if chunk.channels:
           reasoning_tokens += 1
         text_output = "".join(
@@ -155,7 +160,10 @@ class OpenAIHandler(util.CORSRequestHandler):
             )
             self.wfile.flush()
 
-      finish_reason = "tool_calls" if has_tool_calls else "stop"
+      finish_reason = openai_common.openai_finish_reason(
+          has_tool_calls=has_tool_calls,
+          litert_finish_reason=litert_finish_reason,
+      )
       self.wfile.write(formatter.format_complete(finish_reason=finish_reason))
       self.wfile.flush()
       if include_usage and hasattr(formatter, "format_usage"):
