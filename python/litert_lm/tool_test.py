@@ -495,7 +495,9 @@ class ConversationToolHandlingTest(absltest.TestCase):
         return next(chunks)
       if name == "litert_lm_stream_chunk_is_final":
         return True
-      return None  # No error.
+      if name == "litert_lm_stream_chunk_get_finish_reason":
+        return b"stop"
+      return None  # No error or executor stats.
 
     conv._lib.litert_lm_conversation_send_message_stream.side_effect = (
         send_message_stream
@@ -674,7 +676,9 @@ class ConversationToolCallLimitTest(absltest.TestCase):
         return next(chunks)
       if name == "litert_lm_stream_chunk_is_final":
         return True
-      return None  # No error.
+      if name == "litert_lm_stream_chunk_get_finish_reason":
+        return b"stop"
+      return None  # No error or executor stats.
 
     self.conv._lib.litert_lm_conversation_send_message_stream.side_effect = (
         send_message_stream
@@ -725,9 +729,12 @@ class ConversationToolCallLimitTest(absltest.TestCase):
         [_TOOL_CALL_RESPONSE] * 25 + [_ANSWER_RESPONSE]
     )
 
-    responses = list(self.conv.send_message_async("What's the weather?"))
+    *responses, end_of_turn = self.conv.send_message_async(
+        "What's the weather?"
+    )
 
     self.assertEqual([r.to_json() for r in responses], [_ANSWER_RESPONSE])
+    self.assertEqual(end_of_turn.finish_reason, "stop")
     self.assertEqual(self.mock_tool.execute.call_count, 25)
 
   def test_send_message_async_raises_on_26th_tool_call_round(self):

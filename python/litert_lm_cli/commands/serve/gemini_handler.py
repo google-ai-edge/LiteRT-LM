@@ -138,6 +138,19 @@ def gemini_response_from_litertlm(
   return {"candidates": [candidate]}
 
 
+def _gemini_finish_reason(litert_finish_reason: str | None) -> str:
+  """Maps how a LiteRT-LM turn ended to a Gemini `finishReason`.
+
+  Args:
+    litert_finish_reason: LiteRT-LM finish reason, or None if the turn had no
+      end-of-turn message (mapped to "STOP").
+  """
+  # TODO(b/587968572): Map `max_output_tokens` cutoffs to "MAX_TOKENS" once the
+  # C++ runtime distinguishes them from "stop" (currently only a full context
+  # window reports "max_tokens").
+  return "MAX_TOKENS" if litert_finish_reason == "max_tokens" else "STOP"
+
+
 @dataclasses.dataclass(frozen=True)
 class ParsedRequest:
   """A parsed Gemini API request from the URL path.
@@ -353,7 +366,10 @@ class GeminiHandler(util.CORSRequestHandler):
         click.echo(click.style("Raw Engine Response:", fg="magenta"))
         click.echo(json.dumps(response, ensure_ascii=False))
 
-        resp_body = gemini_response_from_litertlm(response)
+        resp_body = gemini_response_from_litertlm(
+            response,
+            finish_reason=_gemini_finish_reason(response.finish_reason),
+        )
         click.echo(click.style("Gemini Response Body:", fg="magenta"))
         click.echo(json.dumps(resp_body, indent=2, ensure_ascii=False))
 
@@ -401,7 +417,13 @@ class GeminiHandler(util.CORSRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
 
+        litert_finish_reason = None
         for chunk in conv.send_message_async(inputs.last_msg):
+          if chunk.finish_reason is not None:
+            # The content-less message that ends the turn; the final chunk
+            # below reports it.
+            litert_finish_reason = chunk.finish_reason
+            continue
           click.echo(click.style("Stream Chunk:", fg="magenta"))
           click.echo(json.dumps(chunk, ensure_ascii=False))
 
@@ -415,7 +437,8 @@ class GeminiHandler(util.CORSRequestHandler):
 
         # Final chunk to signal completion
         final_resp = gemini_response_from_litertlm(
-            litert_lm.Message.model(), finish_reason="STOP"
+            litert_lm.Message.model(),
+            finish_reason=_gemini_finish_reason(litert_finish_reason),
         )
         click.echo(click.style("Final Stream Response:", fg="magenta"))
         click.echo(json.dumps(final_resp, ensure_ascii=False))

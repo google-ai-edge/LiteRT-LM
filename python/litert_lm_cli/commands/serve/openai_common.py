@@ -257,6 +257,29 @@ def compute_token_usage(
   }
 
 
+def openai_finish_reason(
+    *, has_tool_calls: bool, litert_finish_reason: str | None
+) -> str:
+  """Maps how a LiteRT-LM turn ended to an OpenAI `finish_reason`.
+
+  Args:
+    has_tool_calls: Whether the model called tools.
+    litert_finish_reason: The `finish_reason` of the message that ended the
+      turn, or None if no message did.
+
+  Returns:
+    "tool_calls", "length" or "stop".
+  """
+  if has_tool_calls:
+    return "tool_calls"
+  # TODO(b/587968572): Map `max_output_tokens` cutoffs to "length" once the C++
+  # runtime distinguishes them from "stop" (currently only a full context window
+  # reports "max_tokens").
+  if litert_finish_reason == "max_tokens":
+    return "length"
+  return "stop"
+
+
 class OpenAIStreamFormatter(abc.ABC):
   """A formatter for OpenAI API compatible Server-Sent Events."""
 

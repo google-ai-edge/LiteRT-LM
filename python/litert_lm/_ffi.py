@@ -1020,6 +1020,16 @@ def _setup_lib_signatures(lib):
       ctypes.c_void_p,
       ctypes.POINTER(ctypes.c_char_p),
   ]
+  lib.litert_lm_stream_chunk_get_finish_reason.restype = ctypes.c_int
+  lib.litert_lm_stream_chunk_get_finish_reason.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_char_p),
+  ]
+  lib.litert_lm_stream_chunk_get_executor_stats_json.restype = ctypes.c_int
+  lib.litert_lm_stream_chunk_get_executor_stats_json.argtypes = [
+      ctypes.c_void_p,
+      ctypes.POINTER(ctypes.c_char_p),
+  ]
 
   # Embedding Engine Settings
   lib.litert_lm_embedding_engine_settings_create.restype = ctypes.c_int
