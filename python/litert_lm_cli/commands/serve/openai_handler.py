@@ -49,6 +49,8 @@ _parse_model_parameter = openai_common.parse_model_parameter
 _parse_response_format = openai_common.parse_response_format
 _parse_sampler_config = openai_chat_completions.parse_sampler_config
 _parse_thinking_config = openai_common.parse_thinking_config
+_parse_tool_choice = openai_common.parse_tool_choice
+_parse_tools = openai_common.parse_tools
 _translate_openai_message = openai_common.translate_openai_message
 
 
