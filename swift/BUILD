@@ -220,21 +220,21 @@ genrule(
     ] + C_LITERT_LM_PUBLIC_HDRS,
     outs = ["CLiteRTLM_mac.zip"],
     cmd = """
-       mkdir -p CLiteRTLM_mac/Headers
+       mkdir -p CLiteRTLM_mac/Headers/CLiteRTLM
        # Copy the universal dylib
        cp $(execpath :CLiteRTLM_universal) CLiteRTLM_mac/libCLiteRTLM_mac.dylib
        # Copy the headers
-       cp $(execpath //c:api_export.h) CLiteRTLM_mac/Headers/
-       cp $(execpath //c:conversation.h) CLiteRTLM_mac/Headers/
-       cp $(execpath //c:decision_engine.h) CLiteRTLM_mac/Headers/
-       cp $(execpath //c:embedding_engine.h) CLiteRTLM_mac/Headers/
-       cp $(execpath //c:engine.h) CLiteRTLM_mac/Headers/
-       cp $(execpath //c:error_reporter.h) CLiteRTLM_mac/Headers/
-       cp $(execpath //c:experimental.h) CLiteRTLM_mac/Headers/
-       cp $(execpath //c:model_info.h) CLiteRTLM_mac/Headers/
-       cp $(execpath //c:model_sync.h) CLiteRTLM_mac/Headers/
+       cp $(execpath //c:api_export.h) CLiteRTLM_mac/Headers/CLiteRTLM/
+       cp $(execpath //c:conversation.h) CLiteRTLM_mac/Headers/CLiteRTLM/
+       cp $(execpath //c:decision_engine.h) CLiteRTLM_mac/Headers/CLiteRTLM/
+       cp $(execpath //c:embedding_engine.h) CLiteRTLM_mac/Headers/CLiteRTLM/
+       cp $(execpath //c:engine.h) CLiteRTLM_mac/Headers/CLiteRTLM/
+       cp $(execpath //c:error_reporter.h) CLiteRTLM_mac/Headers/CLiteRTLM/
+       cp $(execpath //c:experimental.h) CLiteRTLM_mac/Headers/CLiteRTLM/
+       cp $(execpath //c:model_info.h) CLiteRTLM_mac/Headers/CLiteRTLM/
+       cp $(execpath //c:model_sync.h) CLiteRTLM_mac/Headers/CLiteRTLM/
        # Create module map
-       cat << 'EOF' > CLiteRTLM_mac/Headers/module.modulemap
+       cat << 'EOF' > CLiteRTLM_mac/Headers/CLiteRTLM/module.modulemap
 module CLiteRTLM {
    header "api_export.h"
    header "conversation.h"
