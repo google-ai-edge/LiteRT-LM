@@ -222,6 +222,8 @@ absl::Status MainHelper(int argc, char** argv) {
            "[--benchmark_append_chunks=<num_chunks>] "
            "[--async=<true|false>] [--force_f32=<true|false] "
            "[--report_peak_memory_footprint] [--multi_turns=<true|false>] "
+           "[--enable_thinking=<true|false>] "
+           "[--thinking_token_budget=<num_tokens>] "
            "[--num_cpu_threads=<num_cpu_threads>] "
            "[--enable_ynnpack=<true|false|auto>] "
            "[--gpu_external_tensor_mode=<true|false>] "
@@ -307,6 +309,8 @@ absl::Status MainHelper(int argc, char** argv) {
       absl::GetFlag(FLAGS_report_peak_memory_footprint);
   settings.force_f32 = absl::GetFlag(FLAGS_force_f32);
   settings.multi_turns = absl::GetFlag(FLAGS_multi_turns);
+  settings.enable_thinking = absl::GetFlag(FLAGS_enable_thinking);
+  settings.thinking_token_budget = absl::GetFlag(FLAGS_thinking_token_budget);
   settings.num_cpu_threads = absl::GetFlag(FLAGS_num_cpu_threads);
   settings.enable_ynnpack = absl::GetFlag(FLAGS_enable_ynnpack);
   settings.gpu_external_tensor_mode =

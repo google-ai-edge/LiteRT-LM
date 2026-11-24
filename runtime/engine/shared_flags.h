@@ -49,6 +49,8 @@ ABSL_DECLARE_FLAG(bool, async);
 ABSL_DECLARE_FLAG(bool, report_peak_memory_footprint);
 ABSL_DECLARE_FLAG(bool, force_f32);
 ABSL_DECLARE_FLAG(bool, multi_turns);
+ABSL_DECLARE_FLAG(std::optional<bool>, enable_thinking);
+ABSL_DECLARE_FLAG(std::optional<int>, thinking_token_budget);
 ABSL_DECLARE_FLAG(int, num_cpu_threads);
 ABSL_DECLARE_FLAG(litert::lm::YnnpackMode, enable_ynnpack);
 ABSL_DECLARE_FLAG(bool, gpu_external_tensor_mode);

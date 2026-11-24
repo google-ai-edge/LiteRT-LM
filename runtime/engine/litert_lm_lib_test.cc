@@ -42,6 +42,7 @@
 #include "runtime/components/prompt_template.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -1169,6 +1170,34 @@ TEST(LiteRtLmLibTest, CreateSessionConfig_SamplerOverrides) {
   EXPECT_EQ(temperature_params.k(), 40);
   EXPECT_FLOAT_EQ(temperature_params.p(), 1.0f);
   EXPECT_FLOAT_EQ(temperature_params.temperature(), 0.8f);
+}
+
+MATCHER_P2(ThinkingConfigIs, enable_thinking, thinking_token_budget, "") {
+  return arg.enable_thinking() == enable_thinking &&
+         arg.thinking_token_budget() == thinking_token_budget;
+}
+
+TEST(LiteRtLmLibTest, CreateThinkingConfig) {
+  LiteRtLmSettings settings;
+  EXPECT_EQ(CreateThinkingConfig(settings), std::nullopt);
+
+  settings.enable_thinking = true;
+  EXPECT_THAT(CreateThinkingConfig(settings),
+              Optional(ThinkingConfigIs(true, -1)));
+  settings.enable_thinking = false;
+  EXPECT_THAT(CreateThinkingConfig(settings),
+              Optional(ThinkingConfigIs(false, 0)));
+  settings.thinking_token_budget = 256;
+  EXPECT_THAT(CreateThinkingConfig(settings),
+              Optional(ThinkingConfigIs(false, 256)));
+
+  LiteRtLmSettings budget_only;
+  budget_only.thinking_token_budget = 256;
+  EXPECT_THAT(CreateThinkingConfig(budget_only),
+              Optional(ThinkingConfigIs(true, 256)));
+  budget_only.thinking_token_budget = 0;
+  EXPECT_THAT(CreateThinkingConfig(budget_only),
+              Optional(ThinkingConfigIs(false, 0)));
 }
 
 TEST(LiteRtLmLibTest, RunLiteRtLmWithInferredGemma3ModelType) {
