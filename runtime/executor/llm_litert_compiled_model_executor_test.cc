@@ -2451,6 +2451,22 @@ TEST(LlmLiteRtCompiledModelExecutorDynamicTest, ResetTest) {
     std::tie(model_resources, executor) = std::move(p);
   }
 
+  std::vector<size_t> prefill_kv_packed_sizes;
+  size_t decode_kv_packed_size = 0;
+  executor->UpdatePreGraphRunCallback(
+      [&](absl::string_view signature_name, int current_step,
+          absl::flat_hash_map<absl::string_view, TensorBuffer>& inputs) {
+        auto it = inputs.find("kv_cache_k_0");
+        if (it == inputs.end()) return;
+        auto packed_size = it->second.PackedSize();
+        if (!packed_size) return;
+        if (signature_name == "prefill") {
+          prefill_kv_packed_sizes.push_back(*packed_size);
+        } else if (signature_name == "decode") {
+          decode_kv_packed_size = *packed_size;
+        }
+      });
+
   ExecutorInputs inputs;
   const std::vector<int> input_tokens = {1, 2, 0};
   LITERT_ASSERT_OK_AND_ASSIGN(
@@ -2459,11 +2475,14 @@ TEST(LlmLiteRtCompiledModelExecutorDynamicTest, ResetTest) {
   inputs.SetTextData(ExecutorTextData(std::move(input_tokens_buffer)));
 
   EXPECT_OK(executor->Prefill(inputs));
+  ASSERT_OK_AND_ASSIGN(auto decoded_tokens, executor->Decode());
 
   {
     ASSERT_OK_AND_ASSIGN(auto current_step, executor->GetCurrentStep());
-    EXPECT_EQ(current_step, 3);
+    EXPECT_EQ(current_step, 4);
   }
+  ASSERT_EQ(prefill_kv_packed_sizes.size(), 1);
+  EXPECT_GT(decode_kv_packed_size, prefill_kv_packed_sizes[0]);
 
   EXPECT_OK(executor->Reset());
 
@@ -2486,6 +2505,8 @@ TEST(LlmLiteRtCompiledModelExecutorDynamicTest, ResetTest) {
     ASSERT_OK_AND_ASSIGN(auto current_step, executor->GetCurrentStep());
     EXPECT_EQ(current_step, 3);
   }
+  ASSERT_EQ(prefill_kv_packed_sizes.size(), 2);
+  EXPECT_EQ(prefill_kv_packed_sizes[1], prefill_kv_packed_sizes[0]);
 }
 
 TEST(LlmLiteRtCompiledModelExecutorDynamicTest, DecodeTest) {
