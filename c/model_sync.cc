@@ -24,6 +24,7 @@
 #include <string>
 #include <utility>
 
+#include "absl/base/attributes.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "c/error_reporter.h"
@@ -74,6 +75,12 @@ absl::Status ToAbslErrorStatus(int raw_code, absl::string_view message) {
                       message.empty() ? "Range fetch failed" : message);
 }
 
+ABSL_ATTRIBUTE_NO_SANITIZE_CFI LiteRtLmStatusCode InvokeRangeFetcher(
+    LiteRtLmModelSyncRangeFetcherCallback c_fetcher, uint64_t start_byte,
+    uint64_t length, LiteRtLmModelSyncRangeWriter* writer, void* user_data) {
+  return c_fetcher(start_byte, length, writer, user_data);
+}
+
 litert::lm::sync::RangeFetcher AdaptFetcher(
     LiteRtLmModelSyncRangeFetcherCallback c_fetcher, void* user_data) {
   if (c_fetcher == nullptr) {
@@ -92,7 +99,8 @@ litert::lm::sync::RangeFetcher AdaptFetcher(
     }
 
     LiteRtLmModelSyncRangeWriter writer{out, {}};
-    LiteRtLmStatusCode code = c_fetcher(start_byte, length, &writer, user_data);
+    LiteRtLmStatusCode code =
+        InvokeRangeFetcher(c_fetcher, start_byte, length, &writer, user_data);
     static_assert(sizeof(int) == sizeof(LiteRtLmStatusCode));
     int raw_code = 0;
     std::memcpy(&raw_code, &code, sizeof(raw_code));
