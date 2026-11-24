@@ -39,6 +39,7 @@
 #include "runtime/executor/cancellation_latch.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/run_options.h"
 #include "runtime/executor/vision/vision_executor.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
 
@@ -143,6 +144,11 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
 
   absl::Status StartProfiling() override;
   absl::StatusOr<ExecutorStats> StopProfiling() override;
+
+  absl::Status SetRunOptions(RunOptionsFactory run_options_factory) override {
+    run_options_factory_ = std::move(run_options_factory);
+    return absl::OkStatus();
+  }
 
   // Returns the variants of the vision encoder that Encode() can select from
   // (see GetVisionEncoderVariants).
@@ -327,6 +333,10 @@ class VisionLiteRtCompiledModelExecutor : public VisionExecutor {
   VisionExecutorProperties vision_executor_properties_;
 
   std::optional<ExecutorStats> latency_stats_;
+
+  // The factory of the LiteRT options of every model run (see
+  // SetRunOptions()), or empty to use the compile-time options.
+  RunOptionsFactory run_options_factory_;
 };
 
 }  // namespace litert::lm

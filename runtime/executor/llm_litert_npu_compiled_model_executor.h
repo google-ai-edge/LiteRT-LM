@@ -48,6 +48,7 @@
 #include "runtime/executor/npu/llm_litert_npu_kv_cache.h"
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
 #include "runtime/executor/npu/llm_litert_npu_rope.h"
+#include "runtime/executor/run_options.h"
 
 namespace litert::lm {
 
@@ -209,6 +210,13 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   };
 
   ::litert::Environment* GetEnvironment() const override { return &env_; }
+
+  // The options are passed to the runs of the NPU models (text decoder and MTP
+  // drafter); the CPU auxiliary models keep their compile-time options.
+  absl::Status SetRunOptions(RunOptionsFactory run_options_factory) override {
+    run_options_factory_ = std::move(run_options_factory);
+    return absl::OkStatus();
+  }
 
   // Prints the latency stats for the executor.  Intended to be used for
   // profiling.
@@ -659,6 +667,10 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // selects context-size suffixed signature names, which dynamic models do not
   // have.
   int dynamic_kv_cache_capacity_ = 0;
+
+  // The factory of the LiteRT options of the NPU model runs (see
+  // SetRunOptions()), or empty to use the compile-time options.
+  RunOptionsFactory run_options_factory_;
 
   absl::Mutex execution_mutex_;
 };

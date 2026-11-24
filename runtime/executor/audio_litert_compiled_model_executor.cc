@@ -62,6 +62,7 @@
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/run_options.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"  // IWYU pragma: keep
 #include "runtime/util/lora_util.h"
@@ -857,9 +858,12 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
   }
 
   {
+    ABSL_ASSIGN_OR_RETURN(std::optional<litert::Options> run_options,
+                          CreateRunOptions(run_options_factory_));
     ScopedLatency scoped(latency_stats_, kAudioEncoderInferenceLatency);
     LITERT_RETURN_IF_ERROR(audio_encoder_->GetMutableCompiledModel().Run(
-        input_buffers_map, audio_encoder_->GetMutableOutputBuffersMap()));
+        input_buffers_map, audio_encoder_->GetMutableOutputBuffersMap(),
+        GetRunOptionsPtr(run_options)));
   }
 
   int chunk_valid_tokens = 0;
@@ -933,10 +937,13 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
     }
 
     {
+      ABSL_ASSIGN_OR_RETURN(std::optional<litert::Options> run_options,
+                            CreateRunOptions(run_options_factory_));
       ScopedLatency scoped(latency_stats_, kAudioAdapterInferenceLatency);
       LITERT_RETURN_IF_ERROR(audio_adapter_->GetMutableCompiledModel().Run(
           audio_adapter_->GetMutableInputBuffers(),
-          audio_adapter_->GetMutableOutputBuffers()));
+          audio_adapter_->GetMutableOutputBuffers(),
+          GetRunOptionsPtr(run_options)));
     }
 
     LITERT_RETURN_IF_ERROR(

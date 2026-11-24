@@ -50,6 +50,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/run_options_test_util.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
@@ -757,6 +758,60 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
   ASSERT_OK_AND_ASSIGN(auto second_map_output_vector,
                        ReadTensorBuffer<float>(*second_map_output_embeddings));
   EXPECT_EQ(second_map_output_vector, second_output_vector);
+}
+
+TEST(VisionLiteRtCompiledModelExecutorTest, EncodeWithRunOptions) {
+  const std::string model_path = (std::filesystem::path(::testing::SrcDir()) /
+                                  std::string(kTestVisionModelWithAdapterPath))
+                                     .string();
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create(model_path));
+  ASSERT_OK_AND_ASSIGN(
+      VisionExecutorSettings settings,
+      VisionExecutorSettings::CreateDefault(model_assets,
+                                            /*encoder_backend=*/Backend::CPU,
+                                            /*adapter_backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      Environment env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<VisionLiteRtCompiledModelExecutor> vision_executor,
+      VisionLiteRtCompiledModelExecutor::Create(settings, env));
+
+  std::vector<float> input_data(10 * 8, 1.0f);
+  RankedTensorType input_tensor_type(ElementType::Float32,
+                                     Layout(litert::Dimensions{1, 10, 8}));
+  ASSERT_OK_AND_ASSIGN(
+      TensorBuffer input_buffer,
+      CreateTensorBuffer<float>(absl::MakeSpan(input_data), input_tensor_type));
+  auto encode = [&]() -> absl::StatusOr<std::vector<float>> {
+    ABSL_ASSIGN_OR_RETURN(ExecutorVisionData output,
+                          vision_executor->Encode(input_buffer));
+    ABSL_ASSIGN_OR_RETURN(TensorBuffer * embeddings,
+                          output.GetMutableEmbeddingsPtr());
+    return ReadTensorBuffer<float>(*embeddings);
+  };
+  ASSERT_OK_AND_ASSIGN(std::vector<float> expected, encode());
+
+  // The CPU models ignore the run options, so the results don't change. Every
+  // run (the encoder and the adapter) of every call gets new options.
+  int num_calls = 0;
+  ASSERT_OK(
+      vision_executor->SetRunOptions(CountingRunOptionsFactory(&num_calls)));
+  EXPECT_THAT(encode(), IsOkAndHolds(expected));
+  EXPECT_EQ(num_calls, 2);
+  EXPECT_THAT(encode(), IsOkAndHolds(expected));
+  EXPECT_EQ(num_calls, 4);
+
+  // A failure to create the options fails the call.
+  ASSERT_OK(vision_executor->SetRunOptions(
+      FailingRunOptionsFactory(absl::InvalidArgumentError("bad options"))));
+  EXPECT_THAT(encode(),
+              StatusIs(absl::StatusCode::kInvalidArgument, "bad options"));
+
+  // An empty factory reverts to the compile-time options.
+  ASSERT_OK(vision_executor->SetRunOptions(nullptr));
+  EXPECT_THAT(encode(), IsOkAndHolds(expected));
+  EXPECT_EQ(num_calls, 4);
 }
 
 TEST(VisionLiteRtCompiledModelExecutorTest,

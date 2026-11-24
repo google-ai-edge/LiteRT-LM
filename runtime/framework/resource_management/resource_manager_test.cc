@@ -26,6 +26,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "litert/cc/litert_options.h"  // from @litert
 #include "runtime/engine/engine_settings.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/fake_llm_executor.h"
@@ -33,6 +34,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_processed_tokens.h"
 #include "runtime/executor/llm_executor_settings.h"
+#include "runtime/executor/run_options.h"
 #include "runtime/framework/resource_management/context_handler/context_handler.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -153,6 +155,50 @@ TEST(ResourceManagerTest, AcquiredExecutorForwardsDraftVerification) {
                        resource_manager->AcquireExecutor());
   EXPECT_THAT(executor->VerifyDraft({3, 1, 4}, ExecutorDecodeParams()),
               IsOkAndHolds(FieldsAre(ElementsAre(3, 1, 4), 3)));
+}
+
+// A fake executor that stores the factory set with SetRunOptions() in
+// `*run_options_factory`.
+class RunOptionsFakeLlmExecutor : public FakeLlmExecutor {
+ public:
+  explicit RunOptionsFakeLlmExecutor(RunOptionsFactory* run_options_factory)
+      : FakeLlmExecutor(/*vocab_size=*/16, /*prefill_tokens_set=*/{},
+                        /*decode_tokens_set=*/{}),
+        run_options_factory_(run_options_factory) {}
+
+  absl::Status SetRunOptions(RunOptionsFactory run_options_factory) override {
+    *run_options_factory_ = std::move(run_options_factory);
+    return absl::OkStatus();
+  }
+
+ private:
+  RunOptionsFactory* run_options_factory_;
+};
+
+TEST(ResourceManagerTest, AcquiredExecutorForwardsRunOptions) {
+  RunOptionsFactory forwarded_factory;
+  ASSERT_OK_AND_ASSIGN(
+      auto resource_manager,
+      ResourceManager::Create(
+          /*model_resources=*/nullptr,
+          std::make_unique<RunOptionsFakeLlmExecutor>(&forwarded_factory),
+          /*vision_executor_settings=*/nullptr,
+          /*audio_executor_settings=*/nullptr, /*litert_env=*/nullptr));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmExecutor> executor,
+                       resource_manager->AcquireExecutor());
+
+  int num_calls = 0;
+  ASSERT_OK(executor->SetRunOptions(
+      [&num_calls]() -> absl::StatusOr<::litert::Options> {
+        ++num_calls;
+        return ::litert::Options();
+      }));
+  ASSERT_TRUE(forwarded_factory != nullptr);
+  EXPECT_OK(forwarded_factory());
+  EXPECT_EQ(num_calls, 1);
+
+  ASSERT_OK(executor->SetRunOptions(nullptr));
+  EXPECT_TRUE(forwarded_factory == nullptr);
 }
 
 TEST(ResourceManagerTest, ExecutorsDontSupportDraftVerificationByDefault) {

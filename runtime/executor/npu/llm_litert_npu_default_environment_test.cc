@@ -46,6 +46,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_environment_options.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -56,6 +57,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/llm_litert_npu_compiled_model_executor.h"
+#include "runtime/executor/run_options_test_util.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "tflite/schema/schema_generated.h"  // from @litert
@@ -355,6 +357,66 @@ TEST_F(LlmLiteRtNpuDefaultEnvironmentTest,
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<LlmContext> cloned_ctx,
                        executor->CloneContext());
   ASSERT_OK(executor->RestoreContext(std::move(cloned_ctx)));
+}
+
+TEST_F(LlmLiteRtNpuDefaultEnvironmentTest,
+       RunOptionsAreCreatedForTextDecoderRuns) {
+  ::litert::Environment& env = *env_;
+  std::unique_ptr<SyntheticNpuModelResources> resources =
+      MakeSyntheticNpuModel(env);
+  auto prefill = [&](LlmLiteRtNpuCompiledModelExecutor& executor,
+                     const std::vector<int32_t>& token_ids) -> absl::Status {
+    LITERT_ASSIGN_OR_RETURN(
+        TensorBuffer tokens,
+        TensorBuffer::CreateManaged(
+            env, ::litert::TensorBufferType::kHostMemory,
+            MakeType(ElementType::Int32,
+                     {1, static_cast<int>(token_ids.size())}),
+            token_ids.size() * sizeof(int32_t)));
+    LITERT_RETURN_IF_ERROR(
+        tokens.Write<int32_t>(absl::MakeConstSpan(token_ids)));
+    return executor.Prefill(ExecutorInputs(ExecutorTextData(std::move(tokens)),
+                                           std::nullopt, std::nullopt));
+  };
+
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> executor,
+      LlmLiteRtNpuCompiledModelExecutor::Create(*settings_, *resources, env));
+
+  // The synthetic models run on the CPU, which ignores the run options. Every
+  // text decoder run gets new options.
+  int num_calls = 0;
+  ASSERT_OK(executor->SetRunOptions(CountingRunOptionsFactory(&num_calls)));
+  ASSERT_OK(prefill(*executor, {1, 2, 3}));
+  const int num_prefill_calls = num_calls;
+  EXPECT_GT(num_prefill_calls, 0);
+
+  ASSERT_OK_AND_ASSIGN(TensorBuffer logits,
+                       executor->DecodeLogits(ExecutorInputs()));
+  EXPECT_THAT(DimensionsOf(logits), ElementsAre(1, 1, kVocabSize));
+  EXPECT_GT(num_calls, num_prefill_calls);
+
+  // An empty factory reverts to the compile-time options.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> reset_executor,
+      LlmLiteRtNpuCompiledModelExecutor::Create(*settings_, *resources, env));
+  ASSERT_OK(
+      reset_executor->SetRunOptions(CountingRunOptionsFactory(&num_calls)));
+  ASSERT_OK(reset_executor->SetRunOptions(nullptr));
+  const int num_calls_before_reset = num_calls;
+  EXPECT_OK(prefill(*reset_executor, {1, 2, 3}));
+  EXPECT_OK(reset_executor->DecodeLogits(ExecutorInputs()));
+  EXPECT_EQ(num_calls, num_calls_before_reset);
+
+  // A failure to create the options fails the call.
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<LlmLiteRtNpuCompiledModelExecutor> failing_executor,
+      LlmLiteRtNpuCompiledModelExecutor::Create(*settings_, *resources, env));
+  ASSERT_OK(failing_executor->SetRunOptions(
+      FailingRunOptionsFactory(absl::InvalidArgumentError("bad options"))));
+  const absl::Status failed_prefill = prefill(*failing_executor, {1, 2, 3});
+  EXPECT_FALSE(failed_prefill.ok());
+  EXPECT_THAT(failed_prefill.message(), HasSubstr("bad options"));
 }
 
 TEST_F(LlmLiteRtNpuDefaultEnvironmentTest,

@@ -63,6 +63,7 @@
 #include "runtime/executor/llm_executor_settings_utils.h"
 #include "runtime/executor/llm_litert_verifier.h"
 #include "runtime/executor/nvidia_mtp_drafter_support.h"
+#include "runtime/executor/run_options.h"
 #include "runtime/executor/state_interface.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
@@ -468,9 +469,14 @@ absl::StatusOr<std::vector<int>> LlmLiteRtMtpDrafter::RunDraftingLoop(
     LITERT_RETURN_IF_ERROR(PrepareDrafterOutputBuffers());
 
     bool async = true;
+    std::optional<::litert::Options> run_options;
+    if (run_options_factory_ != nullptr) {
+      ABSL_ASSIGN_OR_RETURN(run_options,
+                            CreateRunOptions(*run_options_factory_));
+    }
     LITERT_RETURN_IF_ERROR(mtp_drafter_model_.RunAsync(
         drafter_signature_.Key(), active_drafter_input_buffers_,
-        active_drafter_output_buffers_, async));
+        active_drafter_output_buffers_, async, GetRunOptionsPtr(run_options)));
 
     if (constraint_states != nullptr) {
       ABSL_ASSIGN_OR_RETURN(const LogitMask* mask,

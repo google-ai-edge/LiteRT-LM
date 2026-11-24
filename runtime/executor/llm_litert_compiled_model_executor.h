@@ -51,6 +51,7 @@
 #include "runtime/executor/llm_litert_verifier.h"
 #include "runtime/executor/llm_processed_context.h"
 #include "runtime/executor/mtp_gating_policy.h"
+#include "runtime/executor/run_options.h"
 #include "runtime/executor/speculative_decoding_controller.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/executor/state_interface.h"
@@ -251,6 +252,13 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
   }
 
   ::litert::Environment* GetEnvironment() const override { return &env_; }
+
+  // The options replace the default run options built from the executor
+  // settings (see GetRunOptions()). They are also used by the MTP drafter.
+  absl::Status SetRunOptions(RunOptionsFactory run_options_factory) override {
+    run_options_factory_ = std::move(run_options_factory);
+    return absl::OkStatus();
+  }
 
  protected:
   LlmLiteRtCompiledModelExecutorBase(
@@ -542,6 +550,10 @@ class LlmLiteRtCompiledModelExecutorBase : public LlmExecutor {
 
   // Gets the LiteRT run options based on the current executor settings.
   litert::Options GetRunOptions() const;
+
+  // The factory set with SetRunOptions(), or empty to use GetRunOptions(). The
+  // MTP drafter refers to it.
+  RunOptionsFactory run_options_factory_;
 
   LlmExecutorSettings executor_settings_;
   std::atomic<bool> gpu_enable_metal_residency_set_ = false;

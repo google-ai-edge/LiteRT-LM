@@ -70,6 +70,7 @@
 #include "runtime/executor/npu/llm_litert_npu_kv_cache.h"
 #include "runtime/executor/npu/llm_litert_npu_mask.h"
 #include "runtime/executor/npu/llm_litert_npu_rope.h"
+#include "runtime/executor/run_options.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/proto/executor_metadata.pb.h"
 #include "runtime/proto/llm_metadata.pb.h"
@@ -2015,13 +2016,16 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::PrefillCommonPipeline(
   }
 
   {
+    ABSL_ASSIGN_OR_RETURN(std::optional<::litert::Options> run_options,
+                          CreateRunOptions(run_options_factory_));
     auto start = absl::Now();
     auto res = text_decoder_compiled_model_.Run(
         sigs.prefill,
         ActiveContextGroup()
             .text_decoder_inference_context.prefill_input_buffers,
         ActiveContextGroup()
-            .text_decoder_inference_context.prefill_output_buffers);
+            .text_decoder_inference_context.prefill_output_buffers,
+        GetRunOptionsPtr(run_options));
     RET_CHECK(res) << "Failed to run text decoder model."
                    << res.Error().Message();
     latency_stats_.prefill_llm_inference_latency_us +=
@@ -2101,13 +2105,16 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::DecodeInternal(
   }
 
   {
+    ABSL_ASSIGN_OR_RETURN(std::optional<::litert::Options> run_options,
+                          CreateRunOptions(run_options_factory_));
     auto start = absl::Now();
     auto res = text_decoder_compiled_model_.Run(
         ActiveContextGroup().decode_signature,
         ActiveContextGroup()
             .text_decoder_inference_context.decode_input_buffers,
         ActiveContextGroup()
-            .text_decoder_inference_context.decode_output_buffers);
+            .text_decoder_inference_context.decode_output_buffers,
+        GetRunOptionsPtr(run_options));
     latency_stats_.decode_llm_inference_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start);
     RET_CHECK(res) << "Failed to run text decoder model."
@@ -2241,9 +2248,12 @@ LlmLiteRtNpuCompiledModelExecutor::RunDrafterLoop(int start_step,
       memcpy(base_ptr + draft_embedding.size() * sizeof(float),
              current_activations.data(), current_activations.size());
     }
+    ABSL_ASSIGN_OR_RETURN(std::optional<::litert::Options> run_options,
+                          CreateRunOptions(run_options_factory_));
     start = absl::Now();
     LITERT_RETURN_IF_ERROR(ctx.mtp_compiled_model.Run(
-        ctx.signature, ctx.mtp_input_buffers, ctx.mtp_output_buffers));
+        ctx.signature, ctx.mtp_input_buffers, ctx.mtp_output_buffers,
+        GetRunOptionsPtr(run_options)));
     latency_stats_.decode_drafter_inference_latency_us +=
         absl::ToInt64Microseconds(absl::Now() - start);
 
@@ -2546,11 +2556,13 @@ absl::Status LlmLiteRtNpuCompiledModelExecutor::RunVerifierBatch(
   LITERT_RETURN_IF_ERROR(
       main_mask_.RunVerify(ActiveContextGroup().verify_aux_signatures.mask));
 
+  ABSL_ASSIGN_OR_RETURN(std::optional<::litert::Options> run_options,
+                        CreateRunOptions(run_options_factory_));
   LITERT_RETURN_IF_ERROR(text_decoder_compiled_model_.Run(
       ActiveContextGroup().verify_signature,
       ActiveContextGroup().text_decoder_inference_context.verify_input_buffers,
-      ActiveContextGroup()
-          .text_decoder_inference_context.verify_output_buffers));
+      ActiveContextGroup().text_decoder_inference_context.verify_output_buffers,
+      GetRunOptionsPtr(run_options)));
 
   return absl::OkStatus();
 }
