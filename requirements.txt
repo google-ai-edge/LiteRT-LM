@@ -1,5 +1,5 @@
 annotated-doc==0.0.4
-anyio==4.13.0
+anyio==4.14.2
 certifi==2026.10.23
 click==8.3.2
 filelock==3.28.0
