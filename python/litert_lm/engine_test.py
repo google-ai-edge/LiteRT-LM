@@ -1087,6 +1087,27 @@ class EngineTest(LiteRtLmTestBase):
 
       mock_set_config.assert_called_once()
 
+  def test_benchmark_rejects_speculative_decoding_with_fixed_tokens(self):
+    for mode in (
+        litert_lm.SpeculativeDecodingMode.ON,
+        litert_lm.SpeculativeDecodingMode.ADAPTIVE,
+    ):
+      with self.subTest(mode=mode):
+        benchmark = litert_lm.Benchmark(
+            self.model_path,
+            litert_lm.Backend.CPU(),
+            prefill_tokens=10,
+            decode_tokens=10,
+            cache_dir=":nocache",
+            speculative_decoding_config=litert_lm.SpeculativeDecodingConfig(
+                mode=mode
+            ),
+        )
+        with self.assertRaisesRegex(
+            RuntimeError, r"INVALID_ARGUMENT.*fixed-token benchmarking"
+        ):
+          benchmark.run()
+
   def test_engine_abc_inheritance(self):
     with self._create_engine() as engine:
       self.assertIsInstance(engine, litert_lm.AbstractEngine)

@@ -144,7 +144,8 @@ extension BenchmarkInfo {
 ///       model or the engine. Note that the KV cache size affects the prefill and decode speed.
 ///   - speculativeDecodingConfig: The speculative decoding configuration of the benchmarked engine
 ///       (see `EngineConfig.speculativeDecodingConfig`). `nil` keeps the runtime default (`.off`),
-///       unless the deprecated `ExperimentalFlags.enableSpeculativeDecoding` is set.
+///       unless the deprecated `ExperimentalFlags.enableSpeculativeDecoding` is set. Modes `.on`
+///       and `.adaptive` require `prefillTokens == 0` and `decodeTokens == 0`.
 ///   - samplerConfig: The sampler configuration of the benchmarked conversation. `nil` uses the
 ///       model's default sampler, like `ConversationConfig.samplerConfig`.
 /// - Returns: The benchmark info.

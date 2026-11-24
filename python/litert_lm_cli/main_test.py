@@ -1653,6 +1653,133 @@ class MainTest(absltest.TestCase):
 
     self.assertIn("weights_in_model_graph=False", result.output)
 
+  def test_benchmark_rejects_speculative_decoding_with_fixed_tokens(self):
+    self._setup_mock_model()
+    mock_benchmark_cls = self.enter_context(
+        unittest.mock.patch.object(litert_lm, "Benchmark", autospec=True)
+    )
+    runner = testing.CliRunner()
+    for extra_args in (
+        ["--speculative-decoding", "on"],
+        ["--speculative-decoding", "adaptive"],
+        ["--speculative-decoding", "on", "-p", "16", "-d", "0"],
+        ["--speculative-decoding", "on", "-p", "0", "-d", "128"],
+        ["--speculative-decoding", "true", "-p", "16", "-d", "128"],
+    ):
+      with self.subTest(extra_args=extra_args):
+        result = runner.invoke(main.cli, ["benchmark", "my-model", *extra_args])
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("-p 0 -d 0 --prompt", result.output)
+        mock_benchmark_cls.assert_not_called()
+
+  def test_benchmark_rejects_config_speculative_decoding_with_fixed_tokens(
+      self,
+  ):
+    self._setup_mock_model()
+    mock_benchmark_cls = self.enter_context(
+        unittest.mock.patch.object(litert_lm, "Benchmark", autospec=True)
+    )
+    runner = testing.CliRunner()
+    with runner.isolated_filesystem():
+      with open("cfg.json", "w", encoding="utf-8") as f:
+        f.write('{"models": {"my-model": {"speculative_decoding": "on"}}}')
+      common.config._clear_cache()  # pylint: disable=protected-access
+      result = runner.invoke(
+          main.cli, ["benchmark", "my-model", "--config=cfg.json"]
+      )
+    self.assertNotEqual(result.exit_code, 0)
+    self.assertIn("-p 0 -d 0 --prompt", result.output)
+    mock_benchmark_cls.assert_not_called()
+
+  def test_benchmark_allows_speculative_decoding_with_real_prompt(self):
+    self._setup_mock_model()
+    mock_benchmark_cls = self.enter_context(
+        unittest.mock.patch.object(litert_lm, "Benchmark", autospec=True)
+    )
+    mock_benchmark = mock_benchmark_cls.return_value
+    mock_benchmark.__enter__.return_value = mock_benchmark
+    mock_benchmark.run.return_value = litert_lm.interfaces.BenchmarkInfo(
+        init_time_in_second=0.1,
+        time_to_first_token_in_second=0.05,
+        last_prefill_token_count=10,
+        last_prefill_tokens_per_second=100.0,
+        last_decode_token_count=20,
+        last_decode_tokens_per_second=50.0,
+    )
+
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        main.cli,
+        [
+            "benchmark",
+            "my-model",
+            "--speculative-decoding",
+            "on",
+            "-p",
+            "0",
+            "-d",
+            "0",
+            "--prompt",
+            "Write merge sort in Python",
+            "--skip-warmup",
+        ],
+    )
+    self.assertEqual(result.exit_code, 0, result.output)
+    mock_benchmark_cls.assert_called_once()
+    kwargs = mock_benchmark_cls.call_args.kwargs
+    self.assertEqual(kwargs["prefill_tokens"], 0)
+    self.assertEqual(kwargs["decode_tokens"], 0)
+    self.assertEqual(kwargs["prompt"], "Write merge sort in Python")
+    self.assertEqual(
+        kwargs["speculative_decoding_config"],
+        litert_lm.SpeculativeDecodingConfig(
+            mode=litert_lm.SpeculativeDecodingMode.ON
+        ),
+    )
+
+  def test_benchmark_allows_speculative_decoding_off_with_fixed_tokens(self):
+    self._setup_mock_model()
+    mock_benchmark_cls = self.enter_context(
+        unittest.mock.patch.object(litert_lm, "Benchmark", autospec=True)
+    )
+    mock_benchmark = mock_benchmark_cls.return_value
+    mock_benchmark.__enter__.return_value = mock_benchmark
+    mock_benchmark.run.return_value = litert_lm.interfaces.BenchmarkInfo(
+        init_time_in_second=0.1,
+        time_to_first_token_in_second=0.05,
+        last_prefill_token_count=16,
+        last_prefill_tokens_per_second=100.0,
+        last_decode_token_count=128,
+        last_decode_tokens_per_second=50.0,
+    )
+
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        main.cli,
+        [
+            "benchmark",
+            "my-model",
+            "--speculative-decoding",
+            "off",
+            "-p",
+            "16",
+            "-d",
+            "128",
+            "--skip-warmup",
+        ],
+    )
+    self.assertEqual(result.exit_code, 0, result.output)
+    mock_benchmark_cls.assert_called_once()
+
+  def test_benchmark_rejects_prompt_with_android(self):
+    runner = testing.CliRunner()
+    result = runner.invoke(
+        main.cli,
+        ["benchmark", "my-model", "--android", "--prompt", "hello"],
+    )
+    self.assertNotEqual(result.exit_code, 0)
+    self.assertIn("--prompt is not supported with --android", result.output)
+
 
 if __name__ == "__main__":
   absltest.main()

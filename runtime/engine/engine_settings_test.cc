@@ -2042,5 +2042,153 @@ TEST(EngineSettingsTest,
   EXPECT_EQ(updated_top_k_config.max_top_k, 128u);
 }
 
+TEST(EngineSettingsTest,
+     MaybeUpdateAndValidateRejectsNegativeBenchmarkTokenCounts) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_1"));
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+
+  {
+    ASSERT_OK_AND_ASSIGN(EngineSettings settings,
+                         EngineSettings::CreateDefault(model_assets));
+    settings.GetMutableBenchmarkParams().set_num_prefill_tokens(-1);
+    EXPECT_THAT(settings.MaybeUpdateAndValidate(&tokenizer, &llm_metadata),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+  {
+    ASSERT_OK_AND_ASSIGN(EngineSettings settings,
+                         EngineSettings::CreateDefault(model_assets));
+    settings.GetMutableBenchmarkParams().set_num_decode_tokens(-1);
+    EXPECT_THAT(settings.MaybeUpdateAndValidate(&tokenizer, &llm_metadata),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+}
+
+TEST(EngineSettingsTest,
+     MaybeUpdateAndValidateRejectsSpeculativeDecodingWithFixedTokenBenchmark) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_1"));
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+
+  struct BenchmarkCase {
+    int prefill_tokens;
+    int decode_tokens;
+  };
+  for (const SpeculativeDecodingMode mode :
+       {SpeculativeDecodingMode::kOn, SpeculativeDecodingMode::kAdaptive}) {
+    for (const BenchmarkCase& bc :
+         {BenchmarkCase{16, 128}, BenchmarkCase{16, 0},
+          BenchmarkCase{0, 128}}) {
+      SCOPED_TRACE(absl::StrCat("mode=", mode, ", p=", bc.prefill_tokens,
+                                ", d=", bc.decode_tokens));
+      ASSERT_OK_AND_ASSIGN(EngineSettings settings,
+                           EngineSettings::CreateDefault(model_assets));
+      settings.SetSpeculativeDecodingConfig({.mode = mode});
+      settings.GetMutableBenchmarkParams().set_num_prefill_tokens(
+          bc.prefill_tokens);
+      settings.GetMutableBenchmarkParams().set_num_decode_tokens(
+          bc.decode_tokens);
+      EXPECT_THAT(settings.MaybeUpdateAndValidate(&tokenizer, &llm_metadata),
+                  StatusIs(absl::StatusCode::kInvalidArgument));
+    }
+
+    // Real-prompt benchmarking (`0` / `0`) with speculative decoding is
+    // allowed.
+    ASSERT_OK_AND_ASSIGN(EngineSettings real_prompt_settings,
+                         EngineSettings::CreateDefault(model_assets));
+    real_prompt_settings.SetSpeculativeDecodingConfig({.mode = mode});
+    real_prompt_settings.GetMutableBenchmarkParams().set_num_prefill_tokens(0);
+    real_prompt_settings.GetMutableBenchmarkParams().set_num_decode_tokens(0);
+    EXPECT_OK(
+        real_prompt_settings.MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+  }
+
+  // Legacy `AdvancedSettings::enable_speculative_decoding` is also rejected.
+  {
+    ASSERT_OK_AND_ASSIGN(EngineSettings legacy_settings,
+                         EngineSettings::CreateDefault(model_assets));
+    AdvancedSettings advanced_settings;
+    advanced_settings.enable_speculative_decoding = true;
+    legacy_settings.GetMutableMainExecutorSettings().SetAdvancedSettings(
+        advanced_settings);
+    legacy_settings.GetMutableBenchmarkParams().set_num_prefill_tokens(16);
+    legacy_settings.GetMutableBenchmarkParams().set_num_decode_tokens(128);
+    EXPECT_THAT(
+        legacy_settings.MaybeUpdateAndValidate(&tokenizer, &llm_metadata),
+        StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+
+  // Disabling or leaving speculative decoding unset still allows fixed-token
+  // benchmarking.
+  for (const std::optional<SpeculativeDecodingMode> mode :
+       {std::optional<SpeculativeDecodingMode>{std::nullopt},
+        std::optional<SpeculativeDecodingMode>{
+            SpeculativeDecodingMode::kOff}}) {
+    ASSERT_OK_AND_ASSIGN(EngineSettings settings,
+                         EngineSettings::CreateDefault(model_assets));
+    if (mode.has_value()) {
+      settings.SetSpeculativeDecodingConfig({.mode = *mode});
+    }
+    settings.GetMutableBenchmarkParams().set_num_prefill_tokens(16);
+    settings.GetMutableBenchmarkParams().set_num_decode_tokens(128);
+    EXPECT_OK(settings.MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+  }
+}
+
+TEST(SessionConfigTest,
+     MaybeUpdateAndValidateRejectsSpeculativeDecodingWithFixedTokenBenchmark) {
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create("test_model_path_1"));
+  MockTokenizer tokenizer;
+  EXPECT_CALL(tokenizer, TokenIdsToText).WillRepeatedly(Return("fake_text"));
+  EXPECT_CALL(tokenizer, TokenToId).WillRepeatedly(Return(1));
+  EXPECT_CALL(tokenizer, TextToTokenIds)
+      .WillRepeatedly(Return(std::vector<int>{1}));
+  proto::LlmMetadata llm_metadata = CreateLlmMetadata();
+
+  ASSERT_OK_AND_ASSIGN(EngineSettings fixed_token_settings,
+                       EngineSettings::CreateDefault(model_assets));
+  fixed_token_settings.GetMutableBenchmarkParams().set_num_prefill_tokens(16);
+  fixed_token_settings.GetMutableBenchmarkParams().set_num_decode_tokens(128);
+  ASSERT_OK(
+      fixed_token_settings.MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+
+  for (const SpeculativeDecodingMode mode :
+       {SpeculativeDecodingMode::kOn, SpeculativeDecodingMode::kAdaptive}) {
+    SessionConfig session_config = SessionConfig::CreateDefault();
+    session_config.SetSpeculativeDecodingConfig({.mode = mode});
+    EXPECT_THAT(session_config.MaybeUpdateAndValidate(fixed_token_settings),
+                StatusIs(absl::StatusCode::kInvalidArgument));
+  }
+
+  SessionConfig off_config = SessionConfig::CreateDefault();
+  off_config.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kOff});
+  EXPECT_OK(off_config.MaybeUpdateAndValidate(fixed_token_settings));
+
+  // Real-prompt benchmarking (`0` / `0`) allows session-level speculative
+  // decoding.
+  ASSERT_OK_AND_ASSIGN(EngineSettings real_prompt_settings,
+                       EngineSettings::CreateDefault(model_assets));
+  real_prompt_settings.GetMutableBenchmarkParams().set_num_prefill_tokens(0);
+  real_prompt_settings.GetMutableBenchmarkParams().set_num_decode_tokens(0);
+  ASSERT_OK(
+      real_prompt_settings.MaybeUpdateAndValidate(&tokenizer, &llm_metadata));
+  SessionConfig on_config = SessionConfig::CreateDefault();
+  on_config.SetSpeculativeDecodingConfig(
+      {.mode = SpeculativeDecodingMode::kOn});
+  EXPECT_OK(on_config.MaybeUpdateAndValidate(real_prompt_settings));
+}
+
 }  // namespace
 }  // namespace litert::lm

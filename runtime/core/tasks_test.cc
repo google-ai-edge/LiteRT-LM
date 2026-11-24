@@ -708,11 +708,18 @@ class MultiTokenFakeLlmExecutor : public FakeLlmExecutor {
     return std::vector<std::vector<int>>{tokens};
   }
 
+  absl::Status SetCurrentStep(int current_step) override {
+    ++num_set_current_step_calls_;
+    return FakeLlmExecutor::SetCurrentStep(current_step);
+  }
+
   int num_decode_calls() const { return num_decode_calls_; }
+  int num_set_current_step_calls() const { return num_set_current_step_calls_; }
 
  private:
   std::vector<std::vector<int>> decode_steps_;
   int num_decode_calls_ = 0;
+  int num_set_current_step_calls_ = 0;
 };
 
 // Prefills `prefill_token_ids`, then decodes one candidate until
@@ -829,8 +836,11 @@ class TasksMultiTokenDecodeTest : public TasksTest {
 
   absl::StatusOr<Responses> PrefillAndDecode(
       MultiTokenFakeLlmExecutor& executor, int max_output_tokens,
-      absl::AnyInvocable<void(absl::StatusOr<Responses>)>& callback) {
-    std::optional<BenchmarkInfo> benchmark_info;
+      absl::AnyInvocable<void(absl::StatusOr<Responses>)>& callback,
+      std::optional<BenchmarkInfo>* benchmark_info = nullptr) {
+    std::optional<BenchmarkInfo> local_benchmark_info;
+    std::optional<BenchmarkInfo>& effective_benchmark_info =
+        benchmark_info != nullptr ? *benchmark_info : local_benchmark_info;
     std::vector<int> prefill_token_ids = {2, 90, 547, 58, 735, 210, 466, 2294};
     ABSL_ASSIGN_OR_RETURN(
         auto token_ids_buffer,
@@ -839,14 +849,14 @@ class TasksMultiTokenDecodeTest : public TasksTest {
                           std::nullopt, std::nullopt);
     ABSL_RETURN_IF_ERROR(Tasks::Prefill(executor, inputs,
                                         /*wait_for_completion=*/true,
-                                        benchmark_info, random_state_)
+                                        effective_benchmark_info, random_state_)
                              .status());
 
     StopTokenDetector stop_token_detector(/*batch_size=*/1);
     ABSL_RETURN_IF_ERROR(stop_token_detector.AddStopTokenSequence({2294}));
     return Tasks::Decode(
         executor, *tokenizer_, stop_token_detector,
-        /*num_output_candidates=*/1, benchmark_info,
+        /*num_output_candidates=*/1, effective_benchmark_info,
         /*sampler=*/nullptr, random_state_, RepetitionPenaltyConfig::Default(),
         NoRepeatNgramConfig::Default(), SuppressTokensConfig::Default(),
         /*constraint=*/nullptr, /*decoded_ids=*/std::nullopt, callback,
@@ -940,6 +950,87 @@ TEST_F(TasksMultiTokenDecodeTest, StreamingChunksCarrySeveralTokens) {
 
   EXPECT_THAT(streamed_token_ids, ElementsAre(224, 24, 8, 66));
   EXPECT_LT(num_chunks, static_cast<int>(streamed_token_ids.size()));
+}
+
+TEST_F(TasksMultiTokenDecodeTest,
+       BenchmarkWithDecodeTokenCountDoesNotRollBackOnStopToken) {
+  // Multi-token rounds emit a stop token (2294) early and continue emitting
+  // multi-token rounds to reach `num_decode_tokens = 6`.
+  MultiTokenFakeLlmExecutor executor(tokenizer_->GetVocabSize(),
+                                     {{2, 90, 547, 58, 735, 210, 466, 2294}},
+                                     {{224, 2294, 8}, {66, 246, 18}});
+  proto::BenchmarkParams benchmark_params;
+  benchmark_params.set_num_decode_tokens(6);
+  std::optional<BenchmarkInfo> benchmark_info(std::in_place, benchmark_params);
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
+
+  ASSERT_OK_AND_ASSIGN(
+      Responses responses,
+      PrefillAndDecode(executor,
+                       /*max_output_tokens=*/std::numeric_limits<int>::max(),
+                       callback, &benchmark_info));
+
+  EXPECT_EQ(responses.GetTaskState(), TaskState::kDone);
+  EXPECT_EQ(executor.num_decode_calls(), 2);
+  EXPECT_EQ(executor.num_set_current_step_calls(), 0);
+  ASSERT_EQ(responses.GetTokenIds().size(), 1);
+  EXPECT_THAT(responses.GetTokenIds()[0], ElementsAre(224));
+  ASSERT_OK_AND_ASSIGN(int current_step, executor.GetCurrentStep());
+  EXPECT_EQ(current_step, kNumPrefillTokens + 6);
+  ASSERT_OK_AND_ASSIGN(BenchmarkTurnData decode_turn,
+                       benchmark_info->GetDecodeTurn(0));
+  EXPECT_EQ(decode_turn.num_tokens, 6);
+}
+
+TEST_F(TasksMultiTokenDecodeTest,
+       BenchmarkWithZeroDecodeTokenCountStillStopsAndRollsBackOnStopToken) {
+  MultiTokenFakeLlmExecutor executor(tokenizer_->GetVocabSize(),
+                                     {{2, 90, 547, 58, 735, 210, 466, 2294}},
+                                     {{224, 2294, 8}, {66, 246, 18}});
+  proto::BenchmarkParams benchmark_params;
+  benchmark_params.set_num_decode_tokens(0);
+  std::optional<BenchmarkInfo> benchmark_info(std::in_place, benchmark_params);
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
+
+  ASSERT_OK_AND_ASSIGN(
+      Responses responses,
+      PrefillAndDecode(executor,
+                       /*max_output_tokens=*/std::numeric_limits<int>::max(),
+                       callback, &benchmark_info));
+
+  EXPECT_EQ(responses.GetTaskState(), TaskState::kDone);
+  EXPECT_EQ(executor.num_decode_calls(), 1);
+  EXPECT_EQ(executor.num_set_current_step_calls(), 1);
+  ASSERT_EQ(responses.GetTokenIds().size(), 1);
+  EXPECT_THAT(responses.GetTokenIds()[0], ElementsAre(224));
+  ASSERT_OK_AND_ASSIGN(int current_step, executor.GetCurrentStep());
+  EXPECT_EQ(current_step, kNumPrefillTokens + 2);
+}
+
+TEST_F(TasksMultiTokenDecodeTest,
+       BenchmarkWithDecodeTokenCountStillRespectsMaxNumTokensAfterStopToken) {
+  MultiTokenFakeLlmExecutor executor(tokenizer_->GetVocabSize(),
+                                     {{2, 90, 547, 58, 735, 210, 466, 2294}},
+                                     {{224, 2294, 8}, {66, 246, 18}});
+  constexpr int kMaxNumTokens = kNumPrefillTokens + 4;
+  ASSERT_OK_AND_ASSIGN(auto* executor_settings,
+                       executor.GetMutableExecutorSettings());
+  executor_settings->SetMaxNumTokens(kMaxNumTokens);
+  proto::BenchmarkParams benchmark_params;
+  benchmark_params.set_num_decode_tokens(10);
+  std::optional<BenchmarkInfo> benchmark_info(std::in_place, benchmark_params);
+  absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback = nullptr;
+
+  ASSERT_OK_AND_ASSIGN(
+      Responses responses,
+      PrefillAndDecode(executor,
+                       /*max_output_tokens=*/std::numeric_limits<int>::max(),
+                       callback, &benchmark_info));
+
+  EXPECT_EQ(responses.GetTaskState(), TaskState::kMaxNumTokensReached);
+  EXPECT_EQ(executor.num_decode_calls(), 2);
+  ASSERT_OK_AND_ASSIGN(int current_step, executor.GetCurrentStep());
+  EXPECT_EQ(current_step, kMaxNumTokens);
 }
 
 // The token ids of "Hello World!", with the bos token id (2) first.

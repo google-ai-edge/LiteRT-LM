@@ -34,11 +34,32 @@ except ImportError:
   _HAS_ADB = False
 
 
+def _validate_speculative_decoding_benchmark_args(
+    speculative_decoding: str | None,
+    prefill_tokens: int,
+    decode_tokens: int,
+) -> None:
+  """Rejects speculative decoding with fixed-token synthetic benchmarking."""
+  normalized = common.normalize_speculative_decoding(speculative_decoding)
+  if normalized in ("on", "adaptive") and (
+      prefill_tokens > 0 or decode_tokens > 0
+  ):
+    raise click.UsageError(
+        f"Speculative decoding ({normalized}) cannot be used with"
+        f" --prefill-tokens={prefill_tokens} and"
+        f" --decode-tokens={decode_tokens}, because synthetic prefill tokens"
+        " and decoding past stop tokens skew draft acceptance rates. Pass"
+        ' `-p 0 -d 0 --prompt "..."` to benchmark with a real prompt, or'
+        " `--speculative-decoding off`."
+    )
+
+
 def run_benchmark(
     model_obj: model.Model,
     *,
     prefill_tokens: int = 256,
     decode_tokens: int = 256,
+    prompt: str | None = None,
     is_android: bool = False,
     backend: str | None = None,
     speculative_decoding: str | None = None,
@@ -70,6 +91,9 @@ def run_benchmark(
         model.resolve_config_option(
             speculative_decoding, model_obj, "speculative_decoding"
         )
+    )
+    _validate_speculative_decoding_benchmark_args(
+        speculative_decoding, prefill_tokens, decode_tokens
     )
     speculative_decoding_config = model.speculative_decoding_config_from_mode(
         speculative_decoding
@@ -123,6 +147,9 @@ def run_benchmark(
           cache_dir=cache_dir_val,
       )
     else:
+      benchmark_kwargs = {}
+      if prompt is not None:
+        benchmark_kwargs["prompt"] = prompt
       benchmark_obj = litert_lm.Benchmark(
           model_obj.model_path,
           backend=backend_val,
@@ -136,6 +163,7 @@ def run_benchmark(
           head_chunked_attention_mib=head_chunked_attention_mib,
           kv_cache_type=kv_cache_type_val,
           enable_ynnpack=enable_ynnpack,
+          **benchmark_kwargs,
       )
 
     click.echo(
@@ -145,6 +173,8 @@ def run_benchmark(
     click.echo(f"Backend                    : {resolved_backend_str}")
     click.echo(f"Number of tokens in prefill: {prefill_tokens}")
     click.echo(f"Number of tokens in decode : {decode_tokens}")
+    if prompt is not None:
+      click.echo(f"Prompt                     : {prompt}")
     if max_num_tokens is not None:
       click.echo(f"Max number of tokens       : {max_num_tokens}")
 
@@ -198,6 +228,8 @@ def run_benchmark(
         f"Time to first token:  {avg_info.time_to_first_token_in_second:.4f} s"
     )
 
+  except click.ClickException:
+    raise
   except Exception:  # pylint: disable=broad-exception-caught
     click.echo(click.style("An error occurred during benchmarking", fg="red"))
     traceback.print_exc()
@@ -223,14 +255,28 @@ def run_benchmark(
     "--prefill-tokens",
     default=256,
     type=int,
-    help="The number of tokens to prefill.",
+    help=(
+        "The number of tokens to prefill. Set to 0 to use the actual prompt"
+        " length."
+    ),
 )
 @click.option(
     "-d",
     "--decode-tokens",
     default=256,
     type=int,
-    help="The number of tokens to decode.",
+    help=(
+        "The number of tokens to decode. Set to 0 to decode until a stop token."
+    ),
+)
+@click.option(
+    "--prompt",
+    type=str,
+    default=None,
+    help=(
+        "The prompt text to benchmark. With --prefill-tokens > 0, it is"
+        " truncated or zero-padded to that many tokens."
+    ),
 )
 @click.option(
     "--max-num-tokens",
@@ -257,6 +303,7 @@ def benchmark(
     model_reference: str | None = None,
     prefill_tokens: int = 256,
     decode_tokens: int = 256,
+    prompt: str | None = None,
     backend: str | None = None,
     android: bool = False,
     speculative_decoding: str | None = None,
@@ -283,6 +330,8 @@ def benchmark(
       the filename in the repository.
     prefill_tokens: The number of tokens to prefill.
     decode_tokens: The number of tokens to decode.
+    prompt: Prompt text to benchmark (truncated or zero-padded when
+      prefill_tokens > 0).
     backend: The backend to use (cpu, gpu or npu).
     android: Run on Android via ADB.
     speculative_decoding: Speculative decoding mode ("on", "off", "adaptive", or
@@ -309,6 +358,12 @@ def benchmark(
   """
   if verbose:
     litert_lm.set_min_log_severity(litert_lm.LogSeverity.VERBOSE)
+
+  _validate_speculative_decoding_benchmark_args(
+      speculative_decoding, prefill_tokens, decode_tokens
+  )
+  if android and prompt is not None:
+    raise click.UsageError("--prompt is not supported with --android.")
 
   model_reference = model_reference or cli_helpers.resolve_model_file(
       from_huggingface_repo,
@@ -337,6 +392,7 @@ def benchmark(
       model_obj,
       prefill_tokens=prefill_tokens,
       decode_tokens=decode_tokens,
+      prompt=prompt,
       is_android=android,
       backend=backend,
       speculative_decoding=speculative_decoding,

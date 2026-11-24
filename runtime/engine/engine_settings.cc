@@ -85,6 +85,50 @@ absl::Status ValidateSpeculativeDecodingConfig(
   return absl::OkStatus();
 }
 
+// Returns an InvalidArgument error if `benchmark_params` holds negative token
+// counts.
+absl::Status ValidateBenchmarkParams(
+    const std::optional<proto::BenchmarkParams>& benchmark_params) {
+  if (!benchmark_params.has_value()) {
+    return absl::OkStatus();
+  }
+  if (benchmark_params->num_prefill_tokens() < 0) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Benchmark num_prefill_tokens must be >= 0, but got: ",
+                     benchmark_params->num_prefill_tokens()));
+  }
+  if (benchmark_params->num_decode_tokens() < 0) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Benchmark num_decode_tokens must be >= 0, but got: ",
+                     benchmark_params->num_decode_tokens()));
+  }
+  return absl::OkStatus();
+}
+
+// Rejects combining speculative decoding with fixed-token benchmarking
+// (`num_prefill_tokens > 0` or `num_decode_tokens > 0`), because synthetic
+// prefill tokens and decoding past stop tokens skew draft acceptance rates.
+absl::Status ValidateSpeculativeDecodingWithBenchmarkParams(
+    SpeculativeDecodingMode mode,
+    const std::optional<proto::BenchmarkParams>& benchmark_params) {
+  if ((mode == SpeculativeDecodingMode::kOn ||
+       mode == SpeculativeDecodingMode::kAdaptive) &&
+      benchmark_params.has_value() &&
+      (benchmark_params->num_prefill_tokens() > 0 ||
+       benchmark_params->num_decode_tokens() > 0)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Speculative decoding (", mode,
+        ") cannot be used with fixed-token benchmarking (num_prefill_tokens=",
+        benchmark_params->num_prefill_tokens(),
+        ", num_decode_tokens=", benchmark_params->num_decode_tokens(),
+        "), because synthetic prefill tokens and decoding past stop tokens "
+        "skew draft acceptance rates. Set both num_prefill_tokens and "
+        "num_decode_tokens to 0 and benchmark with a real prompt, or disable "
+        "speculative decoding."));
+  }
+  return absl::OkStatus();
+}
+
 // Returns an InvalidArgument error if `sampler_params` (prior to
 // `NormalizeSamplerParams`) holds an unrecognized `type`, a non-positive `k`
 // for `TOP_K` / `TOP_P`, a `p` outside [0, 1] for `TOP_P`, or a negative /
@@ -674,6 +718,10 @@ absl::Status EngineSettings::MaybeUpdateAndValidate(
 
   ABSL_RETURN_IF_ERROR(ValidateSpeculativeDecodingConfig(
       main_executor_settings_.GetSpeculativeDecodingConfig()));
+  ABSL_RETURN_IF_ERROR(ValidateBenchmarkParams(benchmark_params_));
+  ABSL_RETURN_IF_ERROR(ValidateSpeculativeDecodingWithBenchmarkParams(
+      main_executor_settings_.GetEffectiveSpeculativeDecodingMode(),
+      benchmark_params_));
 
   ABSL_VLOG(5) << "The llm metadata: " << metadata.DebugString();
   ABSL_VLOG(1) << "The validated engine settings: " << *this;
@@ -991,6 +1039,9 @@ absl::Status SessionConfig::MaybeUpdateAndValidate(
   }
   ABSL_RETURN_IF_ERROR(
       ValidateSpeculativeDecodingConfig(speculative_decoding_config_));
+  ABSL_RETURN_IF_ERROR(ValidateSpeculativeDecodingWithBenchmarkParams(
+      *speculative_decoding_config_.mode,
+      engine_settings.GetBenchmarkParams()));
 
   ABSL_VLOG(5) << "The validated session config: " << *this;
   return absl::OkStatus();

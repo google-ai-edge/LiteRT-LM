@@ -270,6 +270,9 @@ class DecodeOneStep {
         composite_constraint_(std::move(composite_constraint)),
         constrained_decoder_(std::move(constrained_decoder)),
         benchmark_info_(benchmark_info),
+        stop_on_stop_tokens_(
+            !benchmark_info_.has_value() ||
+            benchmark_info_->GetBenchmarkParams().num_decode_tokens() <= 0),
         stop_token_detector_(stop_token_detector),
         stop_token_filter_(&stop_token_detector_, num_output_candidates),
         result_text_(num_output_candidates, ""),
@@ -351,8 +354,9 @@ class DecodeOneStep {
         speculative_decoding_config, std::move(draft_token_ids)));
   }
 
-  // Runs one step of the decode process and returns if all stops for all
-  // candidates have been found.
+  // Runs one step of the decode process and returns whether stop tokens ended
+  // decoding for all candidates (always false when fixed-length benchmark
+  // decoding ignores stop tokens).
   // For external sampling, `decoded_ids` must be provided and will be updated.
   // For internal sampling, `decoded_ids` is ignored.
   // A step can produce several tokens per candidate (e.g. a speculative
@@ -422,20 +426,22 @@ class DecodeOneStep {
       }
 
       is_first_step_ = false;
-      ABSL_ASSIGN_OR_RETURN(bool all_done, stop_token_detector_.AllDone());
-      if (all_done) {
-        // A multi-token step (e.g. a speculative decoding round) can emit
-        // tokens after the one that completes the stop sequence. Roll back
-        // only those, so that the executor ends up as after single-token
-        // steps: the stop token is the pending input token.
-        const int num_tokens_after_stop =
-            static_cast<int>(sequence_length - 1 - step);
-        if (num_tokens_after_stop > 0) {
-          ABSL_ASSIGN_OR_RETURN(int current_step, executor_.GetCurrentStep());
-          ABSL_RETURN_IF_ERROR(
-              executor_.SetCurrentStep(current_step - num_tokens_after_stop));
+      if (stop_on_stop_tokens_) {
+        ABSL_ASSIGN_OR_RETURN(bool all_done, stop_token_detector_.AllDone());
+        if (all_done) {
+          // A multi-token step (e.g. a speculative decoding round) can emit
+          // tokens after the one that completes the stop sequence. Roll back
+          // only those, so that the executor ends up as after single-token
+          // steps: the stop token is the pending input token.
+          const int num_tokens_after_stop =
+              static_cast<int>(sequence_length - 1 - step);
+          if (num_tokens_after_stop > 0) {
+            ABSL_ASSIGN_OR_RETURN(int current_step, executor_.GetCurrentStep());
+            ABSL_RETURN_IF_ERROR(
+                executor_.SetCurrentStep(current_step - num_tokens_after_stop));
+          }
+          return true;
         }
-        return true;
       }
     }
     return false;
@@ -602,6 +608,7 @@ class DecodeOneStep {
   std::unique_ptr<CompositeConstraint> composite_constraint_;
   std::unique_ptr<ConstrainedDecoder> constrained_decoder_;
   std::optional<BenchmarkInfo> benchmark_info_;
+  const bool stop_on_stop_tokens_;
   StopTokenDetector stop_token_detector_;
   StopTokenStreamFilter stop_token_filter_;
 

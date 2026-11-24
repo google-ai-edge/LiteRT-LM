@@ -94,7 +94,9 @@ data class BenchmarkInfo(
  *   value that the engine actually used is returned in [BenchmarkInfo.maxNumTokens].
  * @param speculativeDecodingConfig The speculative decoding configuration of the benchmarked engine
  *   (see [EngineConfig.speculativeDecodingConfig]). `null` keeps the runtime default (off), unless
- *   the deprecated [ExperimentalFlags.enableSpeculativeDecoding] is set.
+ *   the deprecated [ExperimentalFlags.enableSpeculativeDecoding] is set. Modes
+ *   [SpeculativeDecodingMode.ON] and [SpeculativeDecodingMode.ADAPTIVE] require
+ *   `prefillTokens = 0` and `decodeTokens = 0`.
  * @param samplerConfig The sampler configuration of the benchmarked conversation. When `null`, use
  *   the model's default sampler, like [ConversationConfig.samplerConfig].
  * @return The benchmark info.

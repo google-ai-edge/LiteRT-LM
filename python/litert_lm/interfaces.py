@@ -1006,7 +1006,8 @@ class AbstractBenchmark(abc.ABC):
         `SpeculativeDecodingMode.OFF`.
       speculative_decoding_config: The speculative decoding configuration of the
         benchmarked engine. Fields left None use the runtime defaults (mode
-        `SpeculativeDecodingMode.OFF`).
+        `SpeculativeDecodingMode.OFF`). Modes `ON` and `ADAPTIVE` require
+        `prefill_tokens=0` and `decode_tokens=0`.
       bos_token_id: The BOS token id for the model if one is configured.
       eos_token_ids: Stop token sequences configured for the model.
       prompt: The custom prompt string to tokenize and run. If the tokenized
