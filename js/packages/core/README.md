@@ -224,8 +224,9 @@ You can cancel an ongoing generation explicitly by calling `cancel()` on the
 conversation.cancel();
 ```
 
-If you are streaming the response, exiting the `for await...of` loop early (such
-as with `break`) will also automatically cancel the ongoing generation:
+If you are streaming the response, cancelling the stream (via `reader.cancel()`,
+or by exiting a `for await...of` loop early such as with `break`) also calls
+`conversation.cancel()` under the hood:
 
 ```ts
 for await (const chunk of stream) {
@@ -234,3 +235,40 @@ for await (const chunk of stream) {
   }
 }
 ```
+
+**Note:** Reusing a `Conversation` after cancelling an ongoing generation is not
+supported. The underlying session is left in a cancelled state, and subsequent
+`sendMessage()` or `sendMessageStreaming()` calls on that `Conversation` will
+fail with `Task cancelled`. Call `await conversation.delete()` and create a new
+`Conversation` instead.
+
+To continue from previous turns without re-prefilling if a turn is cancelled,
+call `conversation.clone()` before starting the turn:
+
+```ts
+let conversation = await engine.createConversation();
+// ... after any earlier turns ...
+const checkpoint = await conversation.clone();
+let stopped = false;
+try {
+  for await (const chunk of conversation.sendMessageStreaming('Tell me a long story.')) {
+    if (shouldStop()) {
+      stopped = true;
+      break; // Cancels the stream and leaves `conversation` unusable
+    }
+  }
+} catch (e) {
+  stopped = true; // Cancelled via conversation.cancel() or failed
+  throw e; // or handle the cancellation/error
+} finally {
+  if (stopped) {
+    await conversation.delete();
+    conversation = checkpoint; // Continue from before the cancelled turn
+  } else {
+    await checkpoint.delete();
+  }
+}
+```
+
+Alternatively, create a new conversation with the prior turns in
+`preface.messages` (this re-prefills them).

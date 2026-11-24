@@ -68,6 +68,12 @@ export class Session {
 
   /**
    * Sends a signal to cancel any current generation.
+   *
+   * Reusing a `Session` after cancelling an ongoing operation is not
+   * supported: the underlying session is left in a cancelled state and
+   * subsequent operations may fail. Call `delete()` and create a new `Session`
+   * instead, or call `clone()` before starting an operation that may be
+   * cancelled to preserve its state.
    */
   cancel() {
     this.session.cancelProcess();

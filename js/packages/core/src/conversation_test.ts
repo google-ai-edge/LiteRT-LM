@@ -340,6 +340,42 @@ describe('Conversation', () => {
        await expectAsync(reader.read()).toBeRejectedWithError('Execution failed');
      });
 
+  it('forwards cancel() to wasm cancelProcess()', () => {
+    const conversation =
+        new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+
+    conversation.cancel();
+
+    expect(mockWasmConversation.cancelProcess).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls cancelProcess() when a streaming response is cancelled',
+     async () => {
+       const conversation =
+           new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+       let finishWait: () => void = () => {};
+       mockWasmConversation.sendMessageAsync.and.callFake(
+           (messageJson, blobs, callback) => {
+             callback(
+                 JSON.stringify({role: 'assistant', content: 'chunk1'}), false,
+                 null);
+             return Promise.resolve();
+           });
+       mockWasmEngine.waitUntilDone.and.returnValue(new Promise<void>(resolve => {
+         finishWait = resolve;
+       }));
+
+       const reader = conversation.sendMessageStreaming('hi').getReader();
+       const first = await reader.read();
+       expect(first.done).toBeFalse();
+       expect(first.value?.content).toBe('chunk1');
+
+       await reader.cancel();
+       expect(mockWasmConversation.cancelProcess).toHaveBeenCalledTimes(1);
+
+       finishWait();
+     });
+
   it('clones conversation properly and allows independent message sending',
      async () => {
        const conversation = new Conversation(

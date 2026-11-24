@@ -64,6 +64,10 @@ export class Conversation implements ChatInterface {
    * Sends a message to the LLM and returns a ReadableStream that yields
    * message chunks as they are generated. The last element of a turn that
    * ends has no content, only the turn's `finish_reason` and `executor_stats`.
+   *
+   * Cancelling the returned stream (for example via `reader.cancel()` or
+   * exiting a `for await...of` loop early) calls `cancel()`, which leaves this
+   * `Conversation` unusable afterwards (see `cancel()`).
    */
   sendMessageStreaming(message: MessageLike): ReadableStream<Message> {
     if (this.isBusy) {
@@ -137,6 +141,14 @@ export class Conversation implements ChatInterface {
 
   /**
    * Sends a signal to cancel any current generation.
+   *
+   * Reusing a `Conversation` after cancelling an ongoing generation is not
+   * supported: the underlying session is left in a cancelled state, and
+   * subsequent `sendMessage()` or `sendMessageStreaming()` calls will fail
+   * with `Task cancelled`. Call `delete()` to release resources and create a
+   * new `Conversation` instead. To continue from prior turns without
+   * re-prefilling if a turn is cancelled, call `clone()` before starting the
+   * turn.
    */
   cancel() {
     this.conversation.cancelProcess();
