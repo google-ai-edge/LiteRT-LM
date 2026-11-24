@@ -417,38 +417,51 @@ class GeminiHandler(util.CORSRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
 
-        litert_finish_reason = None
-        for chunk in conv.send_message_async(inputs.last_msg):
-          if chunk.finish_reason is not None:
-            # The content-less message that ends the turn; the final chunk
-            # below reports it.
-            litert_finish_reason = chunk.finish_reason
-            continue
-          click.echo(click.style("Stream Chunk:", fg="magenta"))
-          click.echo(json.dumps(chunk, ensure_ascii=False))
+        try:
+          litert_finish_reason = None
+          for chunk in conv.send_message_async(inputs.last_msg):
+            if chunk.finish_reason is not None:
+              # The content-less message that ends the turn; the final chunk
+              # below reports it.
+              litert_finish_reason = chunk.finish_reason
+              continue
+            click.echo(click.style("Stream Chunk:", fg="magenta"))
+            click.echo(json.dumps(chunk, ensure_ascii=False))
 
-          resp = gemini_response_from_litertlm(chunk, finish_reason="")
+            resp = gemini_response_from_litertlm(chunk, finish_reason="")
+            self.wfile.write(
+                f"data: {json.dumps(resp, ensure_ascii=False)}\n\n".encode(
+                    "utf-8"
+                )
+            )
+            self.wfile.flush()
+
+          # Final chunk to signal completion
+          final_resp = gemini_response_from_litertlm(
+              litert_lm.Message.model(),
+              finish_reason=_gemini_finish_reason(litert_finish_reason),
+          )
+          click.echo(click.style("Final Stream Response:", fg="magenta"))
+          click.echo(json.dumps(final_resp, ensure_ascii=False))
+
           self.wfile.write(
-              f"data: {json.dumps(resp, ensure_ascii=False)}\n\n".encode(
+              f"data: {json.dumps(final_resp, ensure_ascii=False)}\n\n".encode(
                   "utf-8"
               )
           )
           self.wfile.flush()
-
-        # Final chunk to signal completion
-        final_resp = gemini_response_from_litertlm(
-            litert_lm.Message.model(),
-            finish_reason=_gemini_finish_reason(litert_finish_reason),
-        )
-        click.echo(click.style("Final Stream Response:", fg="magenta"))
-        click.echo(json.dumps(final_resp, ensure_ascii=False))
-
-        self.wfile.write(
-            f"data: {json.dumps(final_resp, ensure_ascii=False)}\n\n".encode(
-                "utf-8"
-            )
-        )
-        self.wfile.flush()
+        except ConnectionError:
+          click.echo(
+              click.style(
+                  "Client disconnected during streaming; cancelling"
+                  " generation.",
+                  fg="yellow",
+              )
+          )
+          conv.cancel_process()
+        except Exception:
+          conv.cancel_process()
+          raise
     except Exception as e:  # pylint: disable=broad-exception-caught
       self._handle_inference_error(e, req.model_id, inputs.last_msg)
 

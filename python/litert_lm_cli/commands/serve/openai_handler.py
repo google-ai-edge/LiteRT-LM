@@ -183,6 +183,15 @@ class OpenAIHandler(util.CORSRequestHandler):
             **({"content": full_text_output} if full_text_output else {}),
         }
       return {"role": "assistant", "content": full_text_output or None}
+    except ConnectionError:
+      click.echo(
+          click.style(
+              "Client disconnected during streaming; cancelling generation.",
+              fg="yellow",
+          )
+      )
+      conv.cancel_process()
+      return None
     except Exception as e:  # pylint: disable=broad-exception-caught
       click.echo(
           click.style(

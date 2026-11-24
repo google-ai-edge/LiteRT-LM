@@ -2770,6 +2770,169 @@ class ServeTest(parameterized.TestCase):
       server.shutdown()
       thread.join()
 
+  def test_openai_stream_client_disconnect_cancels_process(self):
+    handler = object.__new__(openai_handler.OpenAIHandler)
+    handler._headers_sent = False
+    handler.send_response = mock.Mock()
+    handler.send_header = mock.Mock()
+    handler.end_headers = mock.Mock()
+    handler.wfile = mock.Mock()
+    handler.wfile.write.side_effect = [None, BrokenPipeError("Broken pipe")]
+
+    mock_conv = mock.create_autospec(
+        interfaces.AbstractConversation, instance=True
+    )
+    mock_conv.send_message_async.return_value = iter([
+        mock_litert_lm.Message.from_json({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "chunk1"}],
+        }),
+        mock_litert_lm.Message.from_json({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "chunk2"}],
+        }),
+    ])
+    mock_formatter = mock.create_autospec(
+        openai_common.OpenAIStreamFormatter, instance=True
+    )
+    mock_formatter.format_initial.return_value = b"data: init\n\n"
+    mock_formatter.format_delta.return_value = b"data: chunk1\n\n"
+
+    result = handler.stream_response(mock_conv, "hello", mock_formatter)
+
+    self.assertIsNone(result)
+    mock_conv.cancel_process.assert_called_once_with()
+    mock_formatter.format_error.assert_not_called()
+
+  def test_gemini_stream_client_disconnect_cancels_process(self):
+    handler = object.__new__(gemini_handler.GeminiHandler)
+    handler._headers_sent = False
+    handler.send_response = mock.Mock()
+    handler.send_header = mock.Mock()
+    handler.end_headers = mock.Mock()
+    handler.wfile = mock.Mock()
+    handler.wfile.write.side_effect = BrokenPipeError("Broken pipe")
+    handler._parse_request_body = mock.Mock(
+        return_value={"contents": [{"role": "user", "parts": [{"text": "Hi"}]}]}
+    )
+
+    mock_conv = mock.create_autospec(
+        interfaces.AbstractConversation, instance=True
+    )
+    mock_conv.__enter__.return_value = mock_conv
+    mock_conv.__exit__.return_value = False
+    mock_conv.send_message_async.return_value = iter([
+        mock_litert_lm.Message.from_json({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "chunk1"}],
+        })
+    ])
+    mock_engine_instance = mock.create_autospec(
+        interfaces.AbstractEngine, instance=True
+    )
+    mock_engine_instance.create_conversation.return_value = mock_conv
+    handler._get_engine = mock.Mock(return_value=mock_engine_instance)
+
+    match = gemini_handler.STREAM_GEN_CONTENT_RE.fullmatch(
+        "/v1beta/models/gemma:streamGenerateContent"
+    )
+    self.assertIsNotNone(match)
+    handler._handle_stream_generate_content(match)
+
+    mock_conv.cancel_process.assert_called_once_with()
+
+  def test_gemini_stream_unexpected_error_cancels_process(self):
+    handler = object.__new__(gemini_handler.GeminiHandler)
+    handler._headers_sent = False
+    handler.send_response = mock.Mock()
+    handler.send_header = mock.Mock()
+    handler.end_headers = mock.Mock()
+    handler.wfile = mock.Mock()
+    handler._parse_request_body = mock.Mock(
+        return_value={"contents": [{"role": "user", "parts": [{"text": "Hi"}]}]}
+    )
+    handler._handle_inference_error = mock.Mock()
+
+    def _failing_stream():
+      yield mock_litert_lm.Message.from_json({
+          "role": "assistant",
+          "content": [{"type": "text", "text": "chunk1"}],
+      })
+      raise RuntimeError("inference boom")
+
+    mock_conv = mock.create_autospec(
+        interfaces.AbstractConversation, instance=True
+    )
+    mock_conv.__enter__.return_value = mock_conv
+    mock_conv.__exit__.return_value = False
+    mock_conv.send_message_async.return_value = _failing_stream()
+    mock_engine_instance = mock.create_autospec(
+        interfaces.AbstractEngine, instance=True
+    )
+    mock_engine_instance.create_conversation.return_value = mock_conv
+    handler._get_engine = mock.Mock(return_value=mock_engine_instance)
+
+    match = gemini_handler.STREAM_GEN_CONTENT_RE.fullmatch(
+        "/v1beta/models/gemma:streamGenerateContent"
+    )
+    self.assertIsNotNone(match)
+    handler._handle_stream_generate_content(match)
+
+    mock_conv.cancel_process.assert_called_once_with()
+    handler._handle_inference_error.assert_called_once()
+    self.assertIsInstance(
+        handler._handle_inference_error.call_args.args[0], RuntimeError
+    )
+
+  def test_gemini_stream_normal_completion(self):
+    handler = object.__new__(gemini_handler.GeminiHandler)
+    handler._headers_sent = False
+    handler.send_response = mock.Mock()
+    handler.send_header = mock.Mock()
+    handler.end_headers = mock.Mock()
+    handler.wfile = mock.Mock()
+    handler._parse_request_body = mock.Mock(
+        return_value={"contents": [{"role": "user", "parts": [{"text": "Hi"}]}]}
+    )
+
+    mock_conv = mock.create_autospec(
+        interfaces.AbstractConversation, instance=True
+    )
+    mock_conv.__enter__.return_value = mock_conv
+    mock_conv.__exit__.return_value = False
+    mock_conv.send_message_async.return_value = iter([
+        mock_litert_lm.Message.from_json({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Hello"}],
+        }),
+        mock_litert_lm.Message.from_json({
+            "role": "assistant",
+            "finish_reason": "stop",
+            "executor_stats": None,
+        }),
+    ])
+    mock_engine_instance = mock.create_autospec(
+        interfaces.AbstractEngine, instance=True
+    )
+    mock_engine_instance.create_conversation.return_value = mock_conv
+    handler._get_engine = mock.Mock(return_value=mock_engine_instance)
+
+    match = gemini_handler.STREAM_GEN_CONTENT_RE.fullmatch(
+        "/v1beta/models/gemma:streamGenerateContent"
+    )
+    self.assertIsNotNone(match)
+    handler._handle_stream_generate_content(match)
+
+    mock_conv.cancel_process.assert_not_called()
+    self.assertEqual(handler.wfile.write.call_count, 2)
+    self.assertIn(
+        b'"text": "Hello"', handler.wfile.write.call_args_list[0].args[0]
+    )
+    self.assertIn(
+        b'"finishReason": "STOP"',
+        handler.wfile.write.call_args_list[1].args[0],
+    )
+
 
 if __name__ == "__main__":
   absltest.main()
