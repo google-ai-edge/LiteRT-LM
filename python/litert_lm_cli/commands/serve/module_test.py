@@ -19,12 +19,15 @@ import json
 import socket
 import sys
 import threading
+import time
 from typing import Any
 from unittest import mock
+import urllib.error
 import urllib.request
 
 from absl.testing import absltest
 from absl.testing import parameterized
+from click import testing as click_testing
 
 # 1. Mock the C++ extension specifically to prevent loading it.
 # This MUST happen before importing anything from litert_lm.
@@ -118,6 +121,7 @@ if "litert_lm_cli" in sys.modules:
   ].model = mock_model_mod
 
 from litert_lm_cli.commands.serve import gemini_handler
+from litert_lm_cli.commands.serve import module as serve_module
 from litert_lm_cli.commands.serve import openai_chat_completions
 from litert_lm_cli.commands.serve import openai_common
 from litert_lm_cli.commands.serve import openai_embeddings
@@ -3279,6 +3283,280 @@ class ServeTest(parameterized.TestCase):
       server.close_conversation()
       server.shutdown()
       thread.join()
+
+
+def _wait_until(predicate: Any, timeout: float = 5.0) -> bool:
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    if predicate():
+      return True
+    time.sleep(0.01)
+  return predicate()
+
+
+class WorkerPoolTest(parameterized.TestCase):
+  """Tests for the threaded server, --workers, --idle-unload and health."""
+
+  def setUp(self):
+    super().setUp()
+    mock_litert_lm.Engine.reset_mock()  # pyrefly: ignore[missing-attribute]
+    mock_model_mod.Model.from_model_id.reset_mock()
+    mock_model_mod.Model.from_model_id.side_effect = None
+    mock_model_mod.Model.from_model_reference.reset_mock()
+    mock_model_mod.Model.from_model_reference.side_effect = (
+        _from_model_reference
+    )
+    mock_model_mod.Model.get_all_models.reset_mock()
+    mock_model_mod.Model.get_all_models.side_effect = None
+    mock_model_mod.Model.get_all_models.return_value = []
+    mock_model_mod.parse_backend.reset_mock()
+    mock_model_mod.parse_backend.return_value = interfaces.Backend.CPU()
+    mock_model_mod.resolve_config_option.reset_mock()
+    mock_model_mod.resolve_config_option.side_effect = (
+        lambda value, model_obj, config_key, label=None: value
+    )
+    mock_model_mod.resolve_kv_cache_type.return_value = None
+    mock_model_mod.resolve_kv_cache_type.side_effect = None
+    m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    m.exists.return_value = True
+    m.model_path = "/path/to/gemma"
+    m.model_id = "gemma"
+    mock_model_mod.Model.from_model_id.return_value = m
+
+    # Every Engine() call builds a new fake engine. Generation blocks until
+    # `self.release` is set and records when it started.
+    self.release = threading.Event()
+    self.started: list[float] = []
+    self.engines: list[Any] = []
+
+    def make_engine(*args: Any, **kwargs: Any) -> Any:
+      del args, kwargs
+      engine = mock.MagicMock()
+      engine.__enter__.return_value = engine
+
+      def create_conversation(**kwargs: Any) -> Any:
+        del kwargs
+        conv = mock.MagicMock()
+        info = conv.get_benchmark_info.return_value
+        info.last_prefill_token_count = 3
+        info.last_decode_token_count = 2
+        type(conv).token_count = mock.PropertyMock(return_value=5)
+
+        def send(*args: Any, **kwargs: Any) -> Any:
+          del args, kwargs
+          self.started.append(time.monotonic())
+          self.release.wait(10)
+          return iter([
+              mock_litert_lm.Message.from_json({
+                  "role": "assistant",
+                  "content": [{"type": "text", "text": "ok"}],
+              })
+          ])
+
+        conv.send_message_async.side_effect = send
+        ctx = mock.MagicMock()
+        ctx.__enter__.return_value = conv
+        return ctx
+
+      engine.create_conversation.side_effect = create_conversation
+      self.engines.append(engine)
+      return engine
+
+    mock_litert_lm.Engine.side_effect = make_engine  # pyrefly: ignore[missing-attribute]
+    self.addCleanup(setattr, mock_litert_lm.Engine, "side_effect", None)
+
+  def _start(self, **kwargs: Any) -> util.LiteRTLMServer:
+    server = util.LiteRTLMServer(
+        ("127.0.0.1", 0), openai_handler.OpenAIHandler, **kwargs
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def stop() -> None:
+      self.release.set()
+      server.shutdown()
+      thread.join()
+      server.close_all_engines()
+      server.server_close()
+
+    self.addCleanup(stop)
+    return server
+
+  def _chat(
+      self, server: util.LiteRTLMServer, messages: list[dict[str, Any]]
+  ) -> dict[str, Any]:
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_port}/v1/chat/completions",
+        data=json.dumps({"model": "gemma", "messages": messages}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+      return json.loads(resp.read().decode("utf-8"))
+
+  def _chat_in_thread(
+      self, server: util.LiteRTLMServer, text: str
+  ) -> tuple[threading.Thread, list[Any]]:
+    out: list[Any] = []
+    thread = threading.Thread(
+        target=lambda: out.append(
+            self._chat(server, [{"role": "user", "content": text}])
+        ),
+        daemon=True,
+    )
+    thread.start()
+    return thread, out
+
+  def _get(self, server: util.LiteRTLMServer, path: str) -> Any:
+    url = f"http://127.0.0.1:{server.server_port}{path}"
+    with urllib.request.urlopen(url, timeout=2) as resp:
+      self.assertEqual(resp.status, 200)
+      return json.loads(resp.read().decode("utf-8"))
+
+  def test_health_answers_while_a_generation_runs(self):
+    server = self._start()
+    thread, out = self._chat_in_thread(server, "Hello")
+    self.assertTrue(_wait_until(lambda: len(self.started) == 1))
+
+    health = self._get(server, "/health")
+    self.assertEqual(health["busy"], 1)
+    self.assertLen(health["workers"], 1)
+    self.assertEqual(health["workers"][0]["model"], "gemma")
+    self.assertEqual(self._get(server, "/v1/models")["data"], [])
+
+    self.release.set()
+    thread.join(10)
+    self.assertEqual(out[0]["choices"][0]["message"]["content"], "ok")
+    self.assertEqual(server.status()["busy"], 0)
+
+  def test_one_worker_queues_requests(self):
+    server = self._start()
+    first, _ = self._chat_in_thread(server, "one")
+    self.assertTrue(_wait_until(lambda: len(self.started) == 1))
+    second, _ = self._chat_in_thread(server, "two")
+    self.assertTrue(_wait_until(lambda: server.status()["waiting"] == 1))
+    self.assertLen(self.started, 1)
+
+    self.release.set()
+    first.join(10)
+    second.join(10)
+    self.assertLen(self.started, 2)
+    self.assertLen(self.engines, 1)
+
+  def test_two_workers_generate_in_parallel(self):
+    server = self._start(workers=2)
+    first, out1 = self._chat_in_thread(server, "one")
+    second, out2 = self._chat_in_thread(server, "two")
+    # Both generations are running before either is allowed to finish.
+    self.assertTrue(_wait_until(lambda: len(self.started) == 2))
+    self.assertEqual(server.status()["busy"], 2)
+
+    self.release.set()
+    first.join(10)
+    second.join(10)
+    self.assertLen(out1, 1)
+    self.assertLen(out2, 1)
+    self.assertLen(self.engines, 2)
+    self.assertIsNotNone(server.slots[0].litert_lm_engine)
+    self.assertIsNotNone(server.slots[1].litert_lm_engine)
+
+  def test_each_worker_keeps_its_own_conversation(self):
+    self.release.set()
+    server = self._start(workers=2)
+    server.preload("gemma")
+    self.assertLen(self.engines, 2)
+
+    self._chat(server, [{"role": "user", "content": "Hello"}])
+    self._chat(server, [{"role": "user", "content": "Something else"}])
+    self._chat(
+        server,
+        [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "And then?"},
+        ],
+    )
+    # The third request continued the first conversation on its worker
+    # instead of prefilling it again.
+    created = sorted(e.create_conversation.call_count for e in self.engines)
+    self.assertEqual(created, [1, 1])
+
+  def test_idle_unload_frees_the_engine_and_the_next_request_reloads(self):
+    self.release.set()
+    server = self._start(idle_unload_seconds=1800)
+    self._chat(server, [{"role": "user", "content": "Hello"}])
+    engine = server.litert_lm_engine
+    self.assertIsNotNone(engine)
+
+    self.assertEqual(server.unload_idle_engines(time.monotonic() + 60), 0)
+    self.assertEqual(server.unload_idle_engines(time.monotonic() + 1801), 1)
+    engine.__exit__.assert_called_once()
+    self.assertIsNone(server.litert_lm_engine)
+    self.assertIsNone(server.litert_lm_conversation)
+    self.assertIsNone(self._get(server, "/health")["workers"][0]["model"])
+
+    self._chat(server, [{"role": "user", "content": "Hello again"}])
+    self.assertLen(self.engines, 2)
+    self.assertIsNotNone(server.litert_lm_engine)
+
+  def test_idle_unload_skips_a_busy_worker_and_is_off_by_default(self):
+    server = self._start(idle_unload_seconds=60)
+    thread, _ = self._chat_in_thread(server, "Hello")
+    self.assertTrue(_wait_until(lambda: len(self.started) == 1))
+    self.assertEqual(server.unload_idle_engines(time.monotonic() + 3600), 0)
+    self.release.set()
+    thread.join(10)
+
+    off = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    self.addCleanup(off.server_close)
+    off.litert_lm_engine = mock.MagicMock()
+    self.assertEqual(off.unload_idle_engines(time.monotonic() + 10**6), 0)
+
+  def test_models_reply_to_a_closed_socket_is_not_an_error(self):
+    handler = mock.MagicMock()
+    handler.wfile.write.side_effect = BrokenPipeError()
+    with mock.patch.object(openai_models.click, "echo") as echo:
+      openai_models.handle_get_models(handler)
+    handler.send_error.assert_not_called()
+    echo.assert_not_called()
+
+  @parameterized.named_parameters(
+      dict(testcase_name="quiet", verbose=False, logged=False),
+      dict(testcase_name="verbose", verbose=True, logged=True),
+  )
+  def test_health_checks_in_the_access_log(self, verbose, logged):
+    server = self._start(verbose=verbose)
+    with mock.patch.object(
+        http.server.BaseHTTPRequestHandler, "log_message"
+    ) as log:
+      self._get(server, "/v1/models")
+      self._get(server, "/health")
+      with self.assertRaises(urllib.error.HTTPError):
+        urllib.request.urlopen(
+            f"http://127.0.0.1:{server.server_port}/missing", timeout=2
+        )
+    lines = " ".join(str(c.args) for c in log.call_args_list)
+    self.assertEqual("/v1/models" in lines, logged)
+    self.assertEqual("/health" in lines, logged)
+    self.assertIn("/missing", lines)
+
+  def test_serve_passes_the_new_options(self):
+    with mock.patch.object(serve_module, "run_server") as run:
+      result = click_testing.CliRunner().invoke(
+          serve_module.serve,
+          [
+              "--workers",
+              "3",
+              "--idle-unload",
+              "1800",
+              "--preload",
+              "gemma,cpu,4096",
+          ],
+      )
+    self.assertEqual(result.exit_code, 0, result.output)
+    kwargs = run.call_args.kwargs
+    self.assertEqual(kwargs["workers"], 3)
+    self.assertEqual(kwargs["idle_unload"], 1800)
+    self.assertEqual(kwargs["preload"], ("gemma", "cpu", 4096))
 
 
 if __name__ == "__main__":

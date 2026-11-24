@@ -230,7 +230,7 @@ class GeminiHandler(util.CORSRequestHandler):
     try:
       assert isinstance(self.server, util.LiteRTLMServer)
       return util.get_or_initialize_server_engine(
-          self.server,
+          self.acquire_engine_slot(model_id=req.model_id),
           model_id=req.model_id,
       )
     except FileNotFoundError as e:

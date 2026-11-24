@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import time
 import traceback
 from typing import Any
 
@@ -235,6 +236,8 @@ class OpenAIHandler(util.CORSRequestHandler):
     path_without_query, *_ = self.path.split("?", 1)
     if path_without_query == "/v1/models":
       openai_models.handle_get_models(self)
+    elif path_without_query == "/health":
+      openai_models.handle_get_health(self)
     else:
       self.send_error(404, "Not Found")
 
@@ -279,11 +282,17 @@ class OpenAIHandler(util.CORSRequestHandler):
     Returns:
       The LiteRT-LM Engine instance, or None if initialization failed.
     """
-    del translated_messages, prompt
+    del prompt
     try:
       assert isinstance(self.server, util.LiteRTLMServer)
+      slot = self.acquire_engine_slot(
+          model_id=model_id,
+          context_messages=(
+              translated_messages[:-1] if translated_messages else []
+          ),
+      )
       return util.get_or_initialize_server_engine(
-          self.server,
+          slot,
           model_id=model_id,
           backend=backend,
           max_num_tokens=max_num_tokens,
@@ -373,6 +382,15 @@ class OpenAIHandler(util.CORSRequestHandler):
       model_id: The model identifier.
       prompt: The prompt payload.
     """
+    if isinstance(e, util.CLIENT_GONE_ERRORS):
+      click.echo(
+          click.style(
+              f"Client closed the connection before the {model_id!r} reply"
+              " was sent.",
+              fg="yellow",
+          )
+      )
+      return
     click.echo(
         click.style(
             f"Error during inference for model {model_id!r} with prompt "
@@ -406,7 +424,16 @@ class OpenAIHandler(util.CORSRequestHandler):
         ),
     }
 
-    if path_without_query in router:
+    if path_without_query == "/v1/embeddings" and isinstance(
+        self.server, util.LiteRTLMServer
+    ):
+      # One embedding engine is shared by all request threads.
+      with self.server.embedding_lock:
+        try:
+          router[path_without_query]()
+        finally:
+          self.server.embedding_last_used = time.monotonic()
+    elif path_without_query in router:
       router[path_without_query]()
     else:
       self.send_error(404, "Not Found")
