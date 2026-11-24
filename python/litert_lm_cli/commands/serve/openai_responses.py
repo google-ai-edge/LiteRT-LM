@@ -115,6 +115,7 @@ def _handle_responses(
     now_str: str,
     created_ts: int,
     model_id: str,
+    max_output_tokens: int | None = None,
     response_format: litert_lm.ResponseFormat | None = None,
 ) -> None:
   """Generates responses for the v1/responses endpoint.
@@ -136,10 +137,15 @@ def _handle_responses(
     now_str: Timestamp string for unique identifier generation.
     created_ts: Epoch timestamp for creation metadata.
     model_id: The target model identifier.
+    max_output_tokens: Optional maximum number of tokens to generate.
     response_format: Optional response format for constrained decoding.
   """
   if not stream:
-    response = conv.send_message(prompt, response_format=response_format)
+    response = conv.send_message(
+        prompt,
+        max_output_tokens=max_output_tokens,
+        response_format=response_format,
+    )
     text_output = str(response)
     resp_body = OpenAIResponse(
         id=f"resp_{now_str}",
@@ -173,7 +179,11 @@ def _handle_responses(
 
   formatter = _OpenAIV1ResponsesFormatter(now_str, created_ts, model_id)
   handler.stream_response(
-      conv, prompt, formatter, response_format=response_format
+      conv,
+      prompt,
+      formatter,
+      max_completion_tokens=max_output_tokens,
+      response_format=response_format,
   )
 
 
@@ -236,6 +246,14 @@ def handle_post_responses(handler: Any) -> None:
     )
     return
 
+  try:
+    max_output_tokens = openai_common.parse_positive_int_param(
+        body, "max_output_tokens"
+    )
+  except ValueError as e:
+    handler.send_error(400, str(e))
+    return
+
   stream = body.get("stream", False)
 
   try:
@@ -267,6 +285,7 @@ def handle_post_responses(handler: Any) -> None:
           now_str=now_str,
           created_ts=created_ts,
           model_id=raw_model_str,
+          max_output_tokens=max_output_tokens,
           response_format=response_format,
       )
   except Exception as e:  # pylint: disable=broad-exception-caught

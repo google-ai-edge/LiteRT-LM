@@ -45,6 +45,35 @@ def format_sse_final() -> bytes:
   return b"data: [DONE]\n\n"
 
 
+_MAX_INT32 = 2**31 - 1
+
+
+def parse_positive_int_param(body: Mapping[str, Any], name: str) -> int | None:
+  """Parses and validates an optional positive 32-bit integer parameter.
+
+  Args:
+    body: The parsed JSON request body.
+    name: The parameter name to extract.
+
+  Returns:
+    The validated positive 32-bit integer value, or None if the parameter is
+    absent or None.
+
+  Raises:
+    ValueError: If the value is not a positive 32-bit integer (including
+      booleans).
+  """
+  value = body.get(name)
+  if value is None:
+    return None
+  # bool is a subclass of int in Python, so isinstance(True, int) is True.
+  if isinstance(value, bool) or not isinstance(value, int):
+    raise ValueError(f"{name} must be an integer")
+  if value <= 0 or value > _MAX_INT32:
+    raise ValueError(f"{name} must be a positive 32-bit integer")
+  return value
+
+
 def parse_model_parameter(
     model_param: str,
 ) -> tuple[str, str | None, int | None]:

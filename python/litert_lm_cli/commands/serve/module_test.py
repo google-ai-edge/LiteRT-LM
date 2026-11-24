@@ -1696,6 +1696,51 @@ class ServeTest(parameterized.TestCase):
           err_code=400,
       ),
       dict(
+          testcase_name="non_positive_max_completion_tokens",
+          body={
+              "model": "gemma3",
+              "messages": [{"role": "user", "content": "hi"}],
+              "max_completion_tokens": 0,
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="bool_max_tokens",
+          body={
+              "model": "gemma3",
+              "messages": [{"role": "user", "content": "hi"}],
+              "max_tokens": True,
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="non_positive_max_tokens",
+          body={
+              "model": "gemma3",
+              "messages": [{"role": "user", "content": "hi"}],
+              "max_tokens": -5,
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="string_max_tokens",
+          body={
+              "model": "gemma3",
+              "messages": [{"role": "user", "content": "hi"}],
+              "max_tokens": "64",
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="overflow_max_tokens",
+          body={
+              "model": "gemma3",
+              "messages": [{"role": "user", "content": "hi"}],
+              "max_tokens": 2**31,
+          },
+          err_code=400,
+      ),
+      dict(
           testcase_name="invalid_sampler_config",
           body={
               "model": "gemma3",
@@ -2932,6 +2977,232 @@ class ServeTest(parameterized.TestCase):
         b'"finishReason": "STOP"',
         handler.wfile.write.call_args_list[1].args[0],
     )
+
+  @parameterized.named_parameters(
+      dict(testcase_name="absent", body={}, expected=None),
+      dict(testcase_name="none", body={"max_tokens": None}, expected=None),
+      dict(testcase_name="positive", body={"max_tokens": 64}, expected=64),
+      dict(
+          testcase_name="max_int32",
+          body={"max_tokens": 2**31 - 1},
+          expected=2**31 - 1,
+      ),
+  )
+  def test_parse_positive_int_param_valid(self, body, expected):
+    self.assertEqual(
+        openai_common.parse_positive_int_param(body, "max_tokens"), expected
+    )
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="bool_true",
+          value=True,
+          err_msg="max_tokens must be an integer",
+      ),
+      dict(
+          testcase_name="bool_false",
+          value=False,
+          err_msg="max_tokens must be an integer",
+      ),
+      dict(
+          testcase_name="string",
+          value="64",
+          err_msg="max_tokens must be an integer",
+      ),
+      dict(
+          testcase_name="float",
+          value=12.5,
+          err_msg="max_tokens must be an integer",
+      ),
+      dict(
+          testcase_name="zero",
+          value=0,
+          err_msg="max_tokens must be a positive 32-bit integer",
+      ),
+      dict(
+          testcase_name="negative",
+          value=-10,
+          err_msg="max_tokens must be a positive 32-bit integer",
+      ),
+      dict(
+          testcase_name="int32_overflow",
+          value=2**31,
+          err_msg="max_tokens must be a positive 32-bit integer",
+      ),
+  )
+  def test_parse_positive_int_param_invalid(self, value, err_msg):
+    with self.assertRaisesRegex(ValueError, err_msg):
+      openai_common.parse_positive_int_param(
+          {"max_tokens": value}, "max_tokens"
+      )
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="max_tokens_non_stream",
+          extra_body={"max_tokens": 64},
+          stream=False,
+          expected_max_output_tokens=64,
+      ),
+      dict(
+          testcase_name="max_tokens_stream",
+          extra_body={"max_tokens": 64},
+          stream=True,
+          expected_max_output_tokens=64,
+      ),
+      dict(
+          testcase_name="max_completion_tokens_only",
+          extra_body={"max_completion_tokens": 32},
+          stream=False,
+          expected_max_output_tokens=32,
+      ),
+      dict(
+          testcase_name="max_completion_tokens_overrides_max_tokens",
+          extra_body={"max_completion_tokens": 32, "max_tokens": 64},
+          stream=False,
+          expected_max_output_tokens=32,
+      ),
+  )
+  def test_openai_chat_completions_max_tokens_forwarding(
+      self, extra_body, stream, expected_max_output_tokens
+  ):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/gemma"
+    mock_m.model_id = "gemma"
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+
+    mock_engine_instance = mock.MagicMock()
+    mock_conv = mock.MagicMock()
+    mock_conv.get_benchmark_info.return_value.last_prefill_token_count = 10
+    mock_conv.get_benchmark_info.return_value.last_decode_token_count = 5
+    mock_engine_instance.create_conversation.return_value.__enter__.return_value = (
+        mock_conv
+    )
+    mock_conv.send_message_async.return_value = iter([
+        mock_litert_lm.Message.from_json({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Hello!"}],
+        })
+    ])
+    mock_litert_lm.Engine.return_value = mock_engine_instance
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      payload = {
+          "model": "gemma",
+          "messages": [{"role": "user", "content": "Hi"}],
+          "stream": stream,
+          **extra_body,
+      }
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/chat/completions",
+          data=json.dumps(payload).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req) as response:
+        self.assertEqual(response.getcode(), 200)
+        response.read()
+
+      self.assertEqual(
+          mock_conv.send_message_async.call_args.kwargs["max_output_tokens"],
+          expected_max_output_tokens,
+      )
+    finally:
+      server.close_conversation()
+      server.shutdown()
+      thread.join()
+
+  @parameterized.named_parameters(
+      dict(testcase_name="non_stream", stream=False),
+      dict(testcase_name="stream", stream=True),
+  )
+  def test_openai_responses_max_output_tokens_forwarding(self, stream):
+    mock_m = mock.Mock(spec_set=["exists", "model_path", "model_id"])
+    mock_m.exists.return_value = True
+    mock_m.model_path = "/path/to/gemma"
+    mock_m.model_id = "gemma"
+    mock_model_mod.Model.from_model_id.return_value = mock_m
+
+    mock_engine_instance = mock.MagicMock()
+    mock_conv = mock.MagicMock()
+    mock_engine_instance.create_conversation.return_value.__enter__.return_value = (
+        mock_conv
+    )
+    msg = mock_litert_lm.Message.from_json({
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hi"}],
+    })
+    mock_conv.send_message.return_value = msg
+    mock_conv.send_message_async.return_value = iter([msg])
+    mock_litert_lm.Engine.return_value = mock_engine_instance
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/responses",
+          data=json.dumps({
+              "model": "gemma",
+              "input": "Hello",
+              "stream": stream,
+              "max_output_tokens": 48,
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req) as response:
+        self.assertEqual(response.getcode(), 200)
+        response.read()
+
+      if stream:
+        self.assertEqual(
+            mock_conv.send_message_async.call_args.kwargs["max_output_tokens"],
+            48,
+        )
+      else:
+        self.assertEqual(
+            mock_conv.send_message.call_args.kwargs["max_output_tokens"], 48
+        )
+    finally:
+      server.shutdown()
+      thread.join()
+
+  def test_openai_responses_invalid_max_output_tokens(self):
+    mock_engine_instance = mock.MagicMock()
+    self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler,
+            "_get_engine",
+            return_value=mock_engine_instance,
+        )
+    )
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/responses",
+          data=json.dumps({
+              "model": "gemma",
+              "input": "Hello",
+              "max_output_tokens": 0,
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with self.assertRaises(urllib.error.HTTPError) as cm:
+        urllib.request.urlopen(req)
+      self.assertEqual(cm.exception.code, 400)
+    finally:
+      server.shutdown()
+      thread.join()
 
 
 if __name__ == "__main__":

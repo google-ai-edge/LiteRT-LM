@@ -395,14 +395,12 @@ def handle_post_chat_completions(handler: Any) -> None:
     return
 
   stream = body.get("stream", False)
-  max_completion_tokens = body.get("max_completion_tokens")
-  # bool is a subclass of int in Python, so isinstance(True, int) is True.
-  # We must explicitly check for bool to prevent boolean values from passing.
-  if max_completion_tokens is not None and (
-      isinstance(max_completion_tokens, bool)
-      or not isinstance(max_completion_tokens, int)
-  ):
-    handler.send_error(400, "max_completion_tokens must be an integer")
+  try:
+    max_completion_tokens = openai_common.parse_positive_int_param(
+        body, "max_completion_tokens"
+    ) or openai_common.parse_positive_int_param(body, "max_tokens")
+  except ValueError as e:
+    handler.send_error(400, str(e))
     return
 
   try:
