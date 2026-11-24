@@ -65,14 +65,8 @@ constexpr size_t kMaxProtoMetadataSize = 10 * 1024 * 1024;
 // auxiliary model header containing DISPATCH_OP metadata is typically small.
 constexpr size_t kMaxNpuSectionSize = 10 * 1024 * 1024;
 
-// Maximum allowed size (2 GB) for sub-model FlatBuffers (vision encoders, main
-// compute graphs, embedding models). 2 GB is the maximum buffer size
-// addressable by the FlatBuffers specification (due to 32-bit signed offsets)
-// and protects against unbounded memory allocations.
-constexpr size_t kMaxVisionSectionSize = 2ULL * 1024 * 1024 * 1024;
-
-// Maximum number of leading bytes of the main TFLite section read to inspect
-// its graph. A FlatBuffer, and therefore the graph, never exceeds
+// Maximum number of leading bytes of a TFLite section read to inspect its
+// graph. A FlatBuffer, and therefore the graph, never exceeds
 // FLATBUFFERS_MAX_BUFFER_SIZE; larger models store their weights after the
 // FlatBuffer. The FlatBuffers verifier requires a smaller buffer than that.
 constexpr size_t kMaxTfliteGraphSize = FLATBUFFERS_MAX_BUFFER_SIZE - 1;
@@ -332,7 +326,7 @@ void ExtractNpuInfoFromBufferScan(absl::string_view tflite_buffer,
 // 3. Fallback scan for LiteRtStamp string and 250-byte stamp in the buffer.
 NpuInfo DetectNpuInfoFromTfliteBuffer(absl::string_view tflite_buffer) {
   NpuInfo info;
-  if (tflite_buffer.size() < kMaxVisionSectionSize) {
+  if (tflite_buffer.size() <= kMaxTfliteGraphSize) {
     flatbuffers::Verifier verifier(
         reinterpret_cast<const uint8_t*>(tflite_buffer.data()),
         tflite_buffer.size());
@@ -603,6 +597,31 @@ class SectionReader {
   absl::StatusOr<SectionBytes> Read(const StreamSection& section,
                                     size_t max_size,
                                     absl::string_view section_name) {
+    ABSL_RETURN_IF_ERROR(CheckBounds(section, section_name));
+    if (section.size() > max_size) {
+      return absl::InternalError(absl::StrFormat(
+          "%s section size exceeds maximum allowed limit.", section_name));
+    }
+    if (auto mapping = Map(section)) return std::move(*mapping);
+    return Copy(section, section_name);
+  }
+
+  // Reads the leading bytes of a TFLite section that hold its graph, at most
+  // kMaxTfliteGraphSize. The whole section must be within the stream.
+  absl::StatusOr<SectionBytes> ReadTfliteGraph(const StreamSection& section,
+                                               absl::string_view section_name) {
+    ABSL_RETURN_IF_ERROR(CheckBounds(section, section_name));
+    StreamSection graph_section = section;
+    if (section.end - section.begin > kMaxTfliteGraphSize) {
+      graph_section.end = section.begin + kMaxTfliteGraphSize;
+    }
+    return Read(graph_section, kMaxTfliteGraphSize, section_name);
+  }
+
+ private:
+  // Returns an error if `section` is empty or ends past the stream.
+  absl::Status CheckBounds(const StreamSection& section,
+                           absl::string_view section_name) const {
     if (section.end <= section.begin) {
       return absl::InternalError(
           absl::StrFormat("Invalid %s section offsets.", section_name));
@@ -612,15 +631,9 @@ class SectionReader {
       return absl::InternalError(
           absl::StrFormat("%s section exceeds stream bounds.", section_name));
     }
-    if (section.size() > max_size) {
-      return absl::InternalError(absl::StrFormat(
-          "%s section size exceeds maximum allowed limit.", section_name));
-    }
-    if (auto mapping = Map(section)) return std::move(*mapping);
-    return Copy(section, section_name);
+    return absl::OkStatus();
   }
 
- private:
   // Returns std::nullopt if the section cannot be memory-mapped.
   std::optional<SectionBytes> Map(const StreamSection& section) const {
     if (scoped_file_ == nullptr || !scoped_file_->IsValid()) {
@@ -1026,9 +1039,8 @@ absl::Status LoadVisionSignaturesIfPresent(
 
   std::vector<int> all_lengths;
   for (const auto& vision_sec : vision_sections) {
-    ABSL_ASSIGN_OR_RETURN(
-        SectionBytes bytes,
-        reader.Read(vision_sec, kMaxVisionSectionSize, "Vision model"));
+    ABSL_ASSIGN_OR_RETURN(SectionBytes bytes,
+                          reader.ReadTfliteGraph(vision_sec, "Vision model"));
 
     ABSL_ASSIGN_OR_RETURN(auto lengths,
                           ExtractVisionSignatureLengths(bytes.data()));
@@ -1152,11 +1164,7 @@ absl::Status LoadContextInfoFromTfliteIfPresent(
   if (!main_tflite_sec.is_valid()) {
     return absl::OkStatus();
   }
-  // Read only the leading kMaxTfliteGraphSize bytes, which hold the graph.
-  StreamSection graph_sec = main_tflite_sec;
-  graph_sec.end =
-      std::min<uint64_t>(graph_sec.end, graph_sec.begin + kMaxTfliteGraphSize);
-  auto bytes_or = reader.Read(graph_sec, kMaxTfliteGraphSize, "Main TFLite");
+  auto bytes_or = reader.ReadTfliteGraph(main_tflite_sec, "Main TFLite");
   if (!bytes_or.ok()) {
     return absl::OkStatus();
   }
@@ -1367,9 +1375,9 @@ absl::Status LoadEmbeddingModelTfliteIfPresent(
     EmbeddingInferenceCapability& embed_cap) {
   if (!encoder_section.is_valid()) return absl::OkStatus();
 
-  ABSL_ASSIGN_OR_RETURN(SectionBytes bytes,
-                        reader.Read(encoder_section, kMaxVisionSectionSize,
-                                    "Embedding encoder model"));
+  ABSL_ASSIGN_OR_RETURN(
+      SectionBytes bytes,
+      reader.ReadTfliteGraph(encoder_section, "Embedding encoder model"));
 
   return ExtractEmbeddingInfoFromTfliteBuffer(bytes.data(), embed_cap);
 }
@@ -1383,8 +1391,7 @@ absl::Status ConfigureEmbeddingModalitiesAndBackends(
     embed_cap.input_modalities.vision = true;
     std::vector<int> vision_lengths;
     for (const auto& vision_sec : sections.vision_sections) {
-      auto bytes_or =
-          reader.Read(vision_sec, kMaxVisionSectionSize, "Vision model");
+      auto bytes_or = reader.ReadTfliteGraph(vision_sec, "Vision model");
       if (bytes_or.ok()) {
         auto lengths_or = ExtractVisionSignatureLengths(bytes_or->data());
         if (lengths_or.ok() && !lengths_or->empty()) {

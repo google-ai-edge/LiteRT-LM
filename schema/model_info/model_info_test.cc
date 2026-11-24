@@ -18,11 +18,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>  // NOLINT: Required for resize_file().
 #include <fstream>
 #include <ios>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <system_error>  // NOLINT: Required for std::error_code.
 #include <utility>
 #include <vector>
 
@@ -230,6 +232,11 @@ struct TFLiteSectionConfig {
   std::string backend_constraint = "";
   std::string soc_name = "";
   std::string payload = "";
+  // Section size, if larger than `payload`, which then holds its leading bytes.
+  // The returned data ends with `payload`, so only the last section may set
+  // this, and a file written from the data must be extended to the section's
+  // end.
+  uint64_t size = 0;
 };
 
 std::string CreateTestLiteRTLMWithConfigs(
@@ -315,7 +322,8 @@ std::string CreateTestLiteRTLMWithConfigs(
     payloads.push_back(payload);
 
     uint64_t model_begin = current_offset;
-    uint64_t model_end = model_begin + payload.size();
+    uint64_t model_end =
+        model_begin + std::max<uint64_t>(payload.size(), config.size);
     current_offset = model_end;
 
     section_objects.push_back(
@@ -2007,6 +2015,108 @@ TEST(ModelInfoFileTest, GetModelInfo_FromPath_MatchesStream) {
   expected << *from_stream;
   actual << *from_path;
   EXPECT_EQ(actual.str(), expected.str());
+}
+
+// Size of the TFLite section in ModelInfoLargeSectionTest: over 2 GiB, the most
+// a FlatBuffer can address. Models that large store their weights after the
+// FlatBuffer.
+constexpr uint64_t kLargeSectionSize = uint64_t{3} << 30;
+
+// Writes `file_data` to `path` and extends the file with a hole to `file_size`
+// bytes.
+std::error_code WriteFileWithHole(const std::string& path,
+                                  const std::string& file_data,
+                                  uint64_t file_size) {
+  std::ofstream(path, std::ios::binary)
+      .write(file_data.data(), file_data.size());
+  std::error_code error;
+  std::filesystem::resize_file(path, file_size, error);
+  return error;
+}
+
+// Tests files whose only section is a TFLite model of kLargeSectionSize bytes.
+// Only the leading bytes of the section, which hold the graph, are written; the
+// rest of the file is a hole. The section begins on a 16 KB boundary, so it is
+// memory-mapped and only the pages that are read are loaded.
+class ModelInfoLargeSectionTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+#ifdef _WIN32
+    GTEST_SKIP() << "NTFS allocates disk space for holes in non-sparse files.";
+#endif
+  }
+};
+
+// Tests that a vision encoder section over 2 GiB is read only in its leading
+// bytes, which hold the graph.
+TEST_F(ModelInfoLargeSectionTest, GetModelInfo_VisionSection_ReadsGraph) {
+  const std::string vision_model = CreateMinimalTFLiteModel({256, 280});
+  const std::string file_data =
+      CreateTestLiteRTLMWithConfigs("IT", "google/gemma-4-e2b-it",
+                                    {{.model_type = "tf_lite_vision_encoder",
+                                      .payload = vision_model,
+                                      .size = kLargeSectionSize}});
+  const std::string path =
+      ::testing::TempDir() + "/model_info_test_large_vision.litertlm";
+  std::error_code error = WriteFileWithHole(
+      path, file_data,
+      file_data.size() - vision_model.size() + kLargeSectionSize);
+  ASSERT_FALSE(error) << error.message();
+
+  auto info = GetModelInfo(path);
+  std::filesystem::remove(path, error);
+  ASSERT_OK(info);
+  ASSERT_TRUE(info->llm_capability.has_value());
+  EXPECT_THAT(info->llm_capability->vision_signature_selection,
+              ::testing::Optional(::testing::ElementsAre(256, 280)));
+}
+
+// Tests that a vision encoder section over 2 GiB that ends past the end of the
+// file is rejected, although the file holds its graph.
+TEST_F(ModelInfoLargeSectionTest,
+       GetModelInfo_VisionSectionPastEndOfFile_ReturnsError) {
+  const std::string vision_model = CreateMinimalTFLiteModel({256, 280});
+  const std::string file_data =
+      CreateTestLiteRTLMWithConfigs("IT", "google/gemma-4-e2b-it",
+                                    {{.model_type = "tf_lite_vision_encoder",
+                                      .payload = vision_model,
+                                      .size = kLargeSectionSize}});
+  const std::string path =
+      ::testing::TempDir() + "/model_info_test_truncated_vision.litertlm";
+  std::error_code error = WriteFileWithHole(
+      path, file_data,
+      file_data.size() - vision_model.size() + kLargeSectionSize - 1);
+  ASSERT_FALSE(error) << error.message();
+
+  auto info = GetModelInfo(path);
+  std::filesystem::remove(path, error);
+  EXPECT_THAT(info, StatusIs(absl::StatusCode::kInternal));
+}
+
+// Tests that an embedding encoder section over 2 GiB is read only in its
+// leading bytes, which hold the graph.
+TEST_F(ModelInfoLargeSectionTest, GetModelInfo_EmbeddingEncoder_ReadsGraph) {
+  const std::string encoder_model = CreateMinimalEmbeddingTFLiteModel(
+      /*embedding_dim=*/768, /*input_lengths=*/{128, 256});
+  const std::string file_data = CreateTestLiteRTLMWithConfigs(
+      /*model_class=*/"EMBEDDING", /*tf_hub_model_id=*/"",
+      {{.model_type = "tf_lite_text_encoder",
+        .payload = encoder_model,
+        .size = kLargeSectionSize}});
+  const std::string path =
+      ::testing::TempDir() + "/model_info_test_large_encoder.litertlm";
+  std::error_code error = WriteFileWithHole(
+      path, file_data,
+      file_data.size() - encoder_model.size() + kLargeSectionSize);
+  ASSERT_FALSE(error) << error.message();
+
+  auto info = GetModelInfo(path);
+  std::filesystem::remove(path, error);
+  ASSERT_OK(info);
+  ASSERT_TRUE(info->embedding_capability.has_value());
+  EXPECT_EQ(info->embedding_capability->embedding_dimension, 768);
+  EXPECT_THAT(info->embedding_capability->supported_signature_lengths,
+              ::testing::Optional(::testing::ElementsAre(128, 256)));
 }
 
 }  // namespace
