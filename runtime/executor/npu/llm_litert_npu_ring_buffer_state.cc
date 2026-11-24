@@ -51,13 +51,14 @@ absl::flat_hash_set<std::string> RingBufferState::GetNames(
     const absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
         kv_cache_buffers) {
   absl::flat_hash_set<std::string> names;
-  if (!layout.uses_ringbuffer) {
-    return names;
-  }
   for (const auto& [name, buffer] : kv_cache_buffers) {
+    if (name.starts_with(kKvCacheCRootName)) {
+      names.insert(std::string(name));
+      continue;
+    }
     auto it = layout.kv_cache_buffers.find(name);
-    if (it == layout.kv_cache_buffers.end() || !it->second.is_local ||
-        it->second.min_sequence_length <= 0 ||
+    if (!layout.uses_ringbuffer || it == layout.kv_cache_buffers.end() ||
+        !it->second.is_local || it->second.min_sequence_length <= 0 ||
         it->second.min_sequence_length >= layout.global_cache_length) {
       continue;
     }

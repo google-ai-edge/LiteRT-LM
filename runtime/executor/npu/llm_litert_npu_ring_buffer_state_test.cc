@@ -148,6 +148,16 @@ TEST_F(RingBufferStateTest, WithoutRingBufferSavesNothing) {
   ASSERT_OK(RingBufferState::Restore(*saved, layout, kv_cache));
 }
 
+// Without a ring buffer, the recurrent state is saved too (here one as long as
+// the global KV cache, which the layout does not take for a local buffer).
+TEST_F(RingBufferStateTest, WithoutRingBufferSavesTheConvState) {
+  auto kv_cache = MakeKvCache(/*with_ring_buffer=*/false, /*value=*/1.0f);
+  kv_cache.insert_or_assign("kv_cache_c_2",
+                            MakeBuffer({1, 2, kGlobalLen}, /*value=*/1.0f));
+  EXPECT_THAT(RingBufferState::GetNames(ResolveLayout(kv_cache), kv_cache),
+              UnorderedElementsAre("kv_cache_c_2"));
+}
+
 // A context saved without the ring buffers (e.g. in a context size without
 // one) can't restore them.
 TEST_F(RingBufferStateTest, RestoreFailsForOtherRingBuffers) {
