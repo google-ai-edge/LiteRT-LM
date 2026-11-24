@@ -48,7 +48,7 @@ lxml==6.0.4
 markupsafe==3.0.3
 mbstrdecoder==1.1.4
 more-itertools==11.0.2
-multidict==6.7.1
+multidict==6.9.1
 multiprocess==0.70.19
 nltk==3.9.4
 numpy==2.4.4
