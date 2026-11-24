@@ -23,15 +23,25 @@ import {getOrLoadGlobalLiteRtLm} from './load_litertlm.js';
 import {EngineModelInput, resolveModelInput} from './model_input.js';
 import {Mutex} from './mutex.js';
 import {createStreamingModelAssets} from './stream_utils.js';
-import {Backend, Deletable, EmbeddingEngine as WasmEmbeddingEngine, EmbeddingOptions, InputOverflowStrategy, unwrapWasmResult} from './wasm_binding_types.js';
+import {Backend, Deletable, EmbeddingEngine as WasmEmbeddingEngine, InputOverflowStrategy, unwrapWasmResult, WasmEmbeddingOptions} from './wasm_binding_types.js';
 import {consumeEmscriptenVectorToArray} from './wasm_utils.js';
 
 export {
-  type EmbeddingOptions,
   InputOverflowStrategy,
   SUPPORTED_AUDIO_MIME_TYPES,
   SUPPORTED_IMAGE_MIME_TYPES,
 };
+
+/**
+ * Options for configuring the embedding computation.
+ */
+export interface EmbeddingOptions {
+  normalize?: boolean;
+  insertSpecialTokens?: boolean;
+  inputOverflowStrategy?: InputOverflowStrategy;
+  visionTokensPerImage?: number;
+  outputSize?: number;
+}
 
 /**
  * A single input part to the embedding engine.
@@ -53,12 +63,14 @@ export interface EmbeddingResponse {
   numChunks: number;
 }
 
-function toWasmEmbeddingOptions(options?: EmbeddingOptions): EmbeddingOptions {
+function toWasmEmbeddingOptions(options?: EmbeddingOptions):
+    WasmEmbeddingOptions {
   return {
-    normalize: options?.normalize ?? true,
-    insertSpecialTokens: options?.insertSpecialTokens ?? true,
-    inputOverflowStrategy:
-        options?.inputOverflowStrategy ?? InputOverflowStrategy.ERROR,
+    normalize: options?.normalize,
+    insertSpecialTokens: options?.insertSpecialTokens,
+    inputOverflowStrategy: options?.inputOverflowStrategy != null ?
+        {value: options.inputOverflowStrategy} :
+        undefined,
     visionTokensPerImage: options?.visionTokensPerImage,
     outputSize: options?.outputSize,
   };
