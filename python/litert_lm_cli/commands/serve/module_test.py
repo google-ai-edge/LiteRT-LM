@@ -708,6 +708,91 @@ class ServeTest(parameterized.TestCase):
     ):
       openai_handler._translate_openai_message(message, None)
 
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="json_string",
+          arguments='{"path": "."}',
+          expected={"path": "."},
+      ),
+      dict(
+          testcase_name="dict_object",
+          arguments={"path": "."},
+          expected={"path": "."},
+      ),
+  )
+  def test_translate_openai_message_assistant_tool_call_arguments(
+      self, arguments: Any, expected: dict[str, Any]
+  ):
+    message = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "list_files",
+                "arguments": arguments,
+            },
+        }],
+    }
+
+    translated = openai_common.translate_openai_message(message)
+
+    self.assertEqual(
+        translated,
+        {
+            "role": "assistant",
+            "tool_calls": [{
+                "type": "function",
+                "function": {
+                    "name": "list_files",
+                    "arguments": expected,
+                },
+            }],
+        },
+    )
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="invalid_json",
+          arguments="{invalid",
+          expected_error="Invalid JSON in tool call arguments",
+      ),
+      dict(
+          testcase_name="none_value",
+          arguments=None,
+          expected_error="got NoneType",
+      ),
+      dict(
+          testcase_name="unsupported_type",
+          arguments=123,
+          expected_error="got int",
+      ),
+      dict(
+          testcase_name="non_object_json",
+          arguments="[1, 2]",
+          expected_error="got list",
+      ),
+  )
+  def test_translate_openai_message_assistant_tool_call_arguments_invalid(
+      self, arguments: Any, expected_error: str
+  ):
+    message = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "list_files",
+                "arguments": arguments,
+            },
+        }],
+    }
+
+    with self.assertRaisesRegex(ValueError, expected_error):
+      openai_common.translate_openai_message(message)
+
   def test_cors_headers_disabled_by_default(self):
     server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
     port = server.server_port

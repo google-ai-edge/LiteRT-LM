@@ -343,12 +343,34 @@ class OpenAIStreamFormatter(abc.ABC):
     return format_sse_final()
 
 
-def _parse_tool_arguments(args_str: str) -> dict[str, Any]:
-  """Parses a JSON string of arguments into a dictionary, returning empty dict on error."""
-  try:
-    return json.loads(args_str)
-  except json.JSONDecodeError:
-    return {}
+def _parse_tool_arguments(args: str | dict[str, Any]) -> dict[str, Any]:
+  """Parses tool call arguments into a dictionary.
+
+  The OpenAI Chat Completions spec defines `function.arguments` as a
+  JSON-encoded string, but some OpenAI-compatible clients send a JSON object
+  (dict) directly. Accepts both for compatibility.
+  See https://github.com/google-ai-edge/LiteRT-LM/issues/3800.
+
+  Args:
+    args: Tool call arguments as a JSON-encoded string or a dictionary.
+
+  Returns:
+    Parsed arguments dictionary.
+
+  Raises:
+    ValueError: If `args` is not a dict or a valid JSON object string.
+  """
+  if isinstance(args, str):
+    try:
+      args = json.loads(args)
+    except json.JSONDecodeError as e:
+      raise ValueError(f"Invalid JSON in tool call arguments: {e}") from e
+  if not isinstance(args, dict):
+    raise ValueError(
+        "Tool call arguments must be a JSON object or JSON object string, got"
+        f" {type(args).__name__}."
+    )
+  return args
 
 
 def build_name_by_tool_call_id_map(
