@@ -154,7 +154,7 @@ absl::StatusOr<std::unique_ptr<MetalEnv>> CreateMetalEnvFromLiteRtEnv(const Envi
   if (!device) {
     device = MTLCreateSystemDefaultDevice();
     if (!device) {
-      return absl::InternalError("Failed to create Metal device.");
+      return absl::UnavailableError("Failed to create Metal device.");
     }
   }
 

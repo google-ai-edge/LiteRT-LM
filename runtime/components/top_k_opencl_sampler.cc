@@ -14,7 +14,6 @@
 
 #include "runtime/components/top_k_opencl_sampler.h"
 
-#include <any>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -22,6 +21,7 @@
 #include <random>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -31,6 +31,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "ml_drift/cl/cl_command_queue.h"  // from @ml_drift
 #include "ml_drift/cl/cl_context.h"  // from @ml_drift
@@ -53,7 +54,6 @@
 #include "ml_drift/common/task/tensor_desc.h"  // from @ml_drift
 #include "ml_drift/common/util.h"  // from @ml_drift
 #include "litert/cc/internal/litert_handle.h"  // from @litert
-#include "litert/cc/litert_any.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_environment_options.h"  // from @litert
@@ -63,7 +63,20 @@
 #include "runtime/components/top_k_gpu_sampler.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/util/status_macros.h"  // IWYU pragma: keep
-#include "tflite/delegates/gpu/cl/opencl_wrapper.h"  // from @litert
+
+namespace {
+
+// Loads OpenCL via ml_drift and maps load failures to kUnavailable so sampler
+// callers can fall back cleanly.
+absl::Status LoadOpenClOrUnavailable() {
+  if (absl::Status status = ml_drift::cl::LoadOpenCL(); !status.ok()) {
+    return absl::UnavailableError(
+        absl::StrCat("OpenCL library unavailable: ", status.message()));
+  }
+  return absl::OkStatus();
+}
+
+}  // namespace
 
 #define SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(expr, error_msg) \
   do {                                                          \
@@ -161,34 +174,55 @@ args.dst::type result;
   return op;
 }
 
+template <typename HandleT>
+absl::StatusOr<HandleT> GetRequiredOpenClHandle(
+    const EnvironmentOptions& env_options, EnvironmentOptions::Tag tag,
+    absl::string_view name) {
+  LITERT_ASSIGN_OR_RETURN(
+      const auto option, env_options.GetOption(tag),
+      absl::UnavailableError(
+          absl::StrCat("LiteRT environment does not provide ", name, ".")));
+  if (!std::holds_alternative<int64_t>(option)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("LiteRT environment option ", name, " is not an int64."));
+  }
+  // LiteRT treats null OpenCL handles as not provided.
+  if (std::get<int64_t>(option) == 0) {
+    return absl::UnavailableError(
+        absl::StrCat("LiteRT environment does not provide ", name, "."));
+  }
+  return reinterpret_cast<HandleT>(std::get<int64_t>(option));
+}
+
 absl::StatusOr<std::unique_ptr<ClEnv>> CreateClEnvFromLiteRtEnv(
     const Environment& env) {
   LITERT_ASSIGN_OR_RETURN(auto env_options, env.GetOptions());
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto opencl_device_id_any,
-      env_options.GetOption(EnvironmentOptions::Tag::kOpenClDeviceId));
-  auto opencl_device_id = reinterpret_cast<cl_device_id>(
-      std::get<int64_t>(litert::LiteRtVariant(opencl_device_id_any)));
-  LITERT_ASSIGN_OR_RETURN(
-      auto opencl_platform_id_any,
-      env_options.GetOption(EnvironmentOptions::Tag::kOpenClPlatformId));
-  auto opencl_platform_id = reinterpret_cast<cl_platform_id>(
-      std::get<int64_t>(litert::LiteRtVariant(opencl_platform_id_any)));
+  ABSL_ASSIGN_OR_RETURN(
+      cl_device_id opencl_device_id,
+      GetRequiredOpenClHandle<cl_device_id>(
+          env_options, EnvironmentOptions::Tag::kOpenClDeviceId,
+          "OpenCL device ID"));
+  ABSL_ASSIGN_OR_RETURN(
+      cl_platform_id opencl_platform_id,
+      GetRequiredOpenClHandle<cl_platform_id>(
+          env_options, EnvironmentOptions::Tag::kOpenClPlatformId,
+          "OpenCL platform ID"));
+  ABSL_ASSIGN_OR_RETURN(
+      cl_context opencl_context,
+      GetRequiredOpenClHandle<cl_context>(
+          env_options, EnvironmentOptions::Tag::kOpenClContext,
+          "OpenCL context"));
+  ABSL_ASSIGN_OR_RETURN(
+      cl_command_queue opencl_command_queue,
+      GetRequiredOpenClHandle<cl_command_queue>(
+          env_options, EnvironmentOptions::Tag::kOpenClCommandQueue,
+          "OpenCL command queue"));
+
+  ABSL_RETURN_IF_ERROR(LoadOpenClOrUnavailable());
+
   CLDevice cl_device(opencl_device_id, opencl_platform_id);
-
-  LITERT_ASSIGN_OR_RETURN(
-      auto opencl_context_any,
-      env_options.GetOption(EnvironmentOptions::Tag::kOpenClContext));
-  auto opencl_context = reinterpret_cast<cl_context>(
-      std::get<int64_t>(std::any_cast<LiteRtVariant>(opencl_context_any)));
   CLContext cl_context(opencl_context, /*has_ownership=*/false);
-
-  LITERT_ASSIGN_OR_RETURN(
-      auto opencl_command_queue_any,
-      env_options.GetOption(EnvironmentOptions::Tag::kOpenClCommandQueue));
-  auto opencl_command_queue = reinterpret_cast<cl_command_queue>(
-      std::get<int64_t>(litert::LiteRtVariant(opencl_command_queue_any)));
   CLCommandQueue cl_command_queue(opencl_command_queue,
                                   /*has_ownership=*/false);
 
@@ -663,7 +697,6 @@ int LiteRtTopKOpenClSampler_Create(
         sampler_params,
     LiteRtTopKOpenClSampler_Sampler** sampler_out,
     char** absl_nullable error_msg) {
-  SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(ml_drift::cl::LoadOpenCL(), error_msg);
   if (!runtime_c_api) {
     SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(
         absl::InvalidArgumentError("Input LiteRT C API not provided."),
@@ -737,8 +770,6 @@ int SampleToIdAndScoreBufferImpl(
     LiteRtTopKOpenClSampler_Sampler* sampler, LiteRtTensorBuffer logits_tensor,
     LiteRtTensorBuffer ids_tensor, const LiteRtTensorBuffer* scores_tensor,
     std::optional<absl::Span<const float>> uniforms, char** error_msg) {
-  SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(tflite::gpu::cl::LoadOpenCL(),
-                                         error_msg);
   if (!sampler) {
     SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(
         absl::InvalidArgumentError("Sampler not provided."), error_msg);
@@ -754,6 +785,7 @@ int SampleToIdAndScoreBufferImpl(
         absl::InvalidArgumentError("Input ids tensor not provided."),
         error_msg);
   }
+  SAMPLER_RETURN_AND_SET_ERROR_IF_NOT_OK(LoadOpenClOrUnavailable(), error_msg);
   auto env_holder = cpp_sampler->GetEnvironment().GetHolder();
   auto cpp_logits_tensor = litert::TensorBuffer::WrapCObject(
       env_holder, logits_tensor, litert::OwnHandle::kNo);

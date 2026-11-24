@@ -158,6 +158,28 @@ TEST(TopKWebGpuSamplerCApiTest, CreationFailedWithInvalidInputs) {
   ASSERT_EQ(sampler, nullptr);
 }
 
+TEST(TopKWebGpuSamplerCApiTest,
+     ReturnsUnavailableWhenEnvironmentLacksWebGpuOptions) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto bare_env, litert::Environment::Create({}));
+  proto::SamplerParameters sampler_params;
+  sampler_params.set_k(1);
+  sampler_params.set_p(0.5);
+  sampler_params.set_temperature(1.0);
+  LiteRtTopKWebGpuSampler_Sampler* sampler = nullptr;
+  char* error_msg = nullptr;
+  auto [runtime_c_api, env_handle] = bare_env.GetHolderForCApi();
+  int error_code = LiteRtTopKWebGpuSampler_Create(
+      runtime_c_api, env_handle, /*batch_size=*/1, /*sequence_size=*/1,
+      /*vocab_size=*/201,
+      /*activation_data_type=*/nullptr, &sampler_params, &sampler, &error_msg);
+  ASSERT_NE(error_msg, nullptr);
+  std::string error_msg_str = error_msg;
+  free(error_msg);
+  EXPECT_EQ(error_code, static_cast<int>(absl::StatusCode::kUnavailable));
+  EXPECT_THAT(error_msg_str, HasSubstr("does not provide"));
+  EXPECT_EQ(sampler, nullptr);
+}
+
 absl::Status CreateStatus(int error_code, const char* error_msg) {
   absl::StatusCode code = static_cast<absl::StatusCode>(error_code);
   return absl::Status(code, error_msg);

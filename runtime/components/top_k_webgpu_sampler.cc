@@ -21,6 +21,7 @@
 #include <random>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -30,6 +31,7 @@
 #include "absl/status/status_macros.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -203,24 +205,48 @@ args.dst::type result;
   return op;
 }
 
+template <typename HandleT>
+absl::StatusOr<HandleT> GetRequiredWebGpuHandle(
+    const EnvironmentOptions& env_options, EnvironmentOptions::Tag tag,
+    absl::string_view name) {
+  LITERT_ASSIGN_OR_RETURN(
+      const auto option, env_options.GetOption(tag),
+      absl::UnavailableError(
+          absl::StrCat("LiteRT environment does not provide ", name, ".")));
+  if (!std::holds_alternative<int64_t>(option)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("LiteRT environment option ", name, " is not an int64."));
+  }
+  // LiteRT treats null WebGPU handles as not provided.
+  if (std::get<int64_t>(option) == 0) {
+    return absl::UnavailableError(
+        absl::StrCat("LiteRT environment does not provide ", name, "."));
+  }
+  return reinterpret_cast<HandleT>(std::get<int64_t>(option));
+}
+
 absl::StatusOr<std::unique_ptr<WebGpuEnv>> CreateWebGpuEnvFromLiteRtEnv(
     const Environment* env) {
   LITERT_ASSIGN_OR_RETURN(auto env_options, env->GetOptions());
 
 #ifdef LITERT_SAMPLER_LINKED_DYNAMICALLY
-  LITERT_ASSIGN_OR_RETURN(
-      auto instance_ptr,
-      env_options.GetOption(EnvironmentOptions::Tag::kWebGpuInstance));
-  wgpu::Instance instance = reinterpret_cast<WGPUInstance>(  // NOLINT
-      std::get<int64_t>(instance_ptr));
-  ABSL_RETURN_IF_ERROR(ml_drift::webgpu::Instance::Set(instance));
+  ABSL_ASSIGN_OR_RETURN(
+      wgpu::Instance instance,
+      GetRequiredWebGpuHandle<WGPUInstance>(  // NOLINT(misc-include-cleaner)
+          env_options, EnvironmentOptions::Tag::kWebGpuInstance,
+          "WebGPU instance"));
 #endif  // LITERT_SAMPLER_LINKED_DYNAMICALLY
 
-  LITERT_ASSIGN_OR_RETURN(
-      auto wgpu_device_ptr,
-      env_options.GetOption(EnvironmentOptions::Tag::kWebGpuDevice));
-  wgpu::Device device = reinterpret_cast<WGPUDevice>(  // NOLINT
-      std::get<int64_t>(wgpu_device_ptr));
+  ABSL_ASSIGN_OR_RETURN(
+      wgpu::Device device,
+      GetRequiredWebGpuHandle<WGPUDevice>(  // NOLINT(misc-include-cleaner)
+          env_options, EnvironmentOptions::Tag::kWebGpuDevice,
+          "WebGPU device"));
+
+#ifdef LITERT_SAMPLER_LINKED_DYNAMICALLY
+  // Set the global instance only after both handles are validated.
+  ABSL_RETURN_IF_ERROR(ml_drift::webgpu::Instance::Set(instance));
+#endif  // LITERT_SAMPLER_LINKED_DYNAMICALLY
 
   wgpu::AdapterInfo adapter_info;
   device.GetAdapterInfo(&adapter_info);
