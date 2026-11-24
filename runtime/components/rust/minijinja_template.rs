@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use minijinja::syntax::SyntaxConfig;
+use minijinja::value::Serde;
 use minijinja::Environment;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -182,21 +184,25 @@ fn rstrip(s: std::borrow::Cow<'_, str>, chars: Option<std::borrow::Cow<'_, str>>
     }
 }
 
-fn create_env() -> Environment<'static> {
+fn create_env() -> Result<Environment<'static>, minijinja::Error> {
     let mut env = Environment::new();
     // Keep trailing newlines in the rendered prompt text (e.g., `<think>\n`
     // when prefilling thinking channels) so that prompt specifications and
     // model training formatting are preserved exactly without being stripped.
-    env.set_keep_trailing_newline(true);
-    env.set_trim_blocks(true);
-    env.set_lstrip_blocks(true);
+    env.set_syntax(
+        SyntaxConfig::builder()
+            .keep_trailing_newline(true)
+            .trim_blocks(true)
+            .lstrip_blocks(true)
+            .build()?,
+    );
     env.add_function("strftime_now", strftime_now);
     env.add_function("raise_exception", raise_exception);
     env.add_filter("tojson", tojson);
     env.add_filter("lstrip", lstrip);
     env.add_filter("rstrip", rstrip);
     env.add_test("none", is_none);
-    env
+    Ok(env)
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -365,7 +371,16 @@ impl MinijinjaTemplate {
                 is_ok: false,
             };
         }
-        let mut env = create_env();
+        let mut env = match create_env() {
+            Ok(env) => env,
+            Err(e) => {
+                return ffi::UndeclaredVariablesResult {
+                    variables: Vec::new(),
+                    error: e.to_string(),
+                    is_ok: false,
+                };
+            }
+        };
         if let Err(e) = env.add_template("template", &self.source) {
             return ffi::UndeclaredVariablesResult {
                 variables: Vec::new(),
@@ -410,7 +425,7 @@ impl MinijinjaTemplate {
             _ => vec![],
         };
 
-        let mut env = create_env();
+        let mut env = create_env()?;
         env.add_template("template", &self.source)?;
         let tmpl = env.get_template("template")?;
 
@@ -436,7 +451,7 @@ impl MinijinjaTemplate {
             }
         }
 
-        let res = tmpl.render(Value::Object(ctx))?;
+        let res = tmpl.render(Serde(Value::Object(ctx)))?;
         Ok(res)
     }
 }

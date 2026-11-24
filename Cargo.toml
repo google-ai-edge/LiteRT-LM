@@ -16,7 +16,7 @@ cxx = "=1.0.149"
 googletest = "0.14"
 indexmap = "2.12"
 llguidance = { version = "=1.9.1", default-features = false, features = ["lark", "rayon", "ahash"] }
-minijinja = { version = "=2.14.0", features = ["json", "preserve_order"] }
+minijinja = { version = "=3.0.5", features = ["json", "preserve_order", "serde"] }
 paste = "1.0"
 quote = "1.0"
 tokenizers = { version = "=0.21.0", default-features = false, features = ["onig"] }
