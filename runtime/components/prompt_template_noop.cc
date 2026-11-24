@@ -15,6 +15,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -75,6 +76,12 @@ absl::string_view PromptTemplate::GetTemplateSource() const {
     return "";
   }
   return minijinja_template_->source;
+}
+
+absl::StatusOr<std::vector<std::string>>
+PromptTemplate::GetUndeclaredVariables() const {
+  return absl::UnimplementedError(
+      "Minijinja prompt template engine is disabled in this build.");
 }
 
 }  // namespace litert::lm

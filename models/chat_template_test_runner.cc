@@ -49,6 +49,8 @@ ABSL_FLAG(std::vector<std::string>, pbtext_files, {},
           "Comma-separated list of LlmMetadataProto.pbtext files to verify.");
 ABSL_FLAG(std::vector<std::string>, mirror_chat_templates, {},
           "Comma-separated list of mirror chat template files to verify.");
+ABSL_FLAG(std::string, input_schema, "",
+          "Optional path to JSON Schema file to validate template variables.");
 
 namespace litert::lm {
 namespace {
@@ -152,6 +154,60 @@ PromptTemplateInput ParseInputJson(const json& j) {
   return input;
 }
 
+absl::StatusOr<json> LoadInputSchema(const std::filesystem::path& schema_path) {
+  if (!std::filesystem::exists(schema_path)) {
+    return absl::NotFoundError(absl::StrCat(
+        "Input schema file does not exist: ", schema_path.string()));
+  }
+  absl::StatusOr<std::string> schema_str = ReadFileContents(schema_path);
+  if (!schema_str.ok()) {
+    return schema_str.status();
+  }
+  json schema = json::parse(*schema_str, nullptr, /*allow_exceptions=*/false);
+  if (schema.is_discarded()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Failed to parse input schema JSON file: ", schema_path.string()));
+  }
+  return schema;
+}
+
+TEST(ChatTemplateTestRunner, ValidateTemplateVariables) {
+  const std::string chat_template_flag = absl::GetFlag(FLAGS_chat_template);
+  const std::string input_schema_flag = absl::GetFlag(FLAGS_input_schema);
+  if (input_schema_flag.empty()) {
+    GTEST_SKIP() << "Template variable validation skipped (empty "
+                    "--input_schema).";
+  }
+
+  ASSERT_FALSE(chat_template_flag.empty())
+      << "--chat_template must be specified.";
+
+  const std::filesystem::path schema_path = ResolvePath(input_schema_flag);
+  ASSERT_OK_AND_ASSIGN(const json schema, LoadInputSchema(schema_path));
+  const auto props_it = schema.find("properties");
+  ASSERT_TRUE(props_it != schema.end() && props_it->is_object())
+      << "Input schema must contain a top-level 'properties' object: "
+      << schema_path;
+
+  const std::filesystem::path template_path = ResolvePath(chat_template_flag);
+  ASSERT_OK_AND_ASSIGN(const std::string template_content,
+                       ReadFileContents(template_path));
+  PromptTemplate prompt_template(template_content);
+
+  ASSERT_OK_AND_ASSIGN(const std::vector<std::string> undeclared_vars,
+                       prompt_template.GetUndeclaredVariables());
+  std::vector<std::string> non_standard_vars;
+  for (const std::string& var : undeclared_vars) {
+    if (!props_it->contains(var)) {
+      non_standard_vars.push_back(var);
+    }
+  }
+  using ::testing::IsEmpty;
+  EXPECT_THAT(non_standard_vars, IsEmpty())
+      << "Chat template " << chat_template_flag
+      << " references non-standard top-level input variable(s) not declared in "
+      << schema_path;
+}
 TEST(ChatTemplateTestRunner, RenderAndCompareGoldens) {
   const std::string chat_template_flag = absl::GetFlag(FLAGS_chat_template);
   const std::string input_dir_flag = absl::GetFlag(FLAGS_input_dir);

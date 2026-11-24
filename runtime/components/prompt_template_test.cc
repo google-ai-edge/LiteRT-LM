@@ -391,5 +391,34 @@ TEST(PromptTemplateTest, FunctionGemmaToolCallWithNullContent) {
                           "<escape>Paris<escape>}<end_function_call>"));
 }
 
+TEST(PromptTemplateTest, GetUndeclaredVariables) {
+  using ::testing::ElementsAre;
+
+  PromptTemplate prompt_template(
+      "{% set ns = namespace(x=None, flag=True) %}"
+      "{% for m in messages %}{{ m.content }}{% endfor %}"
+      "{% if enable_thinking | default(False) %}{{ reasoning_effort }}{% endif "
+      "%}"
+      "{{ strftime_now('%Y') }}"
+      "{% if false %}{{ raise_exception('err') }}{{ custom_var }}{% endif %}");
+  ASSERT_OK_AND_ASSIGN(std::vector<std::string> vars,
+                       prompt_template.GetUndeclaredVariables());
+  EXPECT_THAT(vars, ElementsAre("custom_var", "enable_thinking", "messages",
+                                "reasoning_effort"));
+}
+
+TEST(PromptTemplateTest, GetUndeclaredVariablesErrors) {
+  PromptTemplate invalid_template("{% if messages %}");
+  EXPECT_THAT(invalid_template.GetUndeclaredVariables(),
+              testing::status::StatusIs(absl::StatusCode::kInternal));
+
+  PromptTemplate valid_template("{{ messages }}");
+  PromptTemplate moved_to = std::move(valid_template);
+  // NOLINTNEXTLINE(bugprone-use-after-move)
+  const auto moved_result = valid_template.GetUndeclaredVariables();
+  EXPECT_THAT(moved_result,
+              testing::status::StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
 }  // namespace
 }  // namespace litert::lm

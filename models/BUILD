@@ -20,6 +20,10 @@ package(
     default_visibility = ["//visibility:public"],
 )
 
+exports_files([
+    "chat_template_input_schema.json",
+])
+
 cc_library(
     name = "chat_template_test_runner_lib",
     testonly = True,

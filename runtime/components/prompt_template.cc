@@ -17,6 +17,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
@@ -154,6 +155,26 @@ absl::string_view PromptTemplate::GetTemplateSource() const {
   }
   auto source = minijinja_template_->tmpl->source();
   return absl::string_view(source.data(), source.size());
+}
+
+absl::StatusOr<std::vector<std::string>>
+PromptTemplate::GetUndeclaredVariables() const {
+  if (minijinja_template_ == nullptr) {
+    return absl::FailedPreconditionError("PromptTemplate was moved from.");
+  }
+  const auto rust_result =
+      minijinja_template_->tmpl->get_undeclared_variables();
+  if (!rust_result.is_ok) {
+    return absl::InternalError(
+        absl::StrCat("Failed to get undeclared variables: ",
+                     std::string(rust_result.error)));
+  }
+  std::vector<std::string> result;
+  result.reserve(rust_result.variables.size());
+  for (const auto& var : rust_result.variables) {
+    result.emplace_back(var.data(), var.size());
+  }
+  return result;
 }
 
 }  // namespace litert::lm

@@ -29,6 +29,12 @@ mod ffi {
         is_ok: bool,
     }
 
+    struct UndeclaredVariablesResult {
+        variables: Vec<String>,
+        error: String,
+        is_ok: bool,
+    }
+
     extern "Rust" {
         type MinijinjaTemplate;
 
@@ -36,6 +42,7 @@ mod ffi {
         fn apply(self: &MinijinjaTemplate, inputs_json: String) -> ApplyResult;
         fn source(self: &MinijinjaTemplate) -> &str;
         fn get_capabilities(self: &MinijinjaTemplate) -> ChatTemplateCapabilities;
+        fn get_undeclared_variables(self: &MinijinjaTemplate) -> UndeclaredVariablesResult;
         fn clone_template(self: &MinijinjaTemplate) -> Box<MinijinjaTemplate>;
     }
 }
@@ -192,6 +199,146 @@ fn create_env() -> Environment<'static> {
     env
 }
 
+fn is_ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_'
+}
+
+fn is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+// Extracts bare identifiers from a Jinja expression/statement, skipping string
+// literals (with backslash escapes) and attribute accesses (`.attr`).
+fn collect_bare_idents<'a>(expr: &'a str, out: &mut std::collections::HashSet<&'a str>) {
+    let mut chars = expr.char_indices().peekable();
+    let mut prev_was_dot = false;
+    while let Some((idx, ch)) = chars.next() {
+        if ch == '\'' || ch == '"' {
+            let quote = ch;
+            while let Some((_, qch)) = chars.next() {
+                if qch == '\\' {
+                    let _ = chars.next();
+                } else if qch == quote {
+                    break;
+                }
+            }
+            prev_was_dot = false;
+        } else if ch == '.' {
+            prev_was_dot = true;
+        } else if is_ident_start(ch) {
+            let mut end = idx + ch.len_utf8();
+            while let Some(&(next_idx, next_ch)) = chars.peek() {
+                if is_ident_char(next_ch) {
+                    end = next_idx + next_ch.len_utf8();
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if !prev_was_dot {
+                out.insert(&expr[idx..end]);
+            }
+            prev_was_dot = false;
+        } else if !ch.is_whitespace() {
+            prev_was_dot = false;
+        }
+    }
+}
+
+// Collects top-level macro names and `{% set name = ... %}` local variables
+// defined in `source`. Minijinja's `undeclared_variables()` walks the AST
+// top-down with lexical scoping on `{% if %}` blocks, so it reports
+// forward-referenced macros and variables assigned inside `{% if %}`/`{% else %}`
+// branches even though they are template-local at runtime.
+fn collect_template_local_definitions<'a>(source: &'a str) -> std::collections::HashSet<&'a str> {
+    let mut locals = std::collections::HashSet::new();
+    let mut referenced_before_set = std::collections::HashSet::new();
+    let mut macro_depth: usize = 0;
+    let mut pos = 0;
+
+    while pos < source.len() {
+        let rest = &source[pos..];
+        let next_open = rest.find('{');
+        let Some(rel_open) = next_open else {
+            break;
+        };
+        let tag_start = pos + rel_open;
+        let after_brace = &source[tag_start + 1..];
+        let Some(kind) = after_brace.chars().next() else {
+            break;
+        };
+
+        if kind == '#' {
+            // Skip Jinja comment `{# ... #}`.
+            if let Some(rel_close) = source[tag_start + 2..].find("#}") {
+                pos = tag_start + 2 + rel_close + 2;
+            } else {
+                break;
+            }
+        } else if kind == '{' {
+            // Expression tag `{{ ... }}`.
+            let Some(rel_close) = source[tag_start + 2..].find("}}") else {
+                break;
+            };
+            let expr = source[tag_start + 2..tag_start + 2 + rel_close]
+                .trim_matches(|c: char| c.is_whitespace() || c == '-');
+            if macro_depth == 0 {
+                collect_bare_idents(expr, &mut referenced_before_set);
+            }
+            pos = tag_start + 2 + rel_close + 2;
+        } else if kind == '%' {
+            // Statement tag `{% ... %}`.
+            let Some(rel_close) = source[tag_start + 2..].find("%}") else {
+                break;
+            };
+            let stmt = source[tag_start + 2..tag_start + 2 + rel_close]
+                .trim_matches(|c: char| c.is_whitespace() || c == '-');
+            if let Some(after_macro) =
+                stmt.strip_prefix("macro").filter(|s| s.starts_with(char::is_whitespace))
+            {
+                if macro_depth == 0 {
+                    let name = after_macro.trim_start().split(|c: char| !is_ident_char(c)).next();
+                    if let Some(name) = name.filter(|n| !n.is_empty()) {
+                        locals.insert(name);
+                    }
+                }
+                macro_depth += 1;
+            } else if stmt == "endmacro"
+                || stmt.strip_prefix("endmacro").is_some_and(|s| s.starts_with(char::is_whitespace))
+            {
+                macro_depth = macro_depth.saturating_sub(1);
+            } else if macro_depth == 0 {
+                if let Some(after_set) =
+                    stmt.strip_prefix("set").filter(|s| s.starts_with(char::is_whitespace))
+                {
+                    if let Some((lhs, rhs)) = after_set.split_once('=') {
+                        let name = lhs.trim();
+                        collect_bare_idents(rhs, &mut referenced_before_set);
+                        // Ignore namespace attribute assignments (`ns.field = ...`)
+                        // and variables already referenced before this `set`
+                        // (including `{% if x is not defined %}{% set x = ... %}`
+                        // and self-referential `{% set x = x | default(...) %}`).
+                        if !name.is_empty()
+                            && name.chars().all(is_ident_char)
+                            && !referenced_before_set.contains(name)
+                        {
+                            locals.insert(name);
+                        }
+                    } else {
+                        collect_bare_idents(after_set, &mut referenced_before_set);
+                    }
+                } else {
+                    collect_bare_idents(stmt, &mut referenced_before_set);
+                }
+            }
+            pos = tag_start + 2 + rel_close + 2;
+        } else {
+            pos = tag_start + 1;
+        }
+    }
+    locals
+}
+
 impl MinijinjaTemplate {
     fn apply(&self, inputs_json: String) -> ffi::ApplyResult {
         match self.apply_impl(inputs_json) {
@@ -208,6 +355,44 @@ impl MinijinjaTemplate {
 
     fn get_capabilities(&self) -> ffi::ChatTemplateCapabilities {
         self.caps
+    }
+
+    fn get_undeclared_variables(&self) -> ffi::UndeclaredVariablesResult {
+        if !self.creation_error.is_empty() {
+            return ffi::UndeclaredVariablesResult {
+                variables: Vec::new(),
+                error: format!("Template creation failed: {}", self.creation_error),
+                is_ok: false,
+            };
+        }
+        let mut env = create_env();
+        if let Err(e) = env.add_template("template", &self.source) {
+            return ffi::UndeclaredVariablesResult {
+                variables: Vec::new(),
+                error: e.to_string(),
+                is_ok: false,
+            };
+        }
+        let tmpl = match env.get_template("template") {
+            Ok(tmpl) => tmpl,
+            Err(e) => {
+                return ffi::UndeclaredVariablesResult {
+                    variables: Vec::new(),
+                    error: e.to_string(),
+                    is_ok: false,
+                };
+            }
+        };
+        let locals = collect_template_local_definitions(&self.source);
+        let mut vars: Vec<String> = tmpl
+            .undeclared_variables(false)
+            .into_iter()
+            .filter(|name| {
+                !env.globals().any(|(g, _)| g == name.as_str()) && !locals.contains(name.as_str())
+            })
+            .collect();
+        vars.sort();
+        ffi::UndeclaredVariablesResult { variables: vars, error: String::new(), is_ok: true }
     }
 
     fn clone_template(&self) -> Box<MinijinjaTemplate> {
@@ -408,5 +593,69 @@ mod tests {
         let res = wrapper.apply(inputs.to_string());
         assert!(res.is_ok);
         assert_eq!(res.content, "  foo  |bar  |  baz|foo12|12foo");
+    }
+
+    #[test]
+    fn test_undeclared_variables() {
+        let source = "{%- macro outer(x) -%}{{ inner(x) }}{%- endmacro -%}\
+            {%- macro inner(x) -%}{{ x }}{%- endmacro -%}\
+            {% set ns = namespace(x=None, flag=True) %}\
+            {% set ns.x = 1 %}\
+            {% if messages %}{% set local_var = 'a' %}{% else %}{% set local_var = 'b' %}{% endif %}\
+            {{ local_var }}\
+            {% set resolved = extra_input | default(false) %}\
+            {% for m in messages %}{{ outer(m.content) }}{% endfor %}\
+            {% if enable_thinking | default(False) %}{{ reasoning_effort }}{% endif %}\
+            {{ strftime_now('%Y') }}\
+            {% if false %}{{ raise_exception('err') }}{{ custom_var }}{% endif %}";
+        let wrapper = new_minijinja_template(source.to_string());
+        let res = wrapper.get_undeclared_variables();
+        assert!(res.is_ok);
+        assert_eq!(
+            res.variables,
+            vec!["custom_var", "enable_thinking", "extra_input", "messages", "reasoning_effort"]
+        );
+    }
+
+    #[test]
+    fn test_undeclared_variables_edge_cases() {
+        // 1. `is not defined` default guard must NOT suppress `custom_flag`.
+        // 2. Macro-local `set` must NOT suppress top-level `shared_name`.
+        // 3. `role = message['role']` and `content = msg.content` inside `if` must be recognized as
+        //    local (not false-positive).
+        let source = "{#- comment with {{ ignored_in_comment }} -#}\
+            {% macro helper() %}{% set shared_name = 1 %}{{ shared_name }}{% endmacro %}\
+            {{ shared_name }}\
+            {% if custom_flag is not defined %}{% set custom_flag = false %}{% endif %}\
+            {{ custom_flag }}\
+            {% for message in messages %}\
+                {% if message['role'] == 'user' %}\
+                    {% set role = message['role'] %}\
+                    {% set content = message.content %}\
+                {% else %}\
+                    {% set role = 'other' %}\
+                    {% set content = '' %}\
+                {% endif %}\
+                {{ role }}{{ content }}\
+            {% endfor %}";
+        let wrapper = new_minijinja_template(source.to_string());
+        let res = wrapper.get_undeclared_variables();
+        assert!(res.is_ok);
+        assert_eq!(res.variables, vec!["custom_flag", "messages", "shared_name"]);
+
+        // 4. Self-referential `set` must not be added to template locals.
+        let locals = collect_template_local_definitions(
+            "{% set self_ref = self_ref | default(false) %}{% set ok_local = 'self_ref' %}",
+        );
+        assert!(!locals.contains("self_ref"));
+        assert!(locals.contains("ok_local"));
+    }
+
+    #[test]
+    fn test_undeclared_variables_invalid_syntax() {
+        let wrapper = new_minijinja_template("{% if messages %}".to_string());
+        let res = wrapper.get_undeclared_variables();
+        assert!(!res.is_ok);
+        assert!(!res.error.is_empty());
     }
 }

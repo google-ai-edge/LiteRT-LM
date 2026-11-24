@@ -17,6 +17,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
@@ -131,6 +132,11 @@ class PromptTemplate {
 
   // Returns the template source string.
   absl::string_view GetTemplateSource() const;
+
+  // Returns the sorted list of top-level undeclared template variables
+  // referenced by this template (excluding built-in Jinja globals and
+  // registered helper functions).
+  absl::StatusOr<std::vector<std::string>> GetUndeclaredVariables() const;
 
   // Returns the capabilities that the prompt template supports.
   const PromptTemplateCapabilities& GetCapabilities() const {
