@@ -2,19 +2,19 @@
 
 workspace(name = "litert_lm")
 
-# UPDATED = 2026-11-06
-LITERT_REF = "bf49eb62406d15948261a840c9dcd8e4f13b478c"
+# UPDATED = 2026-11-12
+LITERT_REF = "e3f1e7df49dfa0189d03e9175a6ddbd90a3bd113"
 
-LITERT_SHA256 = "f5ee44f21843bc6634c02d20d5abb2e4dc0feb83d702b73b5073f10c008231ba"
+LITERT_SHA256 = "d606c7ef8054604a1f677cabaa7538934146b25f28aa9ea6229d3ff63a03ce16"
 
 TENSORFLOW_REF = "faa06da43657488c1f7479289d11d15e03a15ba1"
 
 
 TENSORFLOW_SHA256 = "aa0de21d364ecc1b15d489d439b426157f717c69c1e4cd9d4c3cd08fa798f8ff"
 
-ML_DRIFT_COMMIT = "e9229fa80c4a99f1855721aec8282f7f4ce86fe4"
+ML_DRIFT_COMMIT = "be38e9f63b691936ca19d2871a9a339f49396edb"
 
-ML_DRIFT_SHA256 = "d485e49eb785ce5c0ee2589e3f5aa1a133c5bb9caa0ca88d8a266e96791eac69"
+ML_DRIFT_SHA256 = "9cf52744c6e590568e19b164415cea35cd5381e208f202703a76eda7a9474a0f"
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
@@ -518,7 +518,7 @@ http_archive(
 http_archive(
     name = "litert",
     patch_cmds = [
-        # @dawn//:webgpu_dawn in LiteRT's dawn.BUILD is headers-only; wire in LiteRT-LM's prebuilt Dawn shared library.
+        # Stage LiteRT-LM's desktop prebuilt Dawn runtime in runfiles data (loaded on demand via webgpu_dawn_loader).
         "sed -i -e 's|\"\\:dawn_native\",|\":dawn_native\", \"@//runtime/components:webgpu_dawn_shared_lib\",|g' third_party/dawn/dawn.BUILD",
     ],
     sha256 = LITERT_SHA256,
