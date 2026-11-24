@@ -16,7 +16,7 @@
 
 # The next version of LiteRT-LM (e.g. the version that is currently in development).
 # The minor version code usually should be bumped after every release.
-VERSION = "0.20.0"
+VERSION = "0.21.0"
 
 # The LiteRT Maven version that litertlm-android depends on.
 LITERT_VERSION = "2.4.0"
