@@ -6,12 +6,30 @@ LiteRT, engineered for **high-performance**, **cross-platform** execution.
 🔗 [Product Website](https://ai.google.dev/edge/litert-lm) | 💬✨
 [Chat Demo](https://google-ai-edge.github.io/LiteRT-LM/web_demos/chat/index.html) | 🔎✨ [Embedding Demo](https://google-ai-edge.github.io/LiteRT-LM/web_demos/embedding_search/index.html)
 
-## 🔥 What's New: v0.19.0
--   * **🎯 Accelerated Logit Masking**: Enables faster constrained decoding on GPUs, with full support for MTP-enabled decoding.
--   * **🌐 Web SDK**: @litert-lm/core now stream-loads all models, defaults to the GPU backend, and supports image and audio inputs.
--   * **🎙️ Speech Models**: Added support for multiple ASR and TTS models, including Qwen3-ASR, Kokoro, and Qwen3-TTS.
--   * **🧱 C API 1.0.0 (Breaking)**: Functions that can fail now return LiteRtLmStatusCode with results in out_* parameters, and only litert_lm_* symbols are exported.
--   * **⚙️ Performance & Platform**: GPU sampling now matches CPU for the same seed, ModelInfo is faster and uses less memory.
+## 🔥 What's New: v0.20.0
+
+-   * **NPU Executor Metadata & Default Behavior Change**:
+    * Added `LlmNpuExecutorMetadata` to `ExecutorMetadata` proto and updated the
+      runtime to resolve unset NPU execution flags
+      (`enable_neon_for_npu_greedy_sampling, use_hw_masking_for_npu,
+      use_hw_cache_update_for_npu, use_hw_ple_for_npu`) from `.litertlm`
+      bundle metadata.
+    * **Behavior Change**: Handwritten NPU components now default to disabled
+      unless enabled in bundle metadata or runtime flags (except KV-cache
+      updates on ring-buffer models).
+-   * **Python 3.10 support is deprecated**. Python 3.10 reached upstream
+    end-of-life on 2026-10-01 ([PEP 619](https://peps.python.org/pep-0619/)).
+    Importing `litert_lm` on Python 3.10 now emits a `FutureWarning`.
+    **0.20.0 is the last release that supports Python 3.10**. The next release
+    (0.21.0) will require Python ≥ 3.11 and will no longer publish `cp310`
+    wheels. If you are on Python 3.10, upgrade to 3.11 or newer, or pin
+    `litert-lm==0.20.*`.
+-   * **Benchmark init time**: No longer counts engine creation twice in the C,
+    Kotlin, Swift and Python APIs and litert-lm benchmark.
+-   * **litert_lm_main**: Now stops each reply after --max_output_tokens tokens
+    when the flag is above 0.
+-   * **Reproducible .litertlm builds**: With SOURCE_DATE_EPOCH set, litert-lm-builder
+    now writes byte-identical files from the same inputs and uuid.
 
 👉 Try Gemma4-E4B with MTP on Linux, macOS, Windows or Raspberry Pi with the
 [LiteRT-LM CLI](https://ai.google.dev/edge/litert-lm/cli):
