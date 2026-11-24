@@ -23,4 +23,4 @@ LITERT_VERSION = "2.4.0"
 
 # C API Compatibility version.
 # Keep LITERT_LM_C_API_VERSION_* in c/engine.h in sync; engine_test checks this.
-C_API_VERSION = "1.1.0"
+C_API_VERSION = "1.2.0"

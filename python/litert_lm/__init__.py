@@ -50,6 +50,7 @@ from .interfaces import AbstractEngine
 from .interfaces import AbstractSession
 from .interfaces import Backend
 from .interfaces import BenchmarkInfo
+from .interfaces import Channel
 from .interfaces import ConstrainedDecodingConfig
 from .interfaces import LoraConfig
 from .interfaces import LoraRankConfig
@@ -95,6 +96,7 @@ __all__ = (
     "Backend",
     "Benchmark",
     "BenchmarkInfo",
+    "Channel",
     "ConstrainedDecodingConfig",
     "Content",
     "Contents",
