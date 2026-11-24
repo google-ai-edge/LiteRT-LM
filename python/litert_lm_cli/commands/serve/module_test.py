@@ -3204,6 +3204,82 @@ class ServeTest(parameterized.TestCase):
       server.shutdown()
       thread.join()
 
+  def test_openai_responses_incomplete_on_max_tokens(self):
+    mock_conv = mock.MagicMock()
+    mock_conv.__enter__.return_value = mock_conv
+    mock_conv.__exit__.return_value = False
+    mock_conv.send_message.return_value = mock_litert_lm.Message.from_json({
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Partial"}],
+        "finish_reason": "max_tokens",
+    })
+    mock_conv.send_message_async.return_value = [
+        mock_litert_lm.Message.from_json({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Partial"}],
+        }),
+        mock_litert_lm.Message.from_json({
+            "role": "assistant",
+            "finish_reason": "max_tokens",
+        }),
+    ]
+    mock_engine_instance = mock.MagicMock()
+    mock_engine_instance.create_conversation.return_value = mock_conv
+    self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler,
+            "_get_engine",
+            return_value=mock_engine_instance,
+        )
+    )
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      # Non-streaming /v1/responses
+      req_sync = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/responses",
+          data=json.dumps({
+              "model": "gemma3-1b,gpu",
+              "input": "Hello",
+              "stream": False,
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req_sync) as resp:
+        self.assertEqual(resp.status, 200)
+        body = json.loads(resp.read().decode("utf-8"))
+      self.assertEqual(body["status"], "incomplete")
+      self.assertEqual(
+          body["incomplete_details"], {"reason": "max_output_tokens"}
+      )
+      self.assertEqual(body["output"][0]["status"], "incomplete")
+      self.assertEqual(body["output"][0]["content"][0]["text"], "Partial")
+
+      # Streaming /v1/responses
+      req_stream = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/responses",
+          data=json.dumps({
+              "model": "gemma3-1b,gpu",
+              "input": "Hello",
+              "stream": True,
+          }).encode("utf-8"),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req_stream) as resp:
+        self.assertEqual(resp.status, 200)
+        raw = resp.read().decode("utf-8")
+      self.assertIn("event: response.incomplete", raw)
+      self.assertIn('"status": "incomplete"', raw)
+      self.assertIn('"reason": "max_output_tokens"', raw)
+    finally:
+      server.close_conversation()
+      server.shutdown()
+      thread.join()
+
 
 if __name__ == "__main__":
   absltest.main()

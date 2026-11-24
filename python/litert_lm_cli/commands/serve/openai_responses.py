@@ -51,8 +51,16 @@ class _OpenAIV1ResponsesFormatter(openai_common.OpenAIStreamFormatter):
 
   @override
   def format_complete(self, finish_reason: str = "stop") -> bytes:
-    """Formats the response.completed event."""
-    del finish_reason
+    """Formats the response.completed or response.incomplete event."""
+    if finish_reason == "length":
+      return openai_common.sse_data(
+          openai_common.dump_json({
+              "id": self._resp_id,
+              "status": "incomplete",
+              "incomplete_details": {"reason": "max_output_tokens"},
+          }),
+          event="response.incomplete",
+      )
     return openai_common.sse_data(
         openai_common.dump_json({"id": self._resp_id, "status": "completed"}),
         event="response.completed",
@@ -147,6 +155,8 @@ def _handle_responses(
         response_format=response_format,
     )
     text_output = str(response)
+    is_max_tokens = response.finish_reason == "max_tokens"
+    status = "incomplete" if is_max_tokens else "completed"
     resp_body = OpenAIResponse(
         id=f"resp_{now_str}",
         output=[
@@ -154,7 +164,7 @@ def _handle_responses(
                 id=f"msg_{now_str}",
                 type="message",
                 role="assistant",
-                status="completed",
+                status=status,
                 content=[
                     OutputContent(
                         type="output_text",
@@ -165,15 +175,16 @@ def _handle_responses(
             )
         ],
     )
+    resp_dict: dict[str, Any] = dataclasses.asdict(resp_body)
+    if is_max_tokens:
+      resp_dict["status"] = "incomplete"
+      resp_dict["incomplete_details"] = {"reason": "max_output_tokens"}
     handler.headers_sent = True
     handler.send_response(200)
     handler.send_header("Content-Type", "application/json")
     handler.end_headers()
     handler.wfile.write(
-        (
-            openai_common.dump_json(dataclasses.asdict(resp_body), indent=2)
-            + "\n"
-        ).encode("utf-8")
+        (openai_common.dump_json(resp_dict, indent=2) + "\n").encode("utf-8")
     )
     return
 
