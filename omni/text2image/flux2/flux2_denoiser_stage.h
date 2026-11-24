@@ -23,29 +23,13 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
-#include "omni/base/io_types.h"
 #include "omni/base/litert_runner.h"
 #include "omni/base/stage.h"
 #include "omni/text2image/flux2/flux2_model_config.h"
+#include "omni/text2image/io_types.h"
 #include "omni/text2image/text_encoder_stage.h"
 
 namespace litert::omni::text2image {
-
-// Output of Stage 2 (Flux2DenoiserStage): denoised packed latents
-// of shape [1, grid_h * grid_w, packed_ch] after FlowMatch Euler integration,
-// preserving the input generation metadata (`ImageGenInputMetadata`).
-struct Flux2DenoiserOutput {
-  ImageGenInputMetadata metadata;
-  std::vector<float> packed_latents;
-};
-
-struct Flux2DenoiserInputIndices {
-  size_t hidden = 0;   // args_0: [1, tokens, 128]
-  size_t enc = 1;      // args_1: [1, seq_len, 7680]
-  size_t t = 2;        // args_2: [1]
-  size_t img_ids = 3;  // args_3: [tokens, 4]
-  size_t txt_ids = 4;  // args_4: [seq_len, 4]
-};
 
 // Stage 2: FlowMatch-Euler DiT Denoiser for monolithic FLUX.2 models
 // (Bonsai-FLUX.2).
@@ -54,15 +38,21 @@ struct Flux2DenoiserInputIndices {
 //   `lat += (sigma[k+1] - sigma[k]) *
 //           dit(lat, embeds, sigma[k], img_ids, txt_ids)`
 class Flux2DenoiserStage
-    : public SingleThreadedStageWithDeque<Flux2DenoiserOutput> {
+    : public SingleThreadedStageWithDeque<DenoisedLatents> {
  public:
-  using InputIndices = Flux2DenoiserInputIndices;
+  struct InputIndices {
+    size_t hidden = 0;   // args_0: [1, tokens, 128]
+    size_t enc = 1;      // args_1: [1, seq_len, 7680]
+    size_t t = 2;        // args_2: [1]
+    size_t img_ids = 3;  // args_3: [tokens, 4]
+    size_t txt_ids = 4;  // args_4: [seq_len, 4]
+  };
 
   static absl::StatusOr<std::unique_ptr<Flux2DenoiserStage>> Create(
       Stage<TextEncoderOutput>* absl_nonnull text_encoder,
       const Flux2ModelConfig& config,
       std::unique_ptr<LiteRtRunner> absl_nonnull runner,
-      InputIndices input_indices = {});
+      InputIndices input_indices = DefaultInputIndices());
 
   ~Flux2DenoiserStage() override = default;
 
@@ -72,6 +62,8 @@ class Flux2DenoiserStage
   absl::Status ScheduleInternal() override;
 
  private:
+  static constexpr InputIndices DefaultInputIndices() { return InputIndices{}; }
+
   Flux2DenoiserStage(Stage<TextEncoderOutput>* absl_nonnull text_encoder,
                      Flux2ModelConfig config,
                      std::unique_ptr<LiteRtRunner> absl_nonnull runner,

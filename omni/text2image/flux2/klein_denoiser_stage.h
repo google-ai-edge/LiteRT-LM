@@ -26,8 +26,8 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/litert_runner.h"
 #include "omni/base/stage.h"
-#include "omni/text2image/flux2/flux2_denoiser_stage.h"
 #include "omni/text2image/flux2/flux2_model_config.h"
+#include "omni/text2image/io_types.h"
 #include "omni/text2image/text_encoder_stage.h"
 
 namespace litert::omni::text2image {
@@ -69,7 +69,7 @@ struct KleinDenoiserInputIndices {
 // `dit_single_block_0..3`, `dit_final`) across the FlowMatch Euler integration
 // loop to produce denoised packed latents `[1, tokens, packed_ch]`.
 class KleinDenoiserStage
-    : public SingleThreadedStageWithDeque<Flux2DenoiserOutput> {
+    : public SingleThreadedStageWithDeque<DenoisedLatents> {
  public:
   using InputIndices = KleinDenoiserInputIndices;
 

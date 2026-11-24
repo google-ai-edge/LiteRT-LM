@@ -19,7 +19,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <random>
 #include <utility>
 #include <vector>
 
@@ -35,15 +34,6 @@ namespace {
 constexpr int kPackedChannels = 128;
 constexpr int kVaeLatentChannels = 32;
 constexpr int kPatchSize = 2;
-
-// Maps a normalized activation `v` in `[-1, 1]` to an 8-bit channel value in
-// `[0, 255]`, clamping out-of-range values and mapping non-finite (`NaN`)
-// values to `0`.
-uint8_t FloatToUint8Channel(float v) {
-  const float clamped = std::clamp(v * 0.5f + 0.5f, 0.0f, 1.0f);
-  return static_cast<uint8_t>(
-      std::lround(std::isfinite(clamped) ? clamped * 255.0f : 0.0f));
-}
 
 }  // namespace
 
@@ -109,16 +99,6 @@ std::vector<float> BuildTextPositionIds(int seq_len) {
   return ids;
 }
 
-std::vector<float> SampleGaussianLatents(size_t count, uint64_t seed) {
-  std::mt19937_64 rng(seed);
-  std::normal_distribution<float> dist(0.0f, 1.0f);
-  std::vector<float> out(count);
-  for (size_t i = 0; i < count; ++i) {
-    out[i] = dist(rng);
-  }
-  return out;
-}
-
 absl::StatusOr<std::vector<float>> UnpatchifyLatents(
     absl::Span<const float> packed_latents, int grid_h, int grid_w,
     absl::Span<const float> bn_scale, absl::Span<const float> bn_shift) {
@@ -168,31 +148,6 @@ absl::StatusOr<std::vector<float>> UnpatchifyLatents(
     }
   }
   return nchw;
-}
-
-absl::StatusOr<std::vector<uint8_t>> ConvertNchwToRgb888(
-    absl::Span<const float> nchw, int height, int width) {
-  if (height <= 0 || width <= 0) {
-    return absl::InvalidArgumentError("height and width must be positive.");
-  }
-  const size_t plane_size = static_cast<size_t>(height) * width;
-  if (nchw.size() != plane_size * 3) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "nchw size (", nchw.size(), ") does not match 3 * height * width (",
-        plane_size * 3, ")."));
-  }
-
-  std::vector<uint8_t> rgb(plane_size * 3);
-  const float* r_plane = nchw.data();
-  const float* g_plane = nchw.data() + plane_size;
-  const float* b_plane = nchw.data() + 2 * plane_size;
-
-  for (size_t i = 0; i < plane_size; ++i) {
-    rgb[i * 3 + 0] = FloatToUint8Channel(r_plane[i]);
-    rgb[i * 3 + 1] = FloatToUint8Channel(g_plane[i]);
-    rgb[i * 3 + 2] = FloatToUint8Channel(b_plane[i]);
-  }
-  return rgb;
 }
 
 // TODO(b/568027544): Move generic utility functions to a common directory such
@@ -351,65 +306,6 @@ absl::StatusOr<std::vector<float>> InterleaveThreeEncoderTaps(
     std::memcpy(dst + 2 * hidden_dim, tap2.data() + src_off, row_bytes);
   }
   return out;
-}
-
-absl::StatusOr<std::pair<std::vector<float>, std::vector<float>>>
-BuildFlux2RotaryPosEmbed(absl::Span<const float> joint_ids, int num_tokens,
-                         absl::Span<const int> axes_dim, float theta) {
-  if (num_tokens <= 0) {
-    return absl::InvalidArgumentError("num_tokens must be positive.");
-  }
-  if (axes_dim.empty()) {
-    return absl::InvalidArgumentError("axes_dim must not be empty.");
-  }
-  if (theta <= 0.0f) {
-    return absl::InvalidArgumentError("theta must be positive.");
-  }
-  const size_t num_axes = axes_dim.size();
-  if (joint_ids.size() != static_cast<size_t>(num_tokens) * num_axes) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "joint_ids size (", joint_ids.size(),
-        ") must equal num_tokens * axes_dim.size() (",
-        static_cast<size_t>(num_tokens) * num_axes, ")."));
-  }
-  int total_dim = 0;
-  for (int dim : axes_dim) {
-    if (dim <= 0 || dim % 2 != 0) {
-      return absl::InvalidArgumentError(
-          "Each entry in axes_dim must be a positive even integer.");
-    }
-    total_dim += dim;
-  }
-
-  const size_t total_elements = static_cast<size_t>(num_tokens) * total_dim;
-  std::vector<float> cos_out(total_elements);
-  std::vector<float> sin_out(total_elements);
-
-  for (int n = 0; n < num_tokens; ++n) {
-    float* cos_row = cos_out.data() + static_cast<size_t>(n) * total_dim;
-    float* sin_row = sin_out.data() + static_cast<size_t>(n) * total_dim;
-    int col_offset = 0;
-    for (size_t a = 0; a < num_axes; ++a) {
-      const int dim = axes_dim[a];
-      const int half_dim = dim / 2;
-      const double pos =
-          static_cast<double>(joint_ids[static_cast<size_t>(n) * num_axes + a]);
-      for (int j = 0; j < half_dim; ++j) {
-        const double inv_freq =
-            1.0 / std::pow(static_cast<double>(theta),
-                           static_cast<double>(2 * j) / dim);
-        const double angle = pos * inv_freq;
-        const float c = static_cast<float>(std::cos(angle));
-        const float s = static_cast<float>(std::sin(angle));
-        cos_row[col_offset + 2 * j] = c;
-        cos_row[col_offset + 2 * j + 1] = c;
-        sin_row[col_offset + 2 * j] = s;
-        sin_row[col_offset + 2 * j + 1] = s;
-      }
-      col_offset += dim;
-    }
-  }
-  return std::make_pair(std::move(cos_out), std::move(sin_out));
 }
 
 }  // namespace litert::omni::text2image

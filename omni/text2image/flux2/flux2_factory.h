@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2IMAGE_FLUX2_FLUX2_FACTORY_H_
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
@@ -27,6 +28,7 @@
 #include "omni/base/stage.h"
 #include "omni/text2image/flux2/flux2_model_config.h"
 #include "omni/text2image/prompt_source.h"
+#include "omni/text2image/text2image_session.h"
 #include "runtime/executor/executor_settings_base.h"
 
 namespace litert::omni::text2image {
@@ -50,6 +52,13 @@ absl::Status CreateFlux2Components(
     std::shared_ptr<ModelResources> absl_nonnull resources,
     std::vector<std::unique_ptr<internal::StageBase>>& stages,
     Stage<Output>* absl_nullable* absl_nonnull output_stage);
+
+// Returns a `LeasedText2ImageSessionFactory::ComponentBuilder` that merges
+// per-session overrides (`width`/`height`, requiring square dimensions when
+// set, `num_inference_steps`, and explicit `seed`) onto `base_config` and
+// constructs FLUX.2 pipeline stages via `CreateFlux2Components`.
+LeasedText2ImageSessionFactory::ComponentBuilder MakeFlux2ComponentBuilder(
+    Flux2ModelConfig base_config, std::string model_folder);
 
 }  // namespace litert::omni::text2image
 

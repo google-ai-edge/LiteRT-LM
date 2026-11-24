@@ -52,8 +52,10 @@
 #include "omni/text2image/flux2/klein_denoiser_stage.h"
 #include "omni/text2image/flux2/klein_text_encoder_stage.h"
 #include "omni/text2image/prompt_source.h"
+#include "omni/text2image/text2image_session.h"
 #include "omni/text2image/text_encoder_stage.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/proto/text2image_session_config.pb.h"
 #include "support/tokenizer/tokenizer.h"
 #include "support/util/test_utils.h"  // IWYU pragma: keep for ASSERT_OK
 
@@ -64,6 +66,7 @@ using ::absl_testing::StatusIs;
 using ::testing::_;
 using ::testing::ElementsAre;
 using ::testing::FloatNear;
+using ::testing::HasSubstr;
 
 class FakeTokenizer : public support::Tokenizer {
  public:
@@ -1009,6 +1012,59 @@ TEST_F(Flux2StagesTest, FactoryRejectsMissingLmModelResources) {
                                     std::make_unique<PushPromptSource>(),
                                     resources, stages, &output_stage),
               StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(Flux2StagesTest,
+       MakeFlux2ComponentBuilderValidatesSquareDimensionsAndForwards) {
+  auto shared_env = std::make_shared<Environment>(std::move(*env_));
+  auto resources = std::make_shared<ModelResources>(shared_env);
+  Flux2ModelConfig base_config;
+  LeasedText2ImageSessionFactory::ComponentBuilder builder =
+      MakeFlux2ComponentBuilder(base_config, "/nonexistent/folder");
+
+  // Non-square explicit dimensions are rejected before creating components.
+  std::vector<std::unique_ptr<internal::StageBase>> stages;
+  lm::proto::Text2ImageSessionConfig rect_cfg;
+  rect_cfg.set_width(512);
+  rect_cfg.set_height(256);
+  EXPECT_THAT(builder(rect_cfg, std::make_unique<PushPromptSource>(), resources,
+                      stages),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("square image dimensions")));
+  EXPECT_TRUE(stages.empty());
+
+  lm::proto::Text2ImageSessionConfig width_only_cfg;
+  width_only_cfg.set_width(512);
+  EXPECT_THAT(builder(width_only_cfg, std::make_unique<PushPromptSource>(),
+                      resources, stages),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("square image dimensions")));
+
+  lm::proto::Text2ImageSessionConfig height_only_cfg;
+  height_only_cfg.set_height(256);
+  EXPECT_THAT(builder(height_only_cfg, std::make_unique<PushPromptSource>(),
+                      resources, stages),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("square image dimensions")));
+
+  // Default (empty) config passes validation and delegates to
+  // `CreateFlux2Components`.
+  EXPECT_THAT(
+      builder(lm::proto::Text2ImageSessionConfig{},
+              std::make_unique<PushPromptSource>(), resources, stages),
+      StatusIs(absl::StatusCode::kInvalidArgument, HasSubstr(".litertlm")));
+
+  // Valid square override with `num_inference_steps` and explicit `seed`
+  // delegates to `CreateFlux2Components`.
+  lm::proto::Text2ImageSessionConfig override_cfg;
+  override_cfg.set_width(256);
+  override_cfg.set_height(256);
+  override_cfg.set_num_inference_steps(8);
+  override_cfg.set_seed(0);
+  EXPECT_THAT(
+      builder(override_cfg, std::make_unique<PushPromptSource>(), resources,
+              stages),
+      StatusIs(absl::StatusCode::kInvalidArgument, HasSubstr(".litertlm")));
 }
 
 TEST(Flux2MathTest, Fp16ToFp32AndLookupFp16TokenEmbeddings) {

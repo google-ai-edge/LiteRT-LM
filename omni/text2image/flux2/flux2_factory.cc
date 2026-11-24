@@ -16,6 +16,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -42,12 +43,14 @@
 #include "omni/text2image/flux2/klein_denoiser_stage.h"
 #include "omni/text2image/flux2/klein_text_encoder_stage.h"
 #include "omni/text2image/prompt_source.h"
+#include "omni/text2image/text2image_session.h"
 #include "omni/text2image/text_encoder_stage.h"
 #include "runtime/components/model_resources.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/proto/image_gen_model_type.pb.h"
 #include "runtime/proto/text2image_metadata.pb.h"
+#include "runtime/proto/text2image_session_config.pb.h"
 #include "support/tokenizer/tokenizer.h"
 
 namespace litert::omni::text2image {
@@ -453,6 +456,42 @@ absl::Status CreateFlux2Components(
   return CreateBonsaiComponents(config, std::move(prompt_source),
                                 std::move(tokenizer), *resources, stages,
                                 output_stage);
+}
+
+LeasedText2ImageSessionFactory::ComponentBuilder MakeFlux2ComponentBuilder(
+    Flux2ModelConfig base_config, std::string model_folder) {
+  return [base_config = std::move(base_config),
+          model_folder = std::move(model_folder)](
+             const lm::proto::Text2ImageSessionConfig& effective_config,
+             std::unique_ptr<PromptSource> absl_nonnull prompt_source,
+             std::shared_ptr<ModelResources> absl_nonnull model_resources,
+             std::vector<std::unique_ptr<internal::StageBase>>& stages)
+             -> absl::StatusOr<Stage<Output>* absl_nonnull> {
+    Flux2ModelConfig session_model_config = base_config;
+    if (effective_config.width() > 0 || effective_config.height() > 0) {
+      if (effective_config.width() != effective_config.height()) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "FLUX.2 requires square image dimensions (width == height), got ",
+            effective_config.width(), "x", effective_config.height()));
+      }
+      session_model_config.img_size = effective_config.width();
+    }
+    if (effective_config.num_inference_steps() > 0) {
+      session_model_config.steps = effective_config.num_inference_steps();
+    }
+    if (effective_config.has_seed()) {
+      session_model_config.default_seed =
+          static_cast<uint64_t>(effective_config.seed());
+    }
+    Stage<Output>* output_stage = nullptr;
+    ABSL_RETURN_IF_ERROR(CreateFlux2Components(
+        session_model_config, model_folder, std::move(prompt_source),
+        std::move(model_resources), stages, &output_stage));
+    if (output_stage == nullptr) {
+      return absl::InternalError("Output stage must not be null.");
+    }
+    return output_stage;
+  };
 }
 
 }  // namespace litert::omni::text2image

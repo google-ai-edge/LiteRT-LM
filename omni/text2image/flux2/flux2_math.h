@@ -15,7 +15,6 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2IMAGE_FLUX2_FLUX2_MATH_H_
 #define THIRD_PARTY_ODML_LITERT_LM_OMNI_TEXT2IMAGE_FLUX2_FLUX2_MATH_H_
 
-#include <cstddef>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -23,6 +22,9 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+// TODO(b/568027544): Remove transitive re-export once external callers include
+// `omni/text2image/text2image_math.h` directly.
+#include "omni/text2image/text2image_math.h"  // IWYU pragma: export
 
 namespace litert::omni::text2image {
 
@@ -40,9 +42,6 @@ std::vector<float> BuildImagePositionIds(int grid_h, int grid_w);
 // `[0.0f, 0.0f, 0.0f, i]`.
 std::vector<float> BuildTextPositionIds(int seq_len);
 
-// Samples `count` standard normal N(0, 1) floats using `std::mt19937_64(seed)`.
-std::vector<float> SampleGaussianLatents(size_t count, uint64_t seed);
-
 // Applies per-packed-channel BatchNorm affine transform
 // (`z = lat * bn_scale + bn_shift`) and 2x2 unpatchifies packed latents of
 // shape `[1, grid_h * grid_w, 128]` into NCHW VAE latents of shape
@@ -50,12 +49,6 @@ std::vector<float> SampleGaussianLatents(size_t count, uint64_t seed);
 absl::StatusOr<std::vector<float>> UnpatchifyLatents(
     absl::Span<const float> packed_latents, int grid_h, int grid_w,
     absl::Span<const float> bn_scale, absl::Span<const float> bn_shift);
-
-// Converts planar NCHW float image output of shape `[1, 3, height, width]` in
-// `[-1, 1]` to interleaved RGB888 bytes of shape `[height, width, 3]` via
-// `round(clamp(y * 0.5 + 0.5, 0.0, 1.0) * 255.0)`.
-absl::StatusOr<std::vector<uint8_t>> ConvertNchwToRgb888(
-    absl::Span<const float> nchw, int height, int width);
 
 // TODO(b/568027544): Move generic utility functions (e.g., `Fp16ToFp32` and
 // `LookupFp16TokenEmbeddings`) to a common directory such as `base/` or
@@ -90,13 +83,14 @@ absl::StatusOr<std::vector<float>> InterleaveThreeEncoderTaps(
     absl::Span<const float> tap0, absl::Span<const float> tap1,
     absl::Span<const float> tap2, int seq_len, int hidden_dim);
 
-// Computes multi-axis FLUX.2 rotary positional embeddings `(cos, sin)` of shape
-// `[1, num_tokens, 1, sum(axes_dim)]` from `joint_ids` of shape
-// `[num_tokens, axes_dim.size()]`, matching `Flux2PosEmbed`
-// (`repeat_interleave` by 2 along each axis).
-absl::StatusOr<std::pair<std::vector<float>, std::vector<float>>>
+// TODO(b/568027544): Remove forwarding wrapper once external callers migrate to
+// `BuildMultiAxisRotaryPosEmbed` in `omni/text2image/text2image_math.h`.
+inline absl::StatusOr<std::pair<std::vector<float>, std::vector<float>>>
 BuildFlux2RotaryPosEmbed(absl::Span<const float> joint_ids, int num_tokens,
-                         absl::Span<const int> axes_dim, float theta = 2000.0f);
+                         absl::Span<const int> axes_dim,
+                         float theta = 2000.0f) {
+  return BuildMultiAxisRotaryPosEmbed(joint_ids, num_tokens, axes_dim, theta);
+}
 
 }  // namespace litert::omni::text2image
 

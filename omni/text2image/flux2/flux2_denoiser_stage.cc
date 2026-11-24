@@ -35,6 +35,8 @@
 #include "omni/base/stage.h"
 #include "omni/text2image/flux2/flux2_math.h"
 #include "omni/text2image/flux2/flux2_model_config.h"
+#include "omni/text2image/io_types.h"
+#include "omni/text2image/text2image_math.h"
 #include "omni/text2image/text_encoder_stage.h"
 #include "omni/utils/tensor_utils.h"
 
@@ -194,7 +196,7 @@ absl::Status Flux2DenoiserStage::ScheduleInternal() {
     }
   }
 
-  Flux2DenoiserOutput output;
+  DenoisedLatents output;
   output.metadata = cond->metadata;
   output.metadata.width = width;
   output.metadata.height = height;

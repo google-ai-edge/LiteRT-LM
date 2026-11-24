@@ -38,9 +38,10 @@
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
 #include "omni/base/litert_runner.h"
 #include "omni/base/stage.h"
-#include "omni/text2image/flux2/flux2_denoiser_stage.h"
 #include "omni/text2image/flux2/flux2_math.h"
 #include "omni/text2image/flux2/flux2_model_config.h"
+#include "omni/text2image/io_types.h"
+#include "omni/text2image/text2image_math.h"
 #include "omni/text2image/text_encoder_stage.h"
 #include "omni/utils/tensor_utils.h"
 
@@ -323,8 +324,8 @@ absl::StatusOr<std::unique_ptr<KleinDenoiserStage>> KleinDenoiserStage::Create(
   const std::array<int, 4> axes_dim = {axis_dim, axis_dim, axis_dim, axis_dim};
   ABSL_ASSIGN_OR_RETURN(
       auto rope,
-      BuildFlux2RotaryPosEmbed(joint_ids, static_cast<int>(joint_tokens),
-                               axes_dim));
+      BuildMultiAxisRotaryPosEmbed(joint_ids, static_cast<int>(joint_tokens),
+                                   axes_dim));
   for (size_t i = 0; i < 2; ++i) {
     const auto& idx = input_indices.double_blocks[i];
     LITERT_RETURN_IF_ERROR(buffers.double_in[i][idx.cos].Write<float>(
@@ -514,7 +515,7 @@ absl::Status KleinDenoiserStage::ScheduleInternal() {
     }
   }
 
-  Flux2DenoiserOutput output;
+  DenoisedLatents output;
   output.metadata = cond->metadata;
   output.metadata.width = width;
   output.metadata.height = height;
