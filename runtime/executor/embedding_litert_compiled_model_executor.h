@@ -16,6 +16,7 @@
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_EMBEDDING_LITERT_COMPILED_MODEL_EXECUTOR_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -24,6 +25,7 @@
 #include "absl/container/btree_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/functional/function_ref.h"  // from @com_google_absl
+#include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
@@ -78,47 +80,6 @@ struct TextEncoderVariant {
 
   bool operator==(const TextEncoderVariant& other) const = default;
 };
-
-// A group of inputs that run together on one batched text encoder signature.
-struct BatchedTextEncoderGroup {
-  // The index of the batched signature.
-  size_t signature_index = 0;
-  // The sequence length of the batched signature.
-  int padded_sequence_length = 0;
-  // The indices of the inputs, one per row of the signature, in ascending
-  // order of length.
-  std::vector<size_t> inputs;
-
-  bool operator==(const BatchedTextEncoderGroup& other) const = default;
-};
-
-// Groups inputs of similar length to run them on batched text encoder
-// signatures with as little padding as possible.
-//
-// At each step, the shortest remaining inputs run on the batched signature
-// with the smallest padded length that they fill entirely (preferring larger
-// batches on ties), as long as the batched run does not process more padded
-// tokens than running those inputs one at a time on the batch size 1
-// signatures. Otherwise the shortest remaining input is left out and runs
-// alone.
-//
-// Args:
-//   lengths: The number of tokens of each input, or 0 for an input that must
-//     not be batched. Inputs longer than the longest batched or batch size 1
-//     signature are not batched either.
-//   single_signatures: Sequence length -> signature index, for the signatures
-//     with batch size 1.
-//   batched_signatures: Batch size (> 1) -> sequence length -> signature
-//     index.
-//
-// Returns:
-//   The groups, each referring to inputs by their index in `lengths`. Inputs
-//   in no group are meant to run one at a time.
-std::vector<BatchedTextEncoderGroup> GroupInputsForBatchedSignatures(
-    absl::Span<const size_t> lengths,
-    const absl::btree_map<int, size_t>& single_signatures,
-    const absl::btree_map<int, absl::btree_map<int, size_t>>&
-        batched_signatures);
 
 // EmbeddingLiteRtCompiledModelExecutor implements a two-stage embedding
 // pipeline:

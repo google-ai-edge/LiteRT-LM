@@ -794,7 +794,27 @@ target_link_libraries(runtime_executor_llm_litert_mtp_drafter
     LITERTLM_DEPS
 )
 
+# ==============================================================================
+# Embedding LiteRT Compiled Model Executor Utils
+# ==============================================================================
+add_litertlm_library(runtime_executor_embedding_litert_compiled_model_executor_utils STATIC
+  embedding_litert_compiled_model_executor_utils.cc
+)
+add_library(LiteRTLM::Runtime::Executor::EmbeddingLitertCompiledModelExecutorUtils ALIAS
+  runtime_executor_embedding_litert_compiled_model_executor_utils)
 
+target_include_directories(runtime_executor_embedding_litert_compiled_model_executor_utils
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERT_INCLUDE_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_executor_embedding_litert_compiled_model_executor_utils
+  PUBLIC
+    LiteRTLM::Runtime::Util
+    LITERTLM_DEPS
+)
 
 # ==============================================================================
 # Embedding LiteRT Compiled Model Executor
@@ -815,6 +835,7 @@ target_include_directories(runtime_executor_embedding_litert_compiled_model_exec
 target_link_libraries(runtime_executor_embedding_litert_compiled_model_executor
   PUBLIC
     LiteRTLM::Runtime::Executor::CancellationLatch
+    LiteRTLM::Runtime::Executor::EmbeddingLitertCompiledModelExecutorUtils
     LiteRTLM::Runtime::Executor
     LiteRTLM::Runtime::Components
     LiteRTLM::Runtime::Util
@@ -883,5 +904,6 @@ target_link_libraries(runtime_executor_libs INTERFACE
   LiteRTLM::Runtime::Executor::Litert
   LiteRTLM::Runtime::Executor::Embedding
   LiteRTLM::Runtime::Executor::EmbeddingLitertCompiledModelExecutor
+  LiteRTLM::Runtime::Executor::EmbeddingLitertCompiledModelExecutorUtils
   LiteRTLM::Runtime::Executor::ModelSignatureUtils
 )

@@ -72,7 +72,6 @@ using ::litert::lm::ExecutorTextData;
 using ::litert::lm::ModelAssets;
 using ::testing::ElementsAre;
 using ::testing::HasSubstr;
-using ::testing::IsEmpty;
 using ::testing::status::IsOkAndHolds;
 using ::testing::status::StatusIs;
 
@@ -2302,76 +2301,6 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
                HasSubstr("exceeds maximum supported signature length")));
   ASSERT_OK_AND_ASSIGN(ExecutorStats stats, executor->StopProfiling());
   EXPECT_EQ(stats.GetMetricAsInt64("(e2e) Embedding num padded tokens"), 0);
-}
-
-TEST(GroupInputsForBatchedSignaturesTest, NoSignatures) {
-  EXPECT_THAT(GroupInputsForBatchedSignatures({1, 2}, {}, {}), IsEmpty());
-  EXPECT_THAT(GroupInputsForBatchedSignatures({1, 2}, {}, {{2, {{4, 1}}}}),
-              IsEmpty());
-  EXPECT_THAT(GroupInputsForBatchedSignatures({1, 2}, {{4, 0}}, {}), IsEmpty());
-  EXPECT_THAT(GroupInputsForBatchedSignatures({1, 2}, {{4, 0}}, {{2, {}}}),
-              IsEmpty());
-}
-
-TEST(GroupInputsForBatchedSignaturesTest, IgnoresInvalidBatchSizeOrLength) {
-  EXPECT_THAT(GroupInputsForBatchedSignatures(
-                  {1, 2}, /*single_signatures=*/{{4, 0}},
-                  /*batched_signatures=*/
-                  {{-1, {{4, 1}}}, {0, {{4, 2}}}, {1, {{4, 3}}}}),
-              IsEmpty());
-  EXPECT_THAT(GroupInputsForBatchedSignatures(
-                  {1, 2}, /*single_signatures=*/{{4, 0}},
-                  /*batched_signatures=*/{{2, {{-4, 1}, {0, 2}}}}),
-              IsEmpty());
-  EXPECT_THAT(GroupInputsForBatchedSignatures(
-                  {1, 2}, /*single_signatures=*/{{-4, 0}, {0, 1}},
-                  /*batched_signatures=*/{{2, {{4, 2}}}}),
-              IsEmpty());
-  // Valid batched entries still match alongside invalid ones.
-  EXPECT_THAT(
-      GroupInputsForBatchedSignatures(
-          {1, 2}, /*single_signatures=*/{{4, 0}},
-          /*batched_signatures=*/{{0, {{4, 1}}}, {1, {{4, 2}}}, {2, {{4, 3}}}}),
-      ElementsAre(BatchedTextEncoderGroup{.signature_index = 3,
-                                          .padded_sequence_length = 4,
-                                          .inputs = {0, 1}}));
-}
-
-TEST(GroupInputsForBatchedSignaturesTest, SkipsGroupsWithMorePadding) {
-  // The four 2-token inputs would process 4 x 16 padded tokens on
-  // `encoder_4x16` instead of 4 x 4 alone, but the four 10-token inputs fill
-  // `encoder_4x16` with as many padded tokens as alone.
-  EXPECT_THAT(
-      GroupInputsForBatchedSignatures({2, 10, 2, 10, 2, 10, 2, 10},
-                                      /*single_signatures=*/{{4, 0}, {16, 1}},
-                                      /*batched_signatures=*/{{4, {{16, 2}}}}),
-      ElementsAre(BatchedTextEncoderGroup{.signature_index = 2,
-                                          .padded_sequence_length = 16,
-                                          .inputs = {1, 3, 5, 7}}));
-}
-
-TEST(GroupInputsForBatchedSignaturesTest, PrefersLargerBatchesOnTies) {
-  // Input 1 is not batchable (0), and input 3 is longer than any batched
-  // signature.
-  EXPECT_THAT(
-      GroupInputsForBatchedSignatures(
-          {3, 0, 1, 9, 2, 4, 1}, /*single_signatures=*/{{8, 0}, {16, 4}},
-          /*batched_signatures=*/{{2, {{4, 1}, {8, 3}}}, {4, {{4, 2}}}}),
-      ElementsAre(BatchedTextEncoderGroup{.signature_index = 2,
-                                          .padded_sequence_length = 4,
-                                          .inputs = {2, 6, 4, 0}}));
-}
-
-TEST(GroupInputsForBatchedSignaturesTest, CascadesBatchSizes) {
-  EXPECT_THAT(GroupInputsForBatchedSignatures(
-                  {1, 2, 3, 4, 1, 2, 3}, /*single_signatures=*/{{8, 0}},
-                  /*batched_signatures=*/{{2, {{4, 1}}}, {4, {{4, 2}}}}),
-              ElementsAre(BatchedTextEncoderGroup{.signature_index = 2,
-                                                  .padded_sequence_length = 4,
-                                                  .inputs = {0, 4, 1, 5}},
-                          BatchedTextEncoderGroup{.signature_index = 1,
-                                                  .padded_sequence_length = 4,
-                                                  .inputs = {2, 6}}));
 }
 
 }  // namespace
