@@ -198,6 +198,31 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
     return absl::OkStatus();
   }
 
+  // Gets the runtime configuration: only the sampler parameters are tracked.
+  // Used by the resource manager to clone the loaded context handler (e.g. for
+  // `Conversation::Clone()`) and to switch between context handlers that share
+  // one processed context (a clone and its source).
+  absl::StatusOr<RuntimeConfig> GetRuntimeConfig() const override {
+    RuntimeConfig runtime_config;
+    runtime_config.sampler_params = sampler_params_;
+    return runtime_config;
+  }
+
+  // Gets the runtime state: only the current step is tracked.
+  absl::StatusOr<RuntimeState> GetRuntimeState() const override {
+    RuntimeState runtime_state;
+    runtime_state.current_step = current_step_;
+    return runtime_state;
+  }
+
+  // Updates the runtime state when the resource manager switches to a context
+  // handler that shares the processed context of the loaded one (e.g. a clone).
+  // The KV cache before the handler's step is shared, so only rolling back to
+  // it is supported, with the same checks as `SetCurrentStep`: e.g. after the
+  // ring buffer KV cache wrapped around, the next prefill or decode fails until
+  // the ring buffer is restored, instead of using overwritten entries.
+  absl::Status UpdateRuntimeState(const RuntimeState& runtime_state) override;
+
   // Gets the current step of the executor.
   // Public API, the return value is the current step that user expects (e.g.
   // users prefill 100 tokens, then they expect the current step to be 100).
@@ -233,6 +258,31 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
 
   absl::Status RestoreContext(
       std::unique_ptr<LlmContext> context_data) override;
+
+  // Saves the ring buffer KV cache of the sliding window layers (see
+  // npu/llm_litert_npu_ring_buffer_state.h) and the processed tokens in an
+  // `LlmProcessedContext`, like `LlmLiteRtCompiledModelExecutorBase`, so that
+  // rolling back more than one token after the ring buffer has wrapped around
+  // can be undone with `RestoreContext(ProcessedContext)`.
+  //
+  // Used by Conversation with rewinding disabled
+  // (`ConversationConfig::enable_rewinding()`), the default for the NPU
+  // backend. Both settings roll back, e.g. to remove a thought from the KV
+  // cache: "rewinding" (`Session::SaveCheckpoint` / `RewindToCheckpoint`) only
+  // rolls back the step with `SetCurrentStep`, which is enough as long as the
+  // later steps did not overwrite the state of the earlier ones. With rewinding
+  // disabled, `Session::SaveContext` / `RestoreContext` also save and restore
+  // the state that later steps overwrite (here the ring buffers):
+  // `SessionAdvanced::RestoreContext` calls `SetCurrentStep` and then
+  // `RestoreContext(ProcessedContext)`.
+  absl::StatusOr<std::unique_ptr<ProcessedContext>> SaveContext()
+      const override;
+
+  // Restores a context saved by `SaveContext()`: the ring buffers, the
+  // processed tokens and the step after them. Changes no state if the saved
+  // ring buffers don't match the active context group's.
+  absl::Status RestoreContext(
+      std::unique_ptr<ProcessedContext> processed_context) override;
 
  private:
   enum class SpeculativeDecodingType {
@@ -647,6 +697,22 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // Tracks whether a decode step was run so we know how to update the
   // constraint state.
   bool ran_decode_ = false;
+
+  // Set when `SetCurrentStep` rolled back more than one token after the ring
+  // buffer KV cache wrapped around, until `RestoreContext(ProcessedContext)`
+  // restored the ring buffer (or `RestoreContext(LlmContext)` the whole KV
+  // cache). Prefill, decode, `SaveContext` and `CloneContext` fail while it is
+  // set, since the ring buffer holds the entries of the rolled back steps. It
+  // is not part of `LlmContext`, which is why `CloneContext` fails instead.
+  // This checks that the caller (e.g. Conversation through `Session`) restores
+  // the ring buffer after rolling back, instead of continuing with a KV cache
+  // that silently does not match the processed tokens; see
+  // `CheckRingBufferRestored` for how the other executors handle this.
+  bool ring_buffer_restore_required_ = false;
+
+  // Returns a FailedPrecondition error if `ring_buffer_restore_required_` is
+  // set.
+  absl::Status CheckRingBufferRestored() const;
   int64_t kv_cache_init_value_ = 0;
 
   // The text decoder model (owned by ModelResources, which outlives the
