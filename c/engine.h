@@ -1028,7 +1028,8 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_litert_dispatch_lib_dir(
 // the backend and used for inference. To run complete token generation, keep
 // at least one prefill signature and "decode" in the selection. When MTP is
 // enabled, make sure "verify" is also included. By default every signature of
-// the model is used.
+// the model is used, except that NVIDIA's TensorRT-RTX backend leaves out every
+// prefill signature but the largest. To use a smaller one there, select it.
 //
 // @param settings The engine settings.
 // @param signatures The signature keys to select.

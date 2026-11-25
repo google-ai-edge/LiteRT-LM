@@ -689,11 +689,14 @@ target_include_directories(runtime_executor_nvidia_mtp_drafter_support
 target_link_libraries(runtime_executor_nvidia_mtp_drafter_support
   PUBLIC
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
+    LiteRTLM::Runtime::Executor::LitertCompiledModelExecutorUtils
+    LiteRTLM::Runtime::Executor::LlmExecutorSettings
     LiteRTLM::Runtime::Components::SamplerInterface
     LiteRTLM::Runtime::Components::SamplerFactory
     LiteRTLM::Runtime::Components::SamplerParamsUtil
     LiteRTLM::Runtime::Components::SamplingCpuUtil
     LiteRTLM::Runtime::Components::SamplingUniforms
+    LiteRTLM::Runtime::Util::FileUtil
     LiteRTLM::Generated::Protobuf
     LITERTLM_DEPS
 )

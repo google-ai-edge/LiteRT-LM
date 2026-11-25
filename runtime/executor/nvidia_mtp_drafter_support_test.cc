@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>  // NOLINT(build/c++17)
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <numeric>
@@ -31,12 +32,17 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "absl/status/status.h"  // from @com_google_absl
+#include "absl/status/status_macros.h"  // from @com_google_absl
+#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
+#include "litert/cc/litert_environment_options.h"  // from @litert
+#include "litert/cc/litert_expected.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_opaque_options.h"  // from @litert
@@ -54,17 +60,54 @@
 #include "runtime/components/sampling_uniforms.h"
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
+#include "runtime/util/status_macros.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
 #include "tflite/types/half.h"  // from @litert
 
 namespace litert::lm {
 namespace {
 
+using ::testing::ElementsAre;
+using ::testing::IsEmpty;
+using ::testing::UnorderedElementsAre;
 using ::testing::status::StatusIs;
 
 constexpr auto kCudaBuffer =
     static_cast<TensorBufferType>(nvidia::kNvidiaCudaTensorBufferType);
+
+// The path of the test model `file_name`.
+std::string TestModelPath(absl::string_view file_name) {
+  return (std::filesystem::path(::testing::SrcDir()) /
+          "litert_lm/runtime/testdata" /
+          std::string(file_name))
+      .string();
+}
+
+// The default settings of an executor of the test model `file_name` on
+// `backend`.
+absl::StatusOr<LlmExecutorSettings> CreateTestSettings(
+    absl::string_view file_name, Backend backend) {
+  ABSL_ASSIGN_OR_RETURN(auto model_assets,
+                        ModelAssets::Create(TestModelPath(file_name)));
+  return LlmExecutorSettings::CreateDefault(model_assets, backend);
+}
+
+// An environment that takes its dispatch library from the new directory `name`
+// under the test's temporary directory, which holds an empty file
+// `dispatch_library`.
+Expected<Environment> CreateEnvironmentWithDispatchLibrary(
+    absl::string_view name, absl::string_view dispatch_library) {
+  const std::filesystem::path dir =
+      std::filesystem::path(::testing::TempDir()) / std::string(name);
+  std::filesystem::create_directories(dir);
+  std::ofstream(dir / std::string(dispatch_library)).close();
+  return Environment::Create(
+      EnvironmentOptions(std::vector<EnvironmentOptions::Option>{
+          {EnvironmentOptions::Tag::kDispatchLibraryDir,
+           dir.string().c_str()}}));
+}
 
 TEST(NvidiaMtpDrafterSupportTest, RecognizesTransposedValueCache) {
   const Layout layout(Dimensions{1, 8, 256, 1152});
@@ -204,6 +247,128 @@ TEST(NvidiaMtpDrafterSupportTest, SharedValueCacheOptionsOnlyOnTheNpuRoute) {
     EXPECT_OK(AddNvidiaSharedValueCacheOptions(backend, drafter_model,
                                                base_model, options));
   }
+}
+
+TEST(NvidiaMtpDrafterSupportTest, DefaultSignaturesDropTheSmallerPrefills) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, CreateEnvironmentWithDispatchLibrary(
+                    "smaller_prefills", "libLiteRtDispatch_Nvidia.so"));
+  // Its prefill signatures: prefill_67, prefill_257, prefill_1031 and
+  // prefill_4099. Its other signatures: decode, test_decode_1280,
+  // test_prefill_256 and test_prefill_1024.
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto model,
+      Model::CreateFromFile(TestModelPath("magic_test_multi.tflite")));
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      CreateTestSettings("magic_test_multi.tflite", Backend::NPU));
+
+  ASSERT_OK(SelectDefaultNvidiaSignatures(env, model, "input_pos", settings));
+
+  EXPECT_THAT(settings.GetSelectedSignatures(),
+              UnorderedElementsAre("decode", "prefill_4099", "test_decode_1280",
+                                   "test_prefill_256", "test_prefill_1024"));
+}
+
+TEST(NvidiaMtpDrafterSupportTest, DefaultSignaturesKeepTheCallersSelection) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, CreateEnvironmentWithDispatchLibrary(
+                    "callers_selection", "libLiteRtDispatch_Nvidia.so"));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto model,
+      Model::CreateFromFile(TestModelPath("magic_test_multi.tflite")));
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      CreateTestSettings("magic_test_multi.tflite", Backend::NPU));
+  settings.SetSelectedSignatures({"prefill_67", "decode"});
+
+  ASSERT_OK(SelectDefaultNvidiaSignatures(env, model, "input_pos", settings));
+
+  EXPECT_THAT(settings.GetSelectedSignatures(),
+              ElementsAre("prefill_67", "decode"));
+}
+
+TEST(NvidiaMtpDrafterSupportTest, DefaultSignaturesOnlyOnTheNpuRoute) {
+  LITERT_ASSERT_OK_AND_ASSIGN(auto env,
+                              CreateEnvironmentWithDispatchLibrary(
+                                  "npu_route", "libLiteRtDispatch_Nvidia.so"));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto model,
+      Model::CreateFromFile(TestModelPath("magic_test_multi.tflite")));
+  for (Backend backend : {Backend::CPU, Backend::GPU}) {
+    ASSERT_OK_AND_ASSIGN(
+        auto settings, CreateTestSettings("magic_test_multi.tflite", backend));
+
+    ASSERT_OK(SelectDefaultNvidiaSignatures(env, model, "input_pos", settings));
+
+    EXPECT_THAT(settings.GetSelectedSignatures(), IsEmpty());
+  }
+}
+
+TEST(NvidiaMtpDrafterSupportTest, DefaultSignaturesNeedNvidiasDispatchLibrary) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, CreateEnvironmentWithDispatchLibrary(
+                    "other_vendor", "libLiteRtDispatch_Qualcomm.so"));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto model,
+      Model::CreateFromFile(TestModelPath("magic_test_multi.tflite")));
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      CreateTestSettings("magic_test_multi.tflite", Backend::NPU));
+
+  ASSERT_OK(SelectDefaultNvidiaSignatures(env, model, "input_pos", settings));
+
+  EXPECT_THAT(settings.GetSelectedSignatures(), IsEmpty());
+}
+
+TEST(NvidiaMtpDrafterSupportTest, DefaultSignaturesNeedADispatchLibraryDir) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto model,
+      Model::CreateFromFile(TestModelPath("magic_test_multi.tflite")));
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      CreateTestSettings("magic_test_multi.tflite", Backend::NPU));
+
+  ASSERT_OK(SelectDefaultNvidiaSignatures(env, model, "input_pos", settings));
+
+  EXPECT_THAT(settings.GetSelectedSignatures(), IsEmpty());
+}
+
+TEST(NvidiaMtpDrafterSupportTest, DefaultSignaturesNeedSeveralPrefills) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, CreateEnvironmentWithDispatchLibrary(
+                    "one_prefill", "libLiteRtDispatch_Nvidia.so"));
+  // Its signatures: decode and prefill.
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto model,
+      Model::CreateFromFile(TestModelPath("magic_test_decode_batch.tflite")));
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      CreateTestSettings("magic_test_decode_batch.tflite", Backend::NPU));
+
+  ASSERT_OK(SelectDefaultNvidiaSignatures(env, model, "input_pos", settings));
+
+  EXPECT_THAT(settings.GetSelectedSignatures(), IsEmpty());
+}
+
+TEST(NvidiaMtpDrafterSupportTest, DefaultSignaturesNeedReadablePrefillLengths) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, CreateEnvironmentWithDispatchLibrary(
+                    "prefill_lengths", "libLiteRtDispatch_Nvidia.so"));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto model,
+      Model::CreateFromFile(TestModelPath("magic_test_multi.tflite")));
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      CreateTestSettings("magic_test_multi.tflite", Backend::NPU));
+
+  // The prefill signatures have no such input: the model compiles whole.
+  ASSERT_OK(
+      SelectDefaultNvidiaSignatures(env, model, "no_such_input", settings));
+
+  EXPECT_THAT(settings.GetSelectedSignatures(), IsEmpty());
 }
 
 TEST(NvidiaMtpDrafterSupportTest, GreedySamplerFallsBackOffNvidiaBuffers) {

@@ -597,7 +597,9 @@ class AbstractEngine(abc.ABC):
         for example ["prefill_1024", "decode"]. To run complete token
         generation, keep at least one prefill signature and "decode". When MTP
         is enabled, make sure "verify" is also included. If None, every
-        signature of the model is used.
+        signature of the model is used, except that NVIDIA's TensorRT-RTX
+        backend leaves out every prefill signature but the largest. To use a
+        smaller one there, select it.
   """
 
   model_path: str

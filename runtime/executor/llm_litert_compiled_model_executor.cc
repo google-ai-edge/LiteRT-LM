@@ -2466,6 +2466,12 @@ LlmLiteRtCompiledModelExecutorStatic::Create(
       ModelSignatures signatures,
       GetModelSignaturesFromInputOutputNames(decode_signature.InputNames(),
                                              decode_signature.OutputNames()));
+  // On the NPU route, NVIDIA's backend compiles a default selection of the
+  // signatures for a caller that selected none.
+  if (executor_settings.GetBackend() == Backend::NPU) {
+    ABSL_RETURN_IF_ERROR(SelectDefaultNvidiaSignatures(
+        lrt_env, *litert_model, signatures.input_positions, executor_settings));
+  }
   LITERT_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(executor_settings, activation_data_type,

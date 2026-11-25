@@ -38,6 +38,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/match.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/str_join.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_layout.h"  // from @litert
@@ -66,7 +67,10 @@
 #include "runtime/components/sampling_cpu_util.h"
 #include "runtime/components/sampling_uniforms.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/proto/sampler_params.pb.h"
+#include "runtime/util/nvidia_dispatch_library.h"
 #include "runtime/util/status_macros.h"
 
 namespace litert::lm {
@@ -297,14 +301,13 @@ absl::Status CheckIdsTensor(const TensorBuffer& ids_tensor, int rows) {
   return absl::OkStatus();
 }
 
-}  // namespace
+// The prefix of the keys of a model's prefill signatures.
+constexpr absl::string_view kPrefillSignaturePrefix = "prefill";
 
-// The dispatch library the runtime has loaded already, or nothing (NoLoad:
-// another instance would not share the tensor buffers' CUDA allocator and
-// runtime context).
-absl::StatusOr<std::optional<SharedLibrary>> LoadedDispatchLibrary(
+// The directory `env` takes its dispatch library from, or nullopt if it names
+// none.
+absl::StatusOr<std::optional<std::string>> DispatchLibraryDir(
     const Environment& env) {
-#if (defined(__linux__) || defined(_WIN32)) && defined(RTLD_NOLOAD)
   LITERT_ASSIGN_OR_RETURN(auto options, env.GetOptions());
   auto directory =
       options.GetOption(EnvironmentOptions::Tag::kDispatchLibraryDir);
@@ -316,8 +319,24 @@ absl::StatusOr<std::optional<SharedLibrary>> LoadedDispatchLibrary(
     return absl::InvalidArgumentError(
         "NVIDIA dispatch library directory is not a string");
   }
+  return std::optional<std::string>(*directory_string);
+}
+
+}  // namespace
+
+// The dispatch library the runtime has loaded already, or nothing (NoLoad:
+// another instance would not share the tensor buffers' CUDA allocator and
+// runtime context).
+absl::StatusOr<std::optional<SharedLibrary>> LoadedDispatchLibrary(
+    const Environment& env) {
+#if (defined(__linux__) || defined(_WIN32)) && defined(RTLD_NOLOAD)
+  ABSL_ASSIGN_OR_RETURN(const std::optional<std::string> directory,
+                        DispatchLibraryDir(env));
+  if (!directory.has_value()) {
+    return std::nullopt;
+  }
   const std::string path =
-      absl::StrCat(*directory_string, "/libLiteRtDispatch_Nvidia.so");
+      absl::StrCat(*directory, "/libLiteRtDispatch_Nvidia.so");
   auto library = SharedLibrary::Load(path, RtldFlags::Now().NoLoad().Local());
   if (!library.HasValue()) {
     return std::nullopt;
@@ -326,6 +345,45 @@ absl::StatusOr<std::optional<SharedLibrary>> LoadedDispatchLibrary(
 #else
   return std::nullopt;
 #endif
+}
+
+absl::Status SelectDefaultNvidiaSignatures(
+    const Environment& env, const Model& model,
+    absl::string_view input_positions_name,
+    LlmExecutorSettings& executor_settings) {
+  if (executor_settings.GetBackend() != Backend::NPU ||
+      !executor_settings.GetSelectedSignatures().empty()) {
+    return absl::OkStatus();
+  }
+  ABSL_ASSIGN_OR_RETURN(const std::optional<std::string> dispatch_lib_dir,
+                        DispatchLibraryDir(env));
+  if (!dispatch_lib_dir.has_value() ||
+      !HasNvidiaDispatchLibrary(*dispatch_lib_dir)) {
+    return absl::OkStatus();
+  }
+  // A model whose prefill lengths cannot be read here compiles all its
+  // signatures, as it did before: a default must not fail a load.
+  const absl::StatusOr<SortedPrefillSignatureMap> prefill_runner_set =
+      GetPrefillRunnerSetFromModel(model, kPrefillSignaturePrefix,
+                                   input_positions_name);
+  if (!prefill_runner_set.ok() || prefill_runner_set->size() < 2) {
+    return absl::OkStatus();
+  }
+  // The map is sorted by prefill length, longest first.
+  const std::string& largest_prefill = prefill_runner_set->begin()->second;
+  LITERT_ASSIGN_OR_RETURN(auto signatures, model.GetSignatures());
+  std::vector<std::string> selected_signatures;
+  for (const auto& signature : signatures) {
+    const absl::string_view key = signature.Key();
+    if (!absl::StartsWith(key, kPrefillSignaturePrefix) ||
+        key == largest_prefill) {
+      selected_signatures.emplace_back(key);
+    }
+  }
+  ABSL_LOG(INFO) << "No signatures are selected: NVIDIA's backend compiles "
+                 << absl::StrJoin(selected_signatures, ", ") << ".";
+  executor_settings.SetSelectedSignatures(std::move(selected_signatures));
+  return absl::OkStatus();
 }
 
 namespace {
