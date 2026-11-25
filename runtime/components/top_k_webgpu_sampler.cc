@@ -67,7 +67,10 @@
 
 // Maps `buffer_handle` for reading, awaiting the `mapAsync` promise directly
 // (via JSPI/Asyncify), and copies the first `copy_size` bytes into `dst`.
-// Returns 0 on success, 1 if mapping failed.
+// Returns 0 on success. On failure, writes a NUL-terminated UTF-8 error message
+// into `error_msg` (up to `error_msg_size` bytes including the NUL terminator)
+// and returns 1. All JS calls are guarded with try/catch so exceptions never
+// unwind across `-fno-exceptions` Wasm frames.
 //
 // Awaiting the promise resumes the caller as soon as the readback completes.
 // Polling with `emscripten_sleep()` instead goes through nested `setTimeout()`
@@ -75,17 +78,50 @@
 // clang-format off
 EM_ASYNC_JS(int, ReadMappableBufferJs,
             (WGPUBuffer buffer_handle, double map_size, void* dst,
-             double copy_size), {
-  const buffer = WebGPU.getJsObject(buffer_handle);
+             double copy_size, char* error_msg, int error_msg_size), {
+  let buffer;
+  let mapped = false;
   try {
+    buffer = WebGPU.getJsObject(buffer_handle);
+    if (!buffer) {
+      throw new Error("WebGPU buffer handle is null or invalid.");
+    }
     await buffer.mapAsync(GPUMapMode.READ, 0, map_size);
+    mapped = true;
+    HEAPU8.set(
+        new Uint8Array(buffer.getMappedRange(0, map_size), 0, copy_size),
+        dst >>> 0);
+    mapped = false;
+    buffer.unmap();
+    return 0;
   } catch (e) {
+    if (mapped && buffer) {
+      try {
+        buffer.unmap();
+      } catch (_) {}
+    }
+    try {
+      const errPtr = error_msg >>> 0;
+      if (errPtr && error_msg_size > 0) {
+        let msg = "";
+        if (e && typeof e === "object" && "message" in e && e.message) {
+          msg = e.name ? `${e.name}: ${e.message}` : String(e.message);
+        } else if (e !== null && e !== undefined) {
+          msg = String(e);
+        }
+        const bytes = new TextEncoder().encode(msg);
+        let len = Math.min(bytes.length, error_msg_size - 1);
+        if (len < bytes.length) {
+          while (len > 0 && (bytes[len] & 0xC0) === 0x80) {
+            len--;
+          }
+        }
+        HEAPU8.set(bytes.subarray(0, len), errPtr);
+        HEAPU8[errPtr + len] = 0;
+      }
+    } catch (_) {}
     return 1;
   }
-  HEAPU8.set(new Uint8Array(buffer.getMappedRange(0, map_size), 0, copy_size),
-             dst >>> 0);
-  buffer.unmap();
-  return 0;
 });
 // clang-format on
 #endif  // __EMSCRIPTEN__
@@ -529,10 +565,19 @@ absl::Status TopKWebGpuSampler::DownloadSampledIds(void* dst) {
       kv_cache_batch_size_ * config_.sequence_size * sizeof(int32_t);
 
 #ifdef __EMSCRIPTEN__
+  constexpr int kErrorMsgBufferSize = 512;
+  char error_msg[kErrorMsgBufferSize] = {};
   if (ReadMappableBufferJs(tokens_ids_mappable_buffer_->Get(),
                            static_cast<double>(data_size), dst,
-                           static_cast<double>(logical_size)) != 0) {
-    return absl::InternalError("MapAsync failed while reading sampled ids.");
+                           static_cast<double>(logical_size), error_msg,
+                           kErrorMsgBufferSize) != 0) {
+    error_msg[kErrorMsgBufferSize - 1] = '\0';
+    if (error_msg[0] != '\0') {
+      return absl::InternalError(absl::StrCat(
+          "Failed to read sampled ids from WebGPU buffer: ", error_msg));
+    }
+    return absl::InternalError(
+        "Failed to read sampled ids from WebGPU buffer.");
   }
   return absl::OkStatus();
 #else
