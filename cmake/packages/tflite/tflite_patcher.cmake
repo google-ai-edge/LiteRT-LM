@@ -150,6 +150,16 @@ if(EXISTS "${LITERTLM_XNNPACK_MOD_FILE}")
         "\n# [LiteRTLM] Automated Fix\ninclude(${LITERTLM_TFLITE_PACKAGE_DIR}/shims/xnnpack_shim.cmake)\n")
 endif()
 
+set(_litertlm_xnnpack_sub_cmakelists
+    "${LITERTLM_TFLITE_SRC_DIR}/tools/cmake/modules/xnnpack/CMakeLists.txt")
+if(EXISTS "${_litertlm_xnnpack_sub_cmakelists}")
+    patch_file_content("${_litertlm_xnnpack_sub_cmakelists}"
+        "add_subdirectory("
+        "include(\"${LITERTLM_TFLITE_PACKAGE_DIR}/shims/patch_xnnpack_windows_arm64.cmake\")\nadd_subdirectory("
+        FALSE
+    )
+endif()
+
 if(EXISTS "${LITERTLM_XNNPACK_DELEGATE_CMAKELISTS}")
     message(STATUS "[LiteRTLM] Patching XNNPACK delegate custom command (Native)...")
     file(READ "${LITERTLM_XNNPACK_DELEGATE_CMAKELISTS}" CONTENT)

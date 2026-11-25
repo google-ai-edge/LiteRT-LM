@@ -48,6 +48,27 @@ patch_file_content("${ROOT_LIST}"
     FALSE
 )
 
+# Windows ARM64: the Rust crate bundled with tokenizers-cpp must be built for
+# the same target as the rest of the build, not for the Rust toolchain's
+# default one (x64 when cross compiling from an x64 host). Seed
+# TOKENIZERS_CPP_CARGO_TARGET in tokenizers-cpp/CMakeLists.txt with our target.
+if(CMAKE_HOST_WIN32 AND "${LITERTLM_RUST_TARGET}" MATCHES "^aarch64")
+    file(READ "${ROOT_LIST}" _tokenizers_root_content)
+    set(_tokenizers_cargo_target_init "set(TOKENIZERS_CPP_CARGO_TARGET \"\")")
+    string(FIND "${_tokenizers_root_content}" "${_tokenizers_cargo_target_init}" _tokenizers_cargo_target_pos)
+    if(_tokenizers_cargo_target_pos EQUAL -1)
+        message(FATAL_ERROR
+            "[LiteRTLM] tokenizers-cpp: could not find '${_tokenizers_cargo_target_init}' in "
+            "${ROOT_LIST}; cannot pin Rust target to ${LITERTLM_RUST_TARGET}.")
+    else()
+        string(REPLACE "${_tokenizers_cargo_target_init}"
+            "set(TOKENIZERS_CPP_CARGO_TARGET \"${LITERTLM_RUST_TARGET}\")"
+            _tokenizers_root_content "${_tokenizers_root_content}")
+        file(WRITE "${ROOT_LIST}" "${_tokenizers_root_content}")
+        message(STATUS "[LiteRTLM] tokenizers-cpp: Rust target pinned to ${LITERTLM_RUST_TARGET}")
+    endif()
+endif()
+
 file(GLOB_RECURSE ALL_SOURCE_FILES
     "${LITERTLM_TOKENIZERS_SRC_DIR}/../**/*.h" 
     "${LITERTLM_TOKENIZERS_SRC_DIR}/../**/*.cc")

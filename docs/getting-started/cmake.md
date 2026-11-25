@@ -192,6 +192,161 @@ BenchmarkInfo:
 --------------------------------------------------
 ```
 
+## Windows (ARM64 / x64)
+
+`litert_lm_main.exe` can be built for Windows ARM64 (Snapdragon X series) and
+Windows x64 with MSVC (`cl.exe`), the Ninja generator and the `windows-arm64` /
+`windows-x64` presets.
+
+**Status**: Native Windows ARM64 (Snapdragon X Elite) builds and runs for CPU
+and Qualcomm NPU (text). The `Presubmit-CMake-Windows-ARM64` GitHub workflow
+cross-compiles the ARM64 binary on an x64 runner. GPU is currently disabled in
+the CMake build (so multimodal models that use a GPU vision encoder cannot run
+their vision component via CMake on Windows yet). Note that MSVC (`cl.exe`) on
+ARM64 lacks the ACLE headers needed by XNNPACK's FP16/BF16/SVE2/SME
+microkernels, so those kernels are disabled under `cl.exe` (reducing CPU
+throughput); the build scripts are also written to accept `clang-cl`
+(`-DLITERTLM_CC=clang-cl -DLITERTLM_CXX=clang-cl`) to keep them enabled, though
+`clang-cl` is not yet tested in CI.
+
+#### Prerequisites
+
+-   **Visual Studio 2022** (or Build Tools) with the *Desktop development with
+    C++* workload. For ARM64 also install the *MSVC v143 - VS 2022 C++ ARM64
+    build tools* component (`Microsoft.VisualStudio.Component.VC.Tools.ARM64`).
+
+-   **CMake** 3.25 or newer and **Ninja**. The Visual Studio generators are not
+    supported.
+
+-   **Rust** (rustup) with the target you build for:
+    `rustup target add aarch64-pc-windows-msvc` or
+    `rustup target add x86_64-pc-windows-msvc`.
+
+-   **JDK 17** or newer with `java` on `PATH` (ANTLR 4 code generation).
+
+-   **Python** 3.12+ and **Git** on `PATH`.
+
+-   **Long paths in Git**: `git config --global core.longpaths true`. The
+    dependencies cloned during the build contain paths longer than 260
+    characters.
+
+-   **A short checkout path**, for example `C:\src\lm`. MSVC tools are limited
+    to 260-character paths and the build tree nests deeply. Alternatively pass a
+    short build directory with `-B`, e.g.
+    `cmake --preset windows-arm64 -B C:\b\a64`, and use that directory in the
+    commands below. Paths must not contain spaces.
+
+Every command below runs from a Visual Studio developer shell **for the target
+architecture**, so that `cl`, `link`, `rc` and `mt` on `PATH` are the ones for
+the target. `vcvarsall.bat` is under `VC\Auxiliary\Build` of the Visual Studio
+installation. The build always uses the release DLL C runtime
+(`CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL`), which the Rust components
+require.
+
+#### Windows ARM64, on a Windows ARM64 device
+
+```bat
+call vcvarsall.bat arm64
+cmake --preset windows-arm64
+cmake --build cmake/build/windows-arm64
+```
+
+#### Windows x64
+
+```bat
+call vcvarsall.bat amd64
+cmake --preset windows-x64
+cmake --build cmake/build/windows-x64
+```
+
+#### Windows ARM64, cross-compiled on an x64 host
+
+An x64 machine cannot run the ARM64 `protoc` and `flatc` the build would
+otherwise produce for itself, so they are built once for x64 and passed to the
+ARM64 build.
+
+```bat
+:: 1. x64 developer shell: build the host tools only.
+call vcvarsall.bat amd64
+cmake --preset windows-x64
+cmake --build cmake/build/windows-x64 --target prebuild
+```
+
+```bat
+:: 2. A new shell for the ARM64 target: build LiteRT-LM.
+call vcvarsall.bat amd64_arm64
+cmake --preset windows-arm64 ^
+  -DLITERTLM_HOST_PROTOC=%CD%/cmake/build/windows-x64/ext/protobuf/install/bin/protoc.exe ^
+  -DLITERTLM_HOST_FLATC=%CD%/cmake/build/windows-x64/ext/flatbuffers/install/bin/flatc.exe
+cmake --build cmake/build/windows-arm64
+```
+
+Use a fresh shell for each step, so that each one targets a single architecture.
+
+#### Output and CPU verification
+
+The executable is written to
+`cmake/build/<preset>/litert_lm/build/litert_lm_main.exe`. LiteRT-LM and its
+dependencies are linked into it statically. It uses the DLL C runtime, so the
+machine that runs it needs the Microsoft Visual C++ Redistributable for its
+architecture.
+
+```bat
+cmake\build\windows-arm64\litert_lm\build\litert_lm_main.exe ^
+  --model_path=C:\path\to\model.litertlm ^
+  --backend=cpu ^
+  --input_prompt="What is the tallest building in the world?"
+```
+
+#### Options
+
+| Option                                            | Purpose                                                   |
+| ------------------------------------------------- | --------------------------------------------------------- |
+| `LITERTLM_HOST_PROTOC`, `LITERTLM_HOST_FLATC`     | Host tools; required when cross-compiling for ARM64 on an |
+:                                                   : x64 host.                                                 :
+| `LITERTLM_WINDOWS_CROSS_ARM64`                    | Whether the host can run ARM64 binaries; detected         |
+:                                                   : automatically.                                            :
+| `LITERTLM_RUST_TARGET`                            | Rust target triple; set by the presets.                   |
+| `LITERTLM_MSVC_EXTRA_FLAGS`                       | Extra compiler flags for every LiteRT-LM compile.         |
+| `QAIRT_HEADERS_DIR`                               | Pre-extracted QAIRT / QNN headers, forwarded to the       |
+:                                                   : LiteRT build.                                             :
+| `LITERTLM_LITERT_WINDOWS_BUILD_ALL`               | Build every LiteRT target instead of only the static      |
+:                                                   : libraries `litert_lm_main.exe` links.                     :
+| `LITERTLM_USE_PREBUILT_GEMMA_CONSTRAINT_PROVIDER` | Link                                                      |
+:                                                   : `prebuilt/windows_<arch>/libGemmaModelConstraintProvider` :
+:                                                   : instead of the stub provider. Fails at configure time if  :
+:                                                   : the binaries for the target architecture are missing.     :
+| `LITERTLM_WINDOWS_EXPORT_LITERT_SYMBOLS`          | Export the LiteRT C API from the executable for           |
+:                                                   : accelerator DLLs.                                         :
+
+#### Qualcomm NPU (QNN)
+
+The Qualcomm NPU text backend is verified on Snapdragon X Elite with an
+NPU-precompiled `.litertlm` model. Configure with
+`-DQAIRT_HEADERS_DIR=<qairt>/include/QNN`: this enables LiteRT's Qualcomm
+backend, builds `LiteRtDispatch_Qualcomm.dll` automatically, and copies it next
+to `litert_lm_main.exe`.
+
+```bat
+call vcvarsall.bat arm64
+cmake --preset windows-arm64 -DQAIRT_HEADERS_DIR=C:/qairt/2.51/include/QNN
+cmake --build cmake/build/windows-arm64
+```
+
+At run time, pass `--backend=npu` and `--litert_dispatch_lib_dir` pointing at
+the directory containing `LiteRtDispatch_Qualcomm.dll`, with the Qualcomm AI
+Runtime (QAIRT) Windows ARM64 libraries on `PATH` (`lib\aarch64-windows-msvc`)
+and the matching Hexagon DSP skeleton libraries on `ADSP_LIBRARY_PATH`
+(`lib\hexagon-v*\unsigned`):
+
+-   **Minimum QAIRT version**: QAIRT **2.51** or newer is required at run time
+    (older releases such as 2.49 fail with a QNN System library version mismatch
+    error).
+-   **Matching LiteRT revision**: `LiteRtDispatch_Qualcomm.dll` must be built
+    from the same LiteRT revision as `litert_lm_main.exe` (older dispatch DLLs
+    that only export `LiteRtDispatchGetApi` fail with
+    `Could not load symbol LiteRtDispatchQueryInterface`).
+
 <br>
 
 --------------------------------------------------------------------------------

@@ -20,6 +20,42 @@ add_compile_options(
 include("${LITERTLM_MODULES_DIR}/utils.cmake")
 include("${LITERTLM_MODULES_DIR}/generators/generate_protobuf.cmake")
 
+if(WIN32)
+    # Match Bazel's XNNPACK build by compiling only production microkernels
+    # (xnnpack-microkernels-prod); non-prod microkernels are only used by
+    # XNNPACK's own tests and benchmarks.
+    set(XNNPACK_BUILD_ALL_MICROKERNELS OFF CACHE BOOL "Build only production XNNPACK microkernels on Windows" FORCE)
+endif()
+
+# Ported from LiteRT's litert/CMakeLists.txt (LiteRT-LM builds TFLite itself).
+# MSVC's cl.exe targeting ARM64 ships none of the ACLE headers or intrinsics
+# these microkernel families need: <arm_fp16.h>, <arm_bf16.h> and <arm_sve.h>
+# do not exist, and arm64_neon.h declares no bf16 intrinsics. XNNPACK selects
+# them from the target ISA alone, so a cl.exe build fails to compile them.
+# clang-cl has all of them, so only cl.exe is gated.
+# ARM64 I8MM (without BF16) uses <arm_neon.h> intrinsics that cl.exe supports
+# and is kept enabled via patch_xnnpack_windows_arm64.cmake.
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows" AND CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _litertlm_tflite_processor)
+    string(TOLOWER "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}" _litertlm_tflite_compiler_arch)
+    if(_litertlm_tflite_processor MATCHES "^(arm64|aarch64)$"
+       OR _litertlm_tflite_compiler_arch STREQUAL "arm64")
+        message(STATUS
+            "[LiteRTLM] cl.exe on ARM64 -- disabling XNNPACK FP16/BF16/SVE2/SME "
+            "microkernels (no ACLE support); keeping DotProd and I8MM enabled.")
+        foreach(_litertlm_xnn_off
+                XNNPACK_ENABLE_ARM_FP16_SCALAR
+                XNNPACK_ENABLE_ARM_FP16_VECTOR
+                XNNPACK_ENABLE_ARM_BF16
+                XNNPACK_ENABLE_ARM_SVE2
+                XNNPACK_ENABLE_ARM_SME
+                XNNPACK_ENABLE_ARM_SME2
+                XNNPACK_ENABLE_ARM_SME_ACLE)
+            set(${_litertlm_xnn_off} OFF CACHE BOOL "Unsupported by cl.exe on ARM64" FORCE)
+        endforeach()
+    endif()
+endif()
+
 set(_tflite_shims_dir "${LITERTLM_TFLITE_PACKAGE_DIR}/shims")
 include("${_tflite_shims_dir}/build_tree_shim.cmake")
 
@@ -97,6 +133,11 @@ message(STATUS "[LiteRTLM] Injecting missing CMakeLists into profiling/...")
 
 file(GLOB PROFILING_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/profiling/*.cc")
 list(FILTER PROFILING_SRCS EXCLUDE REGEX "_test\\.cc$")
+if(WIN32)
+    # Android-only (includes <dlfcn.h>); platform_profiler.cc only references
+    # it under __ANDROID__.
+    list(FILTER PROFILING_SRCS EXCLUDE REGEX "atrace_profiler\\.cc$")
+endif()
 
 set(STATS_CALC_SRC 
     "${LITERTLM_TENSORFLOW_SRC_DIR}/third_party/xla/xla/tsl/util/stats_calculator.cc")
@@ -120,7 +161,18 @@ set(LITERTLM_PROTO_FILES
 )
 
 add_library(tflite_profiling STATIC ${PROFILING_SRCS})
-generate_protobuf(tflite_profiling ${LITERTLM_TENSORFLOW_SRC_DIR})
+if(CMAKE_GENERATOR MATCHES "Ninja"
+   AND EXISTS "${LITERTLM_TFLITE_SRC_DIR}/profiling/proto/CMakeLists.txt")
+    # Older TFLite revisions' profiling/proto/CMakeLists.txt already adds custom
+    # commands for profiling_info.proto and model_runtime_info.proto at the same
+    # output paths; Ninja rejects duplicate build rules for the same file.
+    target_link_libraries(tflite_profiling PUBLIC
+        profiling_info_proto
+        model_runtime_info_proto
+    )
+else()
+    generate_protobuf(tflite_profiling ${LITERTLM_TENSORFLOW_SRC_DIR})
+endif()
 
 target_link_libraries(tflite_profiling PRIVATE
     LiteRTLM::absl::absl

@@ -17,7 +17,10 @@ include(${LITERTLM_TFLITE_PACKAGE_DIR}/tflite_config.cmake)
 
 setup_external_install_structure("${LITERTLM_TFLITE_INSTALL_PREFIX}")
 
-set(LITERTLM_TFLITE_TAG "fadb2ca7b5c17ba3b9380f32487cef62eebcf2c9" CACHE STRING "TFLite git tag")
+# Keep in sync with `TENSORFLOW_REF` in the Bazel WORKSPACE so CMake and Bazel
+# build against the same TFLite delegate and XNNPACK microkernels (including
+# ARM64 I8MM kernels for qs8_qc4w).
+set(LITERTLM_TFLITE_TAG "faa06da43657488c1f7479289d11d15e03a15ba1" CACHE STRING "TFLite git tag")
 
 # TFLite's CMake build fetches Eigen by cloning gitlab.com, which is frequently
 # rate limited on CI ("GitLab is currently unable to handle this request due to
@@ -40,6 +43,13 @@ set(LITERTLM_TFLITE_ML_DTYPES_URL
 set(LITERTLM_TFLITE_ML_DTYPES_URL_HASH
     "SHA256=f6e5880666661351e6cd084ac4178ddc4dabcde7e9a73722981c0d1500cf5937"
     CACHE STRING "ml_dtypes archive hash used by the TFLite build")
+
+# MSVC ABI: libpng's static archive is libpng16_static.lib.
+set(LITERTLM_TFLITE_PLATFORM_ARGS "")
+if(LITERTLM_MSVC_FRONTEND)
+    list(APPEND LITERTLM_TFLITE_PLATFORM_ARGS
+        "-DPNG_LIBRARY=${libpng_lib_BINARY_DIR}/libpng16_static.lib")
+endif()
 
 if(NOT EXISTS "${LITERTLM_TFLITE_STATIC_LIB}")
     message(STATUS "TFLite not found. Configuring external build...")
@@ -90,6 +100,7 @@ if(NOT EXISTS "${LITERTLM_TFLITE_STATIC_LIB}")
             "-DLITERTLM_TFLITE_ML_DTYPES_URL_HASH=${LITERTLM_TFLITE_ML_DTYPES_URL_HASH}"
             -P "${LITERTLM_CMAKE_PACKAGES_DIR}/tflite/tflite_patcher.cmake"
         CMAKE_ARGS
+            ${LITERTLM_EP_PLATFORM_ARGS}
             ${LITERTLM_TOOLCHAIN_FILE}
             ${LITERTLM_TOOLCHAIN_ARGS}
             "-DLITERTLM_ORCHESTRATION_PHASE=${LITERTLM_ORCHESTRATION_PHASE}"
@@ -143,6 +154,7 @@ if(NOT EXISTS "${LITERTLM_TFLITE_STATIC_LIB}")
             "-DLITERTLM_TENSORFLOW_SRC_DIR=${LITERTLM_TENSORFLOW_SRC_DIR}"
             "-DLITERTLM_FLATC_EXECUTABLE=${LITERTLM_FLATC_EXECUTABLE}"
             "-DLITERTLM_PATCHES_DIR=${LITERTLM_PATCHES_DIR}"
+            ${LITERTLM_TFLITE_PLATFORM_ARGS}
     )
     block()
         set(LITERTLM_GENERATE_TARGET_MAP OFF CACHE BOOL "Disable target map generation for TFLite external project" FORCE)

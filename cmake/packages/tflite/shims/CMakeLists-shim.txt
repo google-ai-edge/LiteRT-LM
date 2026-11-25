@@ -128,6 +128,9 @@ if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
   set(_TFLITE_ENABLE_NNAPI OFF)
 endif()
 set(_TFLITE_ENABLE_MMAP "${TFLITE_ENABLE_MMAP}")
+if(CMAKE_SYSTEM_NAME MATCHES "Windows")
+  set(_TFLITE_ENABLE_MMAP OFF)
+endif()
 
 macro(populate_source_vars SOURCE_DIR SOURCES_VAR)
   cmake_parse_arguments(ARGS "RECURSE" "" "FILTER" ${ARGN})
@@ -274,7 +277,12 @@ if(CMAKE_SYSTEM_NAME MATCHES "Android")
 endif()
 # Build a list of source files to compile into the TF Lite library.
 populate_tflite_source_vars("." TFLITE_SRCS)
-if(CMAKE_SYSTEM_NAME MATCHES "Windows" AND BUILD_SHARED_LIBS)
+# simple_memory_arena_debug_dump.cc is the strong override of the
+# TFLITE_ATTRIBUTE_WEAK DumpArenaInfo() in simple_memory_arena.cc. PE/COFF has
+# no weak symbols, so both definitions are strong on Windows and linking the
+# two objects together fails with LNK2005, for static libraries as well as for
+# BUILD_SHARED_LIBS (ported from LiteRT's litert/CMakeLists.txt).
+if(CMAKE_SYSTEM_NAME MATCHES "Windows")
   list(FILTER TFLITE_SRCS EXCLUDE REGEX ".*simple_memory_arena_debug_dump\\.cc$")
 endif()
 
@@ -830,17 +838,24 @@ endif()
 # tensorflow/lite directory structure for generated headers.
 set(TFLITE_GENERATED_HEADERS_DIR ${CMAKE_BINARY_DIR}/tensorflow/lite)
 
-# Add the profiling proto directory.
-add_subdirectory(${TFLITE_SOURCE_DIR}/profiling/proto)
+# Add the profiling proto directory (removed in newer TensorFlow revisions,
+# where tflite_shim.cmake generates the protos directly).
+if(EXISTS "${TFLITE_SOURCE_DIR}/profiling/proto/CMakeLists.txt")
+  add_subdirectory(${TFLITE_SOURCE_DIR}/profiling/proto)
+endif()
 
 # Add the benchmark result proto directory.
-add_subdirectory(${TFLITE_SOURCE_DIR}/tools/benchmark/proto)
+if(EXISTS "${TFLITE_SOURCE_DIR}/tools/benchmark/proto/CMakeLists.txt")
+  add_subdirectory(${TFLITE_SOURCE_DIR}/tools/benchmark/proto)
+endif()
 
 # Add the tf example directory.
 add_subdirectory(${TF_SOURCE_DIR}/core/example ${CMAKE_BINARY_DIR}/example_proto_generated)
 
 # The benchmark tool.
-add_subdirectory(${TFLITE_SOURCE_DIR}/tools/benchmark)
+if(TFLITE_ENABLE_BENCHMARK_MODEL)
+  add_subdirectory(${TFLITE_SOURCE_DIR}/tools/benchmark)
+endif()
 
 # The label_image example.
 add_subdirectory(${TFLITE_SOURCE_DIR}/examples/label_image)

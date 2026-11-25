@@ -58,17 +58,23 @@ if("${LITERTLM_ORCHESTRATION_PHASE}" STREQUAL "litert_lm")
       "${LITERTLM_HOST_PROTOC}"
       CACHE PATH "Host protoc for generator module")
 else()
+  # This file is also included from cmake -P patchers and from third-party
+  # builds, so the host suffix is derived here rather than taken from a helper.
+  set(_litertlm_protoc_exe_suffix "")
+  if(CMAKE_HOST_WIN32)
+    set(_litertlm_protoc_exe_suffix ".exe")
+  endif()
   set(LITERTLM_PROTOBUF_BIN_DIR
     "${LITERTLM_PROTOBUF_INSTALL_PREFIX}/bin"
     CACHE PATH "Protobuf binary directory")
   set(LITERTLM_PROTOC_EXECUTABLE
-    "${LITERTLM_PROTOBUF_BIN_DIR}/protoc"
+    "${LITERTLM_PROTOBUF_BIN_DIR}/protoc${_litertlm_protoc_exe_suffix}"
     CACHE PATH "")
   set(LITERTLM_PROTOC_EXE
-    "${LITERTLM_PROTOBUF_BIN_DIR}/protoc"
+    "${LITERTLM_PROTOBUF_BIN_DIR}/protoc${_litertlm_protoc_exe_suffix}"
     CACHE PATH "")
   set(protobuf_generate_PROTOC_EXE
-    "${LITERTLM_PROTOBUF_BIN_DIR}/protoc"
+    "${LITERTLM_PROTOBUF_BIN_DIR}/protoc${_litertlm_protoc_exe_suffix}"
     CACHE PATH "")
 endif()
 

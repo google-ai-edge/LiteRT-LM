@@ -90,10 +90,30 @@ set(_cxxbridge_paths
     "${CMAKE_BINARY_DIR}/libcxxbridge1.a"
 )
 
+set(_litertlm_cxxbridge_msvc_frontend FALSE)
+if(COMMAND litertlm_is_msvc_frontend)
+    litertlm_is_msvc_frontend(_litertlm_cxxbridge_msvc_frontend)
+endif()
+if(_litertlm_cxxbridge_msvc_frontend)
+    # MSVC ABI: the bridge and the crate are linked through Corrosion's targets
+    # (litertlm_cxx_bridge, litert_lm_deps), which also carry the Windows
+    # system libraries the Rust standard library needs. Only the cxx support
+    # archive copied out of the Cargo tree is linked by path, when it exists.
+    set(_cxxbridge_paths "${CMAKE_BINARY_DIR}/cxxbridge1.lib")
+endif()
+
 if(NOT TARGET LiteRTLM::CxxBridge::Aggregate)
     message(STATUS "[LiteRTLM] Generating CxxBridge Aggregate...")
 
     add_library(LiteRTLM::CxxBridge::Aggregate INTERFACE IMPORTED GLOBAL)
+    if(_litertlm_cxxbridge_msvc_frontend)
+    set_target_properties(LiteRTLM::CxxBridge::Aggregate PROPERTIES
+        INTERFACE_LINK_LIBRARIES
+            "litertlm_cxx_bridge;litert_lm_deps"
+        INTERFACE_INCLUDE_DIRECTORIES
+            "${ABSL_INCLUDE_DIR}"
+    )
+    else()
     set_target_properties(LiteRTLM::CxxBridge::Aggregate PROPERTIES
         INTERFACE_LINK_LIBRARIES
             "${CMAKE_BINARY_DIR}/liblitertlm_cxx_bridge.a"
@@ -102,6 +122,7 @@ if(NOT TARGET LiteRTLM::CxxBridge::Aggregate)
         INTERFACE_INCLUDE_DIRECTORIES
             "${ABSL_INCLUDE_DIR}"
     )
+    endif()
     add_dependencies(LiteRTLM::CxxBridge::Aggregate litertlm_cxx_bridge)
     get_target_property(_CXXBRIDGE_PAYLOAD LiteRTLM::CxxBridge::Aggregate INTERFACE_LINK_LIBRARIES)
 

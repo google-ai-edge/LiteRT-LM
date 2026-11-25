@@ -38,14 +38,37 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Suppress deprecation warnings (matching Bazel build behavior in .bazelrc)
-# The codebase has deprecated Error constructors that are still in use
+# The codebase has deprecated Error constructors that are still in use.
+# These are GCC/Clang spellings; an MSVC-style driver (cl.exe, and clang-cl,
+# which CMake also reports as MSVC) rejects them outright -- cl.exe fails with
+# "D8021: invalid numeric argument '/Wno-deprecated-declarations'".
+if(MSVC)
+  add_compile_options(
+    /wd4996  # deprecated declarations
+  )
+else()
 add_compile_options(
   -Wno-deprecated-declarations
   -Wno-nullability-completeness
   -Wno-return-type
   -fpermissive
 )
+endif()
 add_compile_definitions(CL_TARGET_OPENCL_VERSION=300)
+
+if(WIN32)
+  # TFLite sets these for its own targets; LiteRT's targets include the same
+  # headers and need them too. Without NOMINMAX the windows.h min/max macros
+  # break every generated FlatBuffers accessor named min() or max(), e.g.
+  # tflite/converter/schema/schema_generated.h.
+  add_compile_definitions(
+    NOMINMAX              # keep windows.h from defining min()/max()
+    WIN32_LEAN_AND_MEAN
+    NOGDI                 # windows.h ERROR macro vs. logging severity names
+    _USE_MATH_DEFINES     # M_PI and friends
+    _CRT_SECURE_NO_WARNINGS
+  )
+endif()
 
 # Cmake flattens the transitive public and interface link to emit the final link
 # command. Which will trigger a warning on Apple platforms (ld64 still dedups
@@ -108,11 +131,19 @@ if(LITERT_DISABLE_KLEIDIAI)
   set(XNNPACK_ENABLE_KLEIDIAI OFF CACHE BOOL "Disable KleidiAI in XNNPACK")
 endif()
 
+if(NOT DEFINED CMAKE_HOST_EXECUTABLE_SUFFIX)
+  if(CMAKE_HOST_WIN32)
+    set(CMAKE_HOST_EXECUTABLE_SUFFIX ".exe")
+  else()
+    set(CMAKE_HOST_EXECUTABLE_SUFFIX "")
+  endif()
+endif()
+
 if(CMAKE_CROSSCOMPILING)
   # Build or reuse a host flatc for cross compilation.
   if(NOT TFLITE_HOST_TOOLS_DIR)
     set(_root_host_flatc_dir "${CMAKE_CURRENT_SOURCE_DIR}/../host_flatc_build")
-    if(EXISTS "${_root_host_flatc_dir}/_deps/flatbuffers-build/flatc")
+    if(EXISTS "${_root_host_flatc_dir}/_deps/flatbuffers-build/flatc${CMAKE_HOST_EXECUTABLE_SUFFIX}")
       set(TFLITE_HOST_TOOLS_DIR "${_root_host_flatc_dir}/_deps/flatbuffers-build" CACHE PATH "Host tools directory" FORCE)
       message(STATUS "Reusing host flatc from ${TFLITE_HOST_TOOLS_DIR}")
     else()
@@ -120,7 +151,9 @@ if(CMAKE_CROSSCOMPILING)
       file(WRITE "${_root_host_flatc_dir}/CMakeLists.txt" "cmake_minimum_required(VERSION 3.16)\nproject(HostFlatc LANGUAGES C CXX)\ninclude(FetchContent)\n# [LiteRTLM] Suppressed: External fetch prohibited\nset(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL \"\" FORCE)\n# [LiteRTLM] Suppressed: Using Global Manifest\n")
       set(_litert_host_flatc_cmake_args -S . -B . -DCMAKE_BUILD_TYPE=Release)
       set(_litert_host_c_compiler "${LITERT_HOST_C_COMPILER}")
-      if(NOT _litert_host_c_compiler)
+      # On a Windows host the default compiler of the developer shell is used;
+      # there is no /usr/bin/clang to fall back to.
+      if(NOT _litert_host_c_compiler AND NOT CMAKE_HOST_WIN32)
         if(EXISTS "/usr/bin/clang")
           set(_litert_host_c_compiler "/usr/bin/clang")
         else()
@@ -131,7 +164,7 @@ if(CMAKE_CROSSCOMPILING)
         list(APPEND _litert_host_flatc_cmake_args -DCMAKE_C_COMPILER=${_litert_host_c_compiler})
       endif()
       set(_litert_host_cxx_compiler "${LITERT_HOST_CXX_COMPILER}")
-      if(NOT _litert_host_cxx_compiler)
+      if(NOT _litert_host_cxx_compiler AND NOT CMAKE_HOST_WIN32)
         if(EXISTS "/usr/bin/clang++")
           set(_litert_host_cxx_compiler "/usr/bin/clang++")
         else()
@@ -220,9 +253,15 @@ find_package(flatbuffers)
 
 
 if(NOT TARGET flatbuffers::flatbuffers)
+  # libflatbuffers.a, or flatbuffers.lib for the MSVC ABI.
+  if(MSVC)
+    set(_litert_flatbuffers_archive "flatbuffers.lib")
+  else()
+    set(_litert_flatbuffers_archive "libflatbuffers.a")
+  endif()
   add_library(flatbuffers::flatbuffers STATIC IMPORTED)
   set_target_properties(flatbuffers::flatbuffers PROPERTIES
-    IMPORTED_LOCATION "${LITERT_FLATBUFFERS_BUILD_DIR}/libflatbuffers.a"
+    IMPORTED_LOCATION "${LITERT_FLATBUFFERS_BUILD_DIR}/${_litert_flatbuffers_archive}"
     INTERFACE_INCLUDE_DIRECTORIES "${LITERT_FLATBUFFERS_DIR}/include"
   )
 endif()
@@ -253,3 +292,45 @@ add_subdirectory(compiler)
 add_subdirectory(vendors)
 add_subdirectory(tools)
 add_subdirectory(experimental/custom_ops/gated_delta_net)
+
+if(WIN32)
+  option(LITERTLM_LITERT_WINDOWS_BUILD_ALL
+      "Build every LiteRT target instead of only the archives LiteRT-LM links" OFF)
+endif()
+if(WIN32 AND NOT LITERTLM_LITERT_WINDOWS_BUILD_ALL)
+  # LiteRT-LM links LiteRT's static runtime archives only. LiteRT's default
+  # target also builds LiteRt.dll, vendor dispatch/compiler-plugin DLLs and
+  # command line tools, which link against the LiteRT-LM dependency shims and
+  # are not needed for litert_lm_main.exe; a failure in any of them would fail
+  # the whole build. Keep the targets matching LITERTLM_LITERT_WINDOWS_TARGETS
+  # (and whatever they depend on) in `all` and exclude the rest.
+  # Configure LiteRT-LM with -DLITERTLM_LITERT_WINDOWS_BUILD_ALL=ON to build
+  # everything.
+  set(LITERTLM_LITERT_WINDOWS_TARGETS
+      "^(litert_c_api|litert_logging|litert_cc_api|litert_cc_internal|litert_cc_internal_extra|litert_cc_options|litert_compiler_plugin|litert_core|litert_core_cache|litert_core_model|litert_runtime|gated_delta_net)$"
+      CACHE STRING "Regex of the LiteRT targets built on Windows")
+
+  function(_litertlm_exclude_unused_litert_targets dir)
+    get_property(_targets DIRECTORY "${dir}" PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_target IN LISTS _targets)
+      get_target_property(_type ${_target} TYPE)
+      if(_type STREQUAL "INTERFACE_LIBRARY" OR _type STREQUAL "UTILITY")
+        continue()
+      endif()
+      # Keep the Qualcomm dispatch DLL in `all` whenever Qualcomm is enabled,
+      # even when reconfiguring an existing build tree with a cached
+      # LITERTLM_LITERT_WINDOWS_TARGETS value.
+      if(LITERT_ENABLE_QUALCOMM AND _target STREQUAL "dispatch_api_qualcomm_so")
+        continue()
+      endif()
+      if(NOT _target MATCHES "${LITERTLM_LITERT_WINDOWS_TARGETS}")
+        set_target_properties(${_target} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+      endif()
+    endforeach()
+    get_property(_subdirs DIRECTORY "${dir}" PROPERTY SUBDIRECTORIES)
+    foreach(_subdir IN LISTS _subdirs)
+      _litertlm_exclude_unused_litert_targets("${_subdir}")
+    endforeach()
+  endfunction()
+  _litertlm_exclude_unused_litert_targets("${CMAKE_CURRENT_SOURCE_DIR}")
+endif()

@@ -21,6 +21,13 @@ set(LITERTLM_GTEST_EXTERNAL_DONE ${LITERTLM_GTEST_STAMP_DIR}/gtest_external-done
 setup_external_install_structure("${LITERTLM_GTEST_INSTALL_PREFIX}")
 set(LITERTLM_GTEST_TAG "v1.17.0" CACHE STRING "GoogleTest git tag")
 
+# MSVC ABI: make GoogleTest use the DLL C runtime (/MD) like the rest of the
+# build, whatever its own default is.
+set(LITERTLM_GTEST_PLATFORM_ARGS "")
+if(LITERTLM_MSVC_FRONTEND)
+  list(APPEND LITERTLM_GTEST_PLATFORM_ARGS "-Dgtest_force_shared_crt=ON")
+endif()
+
 include(ExternalProject)
 if(NOT EXISTS "${LITERTLM_GTEST_EXTERNAL_DONE}")
   message(STATUS "GoogleTest not found. Configuring external build...")
@@ -40,6 +47,7 @@ if(NOT EXISTS "${LITERTLM_GTEST_EXTERNAL_DONE}")
       COMMAND git reset --hard FETCH_HEAD
       COMMAND git clean -dfx
     CMAKE_ARGS
+      ${LITERTLM_EP_PLATFORM_ARGS}
       ${LITERTLM_TOOLCHAIN_FILE}
       ${LITERTLM_TOOLCHAIN_ARGS}
       -DLITERTLM_ORCHESTRATION_PHASE=${LITERTLM_ORCHESTRATION_PHASE}
@@ -69,6 +77,7 @@ if(NOT EXISTS "${LITERTLM_GTEST_EXTERNAL_DONE}")
       -DABSL_LIBRARY_DIR=${ABSL_LIBRARY_DIR}
       -DABSL_LIB_DIR=${ABSL_LIB_DIR}
       -Dabsl_LIBRARY_DIR=${absl_LIBRARY_DIR}
+      ${LITERTLM_GTEST_PLATFORM_ARGS}
   )
   if(LITERTLM_GENERATE_TARGET_MAP)
     ExternalProject_Add_Step(gtest_external generate_target_map

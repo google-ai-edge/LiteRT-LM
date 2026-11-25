@@ -25,6 +25,7 @@
 #include "absl/flags/declare.h"  // from @com_google_absl
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "runtime/executor/llm_executor_settings.h"
 #include "runtime/executor/speculative_decoding_mode.h"
 #include "runtime/executor/ynnpack_mode.h"
 
@@ -122,6 +123,10 @@ namespace litert::lm {
 // Returns an InvalidArgument error for any other value.
 absl::StatusOr<std::optional<SpeculativeDecodingMode>>
 ParseSpeculativeDecodingFlag(absl::string_view value);
+
+// Applies non-empty `--litert_dispatch_lib_dir` and `--litert_compiler_lib_dir`
+// flag values to `executor_settings`.
+void ApplyLiteRtLibDirFlags(LlmExecutorSettings& executor_settings);
 
 }  // namespace litert::lm
 
