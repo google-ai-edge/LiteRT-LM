@@ -25,9 +25,18 @@ export interface ChatInterface {
   /**
    * Streams the response. Chats that report how a turn ended do so in a last
    * element with `finish_reason` set and no content.
+   *
+   * Cancelling the returned stream calls `cancel()`, which leaves the chat
+   * unusable afterwards.
    */
   sendMessageStreaming(message: MessageLike):
       ReadableStream<Message>;
+  /**
+   * Cancels any ongoing generation.
+   *
+   * Reusing the chat after cancelling an ongoing generation is not supported;
+   * call `delete()` instead.
+   */
   cancel(): void;
   getHistory(): Message[]|Promise<Message[]>;
   getTokenCount(): Promise<number>;

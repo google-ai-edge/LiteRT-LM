@@ -169,6 +169,9 @@ export class AutoToolChat implements ChatInterface {
    * Streams the responses of every round, without their tool calls. Only the
    * last round ends the turn, so the other rounds' end-of-turn elements are
    * dropped and the stream ends with the last round's.
+   *
+   * Cancelling the returned stream calls `cancel()`, which leaves this
+   * `AutoToolChat` unusable afterwards (see `cancel()`).
    */
   sendMessageStreaming(message: MessageLike):
       ReadableStream<Message> {
@@ -262,6 +265,11 @@ export class AutoToolChat implements ChatInterface {
 
   /**
    * Cancels the current generation.
+   *
+   * Reusing an `AutoToolChat` after cancelling an ongoing generation is not
+   * supported: cancelling delegates to the underlying `Conversation.cancel()`,
+   * leaving it unusable. Call `delete()` and create a new instance instead.
+   *
    * Note: This does not abort any in-progress tool calls natively. Tools that
    * affect state may still complete in the background eventually, but their
    * results will be discarded and not reported back to the model or the user.
