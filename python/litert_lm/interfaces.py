@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import pathlib
+import platform
 import sys
 from typing import Any
 import warnings
@@ -37,6 +38,98 @@ from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import SpeculativeDecodingMode
 from ._messages import Contents
 from ._messages import Message
+
+# Qualcomm dispatch library bundled in the Windows ARM64 wheel, relative to this
+# package.
+_QUALCOMM_DISPATCH_LIB_DIR = "vendors/qualcomm/dispatch/"
+_QUALCOMM_DISPATCH_LIB = "LiteRtDispatch_Qualcomm.dll"
+
+# Qualcomm AI Runtime (QNN) HTP backend library, which is not bundled.
+_QNN_HTP_LIB = "QnnHtp.dll"
+
+
+def _is_windows_arm64() -> bool:
+  """Returns whether the host is Windows on ARM64 (e.g. Snapdragon)."""
+  return sys.platform == "win32" and platform.machine().lower() in (
+      "arm64",
+      "aarch64",
+  )
+
+
+def _prepend_to_env(name: str, value: str, sep: str) -> None:
+  """Prepends the entries of `value` that are not yet in env variable `name`."""
+  current = os.environ.get(name, "")
+  current_entries = current.split(sep) if current else []
+  case_insensitive = sys.platform == "win32"
+  seen = {
+      entry.lower() if case_insensitive else entry
+      for entry in current_entries
+      if entry
+  }
+  new_entries = []
+  for entry in value.split(sep):
+    key = entry.lower() if case_insensitive else entry
+    if entry and key not in seen:
+      seen.add(key)
+      new_entries.append(entry)
+  if new_entries:
+    os.environ[name] = sep.join(new_entries + current_entries)
+
+
+def _get_qualcomm_dispatch_lib_dir() -> str:
+  """Returns the bundled Qualcomm dispatch library directory (Windows ARM64).
+
+  The QNN runtime libraries are not bundled. If the optional
+  `ai-edge-litert-sdk-qualcomm` package is installed, its libraries are added to
+  the DLL search path.
+
+  Raises:
+    RuntimeError: If the Qualcomm dispatch library or the QNN runtime libraries
+      are not found.
+  """
+  dispatch_lib_dir = resources.files(__package__) / _QUALCOMM_DISPATCH_LIB_DIR
+  if not (dispatch_lib_dir / _QUALCOMM_DISPATCH_LIB).is_file():
+    raise RuntimeError(
+        "NPU on Windows ARM64 requires the Qualcomm dispatch library"
+        f" '{_QUALCOMM_DISPATCH_LIB}', which was not found in"
+        f" '{dispatch_lib_dir}'. It is only bundled in the Windows ARM64"
+        " (win_arm64) wheel of litert-lm-api: reinstall litert-lm-api with a"
+        " native ARM64 Python (3.11 or later, not an x64 Python), or pass"
+        " litert_dispatch_lib_dir explicitly."
+    )
+
+  try:
+    import ai_edge_litert_sdk_qualcomm as qnn_sdk  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]
+  except ImportError:
+    qnn_sdk = None
+  # Older SDK releases do not provide default_qualcomm_paths().
+  default_qualcomm_paths = getattr(qnn_sdk, "default_qualcomm_paths", None)
+  qualcomm_paths = default_qualcomm_paths() if default_qualcomm_paths else None
+  if qualcomm_paths:
+    qnn_lib_dir, dsp_skel_dir = qualcomm_paths
+    # The QNN libraries are loaded by name, i.e. from PATH. The Hexagon DSP
+    # skeleton libraries are looked up in ADSP_LIBRARY_PATH.
+    _prepend_to_env("PATH", str(qnn_lib_dir), os.pathsep)
+    _prepend_to_env("ADSP_LIBRARY_PATH", str(dsp_skel_dir), ";")
+
+  # The dispatch library loads the QNN libraries from its own directory, then
+  # from PATH.
+  qnn_lib_search_dirs = [str(dispatch_lib_dir)] + os.environ.get(
+      "PATH", ""
+  ).split(os.pathsep)
+  if not any(
+      directory and os.path.isfile(os.path.join(directory, _QNN_HTP_LIB))
+      for directory in qnn_lib_search_dirs
+  ):
+    raise RuntimeError(
+        "NPU on Windows ARM64 requires the Qualcomm AI Runtime (QNN)"
+        f" libraries, but '{_QNN_HTP_LIB}' was not found. Install them with"
+        " 'pip install ai-edge-litert-sdk-qualcomm', or add the"
+        " 'lib\\aarch64-windows-msvc' directory of a Qualcomm AI Runtime SDK"
+        " to PATH and its 'lib\\hexagon-v*\\unsigned' directories to"
+        " ADSP_LIBRARY_PATH."
+    )
+  return str(dispatch_lib_dir)
 
 
 class Backend(abc.ABC):
@@ -93,7 +186,11 @@ class NPU(Backend):
   """NPU hardware backend for LiteRT-LM.
 
   Attributes:
-    litert_dispatch_lib_dir: The directory containing LiteRT dispatch libs.
+    litert_dispatch_lib_dir: The directory containing LiteRT dispatch libs. If
+      None, the dispatch library bundled in the Windows wheels is used: Intel
+      OpenVINO on x64 (requires the 'openvino' package) and Qualcomm on ARM64
+      (requires the Qualcomm AI Runtime libraries, e.g. from the
+      'ai-edge-litert-sdk-qualcomm' package).
   """
 
   litert_dispatch_lib_dir: str | None = None
@@ -103,8 +200,9 @@ class NPU(Backend):
 
     Raises:
       RuntimeError: If the NPU backend is not supported on the current platform,
-        if the 'openvino' package fails to import, or if no NPU device is
-        detected.
+        if the 'openvino' package fails to import (Windows x64), if no NPU
+        device is detected (Windows x64), or if the Qualcomm dispatch or QNN
+        runtime libraries are not found (Windows ARM64).
     """
     if self.litert_dispatch_lib_dir == "":  # pylint: disable=g-explicit-bool-comparison
       logging.warning(
@@ -117,9 +215,15 @@ class NPU(Backend):
     elif self.litert_dispatch_lib_dir is None:
       if sys.platform != "win32":
         raise RuntimeError(
-            "NPU is supported only for Intel OpenVINO on Windows. Current"
-            f" platform is '{sys.platform}'."
+            "NPU is supported only on Windows (Intel OpenVINO on x64, Qualcomm"
+            f" on ARM64). Current platform is '{sys.platform}'."
         )
+
+      if _is_windows_arm64():
+        object.__setattr__(
+            self, "litert_dispatch_lib_dir", _get_qualcomm_dispatch_lib_dir()
+        )
+        return
 
       try:
         import openvino as ov  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]

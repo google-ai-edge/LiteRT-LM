@@ -251,6 +251,7 @@ py_test(
 )
 
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
+load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("//:version.bzl", "VERSION")
 
@@ -320,6 +321,7 @@ genrule(
 genrule(
     name = "copy_windows_prebuilt_libs_dll",
     srcs = select({
+        "//build_config:windows_arm64": ["//prebuilt/windows_arm64:" + lib + ".dll" for lib in _WINDOWS_PREBUILT_LIBS],
         "@platforms//os:windows": ["//prebuilt/windows_x86_64:" + lib + ".dll" for lib in _WINDOWS_PREBUILT_LIBS],
         "//conditions:default": [],
     }),
@@ -340,15 +342,32 @@ genrule(
     tags = ["manual"],
 )
 
+# Windows ARM64 libraries are bundled either when packaging the win_arm64 wheel
+# (on any host, see "wheel_platform_*" below) or when building on Windows
+# ARM64.
+selects.config_setting_group(
+    name = "windows_arm64_libs",
+    match_any = [
+        ":wheel_platform_windows_arm64",
+        "//build_config:windows_arm64",
+    ],
+)
+
 copy_file(
     name = "copy_dxcompiler_dll",
-    src = "@directx_shader_compiler//:dxcompiler",
+    src = select({
+        ":windows_arm64_libs": "@directx_shader_compiler//:dxcompiler_arm64",
+        "//conditions:default": "@directx_shader_compiler//:dxcompiler",
+    }),
     out = "dxcompiler.dll",
 )
 
 copy_file(
     name = "copy_dxil_dll",
-    src = "@directx_shader_compiler//:dxil",
+    src = select({
+        ":windows_arm64_libs": "@directx_shader_compiler//:dxil_arm64",
+        "//conditions:default": "@directx_shader_compiler//:dxil",
+    }),
     out = "dxil.dll",
 )
 
@@ -358,14 +377,27 @@ copy_file(
     out = "vendors/intel_openvino/dispatch/LiteRtDispatch.dll",
 )
 
+# The Qualcomm dispatch library for Windows ARM64 is always a prebuilt, so
+# that the win_arm64 wheel can be packaged on an x86_64 host. It is not checked
+# in: the release pipeline stages it into //prebuilt/windows_arm64.
+copy_file(
+    name = "copy_qualcomm_dispatch_dll",
+    src = "//prebuilt/windows_arm64:LiteRtDispatch_Qualcomm.dll",
+    out = "vendors/qualcomm/dispatch/LiteRtDispatch_Qualcomm.dll",
+    tags = ["manual"],
+)
+
 filegroup(
     name = "copy_prebuilt_libs_dll",
     srcs = [
         ":copy_dxcompiler_dll",
         ":copy_dxil_dll",
-        ":copy_openvino_dispatch_dll",
         ":copy_windows_prebuilt_libs_dll",
-    ],
+    ] + select({
+        # OpenVINO does not support Windows ARM64.
+        "//build_config:windows_arm64": [],
+        "//conditions:default": [":copy_openvino_dispatch_dll"],
+    }),
     tags = ["manual"],
 )
 
@@ -392,6 +424,7 @@ filegroup(
     name = "prebuilt_litert_lm_dll_sources",
     srcs = select({
         ":wheel_platform_windows_x86_64": ["//prebuilt/windows_x86_64:litert-lm.dll"],
+        ":wheel_platform_windows_arm64": ["//prebuilt/windows_arm64:litert-lm.dll"],
         "//conditions:default": [],
     }),
 )
@@ -462,6 +495,12 @@ filegroup(
             ":copy_dxil_dll",
             ":copy_openvino_dispatch_dll",
         ],
+        ":wheel_platform_windows_arm64": [
+            ":copy_litert_lm_dll",
+            ":copy_dxcompiler_dll",
+            ":copy_dxil_dll",
+            ":copy_qualcomm_dispatch_dll",
+        ],
         ":wheel_platform_linux_x86_64": [":copy_litert_lm_so"],
         ":wheel_platform_linux_arm64": [":copy_litert_lm_so"],
         ":wheel_platform_android_arm64": [":copy_litert_lm_so"],
@@ -499,6 +538,11 @@ config_setting(
 config_setting(
     name = "wheel_platform_windows_x86_64",
     define_values = {"wheel_platform": "windows_x86_64"},
+)
+
+config_setting(
+    name = "wheel_platform_windows_arm64",
+    define_values = {"wheel_platform": "windows_arm64"},
 )
 
 config_setting(
@@ -548,6 +592,7 @@ py_wheel(
         ":wheel_platform_linux_arm64": "manylinux_2_27_aarch64",
         ":wheel_platform_macos_arm64": "macosx_12_0_arm64",
         ":wheel_platform_windows_x86_64": "win_amd64",
+        ":wheel_platform_windows_arm64": "win_arm64",
         ":wheel_platform_android_arm64": "android_23_arm64_v8a",
         ":wheel_platform_android_x86_64": "android_23_x86_64",
         "//conditions:default": "any",
