@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use minijinja::syntax::SyntaxConfig;
-use minijinja::value::Serde;
 use minijinja::Environment;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -184,18 +182,31 @@ fn rstrip(s: std::borrow::Cow<'_, str>, chars: Option<std::borrow::Cow<'_, str>>
     }
 }
 
+#[allow(unexpected_cfgs)]
 fn create_env() -> Result<Environment<'static>, minijinja::Error> {
     let mut env = Environment::new();
     // Keep trailing newlines in the rendered prompt text (e.g., `<think>\n`
     // when prefilling thinking channels) so that prompt specifications and
     // model training formatting are preserved exactly without being stripped.
-    env.set_syntax(
-        SyntaxConfig::builder()
-            .keep_trailing_newline(true)
-            .trim_blocks(true)
-            .lstrip_blocks(true)
-            .build()?,
-    );
+    // TODO(b/590227335): Remove minijinja_v2 compatibility once Chromium
+    // upgrades to minijinja v3.
+    #[cfg(minijinja_v2)]
+    {
+        env.set_keep_trailing_newline(true);
+        env.set_trim_blocks(true);
+        env.set_lstrip_blocks(true);
+    }
+    #[cfg(not(minijinja_v2))]
+    {
+        use minijinja::syntax::SyntaxConfig;
+        env.set_syntax(
+            SyntaxConfig::builder()
+                .keep_trailing_newline(true)
+                .trim_blocks(true)
+                .lstrip_blocks(true)
+                .build()?,
+        );
+    }
     env.add_function("strftime_now", strftime_now);
     env.add_function("raise_exception", raise_exception);
     env.add_filter("tojson", tojson);
@@ -414,6 +425,7 @@ impl MinijinjaTemplate {
         Box::new(self.clone())
     }
 
+    #[allow(unexpected_cfgs)]
     fn apply_impl(&self, inputs_json: String) -> Result<String, Box<dyn std::error::Error>> {
         if !self.creation_error.is_empty() {
             return Err(format!("Template creation failed: {}", self.creation_error).into());
@@ -451,7 +463,13 @@ impl MinijinjaTemplate {
             }
         }
 
-        let res = tmpl.render(Serde(Value::Object(ctx)))?;
+        #[cfg(minijinja_v2)]
+        let res = tmpl.render(Value::Object(ctx))?;
+        #[cfg(not(minijinja_v2))]
+        let res = {
+            use minijinja::value::Serde;
+            tmpl.render(Serde(Value::Object(ctx)))?
+        };
         Ok(res)
     }
 }
