@@ -41,6 +41,7 @@
 #include "runtime/components/constrained_decoding/suppress_tokens_config.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/conversation/thinking_config.h"
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
@@ -116,6 +117,9 @@ struct LiteRtLmSettings {
   bool report_peak_memory_footprint = false;
   bool force_f32 = false;
   bool multi_turns = false;
+  // Thinking overrides of the conversation, see CreateThinkingConfig().
+  std::optional<bool> enable_thinking;
+  std::optional<int> thinking_token_budget;
   int num_cpu_threads = 0;
   // Delegate supported CPU operations to YNNPACK before XNNPACK.
   // Can be true (on), false (off), or auto (enabled only if SDPA ops are
@@ -261,6 +265,12 @@ absl::StatusOr<std::unique_ptr<Engine>> CreateEngine(
 
 // Creates the SessionConfig from the LiteRtLmSettings.
 SessionConfig CreateSessionConfig(const LiteRtLmSettings& settings);
+
+// Creates the conversation's ThinkingConfig from the LiteRtLmSettings, with the
+// same defaults as `litert-lm run --thinking --thinking-budget`. Returns
+// std::nullopt if neither `enable_thinking` nor `thinking_token_budget` is set.
+std::optional<ThinkingConfig> CreateThinkingConfig(
+    const LiteRtLmSettings& settings);
 
 // Runs a single Conversation turn, optionally appending
 // `settings.benchmark_append_chunks` user chunks (`has_pending_message = true`)

@@ -94,6 +94,15 @@ ABSL_FLAG(bool, force_f32, false,
           "Force float 32 precision for the activation data type.");
 ABSL_FLAG(bool, multi_turns, false,
           "If true, the command line will ask for multi-turns input.");
+ABSL_FLAG(std::optional<bool>, enable_thinking, std::nullopt,
+          "If set, turns thinking (reasoning) on or off in the conversation. "
+          "If true and --thinking_token_budget is unset, the budget is -1 "
+          "(unlimited). If both are unset, the model's default applies.");
+ABSL_FLAG(std::optional<int>, thinking_token_budget, std::nullopt,
+          "If set, the maximum number of thinking tokens per reply, after "
+          "which the end of thinking is forced; -1 means unlimited. If "
+          "--enable_thinking is unset, a budget of 0 disables thinking and "
+          "any other budget enables it.");
 ABSL_FLAG(int, num_cpu_threads, 0,
           "If greater than 0, the number of CPU threads to use for the LLM "
           "execution with CPU backend.");

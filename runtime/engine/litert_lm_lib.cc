@@ -1245,6 +1245,19 @@ SessionConfig CreateSessionConfig(const LiteRtLmSettings& settings) {
   return session_config;
 }
 
+std::optional<ThinkingConfig> CreateThinkingConfig(
+    const LiteRtLmSettings& settings) {
+  if (!settings.enable_thinking.has_value() &&
+      !settings.thinking_token_budget.has_value()) {
+    return std::nullopt;
+  }
+  const bool enable_thinking =
+      settings.enable_thinking.value_or(settings.thinking_token_budget != 0);
+  return ThinkingConfig(
+      enable_thinking,
+      settings.thinking_token_budget.value_or(enable_thinking ? -1 : 0));
+}
+
 AggregatedLitertLmMetrics ComputeMedianMetrics(
     const std::vector<LitertLmMetrics>& metrics) {
   AggregatedLitertLmMetrics aggregated;
@@ -1489,10 +1502,15 @@ absl::Status RunLiteRtLm(const LiteRtLmSettings& settings,
       }
     } else {
       ABSL_LOG(INFO) << "Creating conversation";
+      ConversationConfig::Builder conversation_config_builder;
+      conversation_config_builder.SetSessionConfig(session_config);
+      if (const std::optional<ThinkingConfig> thinking_config =
+              CreateThinkingConfig(settings);
+          thinking_config.has_value()) {
+        conversation_config_builder.SetThinkingConfig(*thinking_config);
+      }
       ABSL_ASSIGN_OR_RETURN(auto conversation_config,
-                            ConversationConfig::Builder()
-                                .SetSessionConfig(session_config)
-                                .Build(*engine));
+                            conversation_config_builder.Build(*engine));
       ABSL_ASSIGN_OR_RETURN(conversation,
                             Conversation::Create(*engine, conversation_config));
       if (settings.multi_turns) {

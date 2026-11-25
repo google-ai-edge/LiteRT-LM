@@ -217,6 +217,7 @@ cc_library(
         "//runtime/conversation",
         "//runtime/conversation:end_of_turn",
         "//runtime/conversation:io_types",
+        "//runtime/conversation:thinking_config",
         "//runtime/conversation/model_data_processor:gemma4_data_processor_config",
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
