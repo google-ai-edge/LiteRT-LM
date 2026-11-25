@@ -129,8 +129,8 @@ def _handle_responses(
   """Generates responses for the v1/responses endpoint.
 
   Endpoint: `/v1/responses`.
-  - Request: Expects a JSON body with a "model" field and an "input" string.
-    A "stream" field (boolean) can be included.
+  - Request: Expects a JSON body with a "model" field and an "input" string
+    or list of message items. A "stream" field (boolean) can be included.
   - Response (Non-streaming): A custom JSON format containing the generated
     text.
   - Response (Streaming): SSEs with custom event types (`response.created`,
@@ -206,6 +206,7 @@ def handle_post_responses(handler: Any) -> None:
 
   raw_model_str = body.get("model")
   prompt = body.get("input")
+  context_messages: list[dict[str, Any]] = []
 
   if not raw_model_str or not prompt:
     handler.send_error(400, "Missing model or input")
@@ -219,7 +220,18 @@ def handle_post_responses(handler: Any) -> None:
     handler.send_error(400, f"Invalid model parameter: {e}")
     return
 
-  if isinstance(prompt, dict):
+  if isinstance(prompt, list):
+    try:
+      translated_messages = openai_common.translate_openai_messages(prompt)
+    except ValueError as e:
+      handler.send_error(400, f"Invalid input: {e}")
+      return
+    if not translated_messages:
+      handler.send_error(400, "Missing model or input")
+      return
+    prompt = translated_messages[-1]
+    context_messages = translated_messages[:-1]
+  elif isinstance(prompt, dict):
     try:
       prompt = openai_common.translate_openai_message(prompt)
     except ValueError as e:
@@ -278,7 +290,7 @@ def handle_post_responses(handler: Any) -> None:
         provider=provider,
     )
     with engine.create_conversation(
-        messages=[],
+        messages=context_messages,
         automatic_tool_calling=False,
         sampler_config=None,
         thinking_config=thinking_config,

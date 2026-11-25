@@ -1523,6 +1523,62 @@ class ServeTest(parameterized.TestCase):
       server.shutdown()
       thread.join()
 
+  def test_openai_responses_input_list_seeds_conversation(self):
+    mock_conv = mock.MagicMock()
+    mock_conv.__enter__.return_value = mock_conv
+    mock_conv.__exit__.return_value = False
+    mock_conv.send_message.return_value = mock_litert_lm.Message.from_json(
+        {"content": [{"type": "text", "text": "Your name is Tejas."}]}
+    )
+    mock_engine_instance = mock.MagicMock()
+    mock_engine_instance.create_conversation.return_value = mock_conv
+    self.enter_context(
+        mock.patch.object(
+            openai_handler.OpenAIHandler,
+            "_get_engine",
+            return_value=mock_engine_instance,
+        )
+    )
+
+    server = util.LiteRTLMServer(("127.0.0.1", 0), openai_handler.OpenAIHandler)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+      data = json.dumps({
+          "model": "gemma3",
+          "input": [
+              {"role": "system", "content": "Be brief."},
+              {"role": "user", "content": "My name is Tejas."},
+              {"role": "assistant", "content": "Nice to meet you."},
+              {"role": "user", "content": "What is my name?"},
+          ],
+      }).encode("utf-8")
+      req = urllib.request.Request(
+          f"http://127.0.0.1:{port}/v1/responses",
+          data=data,
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(req) as resp:
+        self.assertEqual(resp.status, 200)
+        body = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(
+            body["output"][0]["content"][0]["text"], "Your name is Tejas."
+        )
+
+      _, kwargs = mock_engine_instance.create_conversation.call_args
+      self.assertEqual(len(kwargs["messages"]), 3)
+      self.assertEqual(kwargs["messages"][0]["role"], "system")
+      self.assertEqual(kwargs["messages"][1]["content"], "My name is Tejas.")
+      self.assertEqual(kwargs["messages"][2]["role"], "assistant")
+      sent_prompt = mock_conv.send_message.call_args.args[0]
+      self.assertEqual(sent_prompt["role"], "user")
+      self.assertEqual(sent_prompt["content"], "What is my name?")
+    finally:
+      server.shutdown()
+      thread.join()
+
   @parameterized.named_parameters(
       dict(
           testcase_name="missing_model",
@@ -1544,6 +1600,14 @@ class ServeTest(parameterized.TestCase):
           body={
               "model": "gemma3",
               "input": {"role": "tool", "tool_call_id": "missing"},
+          },
+          err_code=400,
+      ),
+      dict(
+          testcase_name="invalid_list_input",
+          body={
+              "model": "gemma3",
+              "input": [{"role": "tool", "content": "missing tool_call_id"}],
           },
           err_code=400,
       ),
