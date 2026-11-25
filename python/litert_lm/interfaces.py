@@ -20,11 +20,13 @@ import abc
 import collections.abc
 import ctypes
 import dataclasses
+from importlib import metadata
 from importlib import resources
 import json
 import logging
 import os
 import pathlib
+import re
 import sys
 from typing import Any
 import warnings
@@ -37,6 +39,100 @@ from ._ffi import LiteRtLmConstraintProviderType
 from ._ffi import SpeculativeDecodingMode
 from ._messages import Contents
 from ._messages import Message
+
+# The file names of the LiteRT dispatch library for NVIDIA TensorRT-RTX on Linux
+# and on Windows.
+_NVIDIA_DISPATCH_LIB_NAMES = (
+    "libLiteRtDispatch_Nvidia.so",
+    "libLiteRtDispatch_Nvidia.dll",
+)
+
+# NVIDIA's PyPI packages that hold the CUDA runtime and TensorRT-RTX, which the
+# dispatch library and the compiler plugin link against, and the file names of
+# those two libraries on Linux and on Windows. The CUDA runtime packages come
+# first because TensorRT-RTX links against the CUDA runtime.
+_NVIDIA_RUNTIME_PACKAGES = (
+    "nvidia-cuda-runtime-cu12",
+    "nvidia-cuda-runtime",
+    "tensorrt-rtx-cu12-libs",
+    "tensorrt-rtx-cu13-libs",
+)
+_NVIDIA_RUNTIME_LIB_NAME = re.compile(
+    r"libcudart\.so\.\d+|cudart64_\d+\.dll"
+    r"|libtensorrt_rtx\.so\.\d+|tensorrt_rtx_\d+_\d+\.dll"
+)
+
+_NPU_NOT_FOUND = (
+    "NPU is supported only for NVIDIA TensorRT-RTX and for Intel OpenVINO on"
+    " Windows. NVIDIA's dispatch library or driver was not found."
+)
+
+
+def _has_nvidia_dispatch_lib(lib_dir: str) -> bool:
+  """Returns whether `lib_dir` holds NVIDIA's dispatch library."""
+  return any(
+      os.path.isfile(os.path.join(lib_dir, name))
+      for name in _NVIDIA_DISPATCH_LIB_NAMES
+  )
+
+
+def _load_nvidia_runtime_libs() -> None:
+  """Loads the CUDA runtime and TensorRT-RTX from NVIDIA's PyPI packages.
+
+  pip installs these libraries where the system does not look for libraries, so
+  they are loaded here by path. NVIDIA's dispatch library and compiler plugin
+  then use the loaded copies. A package that is not installed is skipped, and
+  the copy of its library that the system finds is used instead.
+  """
+  for package in _NVIDIA_RUNTIME_PACKAGES:
+    try:
+      files = metadata.files(package) or ()
+    except metadata.PackageNotFoundError:
+      continue
+    for file in files:
+      if not _NVIDIA_RUNTIME_LIB_NAME.fullmatch(file.name):
+        continue
+      path = str(file.locate())
+      try:
+        ctypes.CDLL(path)
+      except OSError as e:
+        logging.warning(
+            "Could not load %s of the %s package: %s", path, package, e
+        )
+
+
+def _find_nvidia_dispatch_lib_dir() -> str | None:
+  """Finds the LiteRT dispatch library for NVIDIA TensorRT-RTX.
+
+  Returns:
+    The directory that holds the dispatch library, if the
+    ai-edge-litert-sdk-nvidia package is installed and the NVIDIA driver is
+    present. None otherwise.
+  """
+  try:
+    import ai_edge_litert_sdk_nvidia  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]
+  except ImportError:
+    return None
+  lib_dir = ai_edge_litert_sdk_nvidia.get_dispatch_lib_dir()
+  if lib_dir is None:
+    return None
+  lib_dir = str(lib_dir)
+
+  # TensorRT-RTX needs the CUDA library of the NVIDIA driver. Loading it does
+  # not initialize CUDA.
+  driver_lib = "nvcuda.dll" if sys.platform == "win32" else "libcuda.so.1"
+  try:
+    ctypes.CDLL(driver_lib)
+  except OSError as e:
+    logging.warning(
+        "Found NVIDIA's dispatch library in %s, but could not load the NVIDIA"
+        " driver library %s: %s. NVIDIA TensorRT-RTX is not used.",
+        lib_dir,
+        driver_lib,
+        e,
+    )
+    return None
+  return lib_dir
 
 
 class Backend(abc.ABC):
@@ -92,6 +188,15 @@ class GPU(Backend):
 class NPU(Backend):
   """NPU hardware backend for LiteRT-LM.
 
+  The model runs through a LiteRT dispatch library. When
+  `litert_dispatch_lib_dir` is None, the library is NVIDIA TensorRT-RTX's if
+  the ai-edge-litert-sdk-nvidia package is installed and the NVIDIA driver is
+  present, and otherwise Intel OpenVINO's on Windows.
+
+  NVIDIA's library needs the CUDA runtime and TensorRT-RTX. They are loaded from
+  NVIDIA's PyPI packages (nvidia-cuda-runtime-cu12 and tensorrt-rtx-cu12-libs,
+  or their CUDA 13 counterparts) when those are installed.
+
   Attributes:
     litert_dispatch_lib_dir: The directory containing LiteRT dispatch libs.
   """
@@ -102,9 +207,9 @@ class NPU(Backend):
     """Initializes the NPU backend.
 
     Raises:
-      RuntimeError: If the NPU backend is not supported on the current platform,
-        if the 'openvino' package fails to import, or if no NPU device is
-        detected.
+      RuntimeError: If no dispatch library can be used: NVIDIA's dispatch
+        library or driver is not found and the platform is not Windows, the
+        'openvino' package fails to import, or OpenVINO detects no NPU device.
     """
     if self.litert_dispatch_lib_dir == "":  # pylint: disable=g-explicit-bool-comparison
       logging.warning(
@@ -115,27 +220,32 @@ class NPU(Backend):
       object.__setattr__(self, "litert_dispatch_lib_dir", "")
       return
     elif self.litert_dispatch_lib_dir is None:
+      nvidia_dispatch_lib_dir = _find_nvidia_dispatch_lib_dir()
+      if nvidia_dispatch_lib_dir is not None:
+        object.__setattr__(
+            self, "litert_dispatch_lib_dir", nvidia_dispatch_lib_dir
+        )
+        _load_nvidia_runtime_libs()
+        return
+
       if sys.platform != "win32":
         raise RuntimeError(
-            "NPU is supported only for Intel OpenVINO on Windows. Current"
-            f" platform is '{sys.platform}'."
+            f"{_NPU_NOT_FOUND} Current platform is '{sys.platform}'."
         )
 
       try:
         import openvino as ov  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-import]
       except ImportError as e:
         raise RuntimeError(
-            "NPU is supported only for Intel OpenVINO on Windows. Failed to"
-            " import the 'openvino' package. Please ensure 'openvino' is"
-            " installed."
+            f"{_NPU_NOT_FOUND} Failed to import the 'openvino' package. Please"
+            " ensure 'openvino' is installed."
         ) from e
 
       available_devices = ov.Core().available_devices  # pyrefly: ignore[unbound-name]
       if "NPU" not in available_devices:
         raise RuntimeError(
-            "NPU is supported only for Intel OpenVINO on Windows. No NPU"
-            " device detected by OpenVINO (available devices:"
-            f" {available_devices})."
+            f"{_NPU_NOT_FOUND} No NPU device detected by OpenVINO (available"
+            f" devices: {available_devices})."
         )
 
       litert_dispatch_lib_dir = str(
@@ -155,6 +265,8 @@ class NPU(Backend):
             if current_path
             else libs_dir
         )
+    elif _has_nvidia_dispatch_lib(self.litert_dispatch_lib_dir):
+      _load_nvidia_runtime_libs()
 
     if not self.litert_dispatch_lib_dir:
       raise RuntimeError(

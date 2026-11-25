@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Sequence
+import ctypes
 import os
 import pathlib
+import sys
+import types
 from unittest import mock
 import warnings
 
@@ -710,8 +714,9 @@ class EngineTest(LiteRtLmTestBase):
   def test_npu_backend_non_windows(self):
     with self.assertRaisesRegex(
         RuntimeError,
-        "NPU is supported only for Intel OpenVINO on Windows. Current"
-        " platform is 'linux'.",
+        "NPU is supported only for NVIDIA TensorRT-RTX and for Intel OpenVINO"
+        " on Windows. NVIDIA's dispatch library or driver was not found."
+        " Current platform is 'linux'.",
     ):
       litert_lm.Backend.NPU()
 
@@ -720,7 +725,7 @@ class EngineTest(LiteRtLmTestBase):
     with mock.patch.dict("sys.modules", {"openvino": None}):
       with self.assertRaisesRegex(
           RuntimeError,
-          "NPU is supported only for Intel OpenVINO on Windows. Failed to"
+          "NVIDIA's dispatch library or driver was not found. Failed to"
           " import the 'openvino' package. Please ensure 'openvino' is"
           " installed.",
       ):
@@ -733,7 +738,7 @@ class EngineTest(LiteRtLmTestBase):
     with mock.patch.dict("sys.modules", {"openvino": mock_ov}):
       with self.assertRaisesRegex(
           RuntimeError,
-          "NPU is supported only for Intel OpenVINO on Windows. No NPU"
+          "NVIDIA's dispatch library or driver was not found. No NPU"
           r" device detected by OpenVINO \(available devices: \['CPU',"
           r" 'GPU'\]\).",
       ):
@@ -745,24 +750,23 @@ class EngineTest(LiteRtLmTestBase):
     mock_ov.__file__ = "path/to/openvino/__init__.py"
     mock_ov.Core.return_value.available_devices = ["CPU", "NPU"]
 
-    mock_path = mock.MagicMock()
-    mock_path.__truediv__.return_value = "mocked_resolved_path"
+    package_dir = pathlib.Path(self.create_tempdir().full_path)
 
     with (
         mock.patch.dict("sys.modules", {"openvino": mock_ov}),
         mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True),
         mock.patch("importlib.resources.files") as mock_files,
     ):
-      mock_files.return_value = mock_path
+      mock_files.return_value = package_dir
       npu = litert_lm.Backend.NPU()
 
-      mock_files.assert_called_once_with(
+      mock_files.assert_called_with(
           "litert_lm"
       )
-      mock_path.__truediv__.assert_called_once_with(
-          "vendors/intel_openvino/dispatch/"
+      self.assertEqual(
+          npu.litert_dispatch_lib_dir,
+          str(package_dir / "vendors/intel_openvino/dispatch/"),
       )
-      self.assertEqual(npu.litert_dispatch_lib_dir, "mocked_resolved_path")
       expected_libs_dir = os.path.join("path/to/openvino", "libs")
       self.assertEqual(
           os.environ["PATH"], f"/usr/bin{os.pathsep}{expected_libs_dir}"
@@ -774,13 +778,12 @@ class EngineTest(LiteRtLmTestBase):
     mock_ov.__file__ = "path/to/openvino/__init__.py"
     mock_ov.Core.return_value.available_devices = ["CPU", "NPU"]
 
-    mock_path = mock.MagicMock()
-    mock_path.__truediv__.return_value = "mocked_resolved_path"
+    package_dir = pathlib.Path(self.create_tempdir().full_path)
     expected_libs_dir = os.path.join("path/to/openvino", "libs")
 
     with (
         mock.patch.dict("sys.modules", {"openvino": mock_ov}),
-        mock.patch("importlib.resources.files", return_value=mock_path),
+        mock.patch("importlib.resources.files", return_value=package_dir),
     ):
       with mock.patch.dict(os.environ, {}, clear=True):
         litert_lm.Backend.NPU()
@@ -798,6 +801,240 @@ class EngineTest(LiteRtLmTestBase):
             os.environ["PATH"],
             f"{prefix_match_dir}{os.pathsep}{expected_libs_dir}",
         )
+
+  def _install_nvidia_dispatch_lib(self) -> pathlib.Path:
+    """Returns a directory with NVIDIA's dispatch library installed."""
+    lib_dir = pathlib.Path(self.create_tempdir().full_path)
+    (lib_dir / "libLiteRtDispatch_Nvidia.so").touch()
+    return lib_dir
+
+  def _install_nvidia_sdk(self, lib_dir: pathlib.Path | None) -> None:
+    """Installs an ai_edge_litert_sdk_nvidia package that holds `lib_dir`."""
+    self.enter_context(
+        mock.patch.dict(
+            sys.modules,
+            {
+                "ai_edge_litert_sdk_nvidia": types.SimpleNamespace(
+                    get_dispatch_lib_dir=lambda: lib_dir
+                )
+            },
+        )
+    )
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="linux",
+          platform="linux",
+          driver_lib="libcuda.so.1",
+      ),
+      dict(
+          testcase_name="windows",
+          platform="win32",
+          driver_lib="nvcuda.dll",
+      ),
+  )
+  def test_npu_backend_finds_nvidia(self, platform: str, driver_lib: str):
+    lib_dir = self._install_nvidia_dispatch_lib()
+    self._install_nvidia_sdk(lib_dir)
+
+    with (
+        mock.patch.object(sys, "platform", platform),
+        mock.patch.object(ctypes, "CDLL", autospec=True) as mock_cdll,
+    ):
+      npu = litert_lm.Backend.NPU()
+
+    self.assertEqual(npu.litert_dispatch_lib_dir, str(lib_dir))
+    mock_cdll.assert_called_once_with(driver_lib)
+
+  def test_npu_backend_nvidia_sdk_without_libs(self):
+    self._install_nvidia_sdk(None)
+
+    with (
+        mock.patch.object(sys, "platform", "linux"),
+        mock.patch.object(ctypes, "CDLL", autospec=True) as mock_cdll,
+        self.assertRaisesRegex(
+            RuntimeError,
+            "NVIDIA's dispatch library or driver was not found. Current"
+            " platform is 'linux'.",
+        ),
+    ):
+      litert_lm.Backend.NPU()
+
+    mock_cdll.assert_not_called()
+
+  def test_npu_backend_prefers_nvidia_to_openvino(self):
+    lib_dir = self._install_nvidia_dispatch_lib()
+    self._install_nvidia_sdk(lib_dir)
+    fake_openvino = types.SimpleNamespace(
+        __file__="path/to/openvino/__init__.py",
+        Core=lambda: types.SimpleNamespace(available_devices=["CPU", "NPU"]),
+    )
+
+    with (
+        mock.patch.object(sys, "platform", "win32"),
+        mock.patch.dict(sys.modules, {"openvino": fake_openvino}),
+        mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True),
+        mock.patch.object(ctypes, "CDLL", autospec=True),
+    ):
+      npu = litert_lm.Backend.NPU()
+      path = os.environ["PATH"]
+
+    self.assertEqual(npu.litert_dispatch_lib_dir, str(lib_dir))
+    self.assertEqual(path, "/usr/bin")
+
+  def test_npu_backend_nvidia_without_driver(self):
+    self._install_nvidia_sdk(self._install_nvidia_dispatch_lib())
+
+    with (
+        mock.patch.object(sys, "platform", "linux"),
+        mock.patch.object(
+            ctypes, "CDLL", autospec=True, side_effect=OSError("no such file")
+        ),
+        self.assertLogs(level="WARNING") as logs,
+        self.assertRaisesRegex(
+            RuntimeError,
+            "NVIDIA's dispatch library or driver was not found. Current"
+            " platform is 'linux'.",
+        ),
+    ):
+      litert_lm.Backend.NPU()
+
+    self.assertIn(
+        "could not load the NVIDIA driver library libcuda.so.1: no such file",
+        "\n".join(logs.output),
+    )
+
+  def test_npu_backend_explicit_dir_skips_nvidia(self):
+    self._install_nvidia_sdk(self._install_nvidia_dispatch_lib())
+
+    with mock.patch.object(ctypes, "CDLL", autospec=True) as mock_cdll:
+      npu = litert_lm.Backend.NPU(litert_dispatch_lib_dir="my_custom_dir")
+
+    self.assertEqual(npu.litert_dispatch_lib_dir, "my_custom_dir")
+    mock_cdll.assert_not_called()
+
+  def _install_pypi_package(
+      self, site_dir: pathlib.Path, name: str, files: Sequence[str]
+  ) -> None:
+    """Installs a PyPI package that holds the empty `files` in `site_dir`."""
+    dist_info_dir = site_dir / f"{name}-1.0.dist-info"
+    dist_info_dir.mkdir()
+    (dist_info_dir / "METADATA").write_text(f"Name: {name}\nVersion: 1.0\n")
+    (dist_info_dir / "RECORD").write_text(
+        "".join(f"{file},,\n" for file in files)
+    )
+    for file in files:
+      (site_dir / file).parent.mkdir(parents=True, exist_ok=True)
+      (site_dir / file).touch()
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="linux_cuda_12",
+          platform="linux",
+          driver_lib="libcuda.so.1",
+          cuda_runtime_package="nvidia_cuda_runtime_cu12",
+          cuda_runtime_lib="nvidia/cuda_runtime/lib/libcudart.so.12",
+          tensorrt_rtx_package="tensorrt_rtx_cu12_libs",
+          tensorrt_rtx_lib="tensorrt_rtx_libs/libtensorrt_rtx.so.1",
+          unused_lib="tensorrt_rtx_libs/libtensorrt_onnxparser_rtx.so.1",
+      ),
+      dict(
+          testcase_name="windows_cuda_12",
+          platform="win32",
+          driver_lib="nvcuda.dll",
+          cuda_runtime_package="nvidia_cuda_runtime_cu12",
+          cuda_runtime_lib="nvidia/cuda_runtime/bin/cudart64_12.dll",
+          tensorrt_rtx_package="tensorrt_rtx_cu12_libs",
+          tensorrt_rtx_lib="tensorrt_rtx_libs/tensorrt_rtx_1_7.dll",
+          unused_lib="tensorrt_rtx_libs/tensorrt_onnxparser_rtx_1_7.dll",
+      ),
+      dict(
+          testcase_name="windows_cuda_13",
+          platform="win32",
+          driver_lib="nvcuda.dll",
+          cuda_runtime_package="nvidia_cuda_runtime",
+          cuda_runtime_lib="nvidia/cu13/bin/arm64/cudart64_13.dll",
+          tensorrt_rtx_package="tensorrt_rtx_cu13_libs",
+          tensorrt_rtx_lib="tensorrt_rtx_libs/tensorrt_rtx_1_7.dll",
+          unused_lib="tensorrt_rtx_libs/tensorrt_onnxparser_rtx_1_7.dll",
+      ),
+  )
+  def test_npu_backend_loads_nvidia_runtime_libs(
+      self,
+      platform: str,
+      driver_lib: str,
+      cuda_runtime_package: str,
+      cuda_runtime_lib: str,
+      tensorrt_rtx_package: str,
+      tensorrt_rtx_lib: str,
+      unused_lib: str,
+  ):
+    self._install_nvidia_sdk(self._install_nvidia_dispatch_lib())
+    site_dir = pathlib.Path(self.create_tempdir().full_path)
+    self._install_pypi_package(
+        site_dir, tensorrt_rtx_package, [tensorrt_rtx_lib, unused_lib]
+    )
+    self._install_pypi_package(
+        site_dir, cuda_runtime_package, [cuda_runtime_lib]
+    )
+
+    with (
+        mock.patch.object(sys, "platform", platform),
+        mock.patch.object(sys, "path", [str(site_dir), *sys.path]),
+        mock.patch.object(ctypes, "CDLL", autospec=True) as mock_cdll,
+    ):
+      litert_lm.Backend.NPU()
+
+    # TensorRT-RTX needs the CUDA runtime, so the CUDA runtime is loaded first.
+    self.assertEqual(
+        mock_cdll.mock_calls,
+        [
+            mock.call(driver_lib),
+            mock.call(str(site_dir / cuda_runtime_lib)),
+            mock.call(str(site_dir / tensorrt_rtx_lib)),
+        ],
+    )
+
+  def test_npu_backend_explicit_nvidia_dir_loads_runtime_libs(self):
+    dispatch_lib_dir = str(self._install_nvidia_dispatch_lib())
+    cuda_runtime_lib = "nvidia/cuda_runtime/lib/libcudart.so.12"
+    site_dir = pathlib.Path(self.create_tempdir().full_path)
+    self._install_pypi_package(
+        site_dir, "nvidia_cuda_runtime_cu12", [cuda_runtime_lib]
+    )
+
+    with (
+        mock.patch.object(sys, "path", [str(site_dir), *sys.path]),
+        mock.patch.object(ctypes, "CDLL", autospec=True) as mock_cdll,
+    ):
+      npu = litert_lm.Backend.NPU(litert_dispatch_lib_dir=dispatch_lib_dir)
+
+    self.assertEqual(npu.litert_dispatch_lib_dir, dispatch_lib_dir)
+    mock_cdll.assert_called_once_with(str(site_dir / cuda_runtime_lib))
+
+  def test_npu_backend_nvidia_runtime_lib_fails_to_load(self):
+    dispatch_lib_dir = str(self._install_nvidia_dispatch_lib())
+    cuda_runtime_lib = "nvidia/cuda_runtime/lib/libcudart.so.12"
+    site_dir = pathlib.Path(self.create_tempdir().full_path)
+    self._install_pypi_package(
+        site_dir, "nvidia_cuda_runtime_cu12", [cuda_runtime_lib]
+    )
+
+    with (
+        mock.patch.object(sys, "path", [str(site_dir), *sys.path]),
+        mock.patch.object(
+            ctypes, "CDLL", autospec=True, side_effect=OSError("bad library")
+        ),
+        self.assertLogs(level="WARNING") as logs,
+    ):
+      npu = litert_lm.Backend.NPU(litert_dispatch_lib_dir=dispatch_lib_dir)
+
+    self.assertEqual(npu.litert_dispatch_lib_dir, dispatch_lib_dir)
+    self.assertIn(
+        f"Could not load {site_dir / cuda_runtime_lib} of the"
+        " nvidia-cuda-runtime-cu12 package: bad library",
+        "\n".join(logs.output),
+    )
 
   def test_engine_init_with_legacy_backend_class(self):
     with warnings.catch_warnings(record=True) as w:
