@@ -25,6 +25,7 @@
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/run_options.h"
 
 namespace litert::lm {
 
@@ -114,6 +115,17 @@ class EmbeddingExecutorBase {
   virtual absl::StatusOr<ExecutorStats> StopProfiling() {
     return absl::UnimplementedError(absl::StrCat(
         "StopProfiling not implemented for backend: ", ExecutorBackendName()));
+  }
+
+  // Sets the factory of the LiteRT options of every subsequent model run of
+  // the executor, e.g. with a vendor NPU performance mode to switch the power
+  // state between inference requests. The factory is called for every model
+  // run until the next call; an empty factory reverts to the options the
+  // models were compiled with. Must not be called concurrently with an
+  // embedding computation.
+  virtual absl::Status SetRunOptions(RunOptionsFactory run_options_factory) {
+    return absl::UnimplementedError(absl::StrCat(
+        "SetRunOptions not implemented for backend: ", ExecutorBackendName()));
   }
 };
 

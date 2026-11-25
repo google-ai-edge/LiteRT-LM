@@ -39,6 +39,7 @@
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_layout.h"  // from @litert
+#include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -50,6 +51,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/run_options_test_util.h"
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -581,6 +583,86 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest, ComputeEmbeddingBatch_Success) {
   EXPECT_EQ(batch_outputs[1].input_length, 1);
   EXPECT_EQ(batch_outputs[1].truncated_length, std::nullopt);
   EXPECT_EQ(batch_outputs[1].num_chunks, 1);
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest, ComputeEmbeddingWithRunOptions) {
+  auto embedder_buf =
+      BuildDummyTfLiteModelBuffer("embedder", {1}, tflite::TensorType_FLOAT32,
+                                  {1, 1, 8}, tflite::TensorType_FLOAT32);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto embedder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                               embedder_buf.data(), embedder_buf.size())));
+  auto encoder_buf = BuildDummyTfLiteModelBuffer(
+      "encoder", {1, 1, 8}, tflite::TensorType_FLOAT32, {1, 8},
+      tflite::TensorType_FLOAT32);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto encoder_model, Model::CreateFromBuffer(litert::BufferRef<uint8_t>(
+                              encoder_buf.data(), encoder_buf.size())));
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(EmbeddingExecutorSettings settings,
+                       EmbeddingExecutorSettings::CreateDefault(
+                           model_assets, /*backend=*/Backend::CPU));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  auto fake_resources = std::make_unique<FakeEmbeddingModelResources>(
+      &embedder_model, &encoder_model);
+  ASSERT_OK_AND_ASSIGN(auto embedding_executor,
+                       EmbeddingLiteRtCompiledModelExecutor::Create(
+                           settings, env, std::move(fake_resources)));
+
+  alignas(LITERT_HOST_MEMORY_BUFFER_ALIGNMENT) int32_t token_data[] = {42};
+  auto make_inputs = [&]() -> absl::StatusOr<ExecutorInputs> {
+    LITERT_ASSIGN_OR_RETURN(
+        auto token_ids_buffer,
+        TensorBuffer::CreateFromHostMemory(
+            env, RankedTensorType(ElementType::Int32, Layout(Dimensions({1}))),
+            token_data, sizeof(token_data)));
+    return ExecutorInputs(ExecutorTextData(std::move(token_ids_buffer)),
+                          std::nullopt, std::nullopt);
+  };
+  auto compute = [&]() -> absl::StatusOr<std::vector<float>> {
+    ABSL_ASSIGN_OR_RETURN(ExecutorInputs inputs, make_inputs());
+    ABSL_ASSIGN_OR_RETURN(EmbeddingOutput output,
+                          embedding_executor->ComputeEmbedding(inputs));
+    return output.embedding;
+  };
+  ASSERT_OK_AND_ASSIGN(std::vector<float> expected, compute());
+
+  // The CPU model ignores the run options, so the results don't change. Every
+  // text encoder run gets new options.
+  int num_calls = 0;
+  ASSERT_OK(
+      embedding_executor->SetRunOptions(CountingRunOptionsFactory(&num_calls)));
+  EXPECT_THAT(compute(), IsOkAndHolds(expected));
+  EXPECT_EQ(num_calls, 1);
+  EXPECT_THAT(compute(), IsOkAndHolds(expected));
+  EXPECT_EQ(num_calls, 2);
+
+  // The model has no batched signature, so a batch runs its inputs one at a
+  // time, each with new options. The batched run is covered by
+  // ComputeEmbeddingBatch_BatchedSignatureUsesRunOptions.
+  std::vector<ExecutorInputs> batch_inputs;
+  for (int i = 0; i < 2; ++i) {
+    ASSERT_OK_AND_ASSIGN(ExecutorInputs inputs, make_inputs());
+    batch_inputs.push_back(std::move(inputs));
+  }
+  ASSERT_OK_AND_ASSIGN(auto batch_outputs,
+                       embedding_executor->ComputeEmbeddingBatch(batch_inputs));
+  EXPECT_EQ(batch_outputs.size(), 2);
+  EXPECT_EQ(num_calls, 4);
+
+  // A failure to create the options fails the call.
+  ASSERT_OK(embedding_executor->SetRunOptions(
+      FailingRunOptionsFactory(absl::InvalidArgumentError("bad options"))));
+  EXPECT_THAT(compute(),
+              StatusIs(absl::StatusCode::kInvalidArgument, "bad options"));
+
+  // An empty factory reverts to the compile-time options.
+  ASSERT_OK(embedding_executor->SetRunOptions(nullptr));
+  const int num_calls_before_reset = num_calls;
+  EXPECT_THAT(compute(), IsOkAndHolds(expected));
+  EXPECT_EQ(num_calls, num_calls_before_reset);
 }
 
 TEST(EmbeddingLiteRtCompiledModelExecutorTest,
@@ -1982,6 +2064,42 @@ TEST(EmbeddingLiteRtCompiledModelExecutorTest,
   EXPECT_EQ(
       outputs[3].embedding,
       std::vector<float>(kSumEmbeddingDim, ExpectedSumEncoding(requests[3])));
+}
+
+TEST(EmbeddingLiteRtCompiledModelExecutorTest,
+     ComputeEmbeddingBatch_BatchedSignatureUsesRunOptions) {
+  ASSERT_OK_AND_ASSIGN(auto models, CreateSumModels({{1, 8}, {2, 4}}));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateSumExecutor(env, *models));
+
+  // Both requests fit `encoder_2x4`, so they run together in one batched run.
+  const std::vector<std::vector<int32_t>> requests = {{1, 2}, {3, 4, 5}};
+  int num_calls = 0;
+  ASSERT_OK(executor->SetRunOptions(CountingRunOptionsFactory(&num_calls)));
+  {
+    ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+    ASSERT_OK_AND_ASSIGN(auto outputs,
+                         executor->ComputeEmbeddingBatch(batch_inputs));
+    ASSERT_EQ(outputs.size(), requests.size());
+    for (int i = 0; i < requests.size(); ++i) {
+      EXPECT_EQ(outputs[i].embedding,
+                std::vector<float>(kSumEmbeddingDim,
+                                   ExpectedSumEncoding(requests[i])))
+          << "request " << i;
+    }
+  }
+  // The single batched run got new options.
+  EXPECT_EQ(num_calls, 1);
+
+  // A failure to create the options fails the batched run.
+  ASSERT_OK(executor->SetRunOptions(
+      FailingRunOptionsFactory(absl::InvalidArgumentError("bad options"))));
+  {
+    ASSERT_OK_AND_ASSIGN(auto batch_inputs, CreateBatchInputs(env, requests));
+    EXPECT_THAT(executor->ComputeEmbeddingBatch(batch_inputs),
+                StatusIs(absl::StatusCode::kInvalidArgument, "bad options"));
+  }
 }
 
 TEST(EmbeddingLiteRtCompiledModelExecutorTest,

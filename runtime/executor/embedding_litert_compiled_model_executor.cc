@@ -65,6 +65,7 @@
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/run_options.h"
 #include "runtime/proto/embedding_metadata.pb.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/data_stream.h"
@@ -555,9 +556,12 @@ EmbeddingLiteRtCompiledModelExecutor::FinishEncoderRun(
     return absl::CancelledError("The text encoder run was cancelled.");
   }
   {
+    ABSL_ASSIGN_OR_RETURN(std::optional<litert::Options> run_options,
+                          CreateRunOptions(run_options_factory_));
     ScopedLatency scoped(latency_stats_, kTextEncoderInferenceLatency);
     auto result = compiled_model_->Run(run.signature_index, input_buffers,
-                                       output_buffers);
+                                       output_buffers,
+                                       GetRunOptionsPtr(run_options));
     // An interrupted run reports a generic error.
     if (!result.HasValue() && latch != nullptr && latch->IsCancelled()) {
       return absl::CancelledError("The text encoder run was cancelled.");
@@ -1014,9 +1018,12 @@ EmbeddingLiteRtCompiledModelExecutor::RunBatchedEncoderForTokens(
   }
 
   {
+    ABSL_ASSIGN_OR_RETURN(std::optional<litert::Options> run_options,
+                          CreateRunOptions(run_options_factory_));
     ScopedLatency scoped(latency_stats_, kTextEncoderInferenceLatency);
     LITERT_RETURN_IF_ERROR(compiled_model_->Run(run.signature_index,
-                                                input_buffers, output_buffers));
+                                                input_buffers, output_buffers,
+                                                GetRunOptionsPtr(run_options)));
   }
 
   std::vector<std::vector<float>> embeddings;

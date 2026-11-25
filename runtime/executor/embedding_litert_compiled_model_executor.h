@@ -20,6 +20,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/container/btree_map.h"  // from @com_google_absl
@@ -39,6 +40,7 @@
 #include "runtime/executor/embedding/embedding_executor_settings.h"
 #include "runtime/executor/executor_stats.h"
 #include "runtime/executor/llm_executor_io_types.h"
+#include "runtime/executor/run_options.h"
 #include "runtime/util/data_stream.h"
 
 namespace litert::lm {
@@ -145,6 +147,12 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
 
   absl::Status StartProfiling() override;
   absl::StatusOr<ExecutorStats> StopProfiling() override;
+
+  // The options are used by the text encoder runs.
+  absl::Status SetRunOptions(RunOptionsFactory run_options_factory) override {
+    run_options_factory_ = std::move(run_options_factory);
+    return absl::OkStatus();
+  }
 
   using EmbeddingExecutorBase::ComputeEmbedding;
   using EmbeddingExecutorBase::ComputeEmbeddingBatch;
@@ -318,6 +326,9 @@ class EmbeddingLiteRtCompiledModelExecutor : public EmbeddingExecutorBase {
   std::unique_ptr<EmbeddingLookupManager> embedding_lookup_;
   std::unique_ptr<EmbeddingLookupManager> per_layer_embedding_lookup_;
   std::unique_ptr<litert::CompiledModel> compiled_model_;
+  // The factory of the LiteRT options of every text encoder run (see
+  // SetRunOptions()), or empty to use the compile-time options.
+  RunOptionsFactory run_options_factory_;
   std::vector<int> expected_input_dimension_;
   int embedding_dimension_;
   std::string backend_name_;
