@@ -25,6 +25,7 @@
 #include <sstream>
 #include <string>
 #include <system_error>  // NOLINT: Required for std::error_code.
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -468,6 +469,25 @@ TEST(ModelInfoFileTest, GetModelInfo_ExtractsMaxVisionTokenBudget) {
   ASSERT_TRUE(result.llm_capability.has_value());
   const auto& llm = *result.llm_capability;
   EXPECT_EQ(llm.max_vision_token_budget, 280);
+}
+
+// Tests that a model without a vision encoder does not report the vision token
+// budget of its model type (e.g. a text-only bundle of a multimodal family).
+TEST(ModelInfoFileTest, GetModelInfo_NoVisionEncoder_NoVisionTokenBudget) {
+  proto::LlmMetadata proto_meta;
+  auto* gemma4 = proto_meta.mutable_llm_model_type()->mutable_gemma4();
+  gemma4->set_max_num_patches(2520);
+  gemma4->set_pooling_kernel_size(3);
+
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "google/gemma-4-2b-it", {"tf_lite_prefill_decode"}, &proto_meta);
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_FALSE(result_or->llm_capability->input_modalities.vision);
+  EXPECT_EQ(result_or->llm_capability->max_vision_token_budget, -1);
 }
 
 TEST(ModelInfoFileTest,
@@ -1720,6 +1740,205 @@ TEST(ModelInfoFileTest, GetModelInfo_DynamicShapes_DynamicContext) {
   ASSERT_TRUE(result_or->llm_capability.has_value());
   EXPECT_EQ(result_or->llm_capability->max_context_tokens, 8192);
   EXPECT_TRUE(result_or->llm_capability->is_dynamic_context);
+}
+
+// Tests a block-sparse indexer cache whose number of context blocks P
+// (dimension 1 of `idx_block` inputs) is a magic number and whose mask is
+// R * P tokens: the context is dynamic (resized by the engine), with
+// LlmMetadata max_num_tokens as the default context size.
+TEST(ModelInfoFileTest, GetModelInfo_IdxBlockMagicNumber_DynamicContext) {
+  proto::LlmMetadata proto_meta;
+  proto_meta.set_max_num_tokens(4096);
+
+  // 65537 blocks of 4 tokens: 262148 tokens (not a prime number).
+  std::string tflite_model = CreateLlmTFLiteModel({
+      {"prefill_128",
+       {{"mask", {1, 1, 128, 262148}},
+        {"kv_cache_c_0", {1, 3, 8192}},
+        {"kv_cache_k_3", {1, 262148, 256}},
+        {"kv_cache_idx_block_k_3", {1, 65537, 128}},
+        {"kv_cache_idx_ring_k_3", {1, 4, 128}}}},
+  });
+  std::string file_data = CreateTestLiteRTLM("IT", "Abc/abc_moe_30b_a4b",
+                                             {"tf_lite_prefill_decode"},
+                                             &proto_meta, {tflite_model});
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_EQ(result_or->llm_capability->max_context_tokens, 4096);
+  EXPECT_TRUE(result_or->llm_capability->is_dynamic_context);
+}
+
+// Tests that an `idx_block` input does not make the context dynamic if its
+// number of blocks is not a magic number, or the mask is not a multiple of it.
+TEST(ModelInfoFileTest, GetModelInfo_IdxBlockWithoutMagicNumber_StaticContext) {
+  for (const auto& [num_blocks, mask_length] :
+       std::vector<std::pair<int32_t, int32_t>>{
+           {65536, 262144},  // Not a prime number.
+           {65537, 262144},  // Not a multiple of the prime number.
+           {65537, 65537},   // A multiple of 1 is the mask magic number case.
+           {7, 28},          // Primes below 11 are not magic numbers.
+       }) {
+    SCOPED_TRACE(absl::StrCat(num_blocks, " blocks, mask ", mask_length));
+    std::string tflite_model = CreateLlmTFLiteModel({
+        {"prefill_128",
+         {{"mask", {1, 1, 128, mask_length}},
+          {"kv_cache_k_3", {1, 4096, 256}},
+          {"kv_cache_idx_block_k_3", {1, num_blocks, 128}}}},
+    });
+    std::string file_data = CreateTestLiteRTLM(
+        "IT", "Abc/abc_moe_30b_a4b", {"tf_lite_prefill_decode"},
+        /*llm_metadata_proto=*/nullptr, {tflite_model});
+
+    std::istringstream stream(file_data, std::ios::binary);
+    auto result_or = GetModelInfo(stream);
+    ASSERT_OK(result_or);
+    ASSERT_TRUE(result_or->llm_capability.has_value());
+    // A prime mask length is itself a magic number.
+    EXPECT_EQ(result_or->llm_capability->is_dynamic_context,
+              mask_length == 65537);
+  }
+}
+
+// Tests that an `idx_block` input is matched to the first mask input, as in
+// SetIdxBlockIfPrime(), even if a later mask has a different length.
+TEST(ModelInfoFileTest, GetModelInfo_IdxBlockMatchesFirstMask) {
+  for (const auto& [first_mask, second_mask, expected_dynamic] :
+       std::vector<std::tuple<int32_t, int32_t, bool>>{
+           {262148, 4096, true},
+           {4096, 262148, false},
+       }) {
+    SCOPED_TRACE(absl::StrCat("masks ", first_mask, ", ", second_mask));
+    std::string tflite_model = CreateLlmTFLiteModel({
+        {"prefill_128",
+         {{"mask_global", {1, 1, 128, first_mask}},
+          {"mask_local", {1, 1, 128, second_mask}},
+          {"kv_cache_k_3", {1, 4096, 256}},
+          {"kv_cache_idx_block_k_3", {1, 65537, 128}}}},
+    });
+    std::string file_data = CreateTestLiteRTLM(
+        "IT", "Abc/abc_moe_30b_a4b", {"tf_lite_prefill_decode"},
+        /*llm_metadata_proto=*/nullptr, {tflite_model});
+
+    std::istringstream stream(file_data, std::ios::binary);
+    auto result_or = GetModelInfo(stream);
+    ASSERT_OK(result_or);
+    ASSERT_TRUE(result_or->llm_capability.has_value());
+    EXPECT_EQ(result_or->llm_capability->is_dynamic_context, expected_dynamic);
+  }
+}
+
+// Tests that a magic-number `idx_block` input is kept even if a later
+// `idx_block` input has a non-magic (e.g. placeholder) block count, as in
+// SetIdxBlockIfPrime().
+TEST(ModelInfoFileTest, GetModelInfo_IdxBlockKeepsMagicNumberInput) {
+  for (const auto& [first_blocks, second_blocks] :
+       std::vector<std::pair<int32_t, int32_t>>{
+           {65537, 1},
+           {1, 65537},
+           {65537, 65536},
+       }) {
+    SCOPED_TRACE(absl::StrCat("blocks ", first_blocks, ", ", second_blocks));
+    std::string tflite_model = CreateLlmTFLiteModel({
+        {"prefill_128",
+         {{"mask", {1, 1, 128, 262148}},
+          {"kv_cache_k_3", {1, 4096, 256}},
+          {"kv_cache_idx_block_k_3", {1, first_blocks, 128}},
+          {"kv_cache_idx_block_k_7", {1, second_blocks, 128}}}},
+    });
+    std::string file_data = CreateTestLiteRTLM(
+        "IT", "Abc/abc_moe_30b_a4b", {"tf_lite_prefill_decode"},
+        /*llm_metadata_proto=*/nullptr, {tflite_model});
+
+    std::istringstream stream(file_data, std::ios::binary);
+    auto result_or = GetModelInfo(stream);
+    ASSERT_OK(result_or);
+    ASSERT_TRUE(result_or->llm_capability.has_value());
+    EXPECT_TRUE(result_or->llm_capability->is_dynamic_context);
+  }
+}
+
+// Tests that a magic-number `idx_block` input needs a mask of R * P tokens with
+// R >= 2: without a mask input (R = 0) the context stays static.
+TEST(ModelInfoFileTest, GetModelInfo_IdxBlockWithoutMask_StaticContext) {
+  std::string tflite_model = CreateLlmTFLiteModel({
+      {"prefill_128",
+       {{"kv_cache_k_3", {1, 4096, 256}},
+        {"kv_cache_idx_block_k_3", {1, 65537, 128}}}},
+  });
+  std::string file_data = CreateTestLiteRTLM(
+      "IT", "Abc/abc_moe_30b_a4b", {"tf_lite_prefill_decode"},
+      /*llm_metadata_proto=*/nullptr, {tflite_model});
+
+  std::istringstream stream(file_data, std::ios::binary);
+  auto result_or = GetModelInfo(stream);
+  ASSERT_OK(result_or);
+  ASSERT_TRUE(result_or->llm_capability.has_value());
+  EXPECT_FALSE(result_or->llm_capability->is_dynamic_context);
+}
+
+// Tests edge cases of `idx_block` inputs: a dynamic dimension makes the graph
+// dynamic, a rank-1 tensor has no block count, an `idx_block` name with a
+// KV-cache prefix is not a KV cache, and a zero-length first mask is still the
+// mask the block count is matched to.
+TEST(ModelInfoFileTest, GetModelInfo_IdxBlockEdgeCases) {
+  struct TestCase {
+    std::string name;
+    std::vector<TestInputSpec> inputs;
+    bool expected_dynamic;
+    int expected_context_tokens;
+  };
+  for (const auto& test_case : std::vector<TestCase>{
+           {"dynamic_dim",
+            {{"mask", {1, 1, 128, 4096}},
+             {"kv_cache_k_3", {1, 4096, 256}},
+             {"kv_cache_idx_block_k_3", {1, 1, 128}, {1, -1, 128}}},
+            true,
+            4096},
+           {"rank_1",
+            {{"mask", {1, 1, 128, 262148}},
+             {"kv_cache_k_3", {1, 4096, 256}},
+             {"kv_cache_idx_block_k_3", {65537}}},
+            false,
+            4096},
+           {"kv_cache_prefix_is_idx_block",
+            {{"mask", {1, 1, 128, 262148}},
+             {"kv_cache_k_3", {1, 4096, 256}},
+             {"kv_cache_k_idx_block_3", {1, 65537, 128}}},
+            true,
+            4096},
+           {"kv_cache_prefix_not_kv_cache",
+            {{"mask", {1, 1, 128, 1024}},
+             {"kv_cache_k_3", {1, 1024, 256}},
+             {"kv_cache_k_idx_block_3", {1, 65537, 128}}},
+            false,
+            1024},
+           {"zero_first_mask",
+            {{"mask_a", {1, 1, 128, 0}},
+             {"mask_b", {1, 1, 128, 262148}},
+             {"kv_cache_k_3", {1, 4096, 256}},
+             {"kv_cache_idx_block_k_3", {1, 65537, 128}}},
+            false,
+            4096},
+       }) {
+    SCOPED_TRACE(test_case.name);
+    std::string tflite_model =
+        CreateLlmTFLiteModel({{"prefill_128", test_case.inputs}});
+    std::string file_data = CreateTestLiteRTLM(
+        "IT", "Abc/abc_moe_30b_a4b", {"tf_lite_prefill_decode"},
+        /*llm_metadata_proto=*/nullptr, {tflite_model});
+
+    std::istringstream stream(file_data, std::ios::binary);
+    auto result_or = GetModelInfo(stream);
+    ASSERT_OK(result_or);
+    ASSERT_TRUE(result_or->llm_capability.has_value());
+    EXPECT_EQ(result_or->llm_capability->is_dynamic_context,
+              test_case.expected_dynamic);
+    EXPECT_EQ(result_or->llm_capability->max_context_tokens,
+              test_case.expected_context_tokens);
+  }
 }
 
 TEST(ModelInfoFileTest, GetModelInfo_DetectsNpuFromRawBufferFallbackScan) {

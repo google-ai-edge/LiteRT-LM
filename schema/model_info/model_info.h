@@ -130,7 +130,7 @@ struct LlmInferenceCapability {
   bool supports_draft_verification = false;
 
   // Maximum vision token budget for multimodal inputs. Defaults to -1 if not
-  // defined.
+  // defined or if the model does not support vision.
   int max_vision_token_budget = -1;
 
   // Vision signature selection capacities, representing the discrete vision

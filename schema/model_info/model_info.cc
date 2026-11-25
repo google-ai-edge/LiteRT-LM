@@ -1015,9 +1015,12 @@ absl::Status LoadLlmMetadataProtoIfPresent(SectionReader& reader,
   }
 
   if (proto_metadata.has_llm_model_type()) {
-    int budget = CalculateMaxVisionTokenBudget(proto_metadata.llm_model_type());
-    if (budget > 0) {
-      llm_cap.max_vision_token_budget = budget;
+    // The vision token budget only applies to models with a vision encoder,
+    // e.g. not to text-only bundles of a multimodal model family.
+    if (llm_cap.input_modalities.vision) {
+      int budget =
+          CalculateMaxVisionTokenBudget(proto_metadata.llm_model_type());
+      if (budget > 0) llm_cap.max_vision_token_budget = budget;
     }
   }
 
@@ -1062,8 +1065,9 @@ absl::Status LoadVisionSignaturesIfPresent(
 // Context and capability information inspected from the prefill decode model.
 struct TfliteContextInfo {
   // Whether the KV-cache size is chosen at initialization time: the prefill
-  // mask has a magic-number context length, or the KV cache has dynamic (-1)
-  // dimensions.
+  // mask has a magic-number context length, an `idx_block` input has a
+  // magic-number block count P with an R * P mask (R >= 2), or the KV cache
+  // has dynamic (-1) dimensions.
   bool is_dynamic = false;
   // Fixed context size of a static graph, or 0 if dynamic or unknown.
   int64_t context_tokens = 0;
@@ -1125,11 +1129,15 @@ TfliteContextInfo ExtractContextInfoFromTfliteBuffer(absl::string_view buffer) {
     const auto* subgraph = model->subgraphs()->Get(sig->subgraph_index());
     if (subgraph == nullptr || subgraph->tensors() == nullptr) continue;
 
+    std::optional<int64_t> mask_dim;
+    int64_t magic_idx_block_size = 0;
     for (const auto* input : *sig->inputs()) {
       if (input == nullptr || input->name() == nullptr) continue;
       const absl::string_view name = input->name()->string_view();
-      const bool is_kv_cache = IsKvCacheInput(name);
-      if (!is_kv_cache && !absl::StrContains(name, "mask")) continue;
+      const bool is_idx_block = absl::StrContains(name, "idx_block");
+      const bool is_kv_cache = !is_idx_block && IsKvCacheInput(name);
+      const bool is_mask = absl::StrContains(name, "mask");
+      if (!is_kv_cache && !is_idx_block && !is_mask) continue;
       if (input->tensor_index() >= subgraph->tensors()->size()) continue;
       const auto* tensor = subgraph->tensors()->Get(input->tensor_index());
       if (tensor == nullptr || tensor->shape() == nullptr ||
@@ -1143,9 +1151,31 @@ TfliteContextInfo ExtractContextInfoFromTfliteBuffer(absl::string_view buffer) {
         for (int32_t dim : shape) {
           max_kv_cache_dim = std::max<int64_t>(max_kv_cache_dim, dim);
         }
+      } else if (is_idx_block) {
+        info.is_dynamic |= HasDynamicDim(*tensor);
+        // Like SetIdxBlockIfPrime(), only a magic-number block count counts,
+        // so a later non-magic `idx_block` input does not hide an earlier one.
+        if (shape.size() > 1 && magic_idx_block_size == 0 &&
+            IsMagicNumber(shape.Get(1))) {
+          magic_idx_block_size = shape.Get(1);
+        }
       } else {
-        info.is_dynamic |= IsMagicNumber(shape.Get(shape.size() - 1));
+        // Attention mask: a magic-number last dimension marks a dynamic
+        // context.
+        const int64_t dim = shape.Get(shape.size() - 1);
+        info.is_dynamic |= IsMagicNumber(dim);
+        // Like SetIdxBlockIfPrime(), match `idx_block` to the first mask.
+        if (!mask_dim.has_value()) mask_dim = dim;
       }
+    }
+    // Keep consistent with SetIdxBlockIfPrime() in
+    // runtime/executor/magic_number_configs_helper.cc. Block-compressed KV
+    // caches (e.g. `kv_cache_idx_block_*` inputs of shape [B, P, D]) are
+    // resized at load time when the block count P is a magic number and the
+    // mask covers R * P tokens (R >= 2).
+    if (magic_idx_block_size > 0 && mask_dim.has_value()) {
+      info.is_dynamic |= *mask_dim % magic_idx_block_size == 0 &&
+                         *mask_dim / magic_idx_block_size >= 2;
     }
   }
 
