@@ -1795,6 +1795,7 @@ cc_test(
     ],
     deps = [
         ":executor_settings_base",
+        ":litert_compiled_model_executor_utils",
         ":llm_executor_settings",
         ":nvidia_mtp_drafter_support",
         "@com_google_googletest//:gtest_main",

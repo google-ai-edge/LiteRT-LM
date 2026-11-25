@@ -1029,7 +1029,9 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_litert_dispatch_lib_dir(
 // at least one prefill signature and "decode" in the selection. When MTP is
 // enabled, make sure "verify" is also included. By default every signature of
 // the model is used, except that NVIDIA's TensorRT-RTX backend leaves out every
-// prefill signature but the largest. To use a smaller one there, select it.
+// prefill signature but the largest. An input then needs that signature's
+// length in free context tokens, also a short input near the end of the
+// context. To keep a smaller prefill signature there, select the signatures.
 //
 // @param settings The engine settings.
 // @param signatures The signature keys to select.

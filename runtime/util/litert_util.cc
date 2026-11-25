@@ -134,19 +134,24 @@ LibDirResult ResolveLibraryDir(
   return {library_dir, should_set_path, from_settings};
 }
 
+// Adds the NPU options of the settings to `env_options`. `library_dir` receives
+// the directory that the options name for the dispatch library. The options
+// point into it, so it has to stay alive until the environment is created from
+// them: LiteRT copies the strings of its options then.
 void PopulateNpuOptions(
     Backend backend,
     const std::optional<VisionExecutorSettings>& vision_settings,
     const std::optional<AudioExecutorSettings>& audio_settings,
     const ExecutorSettingsBase& main_executor_settings,
+    std::string& library_dir,
     std::vector<EnvironmentOptions::Option>& env_options) {
 #if !defined(LITERT_DISABLE_NPU)
   if (UsesNpu(backend, vision_settings, audio_settings)) {
-    auto [library_dir, should_set_path, from_settings] =
+    auto [resolved_library_dir, should_set_path, from_settings] =
         ResolveLibraryDir(main_executor_settings);
+    library_dir = std::move(resolved_library_dir);
 
     if (should_set_path) {
-      // TODO(b/540445921): move the 'library_dir' to its own space.
       env_options.push_back(::litert::EnvironmentOptions::Option{
           ::litert::EnvironmentOptions::Tag::kDispatchLibraryDir,
           library_dir.c_str()});
@@ -220,9 +225,11 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
     }
   }
 
+  // The NPU options point into it until the environment is created.
+  std::string npu_library_dir;
   PopulateNpuOptions(backend, engine_settings.GetVisionExecutorSettings(),
                      engine_settings.GetAudioExecutorSettings(),
-                     main_executor_settings, env_options);
+                     main_executor_settings, npu_library_dir, env_options);
   PopulateAutoRegisterAccelerators(
       backend, main_executor_settings.GetSamplerBackend(),
       engine_settings.GetVisionExecutorSettings(),
@@ -248,9 +255,11 @@ absl::StatusOr<OwnedEnvironment> CreateEnvironment(
   std::vector<EnvironmentOptions::Option> env_options;
   auto helper = std::make_unique<MagicNumberConfigsHelper>();
 
+  // The NPU options point into it until the environment is created.
+  std::string npu_library_dir;
   PopulateNpuOptions(backend, engine_settings.GetVisionExecutorSettings(),
                      engine_settings.GetAudioExecutorSettings(),
-                     main_executor_settings, env_options);
+                     main_executor_settings, npu_library_dir, env_options);
   PopulateAutoRegisterAccelerators(
       backend, /*sampler_backend=*/Backend::UNSPECIFIED,
       engine_settings.GetVisionExecutorSettings(),

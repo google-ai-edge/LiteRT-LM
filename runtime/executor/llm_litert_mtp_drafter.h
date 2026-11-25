@@ -293,6 +293,12 @@ absl::Status UpdateCompilationOptions(
     const LlmExecutorSettings& executor_settings,
     litert::Options& compilation_options);
 
+// The settings to compile the MTP drafter model with: `executor_settings`
+// without the selected signatures. Those name signatures of the base model.
+// The drafter model has its own, and compiles all of them.
+LlmExecutorSettings MtpDrafterCompilationSettings(
+    const LlmExecutorSettings& executor_settings);
+
 }  // namespace litert::lm
 
 #endif  // THIRD_PARTY_ODML_LITERT_LM_RUNTIME_EXECUTOR_LLM_LITERT_MTP_DRAFTER_H_

@@ -109,6 +109,7 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
 
   std::optional<ModelSignatures> signatures;
   std::optional<std::string> cache_suffix;
+  std::optional<LlmExecutorSettings> drafter_settings;
 
   if (model_type == proto::LlmMetadata::TF_LITE_PREFILL_DECODE) {
     ABSL_ASSIGN_OR_RETURN(auto litert_model,
@@ -126,12 +127,14 @@ absl::StatusOr<std::unique_ptr<CompiledModel>> CompileModel(
   } else if (model_type == proto::LlmMetadata::TF_LITE_MTP_DRAFTER) {
     cache_suffix = std::string(ExecutorSettingsBase::GetCacheModelName(
         ExecutorSettingsBase::CacheModel::kMtpDrafter));
+    drafter_settings = MtpDrafterCompilationSettings(executor_settings);
   }
 
   ABSL_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(
-          executor_settings, activation_data_type,
+          drafter_settings.has_value() ? *drafter_settings : executor_settings,
+          activation_data_type,
           signatures ? std::make_optional(&*signatures) : std::nullopt,
           cache_suffix, &resources));
 

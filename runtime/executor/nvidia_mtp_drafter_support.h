@@ -69,19 +69,16 @@ absl::StatusOr<std::optional<SharedLibrary>> LoadedDispatchLibrary(
 // engine for every selected signature when the model loads, so each one costs
 // load time and device memory. With the largest prefill signature alone, a
 // shorter input runs padded in it, and a prefill needs that many free entries
-// in the context. The other signatures (decode, verify) stay, and so do the
-// features that run them. A caller that wants another trade-off selects the
-// signatures itself.
+// in the context: an input no longer fits once fewer are free, where a smaller
+// prefill signature would still have run it. The other signatures (decode,
+// verify) stay, and so do the features that run them. A caller that wants
+// another trade-off selects the signatures itself.
 //
 // `input_positions_name` names the input whose shape gives a prefill signature
 // its length. `executor_settings` is left as it is for a caller that selected
 // signatures, on other backends, when `env` does not take its dispatch library
 // from a directory that holds NVIDIA's, and for a model without several
 // prefill signatures to choose from.
-//
-// An executor on NVIDIA's backend also gets the cache locations of
-// SetDefaultNvidiaCacheLocations, whether or not its caller selected
-// signatures.
 absl::Status SelectDefaultNvidiaSignatures(
     const Environment& env, const Model& model,
     absl::string_view input_positions_name,
@@ -92,6 +89,8 @@ absl::Status SelectDefaultNvidiaSignatures(
 // that the next load of the same model file reads them instead of building
 // them again. The place is next to the model file: the folders
 // litert_nvidia_tensorrt_aot_cache and litert_nvidia_dispatch_runtime_cache.
+// Does nothing when `env` does not take its dispatch library from a directory
+// that holds NVIDIA's.
 //
 // The two libraries read these folders, and the model file that identifies a
 // cached engine, from the environment variables
@@ -99,13 +98,26 @@ absl::Status SelectDefaultNvidiaSignatures(
 // LITERT_NVIDIA_DISPATCH_RUNTIME_CACHE_DIR and
 // LITERT_NVIDIA_TENSORRT_AOT_MODEL_PATH, which this sets for the process. An
 // environment that names any of them itself keeps its own values and gets none
-// from here. Nothing is set for a model that was not loaded from a path, when
-// the folders cannot be created, or on Windows for a model path with other
-// than ASCII characters: the engines are then built at every load.
+// from here. To keep the engines somewhere else, name all three. A variable
+// with an empty value counts as not named. Nothing is set for a model that was
+// not loaded from a path, when the folders cannot be created, or on Windows
+// for a model path with other than ASCII characters: the engines are then
+// built at every load.
+//
+// The libraries find a cached engine again by the model file (its path, size
+// and times), the GPU, the NVIDIA driver and the TensorRT-RTX version. When
+// one of them changes, they build new engines. The old ones stay in the
+// folders until someone deletes them.
 //
 // The variables belong to the process, so they follow the model that loaded
-// last: models that load at the same time have to be the same file.
-void SetDefaultNvidiaCacheLocations(const ModelAssets& model_assets);
+// last: models that load at the same time have to be the same file. A load of
+// the model file that loaded last writes no variable. A load of another model
+// file writes them, which is not safe while another thread reads the
+// environment, as NVIDIA's libraries do when they load or run a model. So the
+// first load of a model file must not run while another thread uses NVIDIA's
+// backend.
+void SetDefaultNvidiaCacheLocations(const Environment& env,
+                                    const ModelAssets& model_assets);
 
 // Whether the base model stores a logical [1, H, D, S] value cache in NVIDIA's
 // physical [1, H, S, D] layout, from the producer's buffer requirements: true

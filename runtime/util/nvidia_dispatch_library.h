@@ -15,11 +15,7 @@
 #ifndef THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_NVIDIA_DISPATCH_LIBRARY_H_
 #define THIRD_PARTY_ODML_LITERT_LM_RUNTIME_UTIL_NVIDIA_DISPATCH_LIBRARY_H_
 
-#include <string>
-
-#include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
-#include "runtime/util/file_util.h"
 
 namespace litert::lm {
 
@@ -34,16 +30,7 @@ inline constexpr absl::string_view kNvidiaDispatchLibraryFileNames[] = {
 // Backend::NPU that takes its dispatch library from that directory runs on
 // NVIDIA's TensorRT-RTX backend. This only looks at the files, so it can be
 // asked before LiteRT has loaded the library.
-inline bool HasNvidiaDispatchLibrary(absl::string_view dispatch_lib_dir) {
-  for (absl::string_view file_name : kNvidiaDispatchLibraryFileNames) {
-    const absl::StatusOr<std::string> path =
-        JoinPath(dispatch_lib_dir, file_name);
-    if (path.ok() && FileExists(*path)) {
-      return true;
-    }
-  }
-  return false;
-}
+bool HasNvidiaDispatchLibrary(absl::string_view dispatch_lib_dir);
 
 }  // namespace litert::lm
 

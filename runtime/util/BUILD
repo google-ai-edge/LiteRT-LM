@@ -614,6 +614,7 @@ cc_library(
 
 cc_library(
     name = "nvidia_dispatch_library",
+    srcs = ["nvidia_dispatch_library.cc"],
     hdrs = ["nvidia_dispatch_library.h"],
     deps = [
         ":file_util",
