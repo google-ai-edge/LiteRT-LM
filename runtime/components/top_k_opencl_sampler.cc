@@ -24,6 +24,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/base/attributes.h"  // from @com_google_absl
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/memory/memory.h"  // from @com_google_absl
@@ -113,6 +114,12 @@ using ::ml_drift::cl::InferenceContext;
 using ::ml_drift::cl::ProfilingCommandQueue;
 using ::ml_drift::cl::Tensor;
 using ClEnv = ::ml_drift::cl::Environment;
+
+ABSL_ATTRIBUTE_NO_SANITIZE_CFI
+cl_int EnqueueBarrierWithWaitList(cl_command_queue queue,
+                                  const cl_event* event) {
+  return ml_drift::cl::clEnqueueBarrierWithWaitList(queue, 1, event, nullptr);
+}
 
 absl::Status InitClOp(ClEnv* env, std::unique_ptr<GPUOperation>&& gpu_op,
                       ClOperation* cl_op) {
@@ -456,8 +463,8 @@ absl::Status TopKOpenClSampler::SampleToIdAndScoreBuffer(
   if (logits_tensor.HasEvent()) {
     LITERT_ASSIGN_OR_RETURN(auto event, logits_tensor.GetEvent());
     LITERT_ASSIGN_OR_RETURN(auto cl_event, event.GetOpenClEvent());
-    if (ml_drift::cl::clEnqueueBarrierWithWaitList(
-            env_->queue()->queue(), 1, &cl_event, nullptr) != CL_SUCCESS) {
+    if (EnqueueBarrierWithWaitList(env_->queue()->queue(), &cl_event) !=
+        CL_SUCCESS) {
       return absl::InternalError("Failed to enqueue barrier for logits tensor");
     }
   }
@@ -638,6 +645,7 @@ absl::Status TopKOpenClSampler::SetInferenceFuncAndInputTensors(
   return absl::OkStatus();
 }
 
+ABSL_ATTRIBUTE_NO_SANITIZE_CFI
 absl::Status TopKOpenClSampler::DownloadSampledIds(void* dst) {
   if (!sample_event_.is_valid()) {
     return absl::FailedPreconditionError(
