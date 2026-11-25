@@ -169,6 +169,7 @@ py_test(
         "//python/litert_lm_cli:huggingface_download",
         "//python/litert_lm_cli:model",
         "@absl_py//absl/testing:absltest",
+        "@absl_py//absl/testing:parameterized",
         requirement("click"),
     ],
 )

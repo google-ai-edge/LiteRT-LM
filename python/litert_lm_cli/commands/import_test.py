@@ -14,12 +14,19 @@
 
 """Unit tests for the LiteRT-LM import command."""
 
+import email.message
 import errno
+import http.client
+import http.server
 import importlib
 import os
+import threading
 from unittest import mock
+import urllib.error
+import urllib.request
 
 from absl.testing import absltest
+from absl.testing import parameterized
 import click
 from click.testing import CliRunner
 
@@ -33,22 +40,34 @@ import_cmd = importlib.import_module(
 )
 
 
-class ImportTest(absltest.TestCase):
+class ImportTest(parameterized.TestCase):
 
   def setUp(self):
     super().setUp()
     self.temp_dir = self.create_tempdir()
+    self.enter_context(
+        mock.patch.object(
+            model,
+            "get_cli_base_dir",
+            return_value=self.temp_dir.full_path,
+            autospec=True,
+        )
+    )
     # Mock Model to use temp dir
     self.mock_model = mock.MagicMock()
     self.mock_model.model_path = os.path.join(
-        self.temp_dir.full_path, "model.litertlm"
+        self.temp_dir.full_path, "models", "model.litertlm"
     )
+
+    def _from_model_id(model_id: str):
+      self.mock_model.model_id = model_id
+      return self.mock_model
 
     self.mock_from_model_id = self.enter_context(
         mock.patch.object(
             model.Model,
             "from_model_id",
-            return_value=self.mock_model,
+            side_effect=_from_model_id,
             autospec=True,
         )
     )
@@ -272,6 +291,169 @@ class ImportTest(absltest.TestCase):
       with open(self.mock_model.model_path, "r") as f:
         self.assertEqual(f.read(), "copy fallback content")
       self.assertEqual(os.stat(self.mock_model.model_path).st_nlink, 1)
+
+  def _mock_http_response(
+      self, payload: bytes, *, content_length: str | None = "auto"
+  ) -> mock.MagicMock:
+    response = mock.create_autospec(http.client.HTTPResponse, instance=True)
+    response.__enter__.return_value = response
+    response.getheader.return_value = (
+        str(len(payload)) if content_length == "auto" else content_length
+    )
+    response.read.side_effect = [payload, b""]
+    return response
+
+  @parameterized.named_parameters(
+      ("q", "https://example.com/dir/gemma.litertlm?id=1", "gemma.litertlm"),
+      ("root_fallback", "https://example.com/?id=1", "model.litertlm"),
+      ("dot_fallback", "https://example.com/.", "model.litertlm"),
+      ("dotdot_fallback", "https://example.com/dir/..?id=1", "model.litertlm"),
+      ("http_scheme", "http://example.com/model.litertlm", "model.litertlm"),
+  )
+  def test_import_url_default_model_id(self, url: str, expected_id: str):
+    content_length = None if url.endswith("/?id=1") else "auto"
+    with mock.patch.object(
+        urllib.request.OpenerDirector,
+        "open",
+        return_value=self._mock_http_response(
+            b"model", content_length=content_length
+        ),
+        autospec=True,
+    ) as mock_open:
+      result = CliRunner().invoke(import_cmd.import_model, [url])
+    self.assertEqual(result.exit_code, 0, msg=result.output)
+    self.assertEqual(self.mock_model.model_id, expected_id)
+    self.assertEqual(mock_open.call_args.kwargs["timeout"], 60)
+
+  @parameterized.named_parameters(
+      (
+          "url_as_model_id",
+          ["local.litertlm", "https://example.com/download?id=123"],
+          "is a URL, not a model ID",
+      ),
+      (
+          "url_with_hf_repo",
+          [
+              "--from-huggingface-repo",
+              "org/repo",
+              "https://example.com/model.litertlm",
+              "my-model",
+          ],
+          "leave out --from-huggingface-repo",
+      ),
+      ("malformed_ipv6", ["http://[::1/model.litertlm"], "Invalid URL"),
+      ("dot_id", ["local.litertlm", "."], "Invalid model ID '.'"),
+      ("dotdot_id", ["local.litertlm", ".."], "Invalid model ID '..'"),
+      ("empty_id", ["local.litertlm", ""], "Invalid model ID ''"),
+      ("backslash_id", ["local.litertlm", "dir\\escape"], "Invalid model ID"),
+  )
+  def test_import_rejects_invalid_arguments(
+      self, cli_args: list[str], expected_msg: str
+  ):
+    result = CliRunner().invoke(import_cmd.import_model, cli_args)
+    self.assertEqual(result.exit_code, 2, msg=result.output)
+    self.assertIn(expected_msg, result.output)
+
+  def test_import_from_local_http_server(self):
+    served = {"payload": b"url model bytes!"}
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+
+      def do_GET(self):  # pylint: disable=invalid-name
+        if self.path in ("/redirect", "/redirect-ftp"):
+          target = (
+              f"http://127.0.0.1:{server.server_port}/model.litertlm"
+              if self.path == "/redirect"
+              else "ftp://example.com/model.litertlm"
+          )
+          self.send_response(302)
+          self.send_header("Location", target)
+          self.end_headers()
+          return
+        body = served["payload"]
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+      def log_message(self, format, *args):  # pylint: disable=redefined-builtin
+        pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    self.addCleanup(server.server_close)
+    self.addCleanup(server.shutdown)
+    base_url = f"http://127.0.0.1:{server.server_port}"
+
+    result = CliRunner().invoke(
+        import_cmd.import_model, [f"{base_url}/model.litertlm", "my-model"]
+    )
+    self.assertEqual(result.exit_code, 0, msg=result.output)
+    self.assertIn("(16B)...", result.output)
+    self.assertIn("litert-lm run my-model", result.output)
+    with open(self.mock_model.model_path, "rb") as f:
+      self.assertEqual(f.read(), b"url model bytes!")
+    downloading_dir = os.path.join(self.temp_dir.full_path, "downloading")
+    self.assertEmpty(os.listdir(downloading_dir))
+
+    served["payload"] = b"updated url model bytes!"
+    result = CliRunner().invoke(
+        import_cmd.import_model, [f"{base_url}/redirect", "my-model"]
+    )
+    self.assertEqual(result.exit_code, 0, msg=result.output)
+    with open(self.mock_model.model_path, "rb") as f:
+      self.assertEqual(f.read(), b"updated url model bytes!")
+
+    result = CliRunner().invoke(
+        import_cmd.import_model, [f"{base_url}/redirect-ftp", "my-model"]
+    )
+    self.assertEqual(result.exit_code, 1)
+    self.assertIn("Redirect to unsupported scheme 'ftp'", result.output)
+
+  def test_url_redirect_and_download_errors(self):
+    handler = import_cmd._UrlRedirectHandler()
+    headers = email.message.Message()
+    url = "https://example.com/model.litertlm"
+    with self.assertRaisesRegex(urllib.error.URLError, "unencrypted http://"):
+      handler.redirect_request(
+          urllib.request.Request("HTTPS://example.com/a"),
+          None, 302, "Found", headers, "HTTP://example.com/b",
+      )
+
+    for outcome, expected_msg in [
+        (
+            self._mock_http_response(b"short", content_length="100"),
+            f"Incomplete download from {url}: got 5 of 100 bytes.",
+        ),
+        (
+            urllib.error.HTTPError(url, 404, "Not Found", headers, None),
+            f"No model found at {url} (HTTP 404)",
+        ),
+        (
+            urllib.error.HTTPError(url, 500, "Error", headers, None),
+            f"Failed to download model from {url}",
+        ),
+        (
+            http.client.RemoteDisconnected("closed"),
+            f"Failed to download model from {url}",
+        ),
+    ]:
+      is_exc = isinstance(outcome, Exception)
+      with mock.patch.object(
+          urllib.request.OpenerDirector,
+          "open",
+          return_value=mock.DEFAULT if is_exc else outcome,
+          side_effect=outcome if is_exc else None,
+          autospec=True,
+      ):
+        result = CliRunner().invoke(import_cmd.import_model, [url, "my-model"])
+      self.assertEqual(result.exit_code, 1)
+      self.assertIn(expected_msg, result.output)
+      self.assertFalse(
+          os.path.exists(os.path.dirname(self.mock_model.model_path))
+      )
+    downloading_dir = os.path.join(self.temp_dir.full_path, "downloading")
+    self.assertEmpty(os.listdir(downloading_dir))
 
 
 if __name__ == "__main__":

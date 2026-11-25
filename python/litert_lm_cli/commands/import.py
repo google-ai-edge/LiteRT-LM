@@ -14,11 +14,14 @@
 
 """Import subcommand for LiteRT-LM CLI."""
 
+import http.client
 import os
 import pathlib
+import posixpath
 import shutil
 import ssl
 import textwrap
+from typing import Any
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -164,15 +167,87 @@ def _link_source(
 _copy_source = _link_source  # For backward compatibility
 
 
+def _is_url(value: str) -> bool:
+  """Returns True if `value` is an HTTP or HTTPS URL."""
+  return value.lower().startswith(("http://", "https://"))
+
+
+_URL_DOWNLOAD_TIMEOUT_SECONDS = 60
+
+
+class _UrlRedirectHandler(urllib.request.HTTPRedirectHandler):
+  """Validates HTTP and HTTPS redirects during URL model downloads."""
+
+  def redirect_request(
+      self, req: urllib.request.Request, fp: Any, code: int, msg: str,
+      headers: Any, newurl: str,
+  ) -> urllib.request.Request | None:
+    new_scheme = urllib.parse.urlsplit(newurl).scheme.lower()
+    if new_scheme not in ("http", "https"):
+      raise urllib.error.URLError(
+          f"Redirect to unsupported scheme {new_scheme!r} is not allowed"
+      )
+    if req.type.lower() == "https" and new_scheme == "http":
+      raise urllib.error.URLError(
+          "Redirect from https:// to unencrypted http:// is not allowed"
+      )
+    return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _download_url_model(
+    *, url: str, model_id: str, ssl_context: ssl.SSLContext | None = None
+) -> str:
+  """Downloads `url` to a temporary file and returns its path."""
+  opener = urllib.request.build_opener(
+      _UrlRedirectHandler(),
+      urllib.request.HTTPSHandler(context=ssl_context),
+  )
+  try:
+    with opener.open(
+        urllib.request.Request(url), timeout=_URL_DOWNLOAD_TIMEOUT_SECONDS
+    ) as response:
+      total_size = common.parse_total_size(response.getheader("Content-Length"))
+      size_suffix = common.download_size_suffix(total_size)
+      click.echo(f"Downloading {model_id!r} from {url}{size_suffix}...")
+      downloading_dir = pathlib.Path(model.get_cli_base_dir()) / "downloading"
+      tmp_path = common.stream_download(
+          response,
+          download_dir=downloading_dir,
+          length=total_size or 0,
+          format_progress=lambda pos: common.format_download_progress(
+              pos, total_size
+          ),
+      )
+      actual_size = tmp_path.stat().st_size
+      if total_size is not None and actual_size < total_size:
+        tmp_path.unlink(missing_ok=True)
+        raise click.ClickException(
+            f"Incomplete download from {url}: got {actual_size} of"
+            f" {total_size} bytes."
+        )
+      return str(tmp_path)
+  except (http.client.HTTPException, OSError) as e:
+    if isinstance(e, urllib.error.HTTPError) and e.code == 404:
+      raise click.ClickException(
+          f"No model found at {url} (HTTP 404). Check the URL."
+      ) from e
+    raise click.ClickException(
+        f"Failed to download model from {url}: {e}"
+    ) from e
+
+
 @click.command(
     cls=help_formatter.ColorCommand,
     name="import",
     help=textwrap.dedent("""\
-        Imports a model from a local path or HuggingFace hub.
+        Imports a model from a local path, URL, or HuggingFace hub.
         \b
         Examples:
           # Import from a local path
           litert-lm import ./model.litertlm my-model
+
+          # Import from an HTTP/HTTPS URL
+          litert-lm import https://example.com/model.litertlm my-model
 
           # Import from a HuggingFace repository
           litert-lm import --from-huggingface-repo org/repo model.litertlm my-model
@@ -197,14 +272,14 @@ def import_model(
     model_file: str | None,
     import_as_model_id: str | None,
 ) -> None:
-  """Imports a model from a local path or HuggingFace hub.
+  """Imports a model from a local path, URL, or HuggingFace hub.
 
   Args:
     from_huggingface_repo: The HuggingFace repository ID.
     huggingface_token: HuggingFace API token.
     user_agent: The user agent used to download experimental models (internal).
-    model_file: The path in the repo (if from-huggingface-repo is set) or local
-      path.
+    model_file: The path in the repo (if from-huggingface-repo is set), a URL,
+      or a local path.
     import_as_model_id: The model ID to store the model as. Defaults to the
       filename of MODEL_FILE.
   """
@@ -213,38 +288,86 @@ def import_model(
   if not model_file and not from_huggingface_repo:
     raise click.UsageError("Missing argument 'MODEL_FILE'.")
 
+  if import_as_model_id and _is_url(import_as_model_id):
+    raise click.BadParameter(
+        f"{import_as_model_id!r} is a URL, not a model ID. To import from a"
+        " URL, pass it as the first argument and quote it, e.g.:"
+        " litert-lm import 'https://example.com/model.litertlm' my-model",
+        param_hint="'IMPORT_AS_MODEL_ID'",
+    )
+  if from_huggingface_repo and model_file and _is_url(model_file):
+    raise click.BadParameter(
+        f"{model_file!r} is a URL. With --from-huggingface-repo, MODEL_FILE is"
+        " the file name in the repo. To import from a URL, leave out"
+        " --from-huggingface-repo.",
+        param_hint="'MODEL_FILE'",
+    )
+  if model_file and _is_url(model_file):
+    try:
+      urllib.parse.urlsplit(model_file)
+    except ValueError as e:
+      raise click.BadParameter(
+          f"Invalid URL {model_file!r}: {e}", param_hint="'MODEL_FILE'"
+      ) from e
+
   resolved_file = model_file or cli_helpers.resolve_model_file(
       from_huggingface_repo,
       huggingface_token,
   )
 
-  if from_huggingface_repo:
-    source = huggingface_download.download_from_huggingface(
-        repo_id=from_huggingface_repo,
-        filename=resolved_file,
-        token=huggingface_token,
+  is_url = bool(resolved_file and _is_url(resolved_file))
+
+  if import_as_model_id is not None:
+    effective_model_id = import_as_model_id
+  elif is_url:
+    url_basename = posixpath.basename(urllib.parse.urlsplit(resolved_file).path)
+    effective_model_id = (
+        "model.litertlm"
+        if url_basename in ("", ".", "..")
+        else url_basename
     )
   else:
-    source = resolved_file
+    effective_model_id = os.path.basename(resolved_file)
 
-  effective_model_id = import_as_model_id or os.path.basename(resolved_file)
+  model_dir_name = model.model_id_dir_name(effective_model_id)
+  if model_dir_name in ("", ".", "..") or "\\" in model_dir_name:
+    raise click.BadParameter(
+        f"Invalid model ID {effective_model_id!r}.",
+        param_hint="'IMPORT_AS_MODEL_ID'",
+    )
 
   model_obj = model.Model.from_model_id(effective_model_id)
   model_path = model_obj.model_path
   model_dir = os.path.dirname(model_path)
 
-  os.makedirs(model_dir, exist_ok=True)
-
   ssl_context = None
 
   try:
-    temporary_file = _link_source(
-        source,
-        model_path,
-        model_file=resolved_file,
-        user_agent=user_agent,
-        ssl_context=ssl_context,
-    )
+    if is_url:
+      temporary_file = _download_url_model(
+          url=resolved_file,
+          model_id=effective_model_id,
+          ssl_context=ssl_context,
+      )
+      os.makedirs(model_dir, exist_ok=True)
+      _link_or_copy(temporary_file, model_path)
+    else:
+      if from_huggingface_repo:
+        source = huggingface_download.download_from_huggingface(
+            repo_id=from_huggingface_repo,
+            filename=resolved_file,
+            token=huggingface_token,
+        )
+      else:
+        source = resolved_file
+      os.makedirs(model_dir, exist_ok=True)
+      temporary_file = _link_source(
+          source,
+          model_path,
+          model_file=resolved_file,
+          user_agent=user_agent,
+          ssl_context=ssl_context,
+      )
     click.echo(
         click.style(f"Successfully imported model to {model_path}", fg="green")
     )
