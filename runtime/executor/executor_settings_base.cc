@@ -14,7 +14,6 @@
 
 #include "runtime/executor/executor_settings_base.h"
 
-#include <initializer_list>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -36,6 +35,7 @@
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/strings/strip.h"  // from @com_google_absl
 #include "absl/synchronization/mutex.h"  // from @com_google_absl
+#include "absl/types/span.h"  // from @com_google_absl
 #include "litert/cc/litert_common.h"  // from @litert
 #include "runtime/util/data_stream.h"
 #include "runtime/util/file_util.h"
@@ -79,24 +79,30 @@ constexpr CacheModel kAllCacheModels[] = {
     CacheModel::kTextEncoder,
 };
 
+constexpr absl::string_view kWeightBackendSuffixes[] = {
+    ExecutorSettingsBase::kXnnpackCacheSuffix,
+    ExecutorSettingsBase::kMlDriftWeightCacheSuffix,
+    ExecutorSettingsBase::kDefaultWeightCacheSuffix,
+};
+
+constexpr absl::string_view kProgramBackendSuffixes[] = {
+    ExecutorSettingsBase::kMlDriftCacheSuffix,
+    ExecutorSettingsBase::kDefaultProgramCacheSuffix,
+};
+
 // Returns the model a cache `suffix` belongs to, from the name in front of the
 // backend suffix, e.g. kMtpDrafter for ".mtp_drafter_mldrift_weight_cache.bin".
 // Returns std::nullopt if the name isn't a known model.
 std::optional<CacheModel> GetCacheModel(absl::string_view suffix,
                                         CacheFileKind kind) {
-  const std::initializer_list<absl::string_view> backend_suffixes =
+  const absl::Span<const absl::string_view> backend_suffixes =
       kind == CacheFileKind::kWeight
-          ? std::initializer_list<
-                absl::string_view>{ExecutorSettingsBase::kXnnpackCacheSuffix,
-                                   ExecutorSettingsBase::
-                                       kMlDriftWeightCacheSuffix,
-                                   ExecutorSettingsBase::
-                                       kDefaultWeightCacheSuffix}
-          : std::initializer_list<absl::string_view>{
-                ExecutorSettingsBase::kMlDriftCacheSuffix,
-                ExecutorSettingsBase::kDefaultProgramCacheSuffix};
+          ? absl::MakeConstSpan(kWeightBackendSuffixes)
+          : absl::MakeConstSpan(kProgramBackendSuffixes);
   for (absl::string_view backend_suffix : backend_suffixes) {
-    if (absl::ConsumeSuffix(&suffix, backend_suffix)) break;
+    if (absl::ConsumeSuffix(&suffix, backend_suffix)) {
+      break;
+    }
   }
   for (CacheModel model : kAllCacheModels) {
     if (suffix == ExecutorSettingsBase::GetCacheModelName(model)) {

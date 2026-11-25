@@ -98,6 +98,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
         "@litert//litert/cc:litert_common",
         "//runtime/util:data_stream",
         "//runtime/util:file_util",

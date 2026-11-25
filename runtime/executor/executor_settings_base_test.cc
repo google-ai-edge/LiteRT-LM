@@ -787,6 +787,44 @@ TEST(LlmExecutorConfigTest, UnknownSuffixGetsNoHostFile) {
   EXPECT_THAT(provider.requests(), IsEmpty());
 }
 
+TEST(LlmExecutorConfigTest, CacheSuffixStrippingMatchesOnlyOwnKind) {
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("/path/to/model.tflite"));
+  TestExecutorSettings settings(model_assets);
+  FakeCacheFileProvider provider;
+  settings.SetCacheFileProvider(provider.AsProvider());
+
+  // Weight cache lookup must not strip program backend suffixes.
+  static constexpr absl::string_view kProgramBackendSuffixes[] = {
+      ExecutorSettingsBase::kDefaultProgramCacheSuffix,
+      ExecutorSettingsBase::kMlDriftCacheSuffix,
+  };
+  for (absl::string_view backend_suffix : kProgramBackendSuffixes) {
+    SCOPED_TRACE(backend_suffix);
+    EXPECT_THAT(settings.GetWeightCacheFile(backend_suffix),
+                StatusIs(absl::StatusCode::kNotFound));
+    EXPECT_THAT(settings.GetWeightCacheFile(
+                    absl::StrCat(kMtpDrafterName, backend_suffix)),
+                StatusIs(absl::StatusCode::kNotFound));
+  }
+
+  // Program cache lookup must not strip weight backend suffixes.
+  static constexpr absl::string_view kWeightBackendSuffixes[] = {
+      ExecutorSettingsBase::kDefaultWeightCacheSuffix,
+      ExecutorSettingsBase::kXnnpackCacheSuffix,
+      ExecutorSettingsBase::kMlDriftWeightCacheSuffix,
+  };
+  for (absl::string_view backend_suffix : kWeightBackendSuffixes) {
+    SCOPED_TRACE(backend_suffix);
+    EXPECT_THAT(settings.GetProgramCacheFile(backend_suffix),
+                StatusIs(absl::StatusCode::kNotFound));
+    EXPECT_THAT(settings.GetProgramCacheFile(
+                    absl::StrCat(kMtpDrafterName, backend_suffix)),
+                StatusIs(absl::StatusCode::kNotFound));
+  }
+  EXPECT_THAT(provider.requests(), IsEmpty());
+}
+
 TEST(LlmExecutorConfigTest, CacheFileProviderNotFoundDoesNotFallBackToPath) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create("/path/to/model.tflite"));
