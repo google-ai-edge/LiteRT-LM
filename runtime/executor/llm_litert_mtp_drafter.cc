@@ -193,9 +193,13 @@ LlmLiteRtMtpDrafter::Create(
           ActivationDataType::FLOAT16);
   auto cache_suffix = std::string(ExecutorSettingsBase::GetCacheModelName(
       ExecutorSettingsBase::CacheModel::kMtpDrafter));
+  // The selected signatures name signatures of the base model. The drafter
+  // model has its own, and compiles all of them.
+  LlmExecutorSettings drafter_settings = executor_settings;
+  drafter_settings.SetSelectedSignatures({});
   ABSL_ASSIGN_OR_RETURN(
       auto compilation_options,
-      CreateCompilationOptions(executor_settings, activation_data_type,
+      CreateCompilationOptions(drafter_settings, activation_data_type,
                                /*signatures=*/std::nullopt,
                                /*cache_suffix=*/cache_suffix, &resources));
   ABSL_RETURN_IF_ERROR(

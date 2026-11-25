@@ -175,6 +175,47 @@ TEST(LlmLiteRtMtpDrafterTest, CreateFromModelResources_MissingVerifySignature) {
 }
 
 TEST(LlmLiteRtMtpDrafterTest,
+     CreateFromModelResources_SelectedSignaturesOfTheBaseModel) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/magic_test_decode_batch.tflite";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(auto executor_settings,
+                       LlmExecutorSettings::CreateDefault(model_assets));
+  // The selection names signatures of the base model. The drafter model here
+  // has no "verify" signature, so it only compiles if the selection is not
+  // applied to it.
+  executor_settings.SetSelectedSignatures({"prefill", "decode", "verify"});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, Environment::Create(std::vector<Environment::Option>()));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto base_model, CompiledModel::Create(env, model_path.string(),
+                                             litert::HwAccelerators::kCpu));
+  ASSERT_OK_AND_ASSIGN(auto model_resources,
+                       TfLiteModelResources::Create(model_assets,
+                                                    /*with_mtp_drafter=*/true));
+
+  const std::filesystem::path embedder_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/dummy_embedder.tflite";
+  LITERT_ASSERT_OK_AND_ASSIGN(auto embedder_model,
+                              Model::CreateFromFile(embedder_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto embedding_lookup,
+      EmbeddingLookupManager::Create(env, &embedder_model,
+                                     /*fully_supports_multi_modal=*/false));
+
+  auto drafter_or = LlmLiteRtMtpDrafter::Create(
+      env, *model_resources, executor_settings, base_model, *embedding_lookup,
+      /*ple_manager=*/std::nullopt);
+
+  // The drafter model compiled: creation got as far as looking for the verify
+  // signature, which this base model lacks.
+  EXPECT_THAT(drafter_or, StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST(LlmLiteRtMtpDrafterTest,
      CreateFromPreCompiledModel_MissingVerifySignature) {
   const std::filesystem::path model_path =
       std::filesystem::path(::testing::SrcDir()) /
