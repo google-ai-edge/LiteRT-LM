@@ -103,7 +103,32 @@ struct JsBenchmarkInfo {
   int plainDecodeSteps = 0;
 };
 
-static litert::lm::EmbeddingOptions ParseEmbeddingOptions(
+// Parses an InputOverflowStrategy from a JS value. Accepts an embind enum
+// element (`{value: n}`) or a plain number.
+static absl::StatusOr<litert::lm::InputOverflowStrategy>
+ParseInputOverflowStrategy(emscripten::val overflow_val) {
+  emscripten::val num_val = overflow_val.hasOwnProperty("value")
+                                ? overflow_val["value"]
+                                : overflow_val;
+  if (!num_val.isNumber()) {
+    return absl::InvalidArgumentError(
+        "inputOverflowStrategy must be a valid InputOverflowStrategy.");
+  }
+  double val_double = num_val.as<double>();
+  for (litert::lm::InputOverflowStrategy strategy : {
+           litert::lm::InputOverflowStrategy::kChunkAndAverage,
+           litert::lm::InputOverflowStrategy::kTruncate,
+           litert::lm::InputOverflowStrategy::kError,
+       }) {
+    if (static_cast<double>(strategy) == val_double) {
+      return strategy;
+    }
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Unknown InputOverflowStrategy: ", val_double));
+}
+
+static absl::StatusOr<litert::lm::EmbeddingOptions> ParseEmbeddingOptions(
     emscripten::val options_val) {
   litert::lm::EmbeddingOptions options;
   if (!options_val.isUndefined() && !options_val.isNull()) {
@@ -118,8 +143,8 @@ static litert::lm::EmbeddingOptions ParseEmbeddingOptions(
     }
     auto overflow_val = options_val["inputOverflowStrategy"];
     if (!overflow_val.isUndefined() && !overflow_val.isNull()) {
-      options.input_overflow_strategy =
-          overflow_val.as<litert::lm::InputOverflowStrategy>();
+      ABSL_ASSIGN_OR_RETURN(options.input_overflow_strategy,
+                            ParseInputOverflowStrategy(overflow_val));
     }
     auto vision_tokens_val = options_val["visionTokensPerImage"];
     if (!vision_tokens_val.isUndefined() && !vision_tokens_val.isNull()) {
@@ -998,16 +1023,6 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
   emscripten::register_optional<int>();
   emscripten::register_vector<float>("VectorFloat");
 
-  emscripten::value_object<litert::lm::EmbeddingOptions>("EmbeddingOptions")
-      .field("normalize", &litert::lm::EmbeddingOptions::normalize)
-      .field("insertSpecialTokens",
-             &litert::lm::EmbeddingOptions::insert_special_tokens)
-      .field("inputOverflowStrategy",
-             &litert::lm::EmbeddingOptions::input_overflow_strategy)
-      .field("visionTokensPerImage",
-             &litert::lm::EmbeddingOptions::vision_tokens_per_image)
-      .field("outputSize", &litert::lm::EmbeddingOptions::output_size);
-
   emscripten::value_object<litert::lm::EmbeddingResponse>("EmbeddingResponse")
       .field("embedding", &litert::lm::EmbeddingResponse::embedding)
       .field("inputLength", &litert::lm::EmbeddingResponse::input_length)
@@ -1106,7 +1121,8 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                                      emscripten::val options_val) {
                   return StatusOrToVal(
                       [&]() -> absl::StatusOr<litert::lm::EmbeddingResponse> {
-                        auto options = ParseEmbeddingOptions(options_val);
+                        ABSL_ASSIGN_OR_RETURN(
+                            auto options, ParseEmbeddingOptions(options_val));
                         ABSL_ASSIGN_OR_RETURN(auto contents,
                                               ParseInputData(input_val));
                         return engine.ComputeEmbedding(contents, options);
@@ -1119,7 +1135,8 @@ EMSCRIPTEN_BINDINGS(litertlm_web) {
                                emscripten::val options_val) {
             return StatusOrToVal([&]() -> absl::StatusOr<std::vector<
                                            litert::lm::EmbeddingResponse>> {
-              auto options = ParseEmbeddingOptions(options_val);
+              ABSL_ASSIGN_OR_RETURN(auto options,
+                                    ParseEmbeddingOptions(options_val));
               std::vector<std::vector<litert::lm::InputData>> batch_contents;
               if (!batch_val.isArray()) {
                 ABSL_ASSIGN_OR_RETURN(auto contents, ParseInputData(batch_val));

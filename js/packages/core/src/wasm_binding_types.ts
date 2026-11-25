@@ -680,12 +680,12 @@ export type InputOverflowStrategy =
     (typeof InputOverflowStrategy)[keyof typeof InputOverflowStrategy];
 
 /**
- * Options for configuring the embedding computation.
+ * Wasm-level options for configuring the embedding computation.
  */
-export declare interface EmbeddingOptions {
+export declare interface WasmEmbeddingOptions {
   normalize?: boolean;
   insertSpecialTokens?: boolean;
-  inputOverflowStrategy?: InputOverflowStrategy;
+  inputOverflowStrategy?: EmscriptenEnumElement<InputOverflowStrategy>;
   visionTokensPerImage?: number;
   outputSize?: number;
 }
@@ -754,9 +754,9 @@ declare const EmbeddingEngineBrand: unique symbol;
  */
 export declare interface EmbeddingEngine extends Deletable {
   [EmbeddingEngineBrand]: void;
-  computeEmbedding(input: unknown, options: EmbeddingOptions):
+  computeEmbedding(input: unknown, options: WasmEmbeddingOptions):
       Promise<WasmResult<WasmEmbeddingResponse>>;
-  computeEmbeddingBatch(inputs: unknown[], options: EmbeddingOptions):
+  computeEmbeddingBatch(inputs: unknown[], options: WasmEmbeddingOptions):
       Promise<WasmResult<EmscriptenVector<WasmEmbeddingResponse>>>;
 }
 
@@ -786,6 +786,11 @@ export declare interface LiteRtLmWasm extends WasmModule {
   SpeculativeDecodingMode: EmscriptenEnum<{
     OFF: SpeculativeDecodingMode; ON: SpeculativeDecodingMode;
     ADAPTIVE: SpeculativeDecodingMode;
+  }>;
+  InputOverflowStrategy: EmscriptenEnum<{
+    CHUNK_AND_AVERAGE: InputOverflowStrategy;
+    TRUNCATE: InputOverflowStrategy;
+    ERROR: InputOverflowStrategy;
   }>;
   ModelAssets: ModelAssetsConstructor;
   EngineSettings: EngineSettingsConstructor;
