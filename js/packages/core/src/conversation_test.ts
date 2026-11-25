@@ -145,6 +145,65 @@ describe('Conversation', () => {
     await new Promise(resolve => setTimeout(resolve, 50));
   });
 
+  it('errors the stream when sendMessageAsync returns a Wasm error',
+     async () => {
+       const conversation =
+           new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+       const wasmError = Object.assign(
+           new Error('Failed to decode image'), {code: 'INVALID_ARGUMENT'});
+
+       mockWasmConversation.sendMessageAsync.and.resolveTo(wasmError);
+
+       const reader = conversation.sendMessageStreaming('hi').getReader();
+
+       await expectAsync(reader.read()).toBeRejectedWith(wasmError);
+       expect(mockWasmEngine.waitUntilDone).not.toHaveBeenCalled();
+
+       // A later message on the same conversation should still succeed.
+       mockWasmConversation.sendMessage.and.resolveTo(
+           JSON.stringify({role: 'assistant', content: 'recovered'}));
+       const response = await conversation.sendMessage('next');
+       expect(response.content).toBe('recovered');
+     });
+
+  it('ignores late stream callbacks after sendMessageAsync fails', async () => {
+    const conversation =
+        new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
+    const wasmError = Object.assign(
+        new Error('Failed to start'), {code: 'INVALID_ARGUMENT'});
+    let capturedCallback!: (
+        chunk: string|null, isDone: boolean, error: string|null) => void;
+
+    mockWasmConversation.sendMessageAsync.and.callFake(
+        (messageJson, blobs, callback) => {
+          capturedCallback = callback;
+          return Promise.resolve(wasmError);
+        });
+
+    const reader = conversation.sendMessageStreaming('hi').getReader();
+    await expectAsync(reader.read()).toBeRejectedWith(wasmError);
+
+    // Start a subsequent turn so the conversation is busy.
+    let finishSecondSend!: () => void;
+    mockWasmConversation.sendMessage.and.returnValue(
+        new Promise<string>((resolve) => {
+          finishSecondSend = () =>
+              resolve(JSON.stringify({role: 'assistant', content: 'second'}));
+        }));
+    const secondSend = conversation.sendMessage('second');
+
+    try {
+      // A stale callback from the failed turn must not clear isBusy for the
+      // active turn.
+      capturedCallback(null, false, 'late error');
+      expect(() => conversation.sendMessageStreaming('overlapping'))
+          .toThrowError(/Conversation is busy/);
+    } finally {
+      finishSecondSend();
+    }
+    expect((await secondSend).content).toBe('second');
+  });
+
   it('returns the end of turn with the response', async () => {
     const conversation =
         new Conversation(mockWasmConversation, mockWasmEngine, mockMutexes);
@@ -541,25 +600,25 @@ describe('Conversation', () => {
     });
   });
 
-  describe('ConversationConfig WASM C++ defaults', () => {
-    const CPU_MODEL_PATH = '/models/tiny_gemma.litertlm';
-    const GPU_ARTISAN_MODEL_PATH = '/models/gemma3-1b-hw.litertlm';
+  const CPU_MODEL_PATH = '/models/tiny_gemma.litertlm';
+  const GPU_ARTISAN_MODEL_PATH = '/models/gemma3-1b-hw.litertlm';
 
-    async function servesLiteRtLmFile(path: string): Promise<boolean> {
-      try {
-        const response = await fetch(path);
-        if (!response.ok || !response.body) {
-          return false;
-        }
-        const reader = response.body.getReader();
-        const {value} = await reader.read();
-        await reader.cancel();
-        return new TextDecoder().decode(value?.subarray(0, 8)) === 'LITERTLM';
-      } catch {
+  async function servesLiteRtLmFile(path: string): Promise<boolean> {
+    try {
+      const response = await fetch(path);
+      if (!response.ok || !response.body) {
         return false;
       }
+      const reader = response.body.getReader();
+      const {value} = await reader.read();
+      await reader.cancel();
+      return new TextDecoder().decode(value?.subarray(0, 8)) === 'LITERTLM';
+    } catch {
+      return false;
     }
+  }
 
+  describe('ConversationConfig WASM C++ defaults', () => {
     it('produces identical effective C++ ConversationConfig values for no args, {}, and partial configs',
        async () => {
          if (!(await servesLiteRtLmFile(CPU_MODEL_PATH))) {
@@ -670,6 +729,61 @@ describe('Conversation', () => {
                await gpuEngine.delete();
              }
            }
+         }
+       },
+       120_000);
+  });
+
+  describe('Conversation WASM sendMessageStreaming errors', () => {
+    it('propagates C++ sendMessageAsync errors and keeps the conversation usable',
+       async () => {
+         if (!(await servesLiteRtLmFile(CPU_MODEL_PATH))) {
+           pending('The local models are not served at /models.');
+           return;
+         }
+         unloadLiteRtLm();
+         await loadLiteRtLm('/wasm');
+
+         const cpuEngine = await Engine.create({
+           model: CPU_MODEL_PATH,
+           backend: Backend.CPU,
+           mainExecutorSettings: {maxNumTokens: 128},
+         });
+         try {
+           const conv = await cpuEngine.createConversation();
+           try {
+             // Non-object message: fails in Conversation::SendMessageAsync
+             // (returned via StatusToVal).
+             const nonObjectMessage = [] as unknown as Message;
+             await expectAsync(
+                 conv.sendMessageStreaming(nonObjectMessage).getReader().read())
+                 .toBeRejectedWith(jasmine.objectContaining({
+                   message: jasmine.stringMatching(/Message must be a JSON object/),
+                   code: 'INVALID_ARGUMENT',
+                 }));
+
+             // Out-of-range blob_index: fails in ParseMessageJsonWithBlobs
+             // (returned via StatusToJsError).
+             const badBlobMessage = {
+               role: 'user',
+               content: [{type: 'image', blob_index: 99}],
+             } as unknown as Message;
+             await expectAsync(
+                 conv.sendMessageStreaming(badBlobMessage).getReader().read())
+                 .toBeRejectedWith(jasmine.objectContaining({
+                   message: jasmine.stringMatching(/blob_index 99 is out of range/),
+                   code: 'INVALID_ARGUMENT',
+                 }));
+
+             // A subsequent valid message on the same conversation should still
+             // succeed.
+             const followUp = await conv.sendMessage('hi');
+             expect(followUp.role).toBe('assistant');
+           } finally {
+             await conv.delete();
+           }
+         } finally {
+           await cpuEngine.delete();
          }
        },
        120_000);

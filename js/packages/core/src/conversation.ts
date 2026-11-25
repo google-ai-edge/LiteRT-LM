@@ -82,7 +82,7 @@ export class Conversation implements ChatInterface {
         const executeGeneration = async(): Promise<void> => {
           const {json, blobs} = await serializeMessage(message);
           await this.mutexes.executor.acquireAndRun(async () => {
-            await this.conversation.sendMessageAsync(
+            unwrapWasmResult(await this.conversation.sendMessageAsync(
                 json, blobs,
                 (chunk: string|null, isDone: boolean, error: string|null) => {
                   if (isCancelled || hasErrored) return;
@@ -105,7 +105,7 @@ export class Conversation implements ChatInterface {
                     controller.error(e);
                   }
                 },
-                this.visualTokenBudget);
+                this.visualTokenBudget));
             // Since we're using the synchronus execution manager in C++, which
             // lazily executes tasks, we must queue the message and call
             // waitUntilDone to start the execution concurrently while holding
@@ -123,6 +123,7 @@ export class Conversation implements ChatInterface {
 
         executeGeneration().catch((e) => {
           if (isCancelled || hasErrored) return;
+          hasErrored = true;
           this.isBusy = false;
           controller.error(e);
         });
