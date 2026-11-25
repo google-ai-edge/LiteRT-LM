@@ -15,6 +15,23 @@
 
 
 # find_and_copy_bridge.cmake
+if(CMAKE_HOST_WIN32)
+    # MSVC ABI: the cxx crate's support archive is cxxbridge1.lib. It is also
+    # bundled into the Rust static library, so not finding it is not an error.
+    file(GLOB_RECURSE BRIDGE_LIB
+        "${CMAKE_BINARY_DIR}/cargo/*/cxxbridge1.lib"
+        "${CMAKE_BINARY_DIR}/cargo/*/libcxxbridge1.a"
+    )
+    if(BRIDGE_LIB)
+        list(GET BRIDGE_LIB 0 ACTUAL_PATH)
+        message(STATUS "Found cxxbridge at: ${ACTUAL_PATH}")
+        file(COPY "${ACTUAL_PATH}" DESTINATION "${CMAKE_BINARY_DIR}")
+    else()
+        message(STATUS "cxxbridge1.lib not found in ${CMAKE_BINARY_DIR}/cargo; using the copy inside the Rust static library")
+    endif()
+    return()
+endif()
+
 file(GLOB_RECURSE BRIDGE_LIB 
     "${CMAKE_BINARY_DIR}/cargo/*/libcxxbridge1.a"
 )

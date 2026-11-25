@@ -14,6 +14,7 @@
 
 import os
 import pathlib
+import types
 from unittest import mock
 import warnings
 
@@ -651,12 +652,13 @@ class EngineTest(LiteRtLmTestBase):
   def test_npu_backend_non_windows(self):
     with self.assertRaisesRegex(
         RuntimeError,
-        "NPU is supported only for Intel OpenVINO on Windows. Current"
-        " platform is 'linux'.",
+        r"NPU is supported only on Windows \(Intel OpenVINO on x64, Qualcomm"
+        r" on ARM64\). Current platform is 'linux'.",
     ):
       litert_lm.Backend.NPU()
 
   @mock.patch("sys.platform", "win32")
+  @mock.patch("platform.machine", lambda: "AMD64")
   def test_npu_backend_windows_no_openvino(self):
     with mock.patch.dict("sys.modules", {"openvino": None}):
       with self.assertRaisesRegex(
@@ -668,6 +670,7 @@ class EngineTest(LiteRtLmTestBase):
         litert_lm.Backend.NPU()
 
   @mock.patch("sys.platform", "win32")
+  @mock.patch("platform.machine", lambda: "AMD64")
   def test_npu_backend_windows_openvino_no_npu(self):
     mock_ov = mock.MagicMock()
     mock_ov.Core.return_value.available_devices = ["CPU", "GPU"]
@@ -681,6 +684,7 @@ class EngineTest(LiteRtLmTestBase):
         litert_lm.Backend.NPU()
 
   @mock.patch("sys.platform", "win32")
+  @mock.patch("platform.machine", lambda: "AMD64")
   def test_npu_backend_windows_openvino_with_npu(self):
     mock_ov = mock.MagicMock()
     mock_ov.__file__ = "path/to/openvino/__init__.py"
@@ -710,6 +714,7 @@ class EngineTest(LiteRtLmTestBase):
       )
 
   @mock.patch("sys.platform", "win32")
+  @mock.patch("platform.machine", lambda: "AMD64")
   def test_npu_backend_windows_openvino_path_deduplication(self):
     mock_ov = mock.MagicMock()
     mock_ov.__file__ = "path/to/openvino/__init__.py"
@@ -739,6 +744,135 @@ class EngineTest(LiteRtLmTestBase):
             os.environ["PATH"],
             f"{prefix_match_dir}{os.pathsep}{expected_libs_dir}",
         )
+
+  def _create_qualcomm_package_dir(
+      self, with_dispatch_lib: bool = True
+  ) -> tuple[pathlib.Path, pathlib.Path]:
+    """Returns a fake (package dir, Qualcomm dispatch lib dir) of the wheel."""
+    package_dir = pathlib.Path(self.create_tempdir().full_path)
+    dispatch_lib_dir = package_dir / "vendors" / "qualcomm" / "dispatch"
+    dispatch_lib_dir.mkdir(parents=True)
+    if with_dispatch_lib:
+      (dispatch_lib_dir / "LiteRtDispatch_Qualcomm.dll").touch()
+    return package_dir, dispatch_lib_dir
+
+  @parameterized.parameters("ARM64", "aarch64")
+  @mock.patch("sys.platform", "win32")
+  def test_npu_backend_windows_arm64_with_qualcomm_sdk(self, machine):
+    package_dir, dispatch_lib_dir = self._create_qualcomm_package_dir()
+    qnn_lib_dir = pathlib.Path(self.create_tempdir().full_path)
+    (qnn_lib_dir / "QnnHtp.dll").touch()
+    mock_sdk = mock.MagicMock()
+    mock_sdk.default_qualcomm_paths.return_value = (
+        qnn_lib_dir,
+        "skel_v73;skel_v75",
+    )
+
+    with (
+        mock.patch("platform.machine", return_value=machine),
+        # A None entry makes the import fail: openvino must not be imported.
+        mock.patch.dict(
+            "sys.modules",
+            {"openvino": None, "ai_edge_litert_sdk_qualcomm": mock_sdk},
+        ),
+        mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True),
+        mock.patch("importlib.resources.files", return_value=package_dir),
+    ):
+      npu = litert_lm.Backend.NPU()
+      # Creating the backend again must not duplicate the environment entries,
+      # including case-insensitive duplicates on Windows.
+      os.environ["ADSP_LIBRARY_PATH"] = "SKEL_V73;SKEL_V75"
+      litert_lm.Backend.NPU()
+
+      self.assertEqual(npu.litert_dispatch_lib_dir, str(dispatch_lib_dir))
+      self.assertEqual(os.environ["PATH"], f"{qnn_lib_dir}{os.pathsep}/usr/bin")
+      self.assertEqual(os.environ["ADSP_LIBRARY_PATH"], "SKEL_V73;SKEL_V75")
+
+  @mock.patch("sys.platform", "win32")
+  @mock.patch("platform.machine", lambda: "ARM64")
+  def test_npu_backend_windows_arm64_qnn_libs_on_path(self):
+    package_dir, dispatch_lib_dir = self._create_qualcomm_package_dir()
+    qnn_lib_dir = pathlib.Path(self.create_tempdir().full_path)
+    (qnn_lib_dir / "QnnHtp.dll").touch()
+    path = f"/usr/bin{os.pathsep}{qnn_lib_dir}"
+
+    with (
+        mock.patch.dict(
+            "sys.modules",
+            {"openvino": None, "ai_edge_litert_sdk_qualcomm": None},
+        ),
+        mock.patch.dict(os.environ, {"PATH": path}, clear=True),
+        mock.patch("importlib.resources.files", return_value=package_dir),
+    ):
+      npu = litert_lm.Backend.NPU()
+
+      self.assertEqual(npu.litert_dispatch_lib_dir, str(dispatch_lib_dir))
+      self.assertEqual(os.environ["PATH"], path)
+      self.assertNotIn("ADSP_LIBRARY_PATH", os.environ)
+
+  @mock.patch("sys.platform", "win32")
+  @mock.patch("platform.machine", lambda: "ARM64")
+  def test_npu_backend_windows_arm64_qnn_libs_next_to_dispatch_lib(self):
+    package_dir, dispatch_lib_dir = self._create_qualcomm_package_dir()
+    (dispatch_lib_dir / "QnnHtp.dll").touch()
+
+    with (
+        mock.patch.dict(
+            "sys.modules",
+            {"openvino": None, "ai_edge_litert_sdk_qualcomm": None},
+        ),
+        mock.patch.dict(os.environ, {}, clear=True),
+        mock.patch("importlib.resources.files", return_value=package_dir),
+    ):
+      npu = litert_lm.Backend.NPU()
+
+      self.assertEqual(npu.litert_dispatch_lib_dir, str(dispatch_lib_dir))
+
+  @mock.patch("sys.platform", "win32")
+  @mock.patch("platform.machine", lambda: "ARM64")
+  def test_npu_backend_windows_arm64_no_dispatch_lib(self):
+    # E.g. the x64 wheel installed with an x64 Python on Windows ARM64.
+    package_dir, _ = self._create_qualcomm_package_dir(with_dispatch_lib=False)
+
+    with (
+        mock.patch.dict("sys.modules", {"openvino": None}),
+        mock.patch("importlib.resources.files", return_value=package_dir),
+    ):
+      with self.assertRaisesRegex(
+          RuntimeError,
+          "NPU on Windows ARM64 requires the Qualcomm dispatch library"
+          " 'LiteRtDispatch_Qualcomm.dll', which was not found in",
+      ):
+        litert_lm.Backend.NPU()
+
+  @parameterized.named_parameters(
+      ("sdk_not_installed", None),
+      ("sdk_without_default_qualcomm_paths", types.SimpleNamespace()),
+      (
+          "sdk_without_libs_for_this_device",
+          types.SimpleNamespace(default_qualcomm_paths=lambda: None),
+      ),
+  )
+  @mock.patch("sys.platform", "win32")
+  @mock.patch("platform.machine", lambda: "ARM64")
+  def test_npu_backend_windows_arm64_no_qnn_libs(self, sdk):
+    package_dir, _ = self._create_qualcomm_package_dir()
+
+    with (
+        mock.patch.dict(
+            "sys.modules",
+            {"openvino": None, "ai_edge_litert_sdk_qualcomm": sdk},
+        ),
+        mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True),
+        mock.patch("importlib.resources.files", return_value=package_dir),
+    ):
+      with self.assertRaisesRegex(
+          RuntimeError,
+          "NPU on Windows ARM64 requires the Qualcomm AI Runtime \\(QNN\\)"
+          " libraries, but 'QnnHtp.dll' was not found. Install them with 'pip"
+          " install ai-edge-litert-sdk-qualcomm'",
+      ):
+        litert_lm.Backend.NPU()
 
   def test_engine_init_with_legacy_backend_class(self):
     with warnings.catch_warnings(record=True) as w:

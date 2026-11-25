@@ -22,7 +22,47 @@ include("${LITERTLM_FLATBUFFERS_CONFIG_PATH}")
 include("${LITERTLM_SENTENCEPIECE_CONFIG_PATH}")
 
 set(LITERTLM_LITERT_EXTERNAL_DONE ${LITERTLM_LITERT_STAMP_DIR}/litert_external-done CACHE INTERNAL "")
-set(LITERTLM_LITERT_TAG "main" CACHE STRING "LiteRT git tag")
+# Keep in sync with `LITERT_REF` in the Bazel WORKSPACE for reproducible builds.
+set(LITERTLM_LITERT_TAG "bf49eb62406d15948261a840c9dcd8e4f13b478c" CACHE STRING "LiteRT git tag")
+
+# --- Platform arguments (empty unless noted) ---
+set(LITERTLM_LITERT_PLATFORM_ARGS "")
+if(QAIRT_HEADERS_DIR)
+  # Pre-extracted QAIRT / QNN headers; LiteRT otherwise downloads the QAIRT SDK.
+  list(APPEND LITERTLM_LITERT_PLATFORM_ARGS "-DQAIRT_HEADERS_DIR=${QAIRT_HEADERS_DIR}")
+endif()
+if(LITERTLM_MSVC_FRONTEND)
+  # cl.exe and clang-cl have no -isystem, -w or -fpermissive: restate the
+  # include directories with /I on top of the flags the orchestrator passes.
+  set(_litertlm_litert_msvc_cxx_flags
+      "${CMAKE_CXX_FLAGS} /I${LITERTLM_TFLITE_INSTALL_PREFIX}/include /I${LITERTLM_ABSL_INSTALL_PREFIX}/include")
+  if(LITERTLM_OPENCL_INCLUDE_DIR)
+    string(APPEND _litertlm_litert_msvc_cxx_flags " /I${LITERTLM_OPENCL_INCLUDE_DIR}")
+  endif()
+  list(APPEND LITERTLM_LITERT_PLATFORM_ARGS
+      "-DCMAKE_CXX_FLAGS:STRING=${_litertlm_litert_msvc_cxx_flags}"
+      "-DCMAKE_C_FLAGS:STRING=${CMAKE_C_FLAGS} /I${LITERTLM_TFLITE_INSTALL_PREFIX}/include"
+      # Windows builds the CPU runtime first. Leave the NPU vendor backends
+      # out, and enable Qualcomm only when the QAIRT headers were provided, so
+      # that configuring does not download the QAIRT SDK.
+      -DLITERT_ENABLE_ALL_VENDORS=OFF
+      -DLITERT_ENABLE_GOOGLE_TENSOR=OFF
+      -DLITERT_ENABLE_MEDIATEK=OFF
+      -DLITERT_ENABLE_OPENVINO=OFF
+      -DLITERT_ENABLE_ARM_VULKAN_ML=OFF
+      -DLITERT_ENABLE_SAMSUNG=OFF
+      -DLITERT_ENABLE_BROADCOM=OFF
+  )
+  if(QAIRT_HEADERS_DIR)
+    list(APPEND LITERTLM_LITERT_PLATFORM_ARGS -DLITERT_ENABLE_QUALCOMM=ON)
+  else()
+    list(APPEND LITERTLM_LITERT_PLATFORM_ARGS -DLITERT_ENABLE_QUALCOMM=OFF)
+  endif()
+  if(LITERTLM_LITERT_WINDOWS_BUILD_ALL)
+    # See the end of shims/CMakeLists-shim.txt.
+    list(APPEND LITERTLM_LITERT_PLATFORM_ARGS -DLITERTLM_LITERT_WINDOWS_BUILD_ALL=ON)
+  endif()
+endif()
 
 include(ExternalProject)
   if(TARGET fetch_content_complete)
@@ -91,6 +131,7 @@ include(ExternalProject)
         -P "${LITERTLM_LITERT_PACKAGE_DIR}/litert_patcher.cmake"
 
     CMAKE_ARGS
+        ${LITERTLM_EP_PLATFORM_ARGS}
         ${LITERTLM_TOOLCHAIN_FILE}
         ${LITERTLM_TOOLCHAIN_ARGS}
         ${LITERTLM_UV_ARGS}
@@ -217,6 +258,7 @@ include(ExternalProject)
         "-DLITERTLM_STB_SRC_DIR=${LITERTLM_STB_SRC_DIR}"
         -DLITERTLM_FETCHCONTENT_MODULE_INCLUDE_DIR=${LITERTLM_FETCHCONTENT_MODULE_INCLUDE_DIR}
         -DLITERTLM_FETCHCONTENT_MODULE_SRC_DIRS=${LITERTLM_FETCHCONTENT_MODULE_SRC_DIRS}
+        ${LITERTLM_LITERT_PLATFORM_ARGS}
 
       INSTALL_COMMAND ""
     )

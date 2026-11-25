@@ -42,7 +42,12 @@ if(LITERTLM_TOOLCHAIN_ARGS)
     set(CMAKE_CXX_STANDARD "20" CACHE STRING "C++ standard" FORCE)
 endif()
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+# cl.exe and clang-cl first: clang-cl reports CMAKE_CXX_COMPILER_ID "Clang" but
+# drives link.exe / lld-link, which reject the GNU ld options below.
+litertlm_is_msvc_frontend(_LITERTLM_MSVC_FRONTEND)
+if(_LITERTLM_MSVC_FRONTEND)
+    litertlm_set_msvc_link_flags()
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     if(APPLE)
         # AppleClang / Mach-O Linker
         set(_LITERTLM_LINK_MULTIDEF "-Wl,-multiply_defined,suppress")
@@ -60,10 +65,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         set(_LITERTLM_LINK_GROUP_END "-Wl,--end-group")
         set(_LITERTLM_SYSLIBS "-lz -lrt -lpthread -ldl")
     endif()
-elseif(MSVC)
-    # MSVC Linker
-    set(_LITERTLM_LINK_MULTIDEF "/FORCE:MULTIPLE")
-    set(_LITERTLM_SYSLIBS "") 
 endif()
 
 set(CMAKE_CXX_STANDARD_LIBRARIES

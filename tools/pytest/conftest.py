@@ -21,6 +21,7 @@ the litert_lm C++ engine.
 """
 
 import os
+import platform
 import subprocess
 import sys
 from typing import Callable
@@ -138,7 +139,10 @@ def _get_dynamic_lib_dirs(engine_binary: str) -> list[str]:
 
   if sys.platform == "win32":
     ext = ".dll"
-    prebuilt_subdir = "windows_x86_64"
+    if platform.machine().lower() in ("arm64", "aarch64"):
+      prebuilt_subdir = "windows_arm64"
+    else:
+      prebuilt_subdir = "windows_x86_64"
   elif sys.platform == "darwin":
     ext = ".dylib"
     prebuilt_subdir = "macos_arm64"

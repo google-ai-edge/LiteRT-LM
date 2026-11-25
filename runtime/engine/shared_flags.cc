@@ -312,4 +312,17 @@ ParseSpeculativeDecodingFlag(absl::string_view value) {
                    "\". Expected on, off or adaptive."));
 }
 
+void ApplyLiteRtLibDirFlags(LlmExecutorSettings& executor_settings) {
+  const std::string litert_dispatch_lib_dir =
+      absl::GetFlag(FLAGS_litert_dispatch_lib_dir);
+  if (!litert_dispatch_lib_dir.empty()) {
+    executor_settings.SetLitertDispatchLibDir(litert_dispatch_lib_dir);
+  }
+  const std::string litert_compiler_lib_dir =
+      absl::GetFlag(FLAGS_litert_compiler_lib_dir);
+  if (!litert_compiler_lib_dir.empty()) {
+    executor_settings.SetLitertCompilerLibDir(litert_compiler_lib_dir);
+  }
+}
+
 }  // namespace litert::lm

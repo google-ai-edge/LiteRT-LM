@@ -149,6 +149,8 @@ absl::Status MainHelper(int argc, char** argv) {
                         litert::lm::GetUseIrModelFromString(
                             absl::GetFlag(FLAGS_gpu_use_ir_model)));
   engine_settings.GetMutableMainExecutorSettings().SetUseIrModel(use_ir_model);
+  litert::lm::ApplyLiteRtLibDirFlags(
+      engine_settings.GetMutableMainExecutorSettings());
 
   if (backend == Backend::CPU) {
     auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();
