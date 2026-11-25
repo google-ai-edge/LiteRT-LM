@@ -92,6 +92,17 @@ class Benchmark(interfaces.AbstractBenchmark):
         )
 
         if (
+            isinstance(self.backend, interfaces.Backend.NPU)
+            and self.backend.litert_dispatch_lib_dir
+        ):
+          call_checked(
+              lib,
+              "litert_lm_engine_settings_set_litert_dispatch_lib_dir",
+              settings,
+              self.backend.litert_dispatch_lib_dir,
+          )
+
+        if (
             isinstance(self.backend, interfaces.CPU)
             and self.backend.thread_count is not None
         ):

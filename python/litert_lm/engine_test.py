@@ -647,6 +647,65 @@ class EngineTest(LiteRtLmTestBase):
 
             mock_set_dir.assert_called_once_with(mock.ANY, "my_custom_dir")
 
+  @mock.patch("sys.platform", "win32")
+  def test_benchmark_init_with_npu_backend(self):
+    lib = litert_lm._ffi._get_lib()
+    if hasattr(lib, "litert_lm_engine_settings_set_litert_dispatch_lib_dir"):
+      orig_set_dir = lib.litert_lm_engine_settings_set_litert_dispatch_lib_dir
+
+      mock_ov = mock.MagicMock()
+      mock_ov.__file__ = "path/to/openvino/__init__.py"
+      mock_ov.Core.return_value.available_devices = ["CPU", "NPU"]
+
+      with mock.patch.object(
+          lib,
+          "litert_lm_engine_settings_set_litert_dispatch_lib_dir",
+          autospec=True,
+          side_effect=orig_set_dir,
+      ) as mock_set_dir:
+        with mock.patch.dict("sys.modules", {"openvino": mock_ov}):
+          with mock.patch("importlib.resources.files") as unused_mock_files:
+            try:
+              npu = litert_lm.Backend.NPU(
+                  litert_dispatch_lib_dir="my_custom_dir"
+              )
+              litert_lm.Benchmark(
+                  self.model_path,
+                  npu,
+                  prefill_tokens=10,
+                  decode_tokens=10,
+                  cache_dir=":nocache",
+              ).run()
+            except RuntimeError:
+              pass
+
+            mock_set_dir.assert_called_once_with(mock.ANY, "my_custom_dir")
+
+  def test_benchmark_init_with_npu_backend_empty_dir(self):
+    lib = litert_lm._ffi._get_lib()
+    if hasattr(lib, "litert_lm_engine_settings_set_litert_dispatch_lib_dir"):
+      orig_set_dir = lib.litert_lm_engine_settings_set_litert_dispatch_lib_dir
+
+      with mock.patch.object(
+          lib,
+          "litert_lm_engine_settings_set_litert_dispatch_lib_dir",
+          autospec=True,
+          side_effect=orig_set_dir,
+      ) as mock_set_dir:
+        try:
+          npu = litert_lm.Backend.NPU(litert_dispatch_lib_dir="")
+          litert_lm.Benchmark(
+              self.model_path,
+              npu,
+              prefill_tokens=10,
+              decode_tokens=10,
+              cache_dir=":nocache",
+          ).run()
+        except RuntimeError:
+          pass
+
+        mock_set_dir.assert_not_called()
+
   @mock.patch("sys.platform", "linux")
   def test_npu_backend_non_windows(self):
     with self.assertRaisesRegex(
