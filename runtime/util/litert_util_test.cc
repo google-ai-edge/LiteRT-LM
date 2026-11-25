@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT(build/c++17)
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -120,6 +121,17 @@ std::string TestTaskPath() {
           "google3/runtime/testdata/"
           "test_lm_new_metadata.task")
       .string();
+}
+
+// Creates the directory `name` under the test's temporary directory, puts an
+// empty file with the name of NVIDIA's dispatch library in it, and returns its
+// path.
+std::string CreateNvidiaDispatchLibDir(absl::string_view name) {
+  const std::filesystem::path dir =
+      std::filesystem::path(::testing::TempDir()) / std::string(name);
+  std::filesystem::create_directories(dir);
+  std::ofstream(dir / "libLiteRtDispatch_Nvidia.so").close();
+  return dir.string();
 }
 
 // Fake ModelResources that returns a caller-provided model for every model type
@@ -371,6 +383,68 @@ TEST(LiteRtUtilTest, CreateEnvironment_CpuWithCompilerLibDir_IgnoresIt) {
   auto compiler_plugin_lib_status = options_status->GetOption(
       EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
   EXPECT_FALSE(compiler_plugin_lib_status.HasValue());
+}
+
+TEST(LiteRtUtilTest,
+     CreateEnvironment_NvidiaDispatchLibrary_SetsCompilerPlugin) {
+  const std::string dispatch_lib_dir =
+      CreateNvidiaDispatchLibDir("nvidia_sets_compiler_plugin");
+  auto model_assets = ModelAssets::Create(TestTaskPath());
+  ASSERT_OK(model_assets);
+
+  auto npu_settings =
+      EngineSettings::CreateDefault(*model_assets, Backend::NPU);
+  ASSERT_OK(npu_settings);
+  npu_settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
+      dispatch_lib_dir);
+
+  auto env_status = CreateEnvironment(*npu_settings, nullptr);
+  ASSERT_OK(env_status);
+
+  auto options_status = env_status->env.GetOptions();
+  ASSERT_TRUE(options_status.HasValue());
+  auto compiler_plugin_lib_status = options_status->GetOption(
+      EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
+#if !defined(LITERT_DISABLE_NPU)
+  ASSERT_TRUE(compiler_plugin_lib_status.HasValue())
+      << "NVIDIA's backend JIT-compiles every model, so its dispatch library "
+         "must bring the compiler plugin directory with it.";
+  EXPECT_EQ(std::string(std::get<const char*>(*compiler_plugin_lib_status)),
+            dispatch_lib_dir);
+#else
+  ASSERT_FALSE(compiler_plugin_lib_status.HasValue());
+#endif
+}
+
+TEST(LiteRtUtilTest,
+     CreateEnvironment_NvidiaDispatchLibraryWithCompilerLibDir_KeepsIt) {
+  const std::string dispatch_lib_dir =
+      CreateNvidiaDispatchLibDir("nvidia_keeps_compiler_lib_dir");
+  auto model_assets = ModelAssets::Create(TestTaskPath());
+  ASSERT_OK(model_assets);
+
+  auto npu_settings =
+      EngineSettings::CreateDefault(*model_assets, Backend::NPU);
+  ASSERT_OK(npu_settings);
+  npu_settings->GetMutableMainExecutorSettings().SetLitertDispatchLibDir(
+      dispatch_lib_dir);
+  npu_settings->GetMutableMainExecutorSettings().SetLitertCompilerLibDir(
+      "/custom/compiler/dir");
+
+  auto env_status = CreateEnvironment(*npu_settings, nullptr);
+  ASSERT_OK(env_status);
+
+  auto options_status = env_status->env.GetOptions();
+  ASSERT_TRUE(options_status.HasValue());
+  auto compiler_plugin_lib_status = options_status->GetOption(
+      EnvironmentOptions::Tag::kCompilerPluginLibraryDir);
+#if !defined(LITERT_DISABLE_NPU)
+  ASSERT_TRUE(compiler_plugin_lib_status.HasValue());
+  EXPECT_EQ(std::string(std::get<const char*>(*compiler_plugin_lib_status)),
+            "/custom/compiler/dir");
+#else
+  ASSERT_FALSE(compiler_plugin_lib_status.HasValue());
+#endif
 }
 
 TEST(LiteRtUtilTest,

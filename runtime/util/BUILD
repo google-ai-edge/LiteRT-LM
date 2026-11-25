@@ -613,12 +613,33 @@ cc_library(
 )
 
 cc_library(
+    name = "nvidia_dispatch_library",
+    hdrs = ["nvidia_dispatch_library.h"],
+    deps = [
+        ":file_util",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_test(
+    name = "nvidia_dispatch_library_test",
+    srcs = ["nvidia_dispatch_library_test.cc"],
+    deps = [
+        ":nvidia_dispatch_library",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
     name = "litert_util",
     srcs = ["litert_util.cc"],
     hdrs = ["litert_util.h"],
     deps = [
         ":litert_lm_loader",
         ":logging",
+        ":nvidia_dispatch_library",
         ":scoped_file",
         "@com_google_absl//absl/log:absl_log",
         "@com_google_absl//absl/status:status_macros",

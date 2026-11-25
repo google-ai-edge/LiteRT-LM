@@ -40,6 +40,7 @@
 #include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/logging.h"
+#include "runtime/util/nvidia_dispatch_library.h"
 #include "runtime/util/scoped_file.h"
 #include "schema/core/litertlm_header_schema_generated.h"
 
@@ -170,6 +171,17 @@ void PopulateNpuOptions(
           compiler_library_dir.c_str()});
       ABSL_VLOG(1) << "Setting compiler plugin library path: "
                    << compiler_library_dir;
+    } else if (should_set_path && HasNvidiaDispatchLibrary(library_dir)) {
+      // NVIDIA's TensorRT-RTX backend has no models compiled ahead of time: it
+      // JIT-compiles every model, with the compiler plugin that ships beside
+      // its dispatch library. So its dispatch library in the dispatch library
+      // directory counts as the request.
+      env_options.push_back(::litert::EnvironmentOptions::Option{
+          ::litert::EnvironmentOptions::Tag::kCompilerPluginLibraryDir,
+          library_dir.c_str()});
+      ABSL_VLOG(1) << "Setting compiler plugin library path to the directory "
+                      "of NVIDIA's dispatch library: "
+                   << library_dir;
     } else {
       ABSL_VLOG(1) << "No compiler library dir set. Models that are not "
                       "compiled ahead of time are not JIT-compiled for the "

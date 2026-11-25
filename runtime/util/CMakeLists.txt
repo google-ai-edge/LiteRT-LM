@@ -283,6 +283,7 @@ target_include_directories(runtime_util_litert_util
 
 target_link_libraries(runtime_util_litert_util
   PUBLIC
+    LiteRTLM::Runtime::Util::FileUtil
     LiteRTLM::Runtime::Util::LitertLmLoader
     LiteRTLM::Runtime::Util::ScopedFile
     LiteRTLM::Schema::Core
