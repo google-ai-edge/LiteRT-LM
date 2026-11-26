@@ -27,6 +27,20 @@ target_include_directories(runtime_components_embedding_lookup_interface
 )
 
 # ==============================================================================
+# Embedding Lookup Accelerators
+# ==============================================================================
+add_litertlm_library(runtime_components_embedding_lookup_embedding_lookup_accelerators INTERFACE)
+add_library(LiteRTLM::Runtime::Components::EmbeddingLookup::Accelerators
+  ALIAS runtime_components_embedding_lookup_embedding_lookup_accelerators)
+
+target_include_directories(runtime_components_embedding_lookup_embedding_lookup_accelerators
+  INTERFACE
+    ${LITERTLM_INCLUDE_PATHS}
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${CMAKE_BINARY_DIR}
+)
+
+# ==============================================================================
 # Embedding Lookup End of Multi Modal
 # ==============================================================================
 add_litertlm_library(runtime_components_embedding_lookup_embedding_lookup_end_of_multi_modal STATIC
@@ -44,6 +58,7 @@ target_include_directories(runtime_components_embedding_lookup_embedding_lookup_
 
 target_link_libraries(runtime_components_embedding_lookup_embedding_lookup_end_of_multi_modal
   PUBLIC
+    LiteRTLM::Runtime::Components::EmbeddingLookup::Accelerators
     LiteRTLM::Runtime::Components::EmbeddingLookup::Interface
     LITERTLM_DEPS
 )
@@ -114,6 +129,7 @@ target_include_directories(runtime_components_embedding_lookup_embedding_lookup_
 
 target_link_libraries(runtime_components_embedding_lookup_embedding_lookup_text
   PUBLIC
+    LiteRTLM::Runtime::Components::EmbeddingLookup::Accelerators
     LiteRTLM::Runtime::Components::EmbeddingLookup::Interface
     LITERTLM_DEPS
 )
@@ -126,6 +142,7 @@ add_library(LiteRTLM::Runtime::Components::EmbeddingLookup
   ALIAS runtime_components_embedding_lookup_libs)
 
 target_link_libraries(runtime_components_embedding_lookup_libs INTERFACE
+  LiteRTLM::Runtime::Components::EmbeddingLookup::Accelerators
   LiteRTLM::Runtime::Components::EmbeddingLookup::Interface
   LiteRTLM::Runtime::Components::EmbeddingLookup::EndOfMultiModal
   LiteRTLM::Runtime::Components::EmbeddingLookup::Manager

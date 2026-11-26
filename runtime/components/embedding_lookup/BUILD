@@ -35,11 +35,17 @@ cc_library(
 )
 
 cc_library(
+    name = "embedding_lookup_accelerators",
+    hdrs = ["embedding_lookup_accelerators.h"],
+)
+
+cc_library(
     name = "embedding_lookup_text",
     srcs = ["embedding_lookup_text.cc"],
     hdrs = ["embedding_lookup_text.h"],
     deps = [
         ":embedding_lookup",
+        ":embedding_lookup_accelerators",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log:absl_log",
@@ -104,6 +110,7 @@ cc_library(
     ],
     deps = [
         ":embedding_lookup",
+        ":embedding_lookup_accelerators",
         "@com_google_absl//absl/base:nullability",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:status_macros",

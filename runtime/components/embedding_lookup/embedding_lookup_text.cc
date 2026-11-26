@@ -44,6 +44,7 @@
 #include "litert/cc/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_options.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
+#include "runtime/components/embedding_lookup/embedding_lookup_accelerators.h"
 #include "runtime/util/status_macros.h"  // NOLINT
 #if defined(__EMSCRIPTEN__)
 #include "litert/cc/options/litert_gpu_options.h"  // from @litert
@@ -290,12 +291,13 @@ absl::Status EmbeddingLookupText::Initialize() {
           "Model is null but compiled_model_ is not provided.");
     }
     LITERT_ASSIGN_OR_RETURN(auto options, Options::Create());
-#if defined(__ANDROID__)
-    options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
-                                    litert::HwAccelerators::kCpu);
-#else
-    options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
-#endif
+    const bool use_npu = UseNpuForEmbeddingLookup();
+    if (use_npu) {
+      options.SetHardwareAccelerators(litert::HwAccelerators::kNpu |
+                                      litert::HwAccelerators::kCpu);
+    } else {
+      options.SetHardwareAccelerators(litert::HwAccelerators::kCpu);
+    }
     if (external_weight_file_.has_value() &&
         !external_weight_sections_.empty()) {
       auto res = options.SetExternalWeightScopedFile(
@@ -315,13 +317,16 @@ absl::Status EmbeddingLookupText::Initialize() {
       }
     }
 #if defined(__ANDROID__)
-    LITERT_ASSIGN_OR_RETURN(
-        ::litert::qualcomm::QualcommOptions & qnn_opts,
-        options.GetOptions<::litert::qualcomm::QualcommOptions>());
-    qnn_opts.SetLogLevel(::litert::qualcomm::QualcommOptions::LogLevel::kOff);
-    qnn_opts.SetHtpPerformanceMode(
-        ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::
-            kSustainedHighPerformance);
+    if (use_npu) {
+      LITERT_ASSIGN_OR_RETURN(
+          ::litert::qualcomm::QualcommOptions & qnn_opts,
+          options.GetOptions<::litert::qualcomm::QualcommOptions>());
+      qnn_opts.SetLogLevel(
+          ::litert::qualcomm::QualcommOptions::LogLevel::kOff);
+      qnn_opts.SetHtpPerformanceMode(
+          ::litert::qualcomm::QualcommOptions::HtpPerformanceMode::
+              kSustainedHighPerformance);
+    }
 #endif
 
     LITERT_ASSIGN_OR_RETURN(compiled_model_, litert::CompiledModel::Create(
