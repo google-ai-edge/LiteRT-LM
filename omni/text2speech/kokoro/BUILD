@@ -54,6 +54,7 @@ cc_test(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "//third_party/gloop/util/gtl:c_memcpy",
         "@litert//litert/cc:litert_model",
         "//runtime/components:model_resources",
         "//runtime/proto:llm_metadata_cc_proto",

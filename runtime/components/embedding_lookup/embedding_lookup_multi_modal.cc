@@ -29,6 +29,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "third_party/gloop/util/gtl/c_memcpy.h"
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -71,8 +72,8 @@ absl::Status EmbeddingLookupMultiModal::LookupPrefill(
   }
 
   // Copy the embedding data to the output vector.
-  std::memcpy(output_vector.data(), embedding_.data(),
-              output_vector.size() * sizeof(float));
+  gtl::c_memcpy(output_vector, embedding_,
+                output_vector.size() * sizeof(float));
   // Remove used embeddings from the buffer.
   embedding_ = embedding_.subspan(output_vector.size());
 
