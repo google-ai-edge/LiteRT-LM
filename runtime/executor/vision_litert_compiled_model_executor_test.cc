@@ -19,6 +19,7 @@
 #include <filesystem>  // NOLINT: Required for path manipulation.
 #include <functional>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <utility>
@@ -52,6 +53,7 @@
 #include "runtime/executor/llm_executor_io_types.h"
 #include "runtime/executor/run_options_test_util.h"
 #include "runtime/executor/vision/vision_executor_settings.h"
+#include "runtime/proto/llm_metadata.pb.h"
 #include "runtime/util/litert_lm_loader.h"
 #include "runtime/util/scoped_file.h"
 #include "runtime/util/test_utils.h"  // IWYU pragma: keep
@@ -1212,6 +1214,139 @@ TEST(VisionLiteRtCompiledModelExecutorTest,
       EXPECT_THAT(ReadTensorBuffer<float>(*embeddings),
                   IsOkAndHolds(expected_vector));
     }
+  }
+}
+
+std::vector<uint8_t> BuildReshapeModelBuffer(
+    const std::string& input_name, const std::vector<int32_t>& input_dims,
+    const std::string& output_name, const std::vector<int32_t>& output_dims) {
+  flatbuffers::FlatBufferBuilder builder;
+  auto opcodes = builder.CreateVector(
+      {tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_RESHAPE)});
+  auto tensors = builder.CreateVector({
+      tflite::CreateTensor(builder, builder.CreateVector(input_dims),
+                           tflite::TensorType_FLOAT32, /*buffer=*/0,
+                           builder.CreateString("input")),
+      tflite::CreateTensor(builder, builder.CreateVector(output_dims),
+                           tflite::TensorType_FLOAT32, /*buffer=*/0,
+                           builder.CreateString("output")),
+  });
+  const std::vector<int32_t> inputs = {0};
+  const std::vector<int32_t> outputs = {1};
+  auto ops = builder.CreateVector({tflite::CreateOperator(
+      builder, /*opcode_index=*/0, builder.CreateVector(inputs),
+      builder.CreateVector(outputs), tflite::BuiltinOptions_ReshapeOptions,
+      tflite::CreateReshapeOptions(builder, builder.CreateVector(output_dims))
+          .Union())});
+  auto subgraphs = builder.CreateVector({tflite::CreateSubGraph(
+      builder, tensors, builder.CreateVector(inputs),
+      builder.CreateVector(outputs), ops, builder.CreateString("main"))});
+  auto input_map = builder.CreateVector(
+      {tflite::CreateTensorMap(builder, builder.CreateString(input_name), 0)});
+  auto output_map = builder.CreateVector(
+      {tflite::CreateTensorMap(builder, builder.CreateString(output_name), 1)});
+  auto signature_defs = builder.CreateVector({tflite::CreateSignatureDef(
+      builder, input_map, output_map, builder.CreateString("serving_default"),
+      /*subgraph_index=*/0)});
+  auto model = tflite::CreateModel(
+      builder, /*version=*/3, opcodes, subgraphs,
+      builder.CreateString("reshape_model"),
+      builder.CreateVector({tflite::CreateBuffer(builder)}),
+      /*metadata_buffer=*/0, /*metadata=*/0, signature_defs);
+  tflite::FinishModelBuffer(builder, model);
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+// Serves an in-memory vision encoder and vision adapter, which must outlive it.
+class FakeVisionModelResources : public ModelResources {
+ public:
+  using ModelResources::GetTFLiteModel;
+  using ModelResources::GetTokenizer;
+
+  FakeVisionModelResources(const Model* encoder, const Model* adapter)
+      : encoder_(encoder), adapter_(adapter) {}
+
+  absl::StatusOr<const Model*> GetTFLiteModel(
+      proto::LlmMetadata::TfLiteModelType model_type) override {
+    if (model_type == proto::LlmMetadata::TF_LITE_VISION_ENCODER) {
+      return encoder_;
+    }
+    if (model_type == proto::LlmMetadata::TF_LITE_VISION_ADAPTER) {
+      return adapter_;
+    }
+    return absl::NotFoundError("Model not found.");
+  }
+  absl::StatusOr<std::unique_ptr<Tokenizer>> GetTokenizer() override {
+    return absl::UnimplementedError("Not used.");
+  }
+  absl::StatusOr<const proto::LlmMetadata*> GetLlmMetadata() override {
+    return absl::UnimplementedError("Not used.");
+  }
+
+ private:
+  const Model* encoder_;
+  const Model* adapter_;
+};
+
+TEST(VisionLiteRtCompiledModelExecutorTest,
+     EncodeInputMapsFeedsAllEncoderRowsToTokenReducingAdapter) {
+  // As in LFM2 VL, the encoder has no mask output and keeps one row per patch
+  // (8), and the adapter merges 4 rows into each of its 2 tokens.
+  const std::vector<uint8_t> encoder_buffer =
+      BuildReshapeModelBuffer("images", {1, 8, 8}, "features", {1, 8, 8});
+  const std::vector<uint8_t> adapter_buffer = BuildReshapeModelBuffer(
+      "soft_tokens", {1, 8, 8}, "mm_embedding", {1, 2, 32});
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      Environment env, Environment::Create(std::vector<Environment::Option>()));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      Model encoder_model,
+      Model::CreateFromBuffer(env, BufferRef<uint8_t>(encoder_buffer.data(),
+                                                      encoder_buffer.size())));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      Model adapter_model,
+      Model::CreateFromBuffer(env, BufferRef<uint8_t>(adapter_buffer.data(),
+                                                      adapter_buffer.size())));
+  FakeVisionModelResources resources(&encoder_model, &adapter_model);
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("dummy_model_path"));
+  ASSERT_OK_AND_ASSIGN(
+      VisionExecutorSettings settings,
+      VisionExecutorSettings::CreateDefault(model_assets,
+                                            /*encoder_backend=*/Backend::CPU,
+                                            /*adapter_backend=*/Backend::CPU));
+  settings.SetCacheDir(":nocache");
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<VisionLiteRtCompiledModelExecutor> vision_executor,
+      VisionLiteRtCompiledModelExecutor::Create(settings, env, resources));
+
+  // 8 patches fill the encoder (2 tokens), 4 patches half of it (1 token).
+  for (const int num_patches : {8, 4}) {
+    SCOPED_TRACE(num_patches);
+    std::vector<float> images_data(num_patches * 8);
+    std::iota(images_data.begin(), images_data.end(), 1.0f);
+    ASSERT_OK_AND_ASSIGN(
+        TensorBuffer images_buffer,
+        CreateTensorBuffer<float>(
+            absl::MakeSpan(images_data),
+            RankedTensorType(ElementType::Float32,
+                             Layout(litert::Dimensions{1, num_patches, 8}))));
+    absl::flat_hash_map<std::string, TensorBuffer> input_maps;
+    input_maps.insert_or_assign("images", std::move(images_buffer));
+
+    ASSERT_OK_AND_ASSIGN(ExecutorVisionData output,
+                         vision_executor->Encode(input_maps));
+    ASSERT_OK_AND_ASSIGN(TensorBuffer * embeddings,
+                         output.GetMutableEmbeddingsPtr());
+    LITERT_ASSERT_OK_AND_ASSIGN(RankedTensorType embeddings_type,
+                                embeddings->TensorType());
+    EXPECT_THAT(embeddings_type.Layout().Dimensions(),
+                ElementsAre(1, num_patches / 4, 32));
+    // Both models only reshape, so the tokens hold every patch, in order.
+    ASSERT_OK_AND_ASSIGN(std::vector<float> tokens,
+                         ReadTensorBuffer<float>(*embeddings));
+    EXPECT_EQ(tokens, images_data);
   }
 }
 
