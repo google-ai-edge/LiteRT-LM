@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -458,6 +459,11 @@ void AudioLiteRtCompiledModelExecutor::AudioStreamingEncoder::SetIsFirstChunk(
   is_first_chunk_ = is_first_chunk;
 }
 
+void AudioLiteRtCompiledModelExecutor::AudioEncoder::
+    ClearOutputMaskBufferForTesting() {
+  output_mask_buffer_ = nullptr;
+}
+
 absl::Status AudioLiteRtCompiledModelExecutor::AudioEncoder::InitializeBuffers(
     const Model& model, CompiledModel compiled_model) {
   compiled_model_ = std::move(compiled_model);
@@ -742,15 +748,29 @@ AudioLiteRtCompiledModelExecutor::Create(
       auto encoder_output_tensor_type,
       audio_encoder->GetOutputFeaturesBuffer().TensorType());
   const auto encoder_dims = encoder_output_tensor_type.Layout().Dimensions();
+  if (encoder_dims.size() < 2) {
+    return absl::InvalidArgumentError(
+        "Audio encoder output features tensor must have at least 2 dimensions");
+  }
+  const int encoder_output_tokens = encoder_dims[encoder_dims.size() - 2];
   const int audio_embedding_dimensions = encoder_dims.back();
 
+  int projected_output_tokens = encoder_output_tokens;
   int projected_audio_embedding_dimensions = audio_embedding_dimensions;
   if (audio_adapter != nullptr) {
     LITERT_ASSIGN_OR_RETURN(auto adapter_output_tensor_type,
                             audio_adapter->GetOutputBuffers()[0].TensorType());
-    projected_audio_embedding_dimensions =
-        adapter_output_tensor_type.Layout().Dimensions().back();
+    const auto adapter_dims = adapter_output_tensor_type.Layout().Dimensions();
+    if (adapter_dims.size() < 2) {
+      return absl::InvalidArgumentError(
+          "Audio adapter output tensor must have at least 2 dimensions");
+    }
+    projected_output_tokens = adapter_dims[adapter_dims.size() - 2];
+    projected_audio_embedding_dimensions = adapter_dims.back();
   }
+  const int output_tokens_per_chunk =
+      std::min(encoder_output_tokens, projected_output_tokens);
+  RET_CHECK_GT(output_tokens_per_chunk, 0);
   const int encoder_shrinking_factor = executor_properties.audio_shrink_factor;
   if (!executor_properties.is_streaming_model) {
     if (audio_adapter != nullptr) {
@@ -830,7 +850,7 @@ AudioLiteRtCompiledModelExecutor::Create(
       /*resources=*/nullptr, std::move(audio_encoder), std::move(audio_adapter),
       sequence_length, spectrogram_feature_dimensions,
       projected_audio_embedding_dimensions, audio_embedding_dimensions,
-      encoder_shrinking_factor));
+      encoder_shrinking_factor, output_tokens_per_chunk));
 }
 
 absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
@@ -885,9 +905,22 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
               absl::MakeConstSpan(encoder_mask)));
     }
   } else {
+    RET_CHECK_GT(encoder_shrinking_factor_, 0);
     int input_valid_tokens = GetValidCount(spectrogram_mask);
     chunk_valid_tokens =
-        CeilIntDiv(input_valid_tokens, encoder_shrinking_factor_);
+        std::min(output_tokens_per_chunk_,
+                 CeilIntDiv(input_valid_tokens, encoder_shrinking_factor_));
+  }
+  RET_CHECK_GE(chunk_valid_tokens, 0);
+  RET_CHECK_LE(chunk_valid_tokens, output_tokens_per_chunk_);
+  const size_t valid_projected_elements =
+      static_cast<size_t>(chunk_valid_tokens) *
+      projected_audio_embedding_dimensions_;
+  RET_CHECK_LE(valid_projected_elements, projected_audio_embeddings.size());
+  const size_t valid_audio_elements =
+      static_cast<size_t>(chunk_valid_tokens) * audio_embedding_dimensions_;
+  if (!audio_embeddings.empty()) {
+    RET_CHECK_LE(valid_audio_elements, audio_embeddings.size());
   }
   auto& encoder_output = audio_encoder_->GetMutableOutputFeaturesBuffer();
 
@@ -932,8 +965,9 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
     }
 
     if (!audio_embeddings.empty()) {
-      LITERT_RETURN_IF_ERROR(adapter_input.Read<float>(audio_embeddings.subspan(
-          0, chunk_valid_tokens * audio_embedding_dimensions_)));
+      LITERT_RETURN_IF_ERROR(
+          adapter_input.Read<float>(audio_embeddings.subspan(
+              0, valid_audio_elements)));
     }
 
     {
@@ -948,9 +982,7 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
 
     LITERT_RETURN_IF_ERROR(
         audio_adapter_->GetMutableOutputBuffers()[0].Read<float>(
-            projected_audio_embeddings.subspan(
-                0,
-                chunk_valid_tokens * projected_audio_embedding_dimensions_)));
+            projected_audio_embeddings.subspan(0, valid_projected_elements)));
   } else {
     LITERT_ASSIGN_OR_RETURN(auto encoder_type, encoder_output.TensorType());
     if (encoder_type.ElementType() == litert::ElementType::Float16) {
@@ -959,15 +991,15 @@ absl::StatusOr<int> AudioLiteRtCompiledModelExecutor::EncodeInternal(
           TensorBufferScopedLock::Create<const tflite::half>(
               encoder_output, TensorBuffer::LockMode::kRead));
       const tflite::half* encoder_data = encoder_lock_and_addr.second;
-      const size_t total_elements =
-          chunk_valid_tokens * projected_audio_embedding_dimensions_;
-      for (size_t i = 0; i < total_elements; ++i) {
+      LITERT_ASSIGN_OR_RETURN(auto elements,
+                              encoder_type.Layout().NumElements());
+      RET_CHECK_LE(valid_projected_elements, elements);
+      for (size_t i = 0; i < valid_projected_elements; ++i) {
         projected_audio_embeddings[i] = static_cast<float>(encoder_data[i]);
       }
     } else {
-      LITERT_RETURN_IF_ERROR(
-          encoder_output.Read<float>(projected_audio_embeddings.subspan(
-              0, chunk_valid_tokens * projected_audio_embedding_dimensions_)));
+      LITERT_RETURN_IF_ERROR(encoder_output.Read<float>(
+          projected_audio_embeddings.subspan(0, valid_projected_elements)));
     }
   }
 
@@ -1137,32 +1169,37 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
   }
 
   // The first chunk of a stream has no previous frames to use as the left
-  // context of the subsampling convolution. Prepend `overlap_size` masked-out
-  // zero frames, as the streaming encoder is exported and verified against
-  // the non-streaming encoder. Without this padding, every chunk is shifted
-  // by `overlap_size` frames relative to the non-streaming encoder.
+  // context of the subsampling convolution. When front padding is enabled,
+  // prepend `overlap_size` masked-out zero frames, as causal/semicausal
+  // streaming encoders are exported and verified against non-streaming
+  // encoders that pad left context.
   std::vector<float> padded_spectrogram;
   std::vector<uint8_t> padded_mask;
   const std::vector<float>* spectrogram = &spectrogram_host_buffer;
   const std::vector<uint8_t>* spectrogram_mask = &spectrogram_mask_host_buffer;
-  if (audio_encoder_->IsStreaming() && overlap_size > 0 && total_frames > 0) {
+  bool first_chunk_unpadded = false;
+  if (audio_encoder_->IsStreaming() && total_frames > 0) {
     auto* streaming_encoder =
         static_cast<AudioStreamingEncoder*>(audio_encoder_.get());
     if (streaming_encoder->IsFirstChunk()) {
-      padded_spectrogram.reserve(spectrogram_host_buffer.size() +
-                                 overlap_size * feature_dim);
-      padded_spectrogram.assign(overlap_size * feature_dim, 0.0f);
-      padded_spectrogram.insert(padded_spectrogram.end(),
-                                spectrogram_host_buffer.begin(),
-                                spectrogram_host_buffer.end());
-      padded_mask.reserve(spectrogram_mask_host_buffer.size() + overlap_size);
-      padded_mask.assign(overlap_size, 0);
-      padded_mask.insert(padded_mask.end(),
-                         spectrogram_mask_host_buffer.begin(),
-                         spectrogram_mask_host_buffer.end());
-      spectrogram = &padded_spectrogram;
-      spectrogram_mask = &padded_mask;
-      total_frames += overlap_size;
+      if (executor_settings_.GetFrontPaddingEnabled() && overlap_size > 0) {
+        padded_spectrogram.reserve(spectrogram_host_buffer.size() +
+                                   overlap_size * feature_dim);
+        padded_spectrogram.assign(overlap_size * feature_dim, 0.0f);
+        padded_spectrogram.insert(padded_spectrogram.end(),
+                                  spectrogram_host_buffer.begin(),
+                                  spectrogram_host_buffer.end());
+        padded_mask.reserve(spectrogram_mask_host_buffer.size() + overlap_size);
+        padded_mask.assign(overlap_size, 0);
+        padded_mask.insert(padded_mask.end(),
+                           spectrogram_mask_host_buffer.begin(),
+                           spectrogram_mask_host_buffer.end());
+        spectrogram = &padded_spectrogram;
+        spectrogram_mask = &padded_mask;
+        total_frames += overlap_size;
+      } else {
+        first_chunk_unpadded = true;
+      }
       streaming_encoder->SetIsFirstChunk(false);
     }
   }
@@ -1172,7 +1209,7 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
   if (total_frames > window_size) {
     N = CeilIntDiv(total_frames - overlap_size, stride);
   }
-  int chunk_max_tokens = CeilIntDiv(stride, encoder_shrinking_factor_);
+  const int chunk_max_tokens = output_tokens_per_chunk_;
   int max_tokens = N * chunk_max_tokens;
 
   // Create the final audio embeddings tensor upfront.
@@ -1197,10 +1234,13 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
   int total_valid_tokens = 0;
   int pos = 0;
   // If flush is enabled, process all the frames, and prevent the last chunk
-  // containing only the overlapped information. If not flush, make sure each
+  // containing only the overlapped information (an unpadded first chunk at
+  // `pos == 0` has no leading overlap frames). If not flush, make sure each
   // chunk has a full window size.
   while (pos + window_size <= total_frames ||
-         (is_flush && pos + overlap_size < total_frames)) {
+         (is_flush &&
+          pos + (pos == 0 && first_chunk_unpadded ? 0 : overlap_size) <
+              total_frames)) {
     int chunk_len = std::min(window_size, total_frames - pos);
     auto spectrogram_slice =
         absl::MakeConstSpan(*spectrogram)
@@ -1208,14 +1248,10 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
     auto spectrogram_mask_slice =
         absl::MakeConstSpan(*spectrogram_mask).subspan(pos, chunk_len);
 
-    int current_chunk_len =
-        overlap_size > 0 ? (chunk_len - overlap_size) : chunk_len;
-    int current_chunk_max_tokens =
-        CeilIntDiv(current_chunk_len, encoder_shrinking_factor_);
     auto projected_audio_embeddings_slice = absl::MakeSpan(
         projected_audio_embeddings_locked.ptr +
             total_valid_tokens * projected_audio_embedding_dimensions_,
-        current_chunk_max_tokens * projected_audio_embedding_dimensions_);
+        chunk_max_tokens * projected_audio_embedding_dimensions_);
 
     // Only construct the slice if audio_embeddings_locked is present.
     absl::Span<float> audio_embeddings_slice;
@@ -1223,7 +1259,7 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
       audio_embeddings_slice = absl::MakeSpan(
           audio_embeddings_locked->ptr +
               total_valid_tokens * audio_embedding_dimensions_,
-          current_chunk_max_tokens * audio_embedding_dimensions_);
+          chunk_max_tokens * audio_embedding_dimensions_);
     }
 
     ABSL_ASSIGN_OR_RETURN(
@@ -1232,6 +1268,7 @@ AudioLiteRtCompiledModelExecutor::EncodeSpecsAndMasks(
                        projected_audio_embeddings_slice,
                        audio_embeddings_slice));
     total_valid_tokens += chunk_valid_tokens;
+    RET_CHECK_LE(total_valid_tokens, max_tokens);
     pos += stride;
   }
 

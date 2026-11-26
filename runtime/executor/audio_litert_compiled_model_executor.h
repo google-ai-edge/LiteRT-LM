@@ -81,8 +81,8 @@ class AudioStreamingContext : public AudioContext {
   // the convolution features and masks of the last timestamp.
   absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> state_buffers_;
   std::vector<float> buffered_spectrogram_;
-  // Whether the next encoded chunk starts the stream and needs the left
-  // context zero padding.
+  // Whether the next encoded chunk starts the stream (used to apply left
+  // context zero padding when front padding is enabled).
   bool is_first_chunk_ = true;
 };
 
@@ -277,6 +277,8 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
 
     TensorBuffer* GetMutableOutputMaskBuffer() { return output_mask_buffer_; }
 
+    void ClearOutputMaskBufferForTesting();
+
     const TensorBuffer& GetOutputFeaturesBuffer() const {
       return *output_features_buffer_;
     }
@@ -408,8 +410,8 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
     bool IsStreaming() const override { return true; }
 
     // Returns whether the next encoded chunk is the first chunk of the
-    // stream. The first chunk has no previous frames to use as the left
-    // context of the subsampling convolution, so it is zero padded.
+    // stream. When front padding is enabled, the first chunk is zero-padded
+    // with `overlap_size` frames of left context.
     //
     // args: none.
     // returns: true if no chunk has been encoded since the last reset.
@@ -505,13 +507,14 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
       std::unique_ptr<AudioAdapter> audio_adapter, int sequence_length,
       int spectrogram_feature_dimensions,
       int projected_audio_embedding_dimensions, int audio_embedding_dimensions,
-      int encoder_shrinking_factor)
+      int encoder_shrinking_factor, int output_tokens_per_chunk)
       : sequence_length_(sequence_length),
         spectrogram_feature_dimensions_(spectrogram_feature_dimensions),
         projected_audio_embedding_dimensions_(
             projected_audio_embedding_dimensions),
         audio_embedding_dimensions_(audio_embedding_dimensions),
         encoder_shrinking_factor_(encoder_shrinking_factor),
+        output_tokens_per_chunk_(output_tokens_per_chunk),
         executor_settings_(std::move(executor_settings)),
         executor_properties_(std::move(executor_properties)),
         env_(env),
@@ -592,6 +595,7 @@ class AudioLiteRtCompiledModelExecutor : public AudioExecutor {
   int projected_audio_embedding_dimensions_;
   int audio_embedding_dimensions_;
   int encoder_shrinking_factor_;
+  int output_tokens_per_chunk_;
   AudioExecutorSettings executor_settings_;
   AudioExecutorProperties executor_properties_;
   /// The LiteRT environment.

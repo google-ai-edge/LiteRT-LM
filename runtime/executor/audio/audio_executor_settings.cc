@@ -35,6 +35,8 @@ std::ostream& operator<<(std::ostream& os,
   os << "BundledWithMainModel: " << settings.GetBundledWithMainModel()
      << std::endl;
   os << "NumThreads(CPU only): " << settings.GetNumThreads() << std::endl;
+  os << "FrontPaddingEnabled: " << settings.GetFrontPaddingEnabled()
+     << std::endl;
   return os;
 }
 
@@ -91,6 +93,14 @@ bool AudioExecutorSettings::GetBundledWithMainModel() const {
 void AudioExecutorSettings::SetBundledWithMainModel(
     bool bundled_with_main_model) {
   bundled_with_main_model_ = bundled_with_main_model;
+}
+
+bool AudioExecutorSettings::GetFrontPaddingEnabled() const {
+  return front_padding_enabled_;
+}
+
+void AudioExecutorSettings::SetFrontPaddingEnabled(bool front_padding_enabled) {
+  front_padding_enabled_ = front_padding_enabled;
 }
 
 }  // namespace litert::lm
