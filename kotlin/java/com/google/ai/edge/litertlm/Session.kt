@@ -149,6 +149,35 @@ class Session(private val handle: Long) : AutoCloseable {
     return Session(LiteRtLmJni.nativeCloneSession(handle))
   }
 
+  /**
+   * Returns debug info for the session, or `null` if debugging is disabled or unsupported.
+   *
+   * @return The [SessionDebugInfo] for the session, or `null`.
+   * @throws IllegalStateException if the session is not alive.
+   */
+  @ExperimentalApi
+  fun getSessionDebugInfo(): SessionDebugInfo? {
+    checkIsAlive()
+    return LiteRtLmJni.nativeGetSessionDebugInfo(handle)?.let { SessionDebugInfo(it) }
+  }
+
+  /**
+   * Deletes all AI Edge Debugger captures of this session
+   * (`<cache_dir>/litert_lm_debugger/<session_id>/`) while keeping the session open for subsequent
+   * turns.
+   *
+   * Succeeds without doing anything when the debugger is not enabled for the session. Must not be
+   * called from inside a [ResponseCallback].
+   *
+   * @throws IllegalStateException if the session is not alive.
+   * @throws LiteRtLmJniException if the session has active tasks, or if deletion fails.
+   */
+  @ExperimentalApi
+  fun deleteDebugCaptures() {
+    checkIsAlive()
+    LiteRtLmJni.nativeDeleteSessionDebugCaptures(handle)
+  }
+
   /** Throws [IllegalStateException] if the session is not alive. */
   private fun checkIsAlive() {
     check(isAlive) { "Session is not alive." }
@@ -211,3 +240,11 @@ interface ResponseCallback {
    */
   fun onError(throwable: Throwable) {}
 }
+
+/**
+ * Debug info for a [Session] or [Conversation].
+ *
+ * @property captureDir Capture directory path relative to [EngineConfig.cacheDir] (for example,
+ *   `"litert_lm_debugger/0"`).
+ */
+@ExperimentalApi data class SessionDebugInfo(val captureDir: String)
