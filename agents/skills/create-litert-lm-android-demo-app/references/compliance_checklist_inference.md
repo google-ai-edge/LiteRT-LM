@@ -31,7 +31,7 @@ command outputs. Vague or descriptive summaries (e.g., "verified", "supported",
 | **Multi-modal API**                                          |        |          |
 | Initialize Fallback Try-Catch Block                          |        |          |
 | Multi-modal Executors (CPU Audio)                            |        |          |
-| Content Order (Text before Media)                            |        |          |
+| Content Order (Media before Text)                            |        |          |
 | Real Inference Used                                          |        |          |
 <!-- mdformat on -->
 
@@ -82,7 +82,8 @@ implementation details strictly:
     -   [ ] **Explicit Argument Check**: Verify that `sendMessageAsync` (or
         equivalent) actually includes the constructed list of `Content` objects
         (text + media), and is not just passing a single text string.
-    -   [ ] **Content Order Check**: Ensure that `Content.Text` is added to the
-        contents list **BEFORE** any media content to match model expectations.
+    -   [ ] **Content Order Check**: Ensure that all media content is added to
+        the contents list **BEFORE** the `Content.Text` prompt to match model
+        expectations.
 -   [ ] **Real Inference**: Verify that the app performs real inference using
     the LiteRT-LM engine and does not use mock responses.

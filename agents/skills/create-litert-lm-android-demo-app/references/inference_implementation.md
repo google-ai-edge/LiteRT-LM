@@ -31,6 +31,7 @@ outermost scope to innermost call:
 
 You MUST attempt engine configuration and start-up using this robust 3-stage
 cascading fallback pattern wrapped in try-catch blocks:
+
 1.  **Try Multi-modal on Selected Backend**: Create `EngineConfig` with
     `visionBackend` set matching the general `backend` (e.g., `Backend.GPU()` or
     `Backend.CPU()`) and `audioBackend` set strictly to `Backend.CPU()`. Call
@@ -89,8 +90,14 @@ cascading fallback pattern wrapped in try-catch blocks:
 *   **Explicit Content Passing**: For multi-modal input, you MUST ensure you
     pass a constructed list of `Content` objects (text + media) to
     `sendMessageAsync`, and not just a single text string.
-    *   **Content Order Check**: You MUST add `Content.Text` to the contents
-        list BEFORE any media content (like `Content.Image` or `Content.Audio`)
-        to match model expectations.
+    *   **Content Order Check**: You MUST add all media content (like
+        `Content.ImageFile`, `Content.ImageBytes`, or `Content.AudioBytes`) to
+        the contents list BEFORE the `Content.Text` prompt, matching the
+        official LiteRT-LM examples and the `litert-lm` CLI, which places
+        attachments before the user text prompt. Placing the text first does not
+        raise an error, but it can silently degrade output quality for some
+        models (e.g., visual grounding with LFM2.5-VL).
+        *   *Example*:
+            `Contents.of(Content.ImageFile(imagePath), Content.Text(prompt))`
 *   **Real Inference**: You MUST perform real inference using the LiteRT-LM
     engine. Do NOT use mock responses.
