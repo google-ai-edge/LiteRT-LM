@@ -149,6 +149,74 @@ class Session(private val handle: Long) : AutoCloseable {
     return Session(LiteRtLmJni.nativeCloneSession(handle))
   }
 
+  /**
+   * Scores candidate target texts against the current prefilled session context.
+   *
+   * Pass one target text (arbitrary token length), or several target texts that are each a single
+   * token. Scoring advances the session's KV cache; call [saveCheckpoint] before scoring and
+   * [rewindToCheckpoint] between multi-token candidates to share a common prefill.
+   *
+   * @param targetText Candidate continuation strings to score.
+   * @param storeTokenLengths Whether to populate [Responses.tokenLengths] with the token count of
+   *   each target text.
+   * @return [Responses] containing total log-likelihood [Responses.scores], optional
+   *   [Responses.tokenLengths], and per-token [Responses.tokenScores].
+   * @throws IllegalStateException if the session is not alive.
+   * @throws LiteRtLmJniException if the native scoring call fails.
+   */
+  @JvmOverloads
+  fun runTextScoring(targetText: List<String>, storeTokenLengths: Boolean = false): Responses {
+    checkIsAlive()
+    return LiteRtLmJni.nativeRunTextScoring(handle, targetText.toTypedArray(), storeTokenLengths)
+      .toResponses()
+  }
+
+  /**
+   * Saves the current session step under [label] so the session can later be rewound with
+   * [rewindToCheckpoint]. If [label] already exists, its step is overwritten.
+   *
+   * @throws IllegalStateException if the session is not alive.
+   * @throws LiteRtLmJniException if saving the checkpoint fails.
+   */
+  fun saveCheckpoint(label: String) {
+    checkIsAlive()
+    LiteRtLmJni.nativeSaveCheckpoint(handle, label)
+  }
+
+  /**
+   * Rewinds the session to a previously saved checkpoint [label]. Any checkpoints saved after the
+   * restored step are removed.
+   *
+   * @throws IllegalStateException if the session is not alive.
+   * @throws LiteRtLmJniException if [label] does not exist or rewinding fails.
+   */
+  fun rewindToCheckpoint(label: String) {
+    checkIsAlive()
+    LiteRtLmJni.nativeRewindToCheckpoint(handle, label)
+  }
+
+  /**
+   * Rewinds the session to a specific token [step].
+   *
+   * @throws IllegalStateException if the session is not alive.
+   * @throws LiteRtLmJniException if [step] is invalid or rewinding fails.
+   */
+  fun rewindToStep(step: Int) {
+    checkIsAlive()
+    LiteRtLmJni.nativeRewindToStep(handle, step)
+  }
+
+  /**
+   * Returns the current token step of the session.
+   *
+   * @throws IllegalStateException if the session is not alive.
+   * @throws LiteRtLmJniException if querying the current step fails.
+   */
+  fun getCurrentStep(): Int {
+    checkIsAlive()
+    return LiteRtLmJni.nativeGetCurrentStep(handle)
+  }
+
   /** Throws [IllegalStateException] if the session is not alive. */
   private fun checkIsAlive() {
     check(isAlive) { "Session is not alive." }
@@ -211,3 +279,22 @@ interface ResponseCallback {
    */
   fun onError(throwable: Throwable) {}
 }
+
+/**
+ * Container for model responses returned by [Session.runTextScoring] and
+ * [Conversation.runTextScoring].
+ *
+ * @property texts The target texts scored by the model, in the order of `targetText`.
+ * @property scores Total log-likelihood score for each target text, in the order of `targetText`.
+ * @property tokenLengths Number of tokens in each target text when `storeTokenLengths` is `true`,
+ *   or empty when `false`.
+ * @property tokenScores Per-token log-likelihood scores for each target text when available.
+ */
+data class Responses
+@JvmOverloads
+constructor(
+  val texts: List<String> = emptyList(),
+  val scores: List<Float> = emptyList(),
+  val tokenLengths: List<Int> = emptyList(),
+  val tokenScores: List<List<Float>> = emptyList(),
+)

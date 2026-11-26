@@ -176,6 +176,7 @@ internal object LiteRtLmJni {
     enableSpeculativeDecoding: Boolean?,
     speculativeDecodingMode: Int?,
     speculativeLenience: Float?,
+    applyPromptTemplate: Boolean? = null,
   ): Long
 
   /**
@@ -267,6 +268,44 @@ internal object LiteRtLmJni {
    * @param sessionPointer A pointer to the native session instance.
    */
   external fun nativeCancelProcess(sessionPointer: Long)
+
+  /**
+   * Primitive-array carrier populated by JNI for [Session.runTextScoring] and
+   * [Conversation.runTextScoring].
+   */
+  class RawResponses(
+    val texts: Array<String>,
+    val scores: FloatArray,
+    val tokenLengths: IntArray?,
+    val tokenScores: Array<FloatArray>?,
+  ) {
+    fun toResponses(): Responses =
+      Responses(
+        texts = texts.toList(),
+        scores = scores.toList(),
+        tokenLengths = tokenLengths?.toList() ?: emptyList(),
+        tokenScores = tokenScores?.map { it.toList() } ?: emptyList(),
+      )
+  }
+
+  /** Scores candidate target texts against the current session context. */
+  external fun nativeRunTextScoring(
+    sessionPointer: Long,
+    targetText: Array<String>,
+    storeTokenLengths: Boolean,
+  ): RawResponses
+
+  /** Saves a named checkpoint at the session's current step. */
+  external fun nativeSaveCheckpoint(sessionPointer: Long, label: String)
+
+  /** Rewinds the session to a named checkpoint. */
+  external fun nativeRewindToCheckpoint(sessionPointer: Long, label: String)
+
+  /** Rewinds the session to a specific step number. */
+  external fun nativeRewindToStep(sessionPointer: Long, step: Int)
+
+  /** Returns the current step of the session. */
+  external fun nativeGetCurrentStep(sessionPointer: Long): Int
 
   /**
    * Creates a new LiteRT-LM conversation.
@@ -433,6 +472,12 @@ internal object LiteRtLmJni {
    * @throws LiteRtLmJniException if the underlying native method fails.
    */
   external fun nativeConversationGetTokenCount(conversationPointer: Long): Int
+
+  /** Scores candidate target texts against the current conversation context without mutating it. */
+  external fun nativeConversationRunTextScoring(
+    conversationPointer: Long,
+    targetText: Array<String>,
+  ): RawResponses
 
   /**
    * Renders the message into a string for testing purposes.
