@@ -53,7 +53,6 @@ swift_library(
     name = "LiteRT_LM_Swift",
     srcs = LITERT_LM_SWIFT_SRCS,
     copts = ["-enable-testing"],
-    features = ["-swift.enable_v6"],
     module_name = "LiteRTLM",
     deps = [
 
@@ -77,7 +76,6 @@ swift_library(
     srcs = ["EngineTests.swift"],
     copts = ["-enable-testing"],
     data = ["//runtime/testdata"],
-    features = ["-swift.enable_v6"],
     deps = [
         ":LiteRT_LM_Swift",
 
@@ -91,7 +89,6 @@ swift_library(
     srcs = ["ConversationTests.swift"],
     copts = ["-enable-testing"],
     data = ["//runtime/testdata"],
-    features = ["-swift.enable_v6"],
     deps = [
         ":LiteRT_LM_Swift",
 
