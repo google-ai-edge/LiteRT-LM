@@ -3,7 +3,7 @@ anyio==4.13.0
 certifi==2026.10.23
 click==8.3.2
 filelock==3.28.0
-fsspec[http]==2026.2.0
+fsspec[http]==2026.6.0
 h11==0.16.0
 hf-xet==1.4.3
 httpcore==1.0.9
