@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -104,9 +105,8 @@ absl::StatusOr<nlohmann::json> ParseMessageJson(
 std::optional<litert::lm::DataProcessorArguments> GetDataProcessorArguments(
     const litert::lm::Conversation* conversation,
     const int visual_token_budget) {
-  const auto& llm_model_type =
-      conversation->GetConfig().GetSessionConfig().GetLlmModelType();
-  if (llm_model_type.has_gemma4()) {
+  if (std::holds_alternative<litert::lm::Gemma4DataProcessorConfig>(
+          conversation->GetConfig().GetProcessorConfig())) {
     return litert::lm::Gemma4DataProcessorArguments{.visual_token_budget =
                                                         visual_token_budget};
   }
