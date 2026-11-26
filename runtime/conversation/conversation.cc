@@ -87,13 +87,22 @@ absl::Status IgnoreEmptyInputError(const absl::Status& status) {
   return IsEmptyInputError(status) ? absl::OkStatus() : status;
 }
 
+// Returns whether `status` is the error with which `Tasks::Prefill()` refuses
+// an input that alone is longer than the context window.
+bool IsInputTooLongError(const absl::Status& status) {
+  return absl::IsInvalidArgument(status) &&
+         absl::StrContains(status.message(), "Input token ids are too long");
+}
+
 // Returns whether a prefill did not run because its input does not fit in the
-// context window. This is the case when the context window has no space left
-// for the input, or when it was already full: the prefill then inherits the
-// `kMaxNumTokensReached` end state of the decode that filled it.
+// context window. This is the case when the input is longer than the context
+// window, when the context window has no space left for the input, or when it
+// was already full: the prefill then inherits the `kMaxNumTokensReached` end
+// state of the decode that filled it.
 bool IsContextWindowFull(const absl::StatusOr<Responses>& responses) {
   if (!responses.ok()) {
-    return absl::IsResourceExhausted(responses.status());
+    return absl::IsResourceExhausted(responses.status()) ||
+           IsInputTooLongError(responses.status());
   }
   return responses->GetTaskState() == TaskState::kMaxNumTokensReached;
 }
@@ -885,6 +894,20 @@ absl::Status Conversation::SendMessageAsync(
     checkpoint_after_user_prefill_ = false;
   };
 
+  // Drops a refused prefill, which would otherwise stay the session's last
+  // task and fail every later task. Rewinding to the current step keeps the KV
+  // cache. Captures the session because `session_` may already be reset when
+  // this runs while the Conversation is being destroyed.
+  auto drop_refused_prefill = [session = session_.get()]() {
+    absl::StatusOr<int> step = session->GetCurrentStep();
+    absl::Status status =
+        step.ok() ? session->RewindToStep(*step) : step.status();
+    if (!status.ok()) {
+      ABSL_LOG(WARNING) << "Failed to rewind after a refused prefill: "
+                        << status;
+    }
+  };
+
   // If the prompt template itself opens a channel at the end of the user
   // prefill (e.g. `<think>\n`), save the checkpoint before prefilling the user
   // message so that the open channel start tag can also be stripped on rewind.
@@ -953,13 +976,16 @@ absl::Status Conversation::SendMessageAsync(
     ABSL_ASSIGN_OR_RETURN(
         auto task_controller,
         session_->RunPrefillAsync(
-            session_inputs,
-            [callback = std::move(user_callback), remove_turn_from_history](
-                absl::StatusOr<Responses> responses) mutable {
+            session_inputs, [callback = std::move(user_callback),
+                             remove_turn_from_history, drop_refused_prefill](
+                                absl::StatusOr<Responses> responses) mutable {
               if (IsContextWindowFull(responses)) {
                 // The input was not prefilled, so it is not part of the
                 // conversation.
                 remove_turn_from_history();
+                if (!responses.ok()) {
+                  drop_refused_prefill();
+                }
                 callback(ContextWindowFullError(responses));
                 return;
               }
@@ -1107,7 +1133,8 @@ absl::Status Conversation::SendMessageAsync(
           session_inputs,
           [this, callback = internal_callback, decode_config,
            open_channel_name = std::move(open_channel_name), task_group_id,
-           remove_turn_from_history = std::move(remove_turn_from_history)](
+           remove_turn_from_history = std::move(remove_turn_from_history),
+           drop_refused_prefill = std::move(drop_refused_prefill)](
               absl::StatusOr<Responses> responses) mutable {
             // First, check if prefill returned an error. Ignore errors
             // caused by empty input, as this is a valid case for triggering
@@ -1117,6 +1144,9 @@ absl::Status Conversation::SendMessageAsync(
               // The input was not prefilled, so it is not part of the
               // conversation.
               remove_turn_from_history();
+              if (!responses.ok()) {
+                drop_refused_prefill();
+              }
               (*callback)(ContextWindowFullError(responses));
             } else if (!status.ok()) {
               // Scenario 1: Prefill failed with an unexpected error.

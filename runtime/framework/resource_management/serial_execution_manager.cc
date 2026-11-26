@@ -857,6 +857,9 @@ absl::Status SerialExecutionManager::AddPrefillTask(
                        /*benchmark_info=*/session_info->benchmark_info,
                        session_info->random_state);
     if (!responses.ok()) {
+      // Release the executor first: the callback runs on this thread and may
+      // acquire it, e.g. to rewind the session.
+      llm_executor.value().reset();
       FinishTaskAndLogErrors(task_id, responses.status(), std::move(callback));
       return;
     }
