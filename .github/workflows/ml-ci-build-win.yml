@@ -244,7 +244,7 @@ jobs:
 
       - name: Upload bazel test logs
         if: always()
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bazel-test-logs-windows
           path: bazel-testlogs/**/test.log
