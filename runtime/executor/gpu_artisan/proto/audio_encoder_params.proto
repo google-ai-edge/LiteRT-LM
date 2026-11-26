@@ -1,0 +1,115 @@
+// Copyright 2024 The ODML Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package odml.infra.proto;
+
+import "runtime/executor/gpu_artisan/proto/transformer_params.proto";
+
+option java_package = "com.google.odml.infra.proto";
+option java_outer_classname = "AudioEncoderParametersProto";
+
+// Parameters used for creating audio encoder for Large Language Models (LLM).
+message AudioEncoderParameters {
+  // Translates to ml_drift::HW in third_party/ml_drift/common/shape.h.
+  message HW {
+    int32 h = 1;
+    int32 w = 2;
+  }
+
+  enum SubSamplePaddingType {
+    UNSPECIFIED = 0;
+    CAUSAL = 1;
+    REVERSE_CAUSAL = 2;
+    SAME = 3;
+  }
+
+  message HWPadding {
+    SubSamplePaddingType h = 1;
+    SubSamplePaddingType w = 2;
+  }
+
+  message ConvParams {
+    int32 channel_size = 1;
+    HW kernel_size = 2;
+    HW stride = 3;
+    HWPadding padding = 4;
+    bool bias = 5;
+  }
+
+  message SubSampleConvProjectionParameters {
+    int32 input_dims = 1;
+    int32 model_dims = 2;
+    repeated ConvParams convs = 3;
+    bool is_causal = 4;
+    bool proj_bias = 5;
+    bool norm_bias = 6;
+    int32 shrink_factor = 7;
+    int32 take_every_n = 8;
+  }
+
+  // Subsample conv projection parameters for the audio encoder.
+  SubSampleConvProjectionParameters sub_sample_conv_projection_parameters = 1;
+
+  message MLPAdapterParameters {
+    int32 num_layers = 1;
+    int32 output_dim = 2;
+    bool initial_layer_norm = 3;
+  }
+
+  // MLP adapter parameters for the audio encoder.
+  MLPAdapterParameters mlp_adapter_parameters = 2;
+
+  // Transoformer parameters for the audio encoder.
+  TransformerParameters transformer_parameters = 3;
+
+  // Whether to pad zero frame to audio matrix.
+  bool pad_zero_frame_to_audio = 4;
+
+  // Vocabulary size of the audio encoder.
+  // This is the same as the vocabulary size of the TransformerConfig of the
+  // audio encoder, and should be used to update that information when
+  // converting parameters to config. Temporary solution.
+  // TODO: b/349164917 - Decide whether to move vocab_size from LlmParameters to
+  // TransformerParameters.
+  int32 vocab_size = 5;
+
+  message ProjectionParameters {
+    // The output dimension of the projection.
+    int32 output_dim = 1;
+
+    // Whether bias is used is automatically determined by the presence of bias
+    // weights in the model.
+  }
+
+  // Optional projection parameters for the projection layer at the end of the
+  // USM encoder.
+  //
+  // This is typically used for smaller USM encoders (e.g., < 700M parameters)
+  // and is applied before `projection_parameters`.
+  ProjectionParameters usm_projection_parameters = 7;
+
+  // Projection parameters for the projection layer at the beginning of the text
+  // decoder.
+  //
+  // In the original trained model, this projection is part of the text decoder.
+  // These parameters are moved to the audio encoder to support cases where the
+  // text decoder (e.g., a LiteRT converted decoder) expects pre-projected audio
+  // embeddings.
+  //
+  // For some models like Gemini v3, this projection is used instead of the MLP
+  // adapter.
+  ProjectionParameters projection_parameters = 6;
+}
