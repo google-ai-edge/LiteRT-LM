@@ -273,30 +273,9 @@ cc_test(
     ],
 )
 
-cc_binary(
-    name = "litert_lm_main",
+cc_library(
+    name = "litert_lm_main_lib",
     srcs = ["litert_lm_main.cc"],
-    additional_linker_inputs = select({
-        "@platforms//os:windows": [
-            "@litert//litert/c:windows_exported_symbols.def",
-        ],
-        "@platforms//os:linux": [":litert_lm_main.exported_symbols"],
-        "//conditions:default": [],
-    }),
-    linkopts = select({
-        "@litert//litert:litert_runtime_link_mode_dynamic": [],
-        # Export LiteRt* symbols for LiteRt accelerator shlibs.
-        "@platforms//os:ios": ["-Wl,-exported_symbol,_LiteRt*"],
-        "@platforms//os:macos": ["-Wl,-exported_symbol,_LiteRt*"],
-        "@platforms//os:windows": [
-            "/DEF:$(location @litert//litert/c:windows_exported_symbols.def)",
-        ],
-        "@platforms//os:linux": ["-Wl,--dynamic-list=$(location :litert_lm_main.exported_symbols)"],
-        "//conditions:default": ["-Wl,--export-dynamic-symbol=LiteRt*"],
-    }) + select({
-        "@platforms//os:android": ["-lEGL", "-lGLESv3"],
-        "//conditions:default": [],
-    }),
     deps = [
         ":engine_factory",
         ":engine_impl_selected",
@@ -324,6 +303,35 @@ cc_binary(
         "//runtime/executor:executor_settings_base",
         "//runtime/executor:llm_executor_settings",
         "//runtime/util:litert_status_util",
+    ],
+    alwayslink = 1,
+)
+
+cc_binary(
+    name = "litert_lm_main",
+    additional_linker_inputs = select({
+        "@platforms//os:windows": [
+            "@litert//litert/c:windows_exported_symbols.def",
+        ],
+        "@platforms//os:linux": [":litert_lm_main.exported_symbols"],
+        "//conditions:default": [],
+    }),
+    linkopts = select({
+        "@litert//litert:litert_runtime_link_mode_dynamic": [],
+        # Export LiteRt* symbols for LiteRt accelerator shlibs.
+        "@platforms//os:ios": ["-Wl,-exported_symbol,_LiteRt*"],
+        "@platforms//os:macos": ["-Wl,-exported_symbol,_LiteRt*"],
+        "@platforms//os:windows": [
+            "/DEF:$(location @litert//litert/c:windows_exported_symbols.def)",
+        ],
+        "@platforms//os:linux": ["-Wl,--dynamic-list=$(location :litert_lm_main.exported_symbols)"],
+        "//conditions:default": ["-Wl,--export-dynamic-symbol=LiteRt*"],
+    }) + select({
+        "@platforms//os:android": ["-lEGL", "-lGLESv3"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":litert_lm_main_lib",
     ] + select({
         "//conditions:default": [],
     }) + select({
