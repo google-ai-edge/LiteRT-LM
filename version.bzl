@@ -21,6 +21,9 @@ VERSION = "0.21.0"
 # The LiteRT Maven version that litertlm-android depends on.
 LITERT_VERSION = "2.4.0"
 
+# The LiteRT Maven version that litertlm-android depends on.
+LITERT_VERSION = "2.3.0"
+
 # C API Compatibility version.
 # Keep LITERT_LM_C_API_VERSION_* in c/engine.h in sync; engine_test checks this.
 C_API_VERSION = "1.1.0"
