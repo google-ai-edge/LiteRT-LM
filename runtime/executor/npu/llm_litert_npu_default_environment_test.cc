@@ -19,7 +19,8 @@
 // may create it first.
 //
 // The `SaveContext` / `RestoreContext` tests also check the executor's rollback
-// logic with a synthetic model whose second layer has a ring buffer KV cache.
+// logic with a synthetic model whose second layer has a ring buffer KV cache
+// and whose third layer has a conv state.
 
 #include <cstddef>
 #include <cstdint>
@@ -103,10 +104,12 @@ struct SyntheticSigSpec {
   absl::string_view key;
   std::vector<TensorSpec> inputs;
   std::vector<TensorSpec> outputs;
+  float output_value = 0.0f;
 };
 
 // Builds a minimal CPU-executable TFLite flatbuffer where each signature output
-// is computed as ABS(zero_constant) of its declared shape.
+// is computed as ABS(constant) of its declared shape, with every element of the
+// constant set to the signature's `output_value`.
 std::vector<uint8_t> BuildSyntheticModelBuffer(
     absl::Span<const SyntheticSigSpec> specs) {
   flatbuffers::FlatBufferBuilder builder;
@@ -138,16 +141,19 @@ std::vector<uint8_t> BuildSyntheticModelBuffer(
       tensors.push_back(make_tensor(in, /*buf_idx=*/0));
     }
     for (const TensorSpec& out : specs[s].outputs) {
-      size_t bytes = sizeof(float);
-      for (int32_t d : out.dims) bytes *= d;
+      size_t num_elements = 1;
+      for (int32_t d : out.dims) num_elements *= d;
+      const std::vector<float> values(num_elements, specs[s].output_value);
       buffers.push_back(tflite::CreateBuffer(
-          builder, builder.CreateVector(std::vector<uint8_t>(bytes, 0))));
-      const int32_t zero_idx = tensors.size();
-      tensors.push_back(make_tensor(out, buffers.size() - 1, "_zero"));
+          builder,
+          builder.CreateVector(reinterpret_cast<const uint8_t*>(values.data()),
+                               values.size() * sizeof(float))));
+      const int32_t constant_idx = tensors.size();
+      tensors.push_back(make_tensor(out, buffers.size() - 1, "_constant"));
       const int32_t out_idx = tensors.size();
       tensors.push_back(make_tensor(out, /*buf_idx=*/0));
       ops.push_back(tflite::CreateOperator(builder, /*opcode_index=*/0,
-                                           builder.CreateVector({zero_idx}),
+                                           builder.CreateVector({constant_idx}),
                                            builder.CreateVector({out_idx})));
       sg_out.push_back(out_idx);
       out_maps.push_back(make_map(out.name, out_idx));
@@ -438,9 +444,17 @@ TEST_F(LlmLiteRtNpuDefaultEnvironmentTest,
 // Ring buffer model: layer 0 has a global KV cache of `kRingModelContextLen`
 // entries, layer 1 a ring buffer of `kRingLen` entries, which the NPU executor
 // detects from the shorter KV cache. `kRingLen` differs from `kDim`, so that
-// the sequence axis of the KV cache buffers is unambiguous.
+// the sequence axis of the KV cache buffers is unambiguous. Layer 2 is a
+// convolution layer with a recurrent state. Prefill outputs ones and decode
+// twos, so that the buffers show whether a prefill or a decode wrote them.
 constexpr int kRingModelContextLen = 16;
 constexpr int kRingLen = 8;
+
+// The conv state is as long as the global KV cache, so that the layout does not
+// take it for a ring buffer.
+TensorSpec ConvStateSpec(absl::string_view name) {
+  return TensorSpec{name, {1, 2, kRingModelContextLen}};
+}
 
 SyntheticSigSpec RingCacheUpdateSpec(absl::string_view key, int seq_len) {
   return SyntheticSigSpec{key,
@@ -449,14 +463,17 @@ SyntheticSigSpec RingCacheUpdateSpec(absl::string_view key, int seq_len) {
                            {"kv_cache_v_0", {1, 1, kDim, kRingModelContextLen}},
                            {"kv_cache_k_1", {1, 1, kRingLen, kDim}},
                            {"kv_cache_v_1", {1, 1, kDim, kRingLen}},
+                           ConvStateSpec("kv_cache_c_2"),
                            {"kv_slice_k_0", {1, 1, seq_len, kDim}},
                            {"kv_slice_v_0", {1, 1, kDim, seq_len}},
                            {"kv_slice_k_1", {1, 1, seq_len, kDim}},
-                           {"kv_slice_v_1", {1, 1, kDim, seq_len}}},
+                           {"kv_slice_v_1", {1, 1, kDim, seq_len}},
+                           ConvStateSpec("kv_slice_c_2")},
                           {{"kv_cache_k_0", {1, 1, kRingModelContextLen, kDim}},
                            {"kv_cache_v_0", {1, 1, kDim, kRingModelContextLen}},
                            {"kv_cache_k_1", {1, 1, kRingLen, kDim}},
-                           {"kv_cache_v_1", {1, 1, kDim, kRingLen}}}};
+                           {"kv_cache_v_1", {1, 1, kDim, kRingLen}},
+                           ConvStateSpec("kv_cache_c_2")}};
 }
 
 std::unique_ptr<SyntheticNpuModelResources> MakeSyntheticRingBufferNpuModel(
@@ -470,23 +487,26 @@ std::unique_ptr<SyntheticNpuModelResources> MakeSyntheticRingBufferNpuModel(
         {"kv_cache_v_0", {1, 1, kDim, kRingModelContextLen}},
         {"kv_cache_k_1", {1, 1, kRingLen, kDim}},
         {"kv_cache_v_1", {1, 1, kDim, kRingLen}},
+        ConvStateSpec("kv_cache_c_2"),
         {"embeddings", {1, seq_len, kDim}}};
   };
   auto decoder_outputs = [&](int seq_len) {
     return std::vector<TensorSpec>{{"kv_slice_k_0", {1, 1, seq_len, kDim}},
                                    {"kv_slice_v_0", {1, 1, kDim, seq_len}},
                                    {"kv_slice_k_1", {1, 1, seq_len, kDim}},
-                                   {"kv_slice_v_1", {1, 1, kDim, seq_len}}};
+                                   {"kv_slice_v_1", {1, 1, kDim, seq_len}},
+                                   ConvStateSpec("kv_slice_c_2")};
   };
   std::vector<TensorSpec> decode_outputs = decoder_outputs(1);
   decode_outputs.push_back({"logits", {1, 1, kVocabSize}});
 
   auto resources =
       std::make_unique<SyntheticNpuModelResources>(kRingModelContextLen);
-  resources->AddModel(
-      env, proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
-      {{"prefill_4", decoder_inputs(kPrefillLen), decoder_outputs(kPrefillLen)},
-       {"decode", decoder_inputs(1), decode_outputs}});
+  resources->AddModel(env, proto::LlmMetadata::TF_LITE_PREFILL_DECODE,
+                      {{"prefill_4", decoder_inputs(kPrefillLen),
+                        decoder_outputs(kPrefillLen), /*output_value=*/1.0f},
+                       {"decode", decoder_inputs(1), decode_outputs,
+                        /*output_value=*/2.0f}});
   resources->AddModel(
       env, proto::LlmMetadata::TF_LITE_AUX,
       {{"prefill_mask_4",
@@ -534,6 +554,30 @@ absl::Status PrefillIds(LlmLiteRtNpuCompiledModelExecutor& executor,
                                          std::nullopt, std::nullopt));
 }
 
+// Reads the ring buffer and the conv state of the ring buffer model from a
+// clone of the executor's context.
+absl::StatusOr<absl::flat_hash_map<std::string, std::vector<float>>>
+ReadRingBufferAndConvState(const LlmLiteRtNpuCompiledModelExecutor& executor) {
+  LITERT_ASSIGN_OR_RETURN(std::unique_ptr<LlmContext> context,
+                          executor.CloneContext());
+  auto* state = dynamic_cast<LegacyMapState*>(
+      static_cast<LlmProcessedContext&>(context->processed_context())
+          .state()
+          .get());
+  if (state == nullptr) {
+    return absl::InternalError("Expected a LegacyMapState.");
+  }
+  absl::flat_hash_map<std::string, std::vector<float>> contents;
+  for (const char* name : {"kv_cache_k_1", "kv_cache_v_1", "kv_cache_c_2"}) {
+    TensorBuffer& buffer = state->buffers().at(name);
+    LITERT_ASSIGN_OR_RETURN(size_t size, buffer.PackedSize());
+    std::vector<float> values(size / sizeof(float));
+    LITERT_RETURN_IF_ERROR(buffer.Read<float>(absl::MakeSpan(values)));
+    contents.insert_or_assign(name, std::move(values));
+  }
+  return contents;
+}
+
 class LlmLiteRtNpuSaveContextTest : public LlmLiteRtNpuDefaultEnvironmentTest {
  protected:
   // Creates an executor for the ring buffer model, which needs the HW KV cache
@@ -569,15 +613,17 @@ TEST_F(LlmLiteRtNpuSaveContextTest, RollbackAfterWrapAroundRequiresRestore) {
   ASSERT_OK_AND_ASSIGN(const int saved_step, executor->GetCurrentStep());
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<ProcessedContext> saved,
                        executor->SaveContext());
-  // The ring buffer (layer 1) is saved, the global KV cache (layer 0) is not.
+  // The ring buffer (layer 1) and the conv state (layer 2) are saved, the
+  // global KV cache (layer 0) is not.
   auto* saved_context = dynamic_cast<LlmProcessedContext*>(saved.get());
   ASSERT_NE(saved_context, nullptr);
   auto* saved_state =
       dynamic_cast<LegacyMapState*>(saved_context->state().get());
   ASSERT_NE(saved_state, nullptr);
-  EXPECT_EQ(saved_state->buffers().size(), 2);
+  EXPECT_EQ(saved_state->buffers().size(), 3);
   EXPECT_TRUE(saved_state->Contains("kv_cache_k_1"));
   EXPECT_TRUE(saved_state->Contains("kv_cache_v_1"));
+  EXPECT_TRUE(saved_state->Contains("kv_cache_c_2"));
   EXPECT_EQ(saved_context->processed_tokens().TokenCount(), saved_step);
 
   // Wraps the ring buffer around.
@@ -600,6 +646,37 @@ TEST_F(LlmLiteRtNpuSaveContextTest, RollbackAfterWrapAroundRequiresRestore) {
   EXPECT_EQ(restored_step, saved_step);
   ASSERT_OK(PrefillIds(*executor, *env_, {4, 5}));
   ASSERT_OK(executor->CloneContext().status());
+}
+
+// The decodes after `SaveContext` overwrite the ring buffer past a wrap-around
+// and the conv state; `RestoreContext` brings back the saved contents of both.
+TEST_F(LlmLiteRtNpuSaveContextTest,
+       RestoreContextRestoresRingBufferAndConvState) {
+  ASSERT_OK_AND_ASSIGN(auto executor, CreateRingBufferExecutor());
+  ASSERT_OK(PrefillIds(*executor, *env_, {1, 2, 3}));
+  ASSERT_OK_AND_ASSIGN(const int saved_step, executor->GetCurrentStep());
+  ASSERT_OK_AND_ASSIGN(auto saved_contents,
+                       ReadRingBufferAndConvState(*executor));
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ProcessedContext> saved,
+                       executor->SaveContext());
+
+  // Decodes positions 2 to 8; position 8 takes the ring buffer slot of 0.
+  for (int i = 0; i < 7; ++i) {
+    ASSERT_OK(executor->Decode());
+  }
+  ASSERT_OK_AND_ASSIGN(auto decoded_contents,
+                       ReadRingBufferAndConvState(*executor));
+  for (const auto& [name, values] : saved_contents) {
+    ASSERT_NE(decoded_contents.at(name), values) << name;
+  }
+
+  ASSERT_OK(executor->SetCurrentStep(saved_step));
+  ASSERT_OK(executor->RestoreContext(std::move(saved)));
+  ASSERT_OK_AND_ASSIGN(auto restored_contents,
+                       ReadRingBufferAndConvState(*executor));
+  for (const auto& [name, values] : saved_contents) {
+    EXPECT_EQ(restored_contents.at(name), values) << name;
+  }
 }
 
 // A one-token rollback (e.g. dropping a stop token) and rolling back before the

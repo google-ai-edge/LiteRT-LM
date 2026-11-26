@@ -234,11 +234,12 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   absl::Status RestoreContext(
       std::unique_ptr<LlmContext> context_data) override;
 
-  // Saves the ring buffer KV cache of the sliding window layers (see
-  // npu/llm_litert_npu_ring_buffer_state.h) and the processed tokens in an
-  // `LlmProcessedContext`, like `LlmLiteRtCompiledModelExecutorBase`, so that
-  // rolling back more than one token after the ring buffer has wrapped around
-  // can be undone with `RestoreContext(ProcessedContext)`.
+  // Saves the ring buffer KV cache of the sliding window layers, the recurrent
+  // state of hybrid models (see npu/llm_litert_npu_ring_buffer_state.h) and the
+  // processed tokens in an `LlmProcessedContext`, like
+  // `LlmLiteRtCompiledModelExecutorBase`, so that rolling back more than one
+  // token after the ring buffer has wrapped around, or in a model with a
+  // recurrent state, can be undone with `RestoreContext(ProcessedContext)`.
   //
   // Used by Conversation with rewinding disabled
   // (`ConversationConfig::enable_rewinding()`), the default for the NPU
@@ -247,15 +248,16 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
   // rolls back the step with `SetCurrentStep`, which is enough as long as the
   // later steps did not overwrite the state of the earlier ones. With rewinding
   // disabled, `Session::SaveContext` / `RestoreContext` also save and restore
-  // the state that later steps overwrite (here the ring buffers):
+  // the state that later steps overwrite (here the ring buffers and the
+  // recurrent state):
   // `SessionAdvanced::RestoreContext` calls `SetCurrentStep` and then
   // `RestoreContext(ProcessedContext)`.
   absl::StatusOr<std::unique_ptr<ProcessedContext>> SaveContext()
       const override;
 
   // Restores a context saved by `SaveContext()`: the ring buffers, the
-  // processed tokens and the step after them. Changes no state if the saved
-  // ring buffers don't match the active context group's.
+  // recurrent state, the processed tokens and the step after them. Changes no
+  // state if the saved buffers don't match the active context group's.
   absl::Status RestoreContext(
       std::unique_ptr<ProcessedContext> processed_context) override;
 

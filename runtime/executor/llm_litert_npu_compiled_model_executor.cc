@@ -2730,8 +2730,8 @@ absl::StatusOr<std::unique_ptr<ProcessedContext>>
 LlmLiteRtNpuCompiledModelExecutor::SaveContext() const {
   // Like `LlmLiteRtCompiledModelExecutorBase::SaveContext`: only the state that
   // later steps overwrite before they are rolled back is saved, here the ring
-  // buffer KV cache of the sliding window layers (none for models without a
-  // ring buffer).
+  // buffer KV cache of the sliding window layers and the recurrent state (none
+  // for models without either).
   ABSL_RETURN_IF_ERROR(CheckRingBufferRestored());
   // `processed_tokens_` is rolled back lazily (by the next prefill or decode),
   // so roll back the saved copy like they would, e.g. after `SetCurrentStep`.
