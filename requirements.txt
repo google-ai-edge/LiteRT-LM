@@ -24,7 +24,7 @@ rich==15.0.0
 shellingham==1.5.4
 tqdm==4.67.3
 typer==0.24.1
-typing-extensions==4.15.0
+typing-extensions==4.16.0
 wcwidth==0.6.0
 # Below are dependencies of lm-eval
 absl-py==2.4.0
