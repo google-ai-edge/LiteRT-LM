@@ -58,6 +58,7 @@ jobs:
       # don't have permission for androidndk rules to create symlinks.
       ANDROID_NDK_HOME:
       ANDROID_NDK_ROOT:
+      BAZEL_SH: C:\Program Files\Git\bin\bash.exe
       GH_TOKEN: ${{ github.token }}  # For gh release upload.
     steps:
       - name: Install System Dependencies
@@ -207,6 +208,7 @@ jobs:
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
             build --config=github_actions_bazel_cache `
+            --config=windows_x86_64 `
             --deleted_packages=swift `
             --build_tag_filters='-nowindows' `
             --action_env=TMP="$env:TMP" `
@@ -226,6 +228,7 @@ jobs:
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
             test --config=github_actions_bazel_cache --test_output=errors `
+            --config=windows_x86_64 `
             --deleted_packages=swift `
             --test_timeout=300,1500,5400,18000 `
             --test_tag_filters='-nowindows' `
@@ -253,6 +256,7 @@ jobs:
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
             build --config=github_actions_bazel_cache `
+            --config=windows_x86_64 `
             --action_env=TMP="$env:TMP" `
             --action_env=TEMP="$env:TEMP" `
             --define=litert_runtime_link_mode=dynamic `
@@ -266,6 +270,7 @@ jobs:
         run: |
           bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
             test --config=github_actions_bazel_cache --test_output=errors `
+            --config=windows_x86_64 `
             --define=litert_runtime_link_mode=dynamic `
             --test_tag_filters='-nowindows' `
             --action_env=TMP="$env:TMP" `
@@ -279,3 +284,181 @@ jobs:
           & $env:PYTHON_EXE -m pytest tools/pytest/ -v `
             --backend=cpu --dynamic `
             --model-path="$env:MODEL_PATH/$env:MODEL_KEY" --build-system=bazel
+
+  # Cross-compiles LiteRT-LM for Windows ARM64 (e.g. Snapdragon X series) on
+  # the x86_64 runner. Resulting binaries cannot run here, so this job verifies
+  # their PE machine type (0xAA64) and uploads them as artifacts.
+  presubmit-arm64:
+    needs: gate
+    if: needs.gate.outputs.should_skip != 'true'
+    # This check is required by name, so keep the name unique across workflows.
+    name: "Presubmit-Bazel-Windows-ARM64"
+    runs-on: windows-x86-n2-16
+    timeout-minutes: 180
+    permissions:
+      id-token: write  # Required to get the OIDC token for WIF (Bazel remote cache).
+      contents: write  # For gh release upload.
+    env:
+      # Clear ANDROID_NDK_HOME and its fallback ANDROID_NDK_ROOT as Windows_x64 has NDK where jobs
+      # don't have permission for androidndk rules to create symlinks.
+      ANDROID_NDK_HOME:
+      ANDROID_NDK_ROOT:
+      BAZEL_SH: C:\Program Files\Git\bin\bash.exe
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          lfs: true
+          persist-credentials: false
+
+      - name: Set up Bazelisk
+        uses: bazelbuild/setup-bazelisk@b39c379c82683a5f25d34f0d062761f62693e0b2 # v3.0.0
+
+      - name: Set up JDK
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Windows ARM64 toolchain and Bazel environment
+        env:
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Git\cmd"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Git\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Git\mingw64\bin"
+
+          $bazel = (Get-Command bazel -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+          if ($bazel -and $bazel -notmatch '\.exe$' -and -not (Test-Path "$bazel.exe")) {
+            Copy-Item -Path $bazel -Destination "$bazel.exe" -Force
+          }
+
+          $vsPath = if ($env:BAZEL_VS -and (Test-Path $env:BAZEL_VS)) {
+            (Get-Item $env:BAZEL_VS).FullName
+          } elseif ($env:BAZEL_VC -and (Test-Path $env:BAZEL_VC)) {
+            Split-Path -Parent (Get-Item $env:BAZEL_VC).FullName
+          } else {
+            (Get-ChildItem -Path "C:\Program Files*\Microsoft Visual Studio\*\*" -Directory -ErrorAction SilentlyContinue |
+              Where-Object { Test-Path (Join-Path $_.FullName "VC\Tools\MSVC") } |
+              Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          }
+          if (-not $vsPath) { throw "Visual Studio installation not found." }
+          $vcRoot = Join-Path $vsPath "VC"
+          if (-not (Get-ChildItem -Path "$vcRoot\Tools\MSVC\*\bin\Hostx64\arm64\cl.exe" -ErrorAction SilentlyContinue)) {
+            $setupExe = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe"
+            if (-not (Test-Path $setupExe)) { throw "Visual Studio Installer not found at $setupExe" }
+            $proc = Start-Process -FilePath $setupExe -ArgumentList @(
+              "modify", "--installPath", "`"$vsPath`"",
+              "--add", "Microsoft.VisualStudio.Component.VC.Tools.ARM64",
+              "--quiet", "--wait", "--norestart", "--nocache"
+            ) -Wait -PassThru
+            if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+              throw "Visual Studio Installer failed with exit code $($proc.ExitCode)"
+            }
+            if (-not (Get-ChildItem -Path "$vcRoot\Tools\MSVC\*\bin\Hostx64\arm64\cl.exe" -ErrorAction SilentlyContinue)) {
+              throw "MSVC ARM64 build tools still not found under $vcRoot after installation."
+            }
+          }
+
+          # Patch both x64 (exec) and arm64 (target) MSVC linkers for long paths.
+          $manifestPath = "C:\TMP\longpath.manifest"
+          New-Item -ItemType Directory -Path "C:\TMP" -Force | Out-Null
+          Set-Content -Path $manifestPath -Encoding UTF8 -Value @"
+          <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+            <application xmlns="urn:schemas-microsoft-com:asm.v3">
+              <windowsSettings>
+                <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+              </windowsSettings>
+            </application>
+          </assembly>
+          "@
+          $mtExe = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\mt.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $mtExe) { throw "Could not locate Windows SDK mt.exe" }
+          foreach ($targetArch in @("x64", "arm64")) {
+            $linkPath = (Get-ChildItem -Path "$vcRoot\Tools\MSVC\*\bin\HostX64\$targetArch\link.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+            if (-not $linkPath) { throw "Could not locate MSVC $targetArch link.exe under $vcRoot" }
+            & $mtExe -nologo -manifest $manifestPath -outputresource:"$linkPath`;1"
+            if ($LASTEXITCODE -ne 0) { throw "mt.exe failed to patch $linkPath." }
+          }
+
+          $newTemp = "C:\_w\_tmp"
+          $bigDrivePath = "C:\_w\_b"
+          New-Item -ItemType Directory -Path $newTemp, $bigDrivePath -Force | Out-Null
+          subst B: $bigDrivePath
+          $shortSha = $env:HEAD_SHA.SubString(0, 8)
+          foreach ($entry in @(
+            "BAZEL_VC=$vcRoot",
+            "TMP=$newTemp",
+            "TEMP=$newTemp",
+            "BAZEL_OUTPUT_BASE=B:\a64-$shortSha"
+          )) {
+            Add-Content -Path $env:GITHUB_ENV -Value $entry -Encoding utf8
+          }
+
+      - name: Run bazel build on Windows ARM64
+        run: |
+          bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
+            build --config=github_actions_bazel_cache `
+            --config=windows_arm64 `
+            --deleted_packages=swift `
+            --build_tag_filters='-nowindows' `
+            --action_env=TMP="$env:TMP" `
+            --action_env=TEMP="$env:TEMP" `
+            -- `
+            //runtime/engine:litert_lm_main
+
+      # The C API shared library (litert-lm.dll) is not built by the step above.
+      # Its Bazel build with MSVC is not required to pass yet, as with the
+      # //c/... tests of the x86_64 Windows job, so a failure here is reported
+      # without failing the job.
+      - name: Run bazel build of the C API shared library on Windows ARM64
+        continue-on-error: true
+        run: |
+          bazel --output_base="$env:BAZEL_OUTPUT_BASE" `
+            build --config=github_actions_bazel_cache `
+            --config=windows_arm64 `
+            --deleted_packages=swift `
+            --build_tag_filters='-nowindows' `
+            --action_env=TMP="$env:TMP" `
+            --action_env=TEMP="$env:TEMP" `
+            -- `
+            //c:litert-lm
+
+      - name: Stage and verify Windows ARM64 binaries
+        run: |
+          $out = "dist\windows_arm64"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+
+          Copy-Item -Path "bazel-bin\runtime\engine\litert_lm_main.exe" -Destination "$out\litert_lm_main.windows_arm64.exe" -Force
+          Get-ChildItem -Path "bazel-bin\runtime\engine\*.dll" -ErrorAction SilentlyContinue | Copy-Item -Destination $out -Force
+          if (Test-Path "bazel-bin\c\litert-lm.dll") {
+            Copy-Item -Path "bazel-bin\c\litert-lm.dll" -Destination $out -Force
+          }
+
+          # ARM64 binaries cannot run on this x86_64 runner; verify PE machine type (0xAA64).
+          $binaries = Get-ChildItem -Path "$out\*" -File -Include *.exe, *.dll
+          if (-not $binaries) { throw "No staged Windows ARM64 binaries found in $out" }
+          foreach ($bin in $binaries) {
+            $bytes = [System.IO.File]::ReadAllBytes($bin.FullName)
+            $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+            $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne 0xAA64) {
+              throw "$($bin.Name): expected ARM64 PE (0xAA64), got 0x$($machine.ToString('X4'))"
+            }
+            Write-Host "Verified ARM64 PE (0xAA64): $($bin.Name)"
+          }
+
+      - name: Upload Windows ARM64 binaries
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+        with:
+          name: litert-lm-windows-arm64
+          path: dist/windows_arm64/
+          if-no-files-found: error
+
+      - name: Update litert_lm_main prebuilt for Windows ARM64 if new version tag is pushed
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}  # For gh release upload.
+        run: |
+          gh release upload $env:GITHUB_REF_NAME dist\windows_arm64\litert_lm_main.windows_arm64.exe --clobber
