@@ -585,6 +585,7 @@ cc_test(
         "//schema/core:litertlm_header_schema",
         "//sync:test_utils",
     ],
+    alwayslink = True,
 )
 
 cc_test(
