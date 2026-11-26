@@ -82,6 +82,8 @@ class Gemma3DataProcessor
   // Returns the end of tool call blocks.
   absl::string_view CodeFenceEnd() const override;
 
+  MultimodalTokenRegexes GetMultimodalTokenRegexes() const override;
+
   bool PushDummyUserMessageToPreface() const override { return true; }
 
  private:

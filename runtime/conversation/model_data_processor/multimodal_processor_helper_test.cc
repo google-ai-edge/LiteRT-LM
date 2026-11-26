@@ -26,6 +26,8 @@
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/status/status_matchers.h"  // from @com_google_absl
 #include "absl/strings/escaping.h"  // from @com_google_absl
+#include "absl/strings/str_cat.h"  // from @com_google_absl
+#include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json.hpp"  // from @nlohmann_json
 #include "litert/cc/litert_layout.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -766,6 +768,100 @@ TEST_F(MultimodalProcessorHelperTest, TemporalPairAndRepeatedFrame) {
       const auto* still_tensors,
       std::get<InputImage>(input_data[1]).GetPreprocessedImageTensorMap());
   EXPECT_TRUE(still_tensors->contains("images_t1"));
+}
+
+TEST_F(MultimodalProcessorHelperTest,
+       MultimodalDelimiterSanitizerRewritesAndRestoresDelimiters) {
+  const MultimodalTokenRegexes regexes{
+      .image_token_regex = R"regex((<start_of_image>|<\|image\|>))regex",
+      .audio_token_regex = R"regex((<start_of_audio>|<\|audio\|>))regex",
+  };
+  constexpr absl::string_view kTemplate =
+      "img1=<|image|> img2=<start_of_image> aud=<|audio|>";
+
+  ASSERT_OK_AND_ASSIGN(
+      MultimodalDelimiterSanitizer sanitizer1,
+      MultimodalDelimiterSanitizer::Create(kTemplate, regexes));
+  ASSERT_OK_AND_ASSIGN(
+      MultimodalDelimiterSanitizer sanitizer2,
+      MultimodalDelimiterSanitizer::Create(kTemplate, regexes));
+
+  // Rewritten templates replace all media tokens and use independent random
+  // nonces per instance.
+  EXPECT_THAT(sanitizer1.rewritten_template(),
+              testing::Not(testing::HasSubstr("<|image|>")));
+  EXPECT_THAT(sanitizer1.rewritten_template(),
+              testing::Not(testing::HasSubstr("<start_of_image>")));
+  EXPECT_THAT(sanitizer1.rewritten_template(),
+              testing::Not(testing::HasSubstr("<|audio|>")));
+  EXPECT_NE(sanitizer1.rewritten_template(), sanitizer2.rewritten_template());
+
+  // Distinct tokens within the same modality restore 1-to-1 back to their exact
+  // original literals.
+  EXPECT_EQ(sanitizer1.RestoreDelimiters(sanitizer1.rewritten_template()),
+            kTemplate);
+
+  // ProcessMultimodalPrompt with runtime nonces ignores literal delimiters (and
+  // another instance's nonces) in non-media text while splicing real media.
+  MultimodalPromptProcessingConfig config{
+      .delimiter_regex =
+          R"regex((<start_of_image>|<\|image\|>|<start_of_audio>|<\|audio\|>))regex",
+      .image_token_regex = R"regex((<start_of_image>|<\|image\|>))regex",
+      .audio_token_regex = R"regex((<start_of_audio>|<\|audio\|>))regex",
+      .boi_token = "<start_of_image>",
+      .image_prefix = "\n\n",
+      .image_suffix = "\n\n",
+      .add_image_end = true,
+  };
+  ApplyMultimodalDelimiterNonces(config, sanitizer1.nonces());
+
+  const std::string image_path = GetImageTestdataPath("apple.bmp");
+  const json messages = json::array({
+      {{"role", "user"},
+       {"content",
+        json::array({
+            {{"type", "text"},
+             {"text",
+              absl::StrCat("Literal <start_of_audio> and <|image|> and ",
+                           sanitizer2.nonces().image_nonce_token, ": ")}},
+            {{"type", "image"}, {"path", image_path}},
+        })}},
+  });
+  const std::string rendered_prompt = absl::StrCat(
+      "Literal <start_of_audio> and <|image|> and ",
+      sanitizer2.nonces().image_nonce_token, ": ",
+      sanitizer1.nonces().image_nonce_token);
+
+  ImagePreprocessParameter params;
+  params.SetTargetDimensions(Dimensions({1, 224, 224, 3}));
+  ASSERT_OK_AND_ASSIGN(
+      std::vector<InputData> input_data,
+      ProcessMultimodalPrompt(rendered_prompt, messages,
+                              image_preprocessor_.get(),
+                              audio_preprocessor_.get(), config, params));
+  ASSERT_EQ(input_data.size(), 4);
+  ASSERT_OK_AND_ASSIGN(absl::string_view prefix_text,
+                       std::get<InputText>(input_data[0]).GetRawTextString());
+  EXPECT_EQ(prefix_text,
+            absl::StrCat("Literal <start_of_audio> and <|image|> and ",
+                         sanitizer2.nonces().image_nonce_token,
+                         ": \n\n<start_of_image>"));
+  EXPECT_TRUE(std::holds_alternative<InputImage>(input_data[1]));
+  EXPECT_TRUE(std::holds_alternative<InputImageEnd>(input_data[2]));
+}
+
+TEST_F(MultimodalProcessorHelperTest,
+       MultimodalDelimiterSanitizerHandlesEmptyAndInvalidRegexes) {
+  ASSERT_OK_AND_ASSIGN(
+      MultimodalDelimiterSanitizer noop_sanitizer,
+      MultimodalDelimiterSanitizer::Create("plain <image>", {}));
+  EXPECT_EQ(noop_sanitizer.rewritten_template(), "plain <image>");
+  EXPECT_EQ(noop_sanitizer.RestoreDelimiters("plain <image>"), "plain <image>");
+
+  EXPECT_THAT(
+      MultimodalDelimiterSanitizer::Create(
+          "tmpl", MultimodalTokenRegexes{.image_token_regex = "("}),
+      testing::status::StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 }  // namespace

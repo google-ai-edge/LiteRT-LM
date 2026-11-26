@@ -28,6 +28,7 @@
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/minicpmv_data_processor_config.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
+#include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #include "runtime/engine/io_types.h"
 
 namespace litert::lm {
@@ -53,6 +54,8 @@ class MiniCpmVDataProcessor
   const MiniCpmVDataProcessorConfig& GetConfig() const override {
     return config_;
   }
+
+  MultimodalTokenRegexes GetMultimodalTokenRegexes() const override;
 
  private:
   MiniCpmVDataProcessor(MiniCpmVDataProcessorConfig config,

@@ -36,6 +36,7 @@
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/data_utils.h"
+#include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #include "runtime/engine/io_types.h"
 #include "support/preprocessor/audio_preprocessor.h"
 #include "support/preprocessor/audio_preprocessor_miniaudio.h"
@@ -137,6 +138,26 @@ class ModelDataProcessor {
   // Returns the end of tool call blocks.
   virtual absl::string_view CodeFenceEnd() const { return ""; }
 
+  // Returns the regexes matching template-emitted multimodal placeholder tokens
+  // for each modality supported by this processor, or empty regexes if the
+  // processor does not split rendered prompts on multimodal delimiters.
+  virtual MultimodalTokenRegexes GetMultimodalTokenRegexes() const {
+    return {};
+  }
+
+  // Configures per-instance runtime nonces for multimodal delimiter
+  // sanitization. When set, the processor splits rendered prompts on these
+  // runtime nonces rather than raw template placeholder strings.
+  void SetMultimodalDelimiterNonces(
+      std::optional<MultimodalDelimiterNonces> multimodal_delimiter_nonces) {
+    multimodal_delimiter_nonces_ = std::move(multimodal_delimiter_nonces);
+  }
+
+  const std::optional<MultimodalDelimiterNonces>&
+  GetMultimodalDelimiterNonces() const {
+    return multimodal_delimiter_nonces_;
+  }
+
   // Clones the state of the other model data processor.
   virtual absl::Status CloneState(const ModelDataProcessor& other) = 0;
 
@@ -152,6 +173,7 @@ class ModelDataProcessor {
 
  private:
   bool return_error_on_parse_failure_ = true;
+  std::optional<MultimodalDelimiterNonces> multimodal_delimiter_nonces_;
 };
 
 // TypeSafeModelDataProcessor is a ModelDataProcessor that expects a specific
@@ -225,6 +247,7 @@ class TypeSafeModelDataProcessor : public ModelDataProcessor {
           "The other ModelDataProcessor is not of the expected type.");
     }
     SetReturnErrorOnParseFailure(typed_other->ReturnErrorOnParseFailure());
+    SetMultimodalDelimiterNonces(typed_other->GetMultimodalDelimiterNonces());
     return this->CloneStateImpl(*typed_other);
   }
 

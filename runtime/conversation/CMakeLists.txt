@@ -35,6 +35,7 @@ target_link_libraries(runtime_conversation_conversation
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::ConfigRegistry
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Factory
     LiteRTLM::Runtime::Conversation::ModelDataProcessor::Interface
+    LiteRTLM::Runtime::Conversation::ModelDataProcessor::MultimodalProcessorHelper
     LiteRTLM::Runtime::Core::SessionUtils
     LiteRTLM::Runtime::Executor::ExecutorSettingsBase
 

@@ -145,9 +145,12 @@ GenericDataProcessor::ToInputDataVectorImpl(
     return input_data;
   }
 
+  MultimodalPromptProcessingConfig multi_config =
+      config_.multimodal->processing_config;
+  ApplyMultimodalDelimiterNonces(multi_config, GetMultimodalDelimiterNonces());
   return ProcessMultimodalPrompt(
       rendered_template_prompt, messages, image_preprocessor_.get(),
-      audio_preprocessor_.get(), config_.multimodal->processing_config,
+      audio_preprocessor_.get(), multi_config,
       config_.multimodal->image_preprocess_parameter, args.visual_token_budget,
       args.dry_run);
 }

@@ -36,6 +36,7 @@
 #include "runtime/components/preprocessor/minicpmv_image_preprocess.h"
 #include "runtime/conversation/model_data_processor/data_utils.h"
 #include "runtime/conversation/model_data_processor/minicpmv_data_processor_config.h"
+#include "runtime/conversation/model_data_processor/multimodal_processor_helper.h"
 #include "runtime/engine/io_types.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/memory_mapped_file.h"
@@ -137,11 +138,17 @@ MiniCpmVDataProcessor::Create(
       new MiniCpmVDataProcessor(config, std::move(image_preprocessor)));
 }
 
+MultimodalTokenRegexes MiniCpmVDataProcessor::GetMultimodalTokenRegexes()
+    const {
+  return {.image_token_regex = "(<image_soft_token>)"};
+}
+
 absl::StatusOr<std::vector<InputData>>
 MiniCpmVDataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt, const ordered_json& messages,
     const MiniCpmVDataProcessorArguments& args) const {
-  // The chat template renders each image as the literal "<image_soft_token>".
+  // The chat template renders each image as the literal "<image_soft_token>"
+  // (or its runtime nonce when delimiter sanitization is enabled).
   // We replace each marker with the official multi-slice layout
   //   <image_id>i</image_id><image>{64 placeholders}</image>
   //   [<slice>{64}</slice>...]
@@ -150,14 +157,19 @@ MiniCpmVDataProcessor::ToInputDataVectorImpl(
   ABSL_ASSIGN_OR_RETURN(const std::vector<std::string> image_bytes_list,
                         ExtractAllImageBytes(messages));
 
+  const auto& nonces = GetMultimodalDelimiterNonces();
+  const absl::string_view image_marker =
+      (nonces.has_value() && !nonces->image_nonce_token.empty())
+          ? absl::string_view(nonces->image_nonce_token)
+          : kImageSoftToken;
+
   std::vector<size_t> marker_positions;
   size_t search_pos = 0;
   while (true) {
-    const size_t pos =
-        rendered_template_prompt.find(kImageSoftToken, search_pos);
+    const size_t pos = rendered_template_prompt.find(image_marker, search_pos);
     if (pos == std::string::npos) break;
     marker_positions.push_back(pos);
-    search_pos = pos + kImageSoftToken.size();
+    search_pos = pos + image_marker.size();
   }
 
   if (marker_positions.size() != image_bytes_list.size()) {
@@ -176,7 +188,7 @@ MiniCpmVDataProcessor::ToInputDataVectorImpl(
     AppendText(absl::string_view(rendered_template_prompt)
                    .substr(text_cursor, marker_pos - text_cursor),
                output);
-    text_cursor = marker_pos + kImageSoftToken.size();
+    text_cursor = marker_pos + image_marker.size();
 
     // Slice, then pad each strip to the fused signature length. The map-based
     // Encode token count is ceil(L / shrink) with

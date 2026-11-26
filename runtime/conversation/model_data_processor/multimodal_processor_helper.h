@@ -17,6 +17,7 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/status/status.h"  // from @com_google_absl
@@ -151,6 +152,89 @@ struct MultimodalPromptProcessingConfig {
   // inputs that `VideoInputExpander::ExpandVideo()` returns for the next
   // `"type": "video"` content item. Empty means video is not supported.
   std::string video_token_regex;
+};
+
+// Regexes matching template-emitted multimodal placeholder tokens for each
+// modality supported by a ModelDataProcessor. Empty strings indicate that the
+// processor does not split rendered prompts on placeholders for that modality.
+struct MultimodalTokenRegexes {
+  std::string image_token_regex;
+  std::string audio_token_regex;
+  std::string video_token_regex;
+
+  bool IsEmpty() const {
+    return image_token_regex.empty() && audio_token_regex.empty() &&
+           video_token_regex.empty();
+  }
+};
+
+// Per-instance runtime nonces that replace template-emitted multimodal
+// placeholders when multimodal delimiter sanitization is enabled.
+struct MultimodalDelimiterNonces {
+  std::string delimiter_regex;
+  std::string image_token_regex;
+  std::string audio_token_regex;
+  std::string video_token_regex;
+  // Exact runtime nonce placeholder for single-literal image markers (used by
+  // processors such as MiniCpmVDataProcessor that split via literal search).
+  std::string image_nonce_token;
+};
+
+// Replaces the multimodal delimiter regexes in `config` with `nonces` when
+// runtime nonces are configured.
+inline void ApplyMultimodalDelimiterNonces(
+    MultimodalPromptProcessingConfig& config,
+    const std::optional<MultimodalDelimiterNonces>& nonces) {
+  if (!nonces.has_value()) {
+    return;
+  }
+  config.delimiter_regex = nonces->delimiter_regex;
+  config.image_token_regex = nonces->image_token_regex;
+  config.audio_token_regex = nonces->audio_token_regex;
+  config.video_token_regex = nonces->video_token_regex;
+}
+
+// Rewrites multimodal placeholder literals in a prompt template source to
+// per-instance random 128-bit runtime nonces and maps rendered nonces back to
+// their original placeholder tokens when formatting debug/test strings.
+class MultimodalDelimiterSanitizer {
+ public:
+  // Creates a sanitizer for `template_source` and `token_regexes` using a
+  // freshly generated random 128-bit runtime nonce.
+  static absl::StatusOr<MultimodalDelimiterSanitizer> Create(
+      absl::string_view template_source,
+      const MultimodalTokenRegexes& token_regexes);
+
+  // Returns the template source with media placeholder literals replaced by
+  // runtime nonces.
+  const std::string& rewritten_template() const { return rewritten_template_; }
+
+  // Returns the runtime nonce configuration for the ModelDataProcessor.
+  const MultimodalDelimiterNonces& nonces() const { return nonces_; }
+
+  // Returns the placeholder emitted for `"image"` items by
+  // `ApplyFallbackPromptTemplate` when Minijinja is disabled.
+  absl::string_view fallback_image_placeholder() const {
+    return fallback_image_placeholder_;
+  }
+
+  // Returns the placeholder emitted for `"audio"` items by
+  // `ApplyFallbackPromptTemplate` when Minijinja is disabled.
+  absl::string_view fallback_audio_placeholder() const {
+    return fallback_audio_placeholder_;
+  }
+
+  // Replaces any runtime nonce placeholders in `rendered` back with their
+  // original template tokens so callers never see internal runtime nonces.
+  std::string RestoreDelimiters(std::string rendered) const;
+
+ private:
+  std::string nonce_hex_;
+  std::string rewritten_template_;
+  MultimodalDelimiterNonces nonces_;
+  std::string fallback_image_placeholder_ = "<start_of_image>";
+  std::string fallback_audio_placeholder_ = "<start_of_audio>";
+  std::vector<std::pair<std::string, std::string>> restore_replacements_;
 };
 
 // Context passed to `VideoInputExpander::ExpandVideo()`.

@@ -43,6 +43,10 @@ FastVlmDataProcessor::Create(FastVlmDataProcessorConfig config) {
       config, std::make_unique<StbImagePreprocessor>()));
 }
 
+MultimodalTokenRegexes FastVlmDataProcessor::GetMultimodalTokenRegexes() const {
+  return {.image_token_regex = "(<image_soft_token>)"};
+}
+
 absl::StatusOr<std::vector<InputData>>
 FastVlmDataProcessor::ToInputDataVectorImpl(
     const std::string& rendered_template_prompt, const ordered_json& messages,
@@ -62,6 +66,7 @@ FastVlmDataProcessor::ToInputDataVectorImpl(
       .audio_suffix = "",
       .add_audio_end = false,
   };
+  ApplyMultimodalDelimiterNonces(multi_config, GetMultimodalDelimiterNonces());
   ImagePreprocessParameter image_preprocess_parameter;
   image_preprocess_parameter.SetTargetDimensions(Dimensions(
       {1, config_.image_tensor_height, config_.image_tensor_width, 3}));
