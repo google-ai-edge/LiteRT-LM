@@ -30,6 +30,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "third_party/gloop/util/gtl/c_memcpy.h"
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_model.h"  // from @litert
@@ -211,9 +212,9 @@ absl::Status EmbeddingLookupManager::LookupPrefill(
   } else {
     // If fully_supports_multi_modal_ is false, then we need to fill in the
     // missing embeddings with the default embedding vector.
-    memcpy(output_vector.data(),
-           text_embedding_lookup_->GetDefaultEmbeddingVector().data(),
-           floats_per_token * sizeof(float));
+    gtl::c_memcpy(output_vector,
+                  text_embedding_lookup_->GetDefaultEmbeddingVector(),
+                  floats_per_token * sizeof(float));
   }
   return absl::OkStatus();
 }
