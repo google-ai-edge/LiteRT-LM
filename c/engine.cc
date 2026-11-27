@@ -731,6 +731,20 @@ LiteRtLmStatusCode litert_lm_engine_settings_set_max_num_tokens(
 
 LiteRtLmStatusCode litert_lm_engine_settings_set_num_threads(
     LiteRtLmEngineSettings* settings, int num_threads) {
+  if (!IsValidEngineSettings(settings)) {
+    return kLiteRtLmStatusInvalidArgument;
+  }
+  auto& main_settings = settings->settings->GetMutableMainExecutorSettings();
+  if (litert::lm::IsCustomBackend(main_settings.GetBackend())) {
+    litert::lm::CpuConfig cpu_config;
+    if (auto existing = main_settings.GetBackendConfig<litert::lm::CpuConfig>();
+        existing.ok()) {
+      cpu_config = *existing;
+    }
+    cpu_config.number_of_threads = num_threads;
+    main_settings.SetBackendConfig(cpu_config);
+    return kLiteRtLmStatusOk;
+  }
   return UpdateMainBackendConfig<litert::lm::CpuConfig>(
       settings, "num_threads", [num_threads](litert::lm::CpuConfig& config) {
         config.number_of_threads = num_threads;

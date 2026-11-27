@@ -1006,6 +1006,21 @@ absl::StatusOr<EngineSettings> CreateEngineSettings(
     cpu_settings.enable_ynnpack = settings.enable_ynnpack;
     cpu_settings.prefill_chunk_size = settings.prefill_chunk_size;
     executor_settings.SetBackendConfig(cpu_settings);
+  } else if (IsCustomBackend(backend) &&
+             (settings.num_cpu_threads > 0 ||
+              settings.enable_ynnpack != YnnpackMode::kOff)) {
+    auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();
+    litert::lm::CpuConfig cpu_settings;
+    if (auto existing =
+            executor_settings.GetBackendConfig<litert::lm::CpuConfig>();
+        existing.ok()) {
+      cpu_settings = *existing;
+    }
+    if (settings.num_cpu_threads > 0) {
+      cpu_settings.number_of_threads = settings.num_cpu_threads;
+    }
+    cpu_settings.enable_ynnpack = settings.enable_ynnpack;
+    executor_settings.SetBackendConfig(cpu_settings);
   }
   if (!settings.custom_backend_options.empty()) {
     auto& executor_settings = engine_settings.GetMutableMainExecutorSettings();
