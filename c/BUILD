@@ -465,7 +465,9 @@ cc_library(
     deps = ENGINE_COMMON_DEPS + [
         ":model_sync",
         "//runtime/engine:engine_impl_selected",
-    ],
+    ] + select({
+        "//conditions:default": [],
+    }),
     alwayslink = True,
 )
 
@@ -780,6 +782,8 @@ cc_binary(
         "//runtime/engine:engine_impl_selected",
         "//sync:model_sync",
     ] + select({
+        "//conditions:default": [],
+    }) + select({
         "//conditions:default": [],
     }),
 )
