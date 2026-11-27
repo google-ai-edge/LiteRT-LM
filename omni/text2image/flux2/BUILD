@@ -40,6 +40,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
+        "//third_party/gloop/util/gtl:c_memcpy",
         "//omni/text2image:text2image_math",
     ],
 )
