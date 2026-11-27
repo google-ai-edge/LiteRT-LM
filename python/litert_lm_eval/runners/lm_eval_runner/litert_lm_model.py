@@ -50,10 +50,18 @@ class LitertLmModelRunner(LM):
   ):
     super().__init__()
     self.model_path = model_path
-    self.max_num_tokens = max_num_tokens
+    self.max_num_tokens = int(max_num_tokens)
+
+    thread_count = kwargs.get("thread_count")
+    if thread_count is not None:
+      thread_count = int(thread_count)
 
     # Default all modalities to the main backend if not specified.
-    self.backend = _BACKEND_MAP.get(backend.upper(), litert_lm.Backend.CPU())
+    backend_upper = backend.upper()
+    if backend_upper == "CPU" and thread_count is not None:
+      self.backend = litert_lm.Backend.CPU(thread_count=thread_count)
+    else:
+      self.backend = _BACKEND_MAP.get(backend_upper, litert_lm.Backend.CPU())
 
     # Extract optional specialized backends if present in kwargs.
     self.vision_backend = None
