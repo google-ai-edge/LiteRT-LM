@@ -456,7 +456,7 @@ def handle_post_chat_completions(handler: Any) -> None:
         provider=provider,
     )
     with util.get_or_create_server_conversation(
-        getattr(handler, "server", None),
+        util.conversation_owner(handler),
         engine,
         context_messages=context_messages,
         prompt=prompt,

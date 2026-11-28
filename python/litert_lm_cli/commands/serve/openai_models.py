@@ -54,6 +54,9 @@ def handle_get_models(handler: http.server.BaseHTTPRequestHandler) -> None:
     handler.wfile.write(
         (openai_common.dump_json(resp_body, indent=2) + "\n").encode("utf-8")
     )
+  except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+    # The client (usually a health check that timed out) hung up first.
+    handler.close_connection = True
   except Exception as e:  # pylint: disable=broad-exception-caught
     click.echo(
         click.style(
@@ -66,3 +69,16 @@ def handle_get_models(handler: http.server.BaseHTTPRequestHandler) -> None:
         handler.send_error(500, "".join(traceback.format_exception_only(e)))
       except BrokenPipeError:
         pass
+
+
+def handle_get_health(handler: http.server.BaseHTTPRequestHandler) -> None:
+  """Handles GET /health: worker pool state, without touching any engine."""
+  status = getattr(handler.server, "status", None)
+  body = status() if callable(status) else {"status": "ok"}
+  try:
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/json")
+    handler.end_headers()
+    handler.wfile.write((openai_common.dump_json(body) + "\n").encode("utf-8"))
+  except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+    handler.close_connection = True
