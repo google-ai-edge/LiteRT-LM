@@ -337,6 +337,7 @@ class LlmLiteRtNpuCompiledModelExecutor : public LlmExecutor {
 
  private:
   friend class LlmLiteRtNpuCloneContextTest;
+  friend class LlmLiteRtNpuInferenceContextTest;
   friend class LlmLiteRtNpuRunDrafterLoopTest;
   friend class LlmLiteRtNpuWarmupTest;
 

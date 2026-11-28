@@ -2738,5 +2738,256 @@ TEST_F(DrafterContextTest,
                        HasSubstr("centroid_logits")));
 }
 
+// Builds a synthetic text-decoder model with `prefill_128` and `decode`
+// signatures whose KV cache inputs carry dynamic (`-1`) context dimensions.
+std::vector<uint8_t> BuildDynamicKvTextDecoderModelBuffer(
+    tflite::TensorType prefill_kv_type, tflite::TensorType decode_kv_type,
+    bool include_decode_only_kv = false) {
+  flatbuffers::FlatBufferBuilder builder;
+  auto opcode =
+      tflite::CreateOperatorCode(builder, tflite::BuiltinOperator_ABS);
+  auto opcodes_vec = builder.CreateVector({opcode});
+
+  auto create_tensor = [&](std::vector<int32_t> dims,
+                           std::vector<int32_t> shape_signature,
+                           tflite::TensorType type, absl::string_view name) {
+    auto sig_vec = shape_signature.empty()
+                       ? 0
+                       : builder.CreateVector(shape_signature);
+    return tflite::CreateTensor(
+        builder, builder.CreateVector(dims), type, /*buffer=*/0,
+        builder.CreateString(name.data(), name.size()), /*quantization=*/0,
+        /*is_variable=*/false, /*sparsity=*/0, sig_vec, /*has_rank=*/true);
+  };
+  auto create_map = [&](absl::string_view name, uint32_t tensor_index) {
+    return tflite::CreateTensorMap(
+        builder, builder.CreateString(name.data(), name.size()), tensor_index);
+  };
+
+  std::vector<flatbuffers::Offset<tflite::SubGraph>> subgraphs;
+  std::vector<flatbuffers::Offset<tflite::SignatureDef>> sig_defs;
+
+  auto add_signature = [&](absl::string_view sig_name,
+                           tflite::TensorType kv_type, bool add_extra_kv) {
+    std::vector<flatbuffers::Offset<tflite::Tensor>> tensors = {
+        create_tensor({1, 1, 8}, {}, tflite::TensorType_FLOAT32, "activations"),
+        create_tensor({1, 1, 1, 4}, {1, 1, -1, 4}, kv_type, "kv_cache_k_0"),
+        create_tensor({1, 1, 4, 1}, {1, 1, 4, -1}, kv_type, "kv_cache_v_0"),
+        create_tensor({1, 1, 8}, {}, tflite::TensorType_FLOAT32, "logits"),
+    };
+    std::vector<int32_t> sg_inputs = {0, 1, 2};
+    std::vector<flatbuffers::Offset<tflite::TensorMap>> inputs_map = {
+        create_map("activations", 0),
+        create_map("kv_cache_k_0", 1),
+        create_map("kv_cache_v_0", 2),
+    };
+    if (add_extra_kv) {
+      tensors.push_back(
+          create_tensor({1, 1, 1, 4}, {1, 1, -1, 4}, kv_type, "kv_cache_k_1"));
+      sg_inputs.push_back(4);
+      inputs_map.push_back(create_map("kv_cache_k_1", 4));
+    }
+    auto op = tflite::CreateOperator(builder, /*opcode_index=*/0,
+                                     builder.CreateVector<int32_t>({0}),
+                                     builder.CreateVector<int32_t>({3}));
+    const uint32_t subgraph_index = subgraphs.size();
+    subgraphs.push_back(tflite::CreateSubGraph(
+        builder, builder.CreateVector(tensors), builder.CreateVector(sg_inputs),
+        builder.CreateVector<int32_t>({3}), builder.CreateVector({op}),
+        builder.CreateString(sig_name.data(), sig_name.size())));
+    sig_defs.push_back(tflite::CreateSignatureDef(
+        builder, builder.CreateVector(inputs_map),
+        builder.CreateVector({create_map("logits", 3)}),
+        builder.CreateString(sig_name.data(), sig_name.size()),
+        subgraph_index));
+  };
+
+  add_signature("prefill_128", prefill_kv_type, /*add_extra_kv=*/false);
+  add_signature("decode", decode_kv_type, include_decode_only_kv);
+
+  auto buffers_vec = builder.CreateVector({tflite::CreateBuffer(builder)});
+  auto model = tflite::CreateModel(
+      builder, /*version=*/3, opcodes_vec, builder.CreateVector(subgraphs),
+      builder.CreateString("dynamic_kv_text_decoder"), buffers_vec,
+      /*metadata_buffer=*/0, /*metadata=*/0, builder.CreateVector(sig_defs));
+  tflite::FinishModelBuffer(builder, model);
+  return std::vector<uint8_t>(builder.GetBufferPointer(),
+                              builder.GetBufferPointer() + builder.GetSize());
+}
+
+}  // namespace
+
+// Exercises CreateTextDecoderInferenceContext on dynamic-shape KV cache
+// signatures.
+class LlmLiteRtNpuInferenceContextTest : public DrafterContextTest {
+ protected:
+  static absl::StatusOr<InferenceContext> CallCreateTextDecoderInferenceContext(
+      ::litert::Environment& env,
+      ::litert::CompiledModel& text_decoder_compiled_model,
+      const ResolvedPrefillSignatures& prefill_signatures,
+      absl::string_view decode_signature,
+      absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer>&
+          input_kv_cache_buffers) {
+    absl::flat_hash_map<absl::string_view, ::litert::TensorBuffer> empty;
+    return LlmLiteRtNpuCompiledModelExecutor::CreateTextDecoderInferenceContext(
+        env, text_decoder_compiled_model, prefill_signatures, decode_signature,
+        TextDecoderSignatures::kVerify, input_kv_cache_buffers, empty, empty,
+        empty, empty, empty, empty);
+  }
+
+  static void ResizeKvSignature(::litert::CompiledModel& compiled_model,
+                                absl::string_view signature_name,
+                                int context_len, bool include_extra_k = false) {
+    const std::vector<int> k_dims = {1, 1, context_len, 4};
+    const std::vector<int> v_dims = {1, 1, 4, context_len};
+    LITERT_ASSERT_OK(compiled_model.ResizeInputTensor(
+        signature_name, "kv_cache_k_0", absl::MakeConstSpan(k_dims)));
+    LITERT_ASSERT_OK(compiled_model.ResizeInputTensor(
+        signature_name, "kv_cache_v_0", absl::MakeConstSpan(v_dims)));
+    if (include_extra_k) {
+      LITERT_ASSERT_OK(compiled_model.ResizeInputTensor(
+          signature_name, "kv_cache_k_1", absl::MakeConstSpan(k_dims)));
+    }
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        size_t sig_idx, compiled_model.GetSignatureIndex(signature_name));
+    LITERT_ASSERT_OK(compiled_model.GetOutputTensorLayouts(
+        sig_idx, /*update_allocation=*/true));
+  }
+};
+
+namespace {
+
+TEST_F(LlmLiteRtNpuInferenceContextTest,
+       ResizedDynamicKvCacheInputsMatchDecodeBuffers) {
+  const std::vector<uint8_t> model_buffer =
+      BuildDynamicKvTextDecoderModelBuffer(tflite::TensorType_INT8,
+                                           tflite::TensorType_INT8,
+                                           /*include_decode_only_kv=*/true);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compiled_model,
+      ::litert::CompiledModel::Create(
+          *env_,
+          ::litert::BufferRef<uint8_t>(model_buffer.data(),
+                                       model_buffer.size()),
+          ::litert::HwAccelerators::kCpu));
+
+  // Verify the static signature still carries the dynamic dim before resizing.
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto static_prefill_type,
+      compiled_model.GetInputTensorType("prefill_128", "kv_cache_k_0"));
+  EXPECT_THAT(static_prefill_type.Layout().Dimensions(),
+              ElementsAre(1, 1, -1, 4));
+
+  ResizeKvSignature(compiled_model, "prefill_128", /*context_len=*/8);
+  ResizeKvSignature(compiled_model, "decode", /*context_len=*/8,
+                    /*include_extra_k=*/true);
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> input_kv_cache_buffers;
+  for (absl::string_view key :
+       {"kv_cache_k_0", "kv_cache_v_0", "kv_cache_k_1"}) {
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        TensorBuffer buf, compiled_model.CreateInputBuffer("decode", key));
+    input_kv_cache_buffers.insert_or_assign(key, std::move(buf));
+  }
+
+  ResolvedPrefillSignatures prefill_sigs;
+  prefill_sigs.prefill = "prefill_128";
+  ASSERT_OK_AND_ASSIGN(
+      InferenceContext ctx,
+      CallCreateTextDecoderInferenceContext(*env_, compiled_model, prefill_sigs,
+                                            "decode", input_kv_cache_buffers));
+
+  EXPECT_TRUE(ctx.verify_input_buffers.empty());
+  ASSERT_TRUE(ctx.prefill_input_buffers.contains("kv_cache_k_0"));
+  ASSERT_TRUE(ctx.prefill_input_buffers.contains("kv_cache_v_0"));
+  EXPECT_FALSE(ctx.prefill_input_buffers.contains("kv_cache_k_1"));
+  EXPECT_EQ(HostAddressOf(ctx.prefill_input_buffers.at("kv_cache_k_0")),
+            HostAddressOf(input_kv_cache_buffers.at("kv_cache_k_0")));
+  EXPECT_EQ(HostAddressOf(ctx.prefill_input_buffers.at("kv_cache_v_0")),
+            HostAddressOf(input_kv_cache_buffers.at("kv_cache_v_0")));
+}
+
+TEST_F(LlmLiteRtNpuInferenceContextTest,
+       MismatchedDynamicKvCacheDimsReturnErrorWithShapes) {
+  const std::vector<uint8_t> model_buffer =
+      BuildDynamicKvTextDecoderModelBuffer(tflite::TensorType_INT8,
+                                           tflite::TensorType_INT8);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compiled_model,
+      ::litert::CompiledModel::Create(
+          *env_,
+          ::litert::BufferRef<uint8_t>(model_buffer.data(),
+                                       model_buffer.size()),
+          ::litert::HwAccelerators::kCpu));
+
+  ResizeKvSignature(compiled_model, "prefill_128", /*context_len=*/4);
+  ResizeKvSignature(compiled_model, "decode", /*context_len=*/8);
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> input_kv_cache_buffers;
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      TensorBuffer k_buf,
+      compiled_model.CreateInputBuffer("decode", "kv_cache_k_0"));
+  input_kv_cache_buffers.insert_or_assign("kv_cache_k_0", std::move(k_buf));
+
+  ResolvedPrefillSignatures prefill_sigs;
+  prefill_sigs.prefill = "prefill_128";
+  EXPECT_THAT(
+      CallCreateTextDecoderInferenceContext(*env_, compiled_model, prefill_sigs,
+                                            "decode", input_kv_cache_buffers),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               ::testing::AllOf(HasSubstr("dims=[1, 1, 4, 4]"),
+                                HasSubstr("dims=[1, 1, 8, 4]"))));
+}
+
+TEST_F(LlmLiteRtNpuInferenceContextTest,
+       ResizedDynamicFloat32PrefillKvAllocatesSeparateBuffer) {
+  const std::vector<uint8_t> model_buffer =
+      BuildDynamicKvTextDecoderModelBuffer(tflite::TensorType_FLOAT32,
+                                           tflite::TensorType_INT8);
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto compiled_model,
+      ::litert::CompiledModel::Create(
+          *env_,
+          ::litert::BufferRef<uint8_t>(model_buffer.data(),
+                                       model_buffer.size()),
+          ::litert::HwAccelerators::kCpu));
+
+  ResizeKvSignature(compiled_model, "prefill_128", /*context_len=*/8);
+  ResizeKvSignature(compiled_model, "decode", /*context_len=*/8);
+
+  absl::flat_hash_map<absl::string_view, TensorBuffer> input_kv_cache_buffers;
+  for (absl::string_view key : {"kv_cache_k_0", "kv_cache_v_0"}) {
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        TensorBuffer buf, compiled_model.CreateInputBuffer("decode", key));
+    input_kv_cache_buffers.insert_or_assign(key, std::move(buf));
+  }
+
+  ResolvedPrefillSignatures prefill_sigs;
+  prefill_sigs.prefill = "prefill_128";
+  ASSERT_OK_AND_ASSIGN(
+      InferenceContext ctx,
+      CallCreateTextDecoderInferenceContext(*env_, compiled_model, prefill_sigs,
+                                            "decode", input_kv_cache_buffers));
+
+  EXPECT_TRUE(ctx.verify_input_buffers.empty());
+  ASSERT_TRUE(ctx.prefill_input_buffers.contains("kv_cache_k_0"));
+  EXPECT_NE(HostAddressOf(ctx.prefill_input_buffers.at("kv_cache_k_0")),
+            HostAddressOf(input_kv_cache_buffers.at("kv_cache_k_0")));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      RankedTensorType prefill_k_type,
+      ctx.prefill_input_buffers.at("kv_cache_k_0").TensorType());
+  EXPECT_EQ(prefill_k_type.ElementType(), ElementType::Float32);
+  EXPECT_THAT(prefill_k_type.Layout().Dimensions(), ElementsAre(1, 1, 8, 4));
+
+  ASSERT_TRUE(ctx.prefill_input_buffers.contains("kv_cache_v_0"));
+  EXPECT_NE(HostAddressOf(ctx.prefill_input_buffers.at("kv_cache_v_0")),
+            HostAddressOf(input_kv_cache_buffers.at("kv_cache_v_0")));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      RankedTensorType prefill_v_type,
+      ctx.prefill_input_buffers.at("kv_cache_v_0").TensorType());
+  EXPECT_EQ(prefill_v_type.ElementType(), ElementType::Float32);
+  EXPECT_THAT(prefill_v_type.Layout().Dimensions(), ElementsAre(1, 1, 4, 8));
+}
+
 }  // namespace
 }  // namespace litert::lm
