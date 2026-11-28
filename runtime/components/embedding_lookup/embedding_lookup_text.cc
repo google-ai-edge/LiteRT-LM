@@ -34,6 +34,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "third_party/gloop/util/gtl/c_memcpy.h"
 #include "litert/cc/internal/scoped_file.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
 #include "litert/cc/litert_compiled_model.h"  // from @litert
@@ -65,7 +66,7 @@ absl::Status EmbeddingLookupText::LookupInternal(int token,
   }
 
   if (token < 0) {
-    memcpy(buffer.data(), default_embedding_vector_.data(), buffer.size());
+    gtl::c_memcpy(buffer, default_embedding_vector_, buffer.size());
     return absl::OkStatus();
   }
 

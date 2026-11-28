@@ -29,6 +29,7 @@
 #include "absl/log/absl_log.h"  // from @com_google_absl
 #include "absl/status/status.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "third_party/gloop/util/gtl/c_memset.h"
 #include "litert/cc/litert_element_type.h"  // from @litert
 #include "litert/cc/litert_environment.h"  // from @litert
 #include "litert/cc/litert_expected.h"  // from @litert
@@ -225,7 +226,7 @@ TEST_F(EmbeddingLookupManagerTest, LookupDecodeTextSingleTokenVectorNonEmpty) {
   ASSERT_NE(embedding_lookup_manager_, nullptr);
 
   std::vector<float> output_vector(4 * 32 * 2);
-  memset(output_vector.data(), 99, output_vector.size() * sizeof(float));
+  gtl::c_memset(output_vector, 99);
 
   int32_t token = 1;
   ASSERT_OK(embedding_lookup_manager_->LookupDecode(token, output_vector));
@@ -357,7 +358,7 @@ TEST_F(EmbeddingLookupManagerTest, LookupPrefillTextSingleTokenVectorNonEmpty) {
   ASSERT_NE(embedding_lookup_manager_, nullptr);
 
   std::vector<float> output_vector(4 * 32 * 2);
-  memset(output_vector.data(), 99, output_vector.size() * sizeof(float));
+  gtl::c_memset(output_vector, 99);
 
   int32_t token = 1;
   ASSERT_OK(embedding_lookup_manager_->LookupPrefill(token, output_vector));
