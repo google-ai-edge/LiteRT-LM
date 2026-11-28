@@ -42,6 +42,7 @@
 #include "absl/time/clock.h"  // from @com_google_absl
 #include "absl/time/time.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "third_party/gloop/util/gtl/c_memcpy.h"
 #include "litert/c/litert_common.h"  // from @litert
 #include "litert/c/litert_model_types.h"  // from @litert
 #include "litert/cc/litert_common.h"  // from @litert
