@@ -20,6 +20,37 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 load("//:android_ndk_env.bzl", "check_android_ndk_env", "stub_local_config_android")
 
+# Combined I8MM/BF16 microkernels require both features to be enabled.
+http_archive(
+    name = "XNNPACK",
+    patch_args = ["-p1"],
+    patches = ["//third_party/xnnpack:windows_arm64.patch"],
+    sha256 = "b1d4ab092cd92b1241c1d14f440b5ed725530757b540fe4fb88a20b07577e8a8",
+    strip_prefix = "XNNPACK-28d1fc6d908bc4d80920be989177b7eb1a4aebc8",
+    urls = ["https://github.com/google/XNNPACK/archive/28d1fc6d908bc4d80920be989177b7eb1a4aebc8.zip"],
+)
+
+# Keep the pinned cpuinfo source, applying its existing MSVC array-argument
+# compatibility macro consistently to the ARM cache implementation.
+http_archive(
+    name = "cpuinfo",
+    patch_args = ["-p1"],
+    patches = ["//third_party/cpuinfo:windows_arm64.patch"],
+    sha256 = "fe2aa43254838a2eb5658d1742696473a1d834a57f2a0b38d533346bcd212482",
+    strip_prefix = "cpuinfo-8ce83db858065145192c97af90cb668ad72a12e9",
+    urls = ["https://github.com/pytorch/cpuinfo/archive/8ce83db858065145192c97af90cb668ad72a12e9.zip"],
+)
+
+# Use LiteRT's MSVC ARM64-compatible BUILD for the same pinned FarmHash source.
+# TensorFlow's default BUILD applies its MSVC compatibility define only to x64.
+http_archive(
+    name = "farmhash_archive",
+    build_file = "@litert//third_party/farmhash:farmhash.BUILD",
+    sha256 = "18392cf0736e1d62ecbb8d695c31496b6507859e8c75541d7ad0ba092dc52115",
+    strip_prefix = "farmhash-0d859a811870d10f53a594927d0d0b97573ad06d",
+    urls = ["https://github.com/google/farmhash/archive/0d859a811870d10f53a594927d0d0b97573ad06d.tar.gz"],
+)
+
 # Declared before `rules_shell_dependencies()` and `apple_rules_dependencies()`
 # because those macros also declare `bazel_skylib`, and the first declaration of
 # a repository wins. The pinned TensorFlow expects 1.9.0: its `@rules_cc` uses
@@ -474,6 +505,7 @@ crates_repository(
     name = "cxxbridge_cmd_deps",
     cargo_lockfile = "//cxxbridge_cmd:Cargo.lock",
     manifests = ["@cxxbridge_cmd//:Cargo.toml"],
+    supported_platform_triples = SUPPORTED_PLATFORM_TRIPLES,
 )
 
 load("@cxxbridge_cmd_deps//:defs.bzl", cxxbridge_cmd_deps = "crate_repositories")
