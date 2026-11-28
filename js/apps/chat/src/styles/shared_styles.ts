@@ -168,4 +168,47 @@ export const sharedStyles = css`
     white-space: nowrap;
     border: 0;
   }
+
+  /* Shadow DOM Highlight.js Theme Tokens (Dark + Light WCAG AA) */
+  .hljs {
+    color: var(--hljs-fg, #e2e8f0);
+  }
+  .hljs-comment,
+  .hljs-quote {
+    color: var(--hljs-comment, #94a3b8);
+    font-style: italic;
+  }
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-literal,
+  .hljs-type,
+  .hljs-built_in {
+    color: var(--hljs-keyword, #7dd3fc);
+  }
+  .hljs-string,
+  .hljs-regexp,
+  .hljs-addition,
+  .hljs-template-variable {
+    color: var(--hljs-string, #6ee7b7);
+  }
+  .hljs-number,
+  .hljs-symbol,
+  .hljs-bullet {
+    color: light-dark(#92400e, #fcd34d);
+  }
+  .hljs-title,
+  .hljs-section,
+  .hljs-function .hljs-title {
+    color: var(--hljs-title, #f9a8d4);
+  }
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-variable,
+  .hljs-params {
+    color: var(--hljs-attr, #93c5fd);
+  }
+  .hljs-name,
+  .hljs-tag {
+    color: var(--hljs-tag, #5eead4);
+  }
 `;
