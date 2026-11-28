@@ -61,6 +61,7 @@ cc_test(
         "@com_google_absl//absl/status:status_matchers",
         "@com_google_absl//absl/strings",
         "@flatbuffers",
+        "//third_party/gloop/util/gtl:c_memcpy",
         "//runtime/proto:embedding_metadata_cc_proto",
         "//runtime/proto:embedding_model_type_cc_proto",
         "//runtime/proto:llm_metadata_cc_proto",
