@@ -48,23 +48,23 @@ _NVIDIA_DISPATCH_LIB_NAMES = (
 )
 
 # NVIDIA's PyPI packages that hold the CUDA runtime and TensorRT-RTX, which the
-# dispatch library and the compiler plugin link against, and the file names of
-# those two libraries on Linux and on Windows. The CUDA runtime packages come
-# first because TensorRT-RTX links against the CUDA runtime.
+# dispatch library and the compiler plugin link against: one pair of packages
+# for each CUDA version, CUDA 12 first.
 _NVIDIA_RUNTIME_PACKAGES = (
-    "nvidia-cuda-runtime-cu12",
-    "nvidia-cuda-runtime",
-    "tensorrt-rtx-cu12-libs",
-    "tensorrt-rtx-cu13-libs",
+    ("nvidia-cuda-runtime-cu12", "tensorrt-rtx-cu12-libs"),
+    ("nvidia-cuda-runtime", "tensorrt-rtx-cu13-libs"),
 )
+# The file names of those two libraries on Linux and on Windows.
 _NVIDIA_RUNTIME_LIB_NAME = re.compile(
     r"libcudart\.so\.\d+|cudart64_\d+\.dll"
     r"|libtensorrt_rtx\.so\.\d+|tensorrt_rtx_\d+_\d+\.dll"
 )
 
 _NPU_NOT_FOUND = (
-    "NPU is supported only for NVIDIA TensorRT-RTX and for Intel OpenVINO on"
-    " Windows. NVIDIA's dispatch library or driver was not found."
+    "NPU is supported only for NVIDIA TensorRT-RTX (Linux and Windows) and"
+    " Intel OpenVINO (Windows). NVIDIA's dispatch library or driver was not"
+    " found: to use NVIDIA TensorRT-RTX, install the ai-edge-litert-sdk-nvidia"
+    " package (pip install ai-edge-litert-sdk-nvidia)."
 )
 
 
@@ -83,12 +83,41 @@ def _load_nvidia_runtime_libs() -> None:
   they are loaded here by path. NVIDIA's dispatch library and compiler plugin
   then use the loaded copies. A package that is not installed is skipped, and
   the copy of its library that the system finds is used instead.
+
+  Only the packages of one CUDA version are loaded: the first version with both
+  packages installed, or else the first version with one of them.
   """
-  for package in _NVIDIA_RUNTIME_PACKAGES:
-    try:
-      files = metadata.files(package) or ()
-    except metadata.PackageNotFoundError:
-      continue
+  # For each CUDA version with an installed package: whether both packages are
+  # installed, and the files of the installed ones by package.
+  installed = []
+  for packages in _NVIDIA_RUNTIME_PACKAGES:
+    files_by_package = {}
+    for package in packages:
+      try:
+        files_by_package[package] = metadata.files(package) or ()
+      except metadata.PackageNotFoundError:
+        continue
+    if files_by_package:
+      installed.append(
+          (len(files_by_package) == len(packages), files_by_package)
+      )
+  if not installed:
+    return
+  chosen = next(
+      (
+          files_by_package
+          for complete, files_by_package in installed
+          if complete
+      ),
+      installed[0][1],
+  )
+  if len(installed) > 1:
+    logging.info(
+        "NVIDIA's packages for more than one CUDA version are installed. Only"
+        " %s are loaded.",
+        " and ".join(chosen),
+    )
+  for package, files in chosen.items():
     for file in files:
       if not _NVIDIA_RUNTIME_LIB_NAME.fullmatch(file.name):
         continue
@@ -195,7 +224,9 @@ class NPU(Backend):
 
   NVIDIA's library needs the CUDA runtime and TensorRT-RTX. They are loaded from
   NVIDIA's PyPI packages (nvidia-cuda-runtime-cu12 and tensorrt-rtx-cu12-libs,
-  or their CUDA 13 counterparts) when those are installed.
+  or their CUDA 13 counterparts) when those are installed. To also use NVIDIA's
+  TensorRT-RTX Python API on x86_64, install tensorrt-rtx-cu12, not
+  tensorrt-rtx.
 
   Attributes:
     litert_dispatch_lib_dir: The directory containing LiteRT dispatch libs.
@@ -598,8 +629,10 @@ class AbstractEngine(abc.ABC):
         generation, keep at least one prefill signature and "decode". When MTP
         is enabled, make sure "verify" is also included. If None, every
         signature of the model is used, except that NVIDIA's TensorRT-RTX
-        backend leaves out every prefill signature but the largest. To use a
-        smaller one there, select it.
+        backend leaves out every prefill signature but the largest. An input
+        then needs that signature's length in free context tokens, also a short
+        input near the end of the context. To keep a smaller prefill signature
+        there, select the signatures.
   """
 
   model_path: str

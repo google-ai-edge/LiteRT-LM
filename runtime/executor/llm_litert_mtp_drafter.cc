@@ -193,10 +193,8 @@ LlmLiteRtMtpDrafter::Create(
           ActivationDataType::FLOAT16);
   auto cache_suffix = std::string(ExecutorSettingsBase::GetCacheModelName(
       ExecutorSettingsBase::CacheModel::kMtpDrafter));
-  // The selected signatures name signatures of the base model. The drafter
-  // model has its own, and compiles all of them.
-  LlmExecutorSettings drafter_settings = executor_settings;
-  drafter_settings.SetSelectedSignatures({});
+  const LlmExecutorSettings drafter_settings =
+      MtpDrafterCompilationSettings(executor_settings);
   ABSL_ASSIGN_OR_RETURN(
       auto compilation_options,
       CreateCompilationOptions(drafter_settings, activation_data_type,
@@ -608,6 +606,13 @@ absl::StatusOr<std::vector<std::vector<int>>> LlmLiteRtMtpDrafter::Draft(
   MTP_DRAFTER_LOG() << "--------------------------------------------------";
 
   return std::vector<std::vector<int>>{std::move(output_tokens)};
+}
+
+LlmExecutorSettings MtpDrafterCompilationSettings(
+    const LlmExecutorSettings& executor_settings) {
+  LlmExecutorSettings drafter_settings = executor_settings;
+  drafter_settings.SetSelectedSignatures({});
+  return drafter_settings;
 }
 
 }  // namespace litert::lm

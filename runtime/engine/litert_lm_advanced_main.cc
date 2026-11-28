@@ -73,7 +73,8 @@ ABSL_FLAG(std::vector<std::string>, selected_signatures, {},
           "Uses LiteRT runtime signature selection to prune inactive "
           "graphs. Empty keeps all signatures, except that NVIDIA's "
           "TensorRT-RTX backend leaves out every prefill signature but the "
-          "largest. Include decode and a prefill signature; include verify "
+          "largest, so an input needs that signature's length in free context "
+          "tokens. Include decode and a prefill signature; include verify "
           "when using speculative decoding.");
 ABSL_FLAG(std::string, metric_proto_file_path, "",
           "Path to the file where the benchmark metrics will be saved in "

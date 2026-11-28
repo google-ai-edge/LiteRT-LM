@@ -53,6 +53,9 @@
 namespace litert::lm {
 namespace {
 
+using ::testing::ElementsAre;
+using ::testing::HasSubstr;
+using ::testing::IsEmpty;
 using ::testing::status::StatusIs;
 
 class TfLiteModelResources : public ModelResources {
@@ -212,7 +215,28 @@ TEST(LlmLiteRtMtpDrafterTest,
 
   // The drafter model compiled: creation got as far as looking for the verify
   // signature, which this base model lacks.
-  EXPECT_THAT(drafter_or, StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(drafter_or, StatusIs(absl::StatusCode::kNotFound,
+                                   HasSubstr("Signature not found: verify")));
+}
+
+TEST(LlmLiteRtMtpDrafterTest, CompilationSettingsDropTheSelectedSignatures) {
+  const std::filesystem::path model_path =
+      std::filesystem::path(::testing::SrcDir()) /
+      "litert_lm/runtime/testdata/magic_test_decode_batch.tflite";
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  ASSERT_OK_AND_ASSIGN(
+      auto executor_settings,
+      LlmExecutorSettings::CreateDefault(model_assets, Backend::GPU));
+  executor_settings.SetSelectedSignatures({"prefill", "decode", "verify"});
+
+  const LlmExecutorSettings drafter_settings =
+      MtpDrafterCompilationSettings(executor_settings);
+
+  EXPECT_THAT(drafter_settings.GetSelectedSignatures(), IsEmpty());
+  EXPECT_EQ(drafter_settings.GetBackend(), Backend::GPU);
+  EXPECT_THAT(executor_settings.GetSelectedSignatures(),
+              ElementsAre("prefill", "decode", "verify"));
 }
 
 TEST(LlmLiteRtMtpDrafterTest,

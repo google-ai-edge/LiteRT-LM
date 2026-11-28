@@ -27,6 +27,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -60,6 +61,7 @@
 #include "runtime/components/sampling_uniforms.h"
 #include "runtime/components/top_p_cpu_sampler.h"
 #include "runtime/executor/executor_settings_base.h"
+#include "runtime/executor/litert_compiled_model_executor_utils.h"
 #include "runtime/executor/llm_executor_settings.h"
 #include "runtime/util/convert_tensor_buffer.h"
 #include "runtime/util/scoped_file.h"
@@ -76,6 +78,7 @@ namespace {
 
 using ::testing::ElementsAre;
 using ::testing::IsEmpty;
+using ::testing::Not;
 using ::testing::UnorderedElementsAre;
 using ::testing::status::StatusIs;
 
@@ -275,6 +278,43 @@ TEST(NvidiaMtpDrafterSupportTest, DefaultSignaturesDropTheSmallerPrefills) {
                                    "test_prefill_256", "test_prefill_1024"));
 }
 
+// What the default costs: with the largest prefill signature alone, an input
+// needs that signature's length in free entries of the context.
+TEST(NvidiaMtpDrafterSupportTest,
+     DefaultSignaturesNeedRoomForTheLargestPrefill) {
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env, CreateEnvironmentWithDispatchLibrary(
+                    "largest_prefill", "libLiteRtDispatch_Nvidia.so"));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto model,
+      Model::CreateFromFile(TestModelPath("magic_test_multi.tflite")));
+  ASSERT_OK_AND_ASSIGN(
+      auto settings,
+      CreateTestSettings("magic_test_multi.tflite", Backend::NPU));
+  ASSERT_OK(SelectDefaultNvidiaSignatures(env, model, "input_pos", settings));
+  ASSERT_OK_AND_ASSIGN(
+      const SortedPrefillSignatureMap default_prefills,
+      GetPrefillRunnerSetFromModel(model, "prefill", "input_pos",
+                                   settings.GetSelectedSignatures()));
+  ASSERT_OK_AND_ASSIGN(
+      const SortedPrefillSignatureMap all_prefills,
+      GetPrefillRunnerSetFromModel(model, "prefill", "input_pos"));
+
+  // A one-token input fits while the context has 4099 free entries, the length
+  // of prefill_4099.
+  EXPECT_OK(
+      GetOptimizedPrefillWorkGroups(default_prefills, /*input_length=*/1,
+                                    /*max_prefill_sequence_length=*/4099));
+  // With one entry less it no longer fits, where the model's smaller prefill
+  // signatures would still have run it.
+  EXPECT_THAT(
+      GetOptimizedPrefillWorkGroups(default_prefills, /*input_length=*/1,
+                                    /*max_prefill_sequence_length=*/4098),
+      StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_OK(GetOptimizedPrefillWorkGroups(
+      all_prefills, /*input_length=*/1, /*max_prefill_sequence_length=*/4098));
+}
+
 TEST(NvidiaMtpDrafterSupportTest, DefaultSignaturesKeepTheCallersSelection) {
   LITERT_ASSERT_OK_AND_ASSIGN(
       auto env, CreateEnvironmentWithDispatchLibrary(
@@ -418,7 +458,13 @@ std::optional<std::string> EnvironmentValue(const char* name) {
 // names no cache location.
 class NvidiaCacheLocationsTest : public ::testing::Test {
  protected:
-  void SetUp() override { ClearCacheVariables(); }
+  void SetUp() override {
+    ClearCacheVariables();
+    LITERT_ASSERT_OK_AND_ASSIGN(
+        auto env, CreateEnvironmentWithDispatchLibrary(
+                      "cache_locations", "libLiteRtDispatch_Nvidia.so"));
+    env_.emplace(std::move(env));
+  }
   void TearDown() override { ClearCacheVariables(); }
 
   static void ClearCacheVariables() {
@@ -437,6 +483,10 @@ class NvidiaCacheLocationsTest : public ::testing::Test {
     std::ofstream(path).close();
     return path;
   }
+
+  // An environment that takes its dispatch library from a directory that
+  // holds NVIDIA's.
+  std::optional<Environment> env_;
 };
 
 TEST_F(NvidiaCacheLocationsTest, DefaultsAreFoldersNextToTheModelFile) {
@@ -444,7 +494,7 @@ TEST_F(NvidiaCacheLocationsTest, DefaultsAreFoldersNextToTheModelFile) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create(model_path.string()));
 
-  SetDefaultNvidiaCacheLocations(model_assets);
+  SetDefaultNvidiaCacheLocations(*env_, model_assets);
 
   const std::filesystem::path aot_cache_dir =
       model_path.parent_path() / "litert_nvidia_tensorrt_aot_cache";
@@ -466,8 +516,8 @@ TEST_F(NvidiaCacheLocationsTest, DefaultsFollowTheModelThatLoadedLast) {
   ASSERT_OK_AND_ASSIGN(auto second_assets,
                        ModelAssets::Create(second_path.string()));
 
-  SetDefaultNvidiaCacheLocations(first_assets);
-  SetDefaultNvidiaCacheLocations(second_assets);
+  SetDefaultNvidiaCacheLocations(*env_, first_assets);
+  SetDefaultNvidiaCacheLocations(*env_, second_assets);
 
   EXPECT_EQ(EnvironmentValue(kAotModelPathVariable), second_path.string());
   EXPECT_EQ(EnvironmentValue(kAotCacheDirVariable),
@@ -486,7 +536,7 @@ TEST_F(NvidiaCacheLocationsTest, AnEnvironmentThatNamesALocationKeepsItsOwn) {
     ClearCacheVariables();
     SetEnvironmentValue(named, "named_by_the_environment");
 
-    SetDefaultNvidiaCacheLocations(model_assets);
+    SetDefaultNvidiaCacheLocations(*env_, model_assets);
 
     for (const char* name : kCacheVariables) {
       if (name == named) {
@@ -509,9 +559,9 @@ TEST_F(NvidiaCacheLocationsTest, AnEnvironmentThatNamesALocationLaterIsKept) {
   ASSERT_OK_AND_ASSIGN(auto second_assets,
                        ModelAssets::Create(second_path.string()));
 
-  SetDefaultNvidiaCacheLocations(first_assets);
+  SetDefaultNvidiaCacheLocations(*env_, first_assets);
   SetEnvironmentValue(kAotCacheDirVariable, "named_by_the_environment");
-  SetDefaultNvidiaCacheLocations(second_assets);
+  SetDefaultNvidiaCacheLocations(*env_, second_assets);
 
   // The first model's locations are not the second model's.
   EXPECT_EQ(EnvironmentValue(kAotCacheDirVariable), "named_by_the_environment");
@@ -537,7 +587,7 @@ TEST_F(NvidiaCacheLocationsTest, DefaultsUseTheCRuntimeThatDllsShare) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create(model_path.string()));
 
-  SetDefaultNvidiaCacheLocations(model_assets);
+  SetDefaultNvidiaCacheLocations(*env_, model_assets);
 
   EXPECT_STREQ(get_env(kAotModelPathVariable), model_path.string().c_str());
   EXPECT_STREQ(get_env(kAotCacheDirVariable),
@@ -552,7 +602,7 @@ TEST_F(NvidiaCacheLocationsTest, DefaultsUseTheCRuntimeThatDllsShare) {
 
   // A location that the caller names there afterwards is kept.
   ASSERT_EQ(put_env(kAotCacheDirVariable, "named_by_the_caller"), 0);
-  SetDefaultNvidiaCacheLocations(model_assets);
+  SetDefaultNvidiaCacheLocations(*env_, model_assets);
 
   EXPECT_STREQ(get_env(kAotCacheDirVariable), "named_by_the_caller");
   EXPECT_EQ(get_env(kAotModelPathVariable), nullptr);
@@ -566,7 +616,7 @@ TEST_F(NvidiaCacheLocationsTest, NoDefaultsForAModelPathWithOtherThanAscii) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create(model_path.string()));
 
-  SetDefaultNvidiaCacheLocations(model_assets);
+  SetDefaultNvidiaCacheLocations(*env_, model_assets);
 
   for (const char* name : kCacheVariables) {
     EXPECT_EQ(EnvironmentValue(name), std::nullopt) << name;
@@ -585,8 +635,8 @@ TEST_F(NvidiaCacheLocationsTest, NoDefaultsWhenTheFoldersCannotBeCreated) {
   ASSERT_OK_AND_ASSIGN(auto second_assets,
                        ModelAssets::Create(second_path.string()));
 
-  SetDefaultNvidiaCacheLocations(first_assets);
-  SetDefaultNvidiaCacheLocations(second_assets);
+  SetDefaultNvidiaCacheLocations(*env_, first_assets);
+  SetDefaultNvidiaCacheLocations(*env_, second_assets);
 
   // The first model's locations are not the second model's.
   for (const char* name : kCacheVariables) {
@@ -601,7 +651,7 @@ TEST_F(NvidiaCacheLocationsTest, NoDefaultsForAModelWithoutAPath) {
       auto model_assets,
       ModelAssets::Create(std::make_shared<ScopedFile>(std::move(model_file))));
 
-  SetDefaultNvidiaCacheLocations(model_assets);
+  SetDefaultNvidiaCacheLocations(*env_, model_assets);
 
   for (const char* name : kCacheVariables) {
     EXPECT_EQ(EnvironmentValue(name), std::nullopt) << name;
@@ -610,11 +660,66 @@ TEST_F(NvidiaCacheLocationsTest, NoDefaultsForAModelWithoutAPath) {
                                        "litert_nvidia_tensorrt_aot_cache"));
 }
 
-TEST_F(NvidiaCacheLocationsTest, AnExecutorOnNvidiasBackendGetsTheDefaults) {
+TEST_F(NvidiaCacheLocationsTest, ALoadOfTheSameModelKeepsItsLocations) {
+  const std::filesystem::path model_path = CreateModelFile("same_model");
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+
+  SetDefaultNvidiaCacheLocations(*env_, model_assets);
+  SetDefaultNvidiaCacheLocations(*env_, model_assets);
+
+  EXPECT_EQ(EnvironmentValue(kAotModelPathVariable), model_path.string());
+  EXPECT_EQ(
+      EnvironmentValue(kAotCacheDirVariable),
+      (model_path.parent_path() / "litert_nvidia_tensorrt_aot_cache").string());
+  EXPECT_EQ(EnvironmentValue(kRuntimeCacheDirVariable),
+            (model_path.parent_path() / "litert_nvidia_dispatch_runtime_cache")
+                .string());
+}
+
+TEST_F(NvidiaCacheLocationsTest, AnEmptyVariableNamesNoLocation) {
+  const std::filesystem::path model_path = CreateModelFile("empty_variable");
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+  for (const char* name : kCacheVariables) {
+    SetEnvironmentValue(name, "");
+  }
+
+  SetDefaultNvidiaCacheLocations(*env_, model_assets);
+
+  EXPECT_EQ(EnvironmentValue(kAotModelPathVariable), model_path.string());
+  EXPECT_EQ(
+      EnvironmentValue(kAotCacheDirVariable),
+      (model_path.parent_path() / "litert_nvidia_tensorrt_aot_cache").string());
+  EXPECT_EQ(EnvironmentValue(kRuntimeCacheDirVariable),
+            (model_path.parent_path() / "litert_nvidia_dispatch_runtime_cache")
+                .string());
+}
+
+TEST_F(NvidiaCacheLocationsTest, NoDefaultsWithoutNvidiasDispatchLibrary) {
   LITERT_ASSERT_OK_AND_ASSIGN(
-      auto env, CreateEnvironmentWithDispatchLibrary(
-                    "cache_locations", "libLiteRtDispatch_Nvidia.so"));
-  const std::filesystem::path model_path = CreateModelFile("nvidia_executor");
+      auto other_vendor_env,
+      CreateEnvironmentWithDispatchLibrary("cache_locations_other_vendor",
+                                           "libLiteRtDispatch_Qualcomm.so"));
+  LITERT_ASSERT_OK_AND_ASSIGN(
+      auto env_without_dispatch_library,
+      Environment::Create(std::vector<Environment::Option>()));
+  const std::filesystem::path model_path = CreateModelFile("other_vendor");
+  ASSERT_OK_AND_ASSIGN(auto model_assets,
+                       ModelAssets::Create(model_path.string()));
+
+  SetDefaultNvidiaCacheLocations(other_vendor_env, model_assets);
+  SetDefaultNvidiaCacheLocations(env_without_dispatch_library, model_assets);
+
+  for (const char* name : kCacheVariables) {
+    EXPECT_EQ(EnvironmentValue(name), std::nullopt) << name;
+  }
+  EXPECT_FALSE(std::filesystem::exists(model_path.parent_path() /
+                                       "litert_nvidia_tensorrt_aot_cache"));
+}
+
+TEST_F(NvidiaCacheLocationsTest, SelectingSignaturesNamesNoLocation) {
+  const std::filesystem::path model_path = CreateModelFile("only_signatures");
   std::filesystem::copy_file(TestModelPath("magic_test_multi.tflite"),
                              model_path,
                              std::filesystem::copy_options::overwrite_existing);
@@ -624,49 +729,15 @@ TEST_F(NvidiaCacheLocationsTest, AnExecutorOnNvidiasBackendGetsTheDefaults) {
                        ModelAssets::Create(model_path.string()));
   ASSERT_OK_AND_ASSIGN(auto settings, LlmExecutorSettings::CreateDefault(
                                           model_assets, Backend::NPU));
-  // A caller that selected its signatures gets the cache locations too.
-  settings.SetSelectedSignatures({"prefill_67", "decode"});
 
-  ASSERT_OK(SelectDefaultNvidiaSignatures(env, model, "input_pos", settings));
+  ASSERT_OK(SelectDefaultNvidiaSignatures(*env_, model, "input_pos", settings));
 
-  EXPECT_THAT(settings.GetSelectedSignatures(),
-              ElementsAre("prefill_67", "decode"));
-  EXPECT_EQ(EnvironmentValue(kAotModelPathVariable), model_path.string());
-  EXPECT_EQ(
-      EnvironmentValue(kAotCacheDirVariable),
-      (model_path.parent_path() / "litert_nvidia_tensorrt_aot_cache").string());
-}
-
-TEST_F(NvidiaCacheLocationsTest, AnExecutorOffNvidiasBackendGetsNoDefaults) {
-  LITERT_ASSERT_OK_AND_ASSIGN(
-      auto other_vendor_env,
-      CreateEnvironmentWithDispatchLibrary("cache_locations_other_vendor",
-                                           "libLiteRtDispatch_Qualcomm.so"));
-  LITERT_ASSERT_OK_AND_ASSIGN(
-      auto nvidia_env,
-      CreateEnvironmentWithDispatchLibrary("cache_locations_other_backend",
-                                           "libLiteRtDispatch_Nvidia.so"));
-  const std::filesystem::path model_path = CreateModelFile("other_executor");
-  std::filesystem::copy_file(TestModelPath("magic_test_multi.tflite"),
-                             model_path,
-                             std::filesystem::copy_options::overwrite_existing);
-  LITERT_ASSERT_OK_AND_ASSIGN(auto model,
-                              Model::CreateFromFile(model_path.string()));
-  ASSERT_OK_AND_ASSIGN(auto model_assets,
-                       ModelAssets::Create(model_path.string()));
-  ASSERT_OK_AND_ASSIGN(auto npu_settings, LlmExecutorSettings::CreateDefault(
-                                              model_assets, Backend::NPU));
-  ASSERT_OK_AND_ASSIGN(auto cpu_settings, LlmExecutorSettings::CreateDefault(
-                                              model_assets, Backend::CPU));
-
-  ASSERT_OK(SelectDefaultNvidiaSignatures(other_vendor_env, model, "input_pos",
-                                          npu_settings));
-  ASSERT_OK(SelectDefaultNvidiaSignatures(nvidia_env, model, "input_pos",
-                                          cpu_settings));
-
+  EXPECT_THAT(settings.GetSelectedSignatures(), Not(IsEmpty()));
   for (const char* name : kCacheVariables) {
     EXPECT_EQ(EnvironmentValue(name), std::nullopt) << name;
   }
+  EXPECT_FALSE(std::filesystem::exists(model_path.parent_path() /
+                                       "litert_nvidia_tensorrt_aot_cache"));
 }
 
 TEST(NvidiaMtpDrafterSupportTest, GreedySamplerFallsBackOffNvidiaBuffers) {

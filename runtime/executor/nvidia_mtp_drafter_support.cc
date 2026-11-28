@@ -365,7 +365,8 @@ std::map<std::string, std::string>& DefaultCacheValues()
   return *values;
 }
 
-// The value of the environment variable `name`, or nullopt if it has none.
+// The value of the environment variable `name`, or nullopt if it has none or
+// an empty one.
 std::optional<std::string> EnvironmentValue(const char* name) {
 #if defined(_WIN32)
   // A Windows process can hold several copies of the C runtime, each with its
@@ -385,7 +386,7 @@ std::optional<std::string> EnvironmentValue(const char* name) {
   return value;
 #else
   const char* value = std::getenv(name);
-  if (value == nullptr) {
+  if (value == nullptr || *value == '\0') {
     return std::nullopt;
   }
   return std::string(value);
@@ -416,30 +417,21 @@ void SetEnvironmentValue(const char* name, const std::string& value) {
 #endif
 }
 
-// Gives the cache variable `name` the value `value` for the process.
-void SetDefaultCacheValue(const char* name, const std::string& value)
+// Whether the environment names a cache location itself: a cache variable has
+// a value that SetDefaultNvidiaCacheLocations did not give it.
+bool EnvironmentNamesCacheLocations()
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(default_cache_values_mutex) {
-  SetEnvironmentValue(name, value);
-  DefaultCacheValues()[name] = value;
-}
-
-// Takes the values that SetDefaultCacheValue gave the cache variables out of
-// the environment. A variable that got another value since keeps it.
-void ClearDefaultCacheValues()
-    ABSL_EXCLUSIVE_LOCKS_REQUIRED(default_cache_values_mutex) {
-  for (const auto& [name, value] : DefaultCacheValues()) {
-    if (EnvironmentValue(name.c_str()) == value) {
-      SetEnvironmentValue(name.c_str(), "");
-    }
-  }
-  DefaultCacheValues().clear();
-}
-
-// Whether the environment names a cache location itself.
-bool EnvironmentNamesCacheLocations() {
+  const std::map<std::string, std::string>& default_values =
+      DefaultCacheValues();
   for (const char* name : {kAotModelPathVariable, kAotCacheDirVariable,
                            kRuntimeCacheDirVariable}) {
-    if (EnvironmentValue(name).has_value()) {
+    const std::optional<std::string> value = EnvironmentValue(name);
+    if (!value.has_value()) {
+      continue;
+    }
+    const auto default_value = default_values.find(name);
+    if (default_value == default_values.end() ||
+        default_value->second != *value) {
       return true;
     }
   }
@@ -466,6 +458,46 @@ bool CreateWritableDirectory(const std::filesystem::path& path) {
   return created;
 }
 
+// The values that the cache variables get for the model of `model_assets`, by
+// variable name: the model file and the two cache folders next to it, which
+// are created. Empty if the model gets no cache.
+std::map<std::string, std::string> CacheValuesNextToModel(
+    const ModelAssets& model_assets) {
+  const absl::StatusOr<absl::string_view> model_path = model_assets.GetPath();
+  if (!model_path.ok()) {
+    return {};
+  }
+#if defined(_WIN32)
+  // NVIDIA's libraries open the paths in the code page of the process, and the
+  // model path is UTF-8: the two agree on ASCII characters only.
+  if (!absl::c_all_of(*model_path, absl::ascii_isascii)) {
+    ABSL_LOG(INFO) << "NVIDIA's backend keeps no engine cache: on Windows it "
+                      "needs a model path of ASCII characters only, which "
+                   << *model_path << " is not.";
+    return {};
+  }
+#endif
+  const std::filesystem::path model_dir =
+      std::filesystem::path(std::string(*model_path)).parent_path();
+  const std::filesystem::path aot_cache_dir = model_dir / kAotCacheDirName;
+  const std::filesystem::path runtime_cache_dir =
+      model_dir / kRuntimeCacheDirName;
+  if (!CreateWritableDirectory(aot_cache_dir) ||
+      !CreateWritableDirectory(runtime_cache_dir)) {
+    ABSL_LOG(INFO) << "NVIDIA's backend keeps no engine cache: the folder of "
+                   << *model_path << " cannot be written to.";
+    return {};
+  }
+  ABSL_LOG(INFO) << "NVIDIA's backend keeps its engine caches in "
+                 << aot_cache_dir.string() << " and "
+                 << runtime_cache_dir.string() << ".";
+  return {
+      {kAotModelPathVariable, std::string(*model_path)},
+      {kAotCacheDirVariable, aot_cache_dir.string()},
+      {kRuntimeCacheDirVariable, runtime_cache_dir.string()},
+  };
+}
+
 }  // namespace
 
 // The dispatch library the runtime has loaded already, or nothing (NoLoad:
@@ -479,73 +511,63 @@ absl::StatusOr<std::optional<SharedLibrary>> LoadedDispatchLibrary(
   if (!directory.has_value()) {
     return std::nullopt;
   }
-  const std::string path =
-      absl::StrCat(*directory, "/libLiteRtDispatch_Nvidia.so");
-  auto library = SharedLibrary::Load(path, RtldFlags::Now().NoLoad().Local());
-  if (!library.HasValue()) {
-    return std::nullopt;
+  for (absl::string_view file_name : kNvidiaDispatchLibraryFileNames) {
+    const std::string path = absl::StrCat(*directory, "/", file_name);
+    auto library = SharedLibrary::Load(path, RtldFlags::Now().NoLoad().Local());
+    if (library.HasValue()) {
+      return std::optional<SharedLibrary>(std::move(library.Value()));
+    }
   }
-  return std::optional<SharedLibrary>(std::move(library.Value()));
+  return std::nullopt;
 #else
   return std::nullopt;
 #endif
 }
 
-void SetDefaultNvidiaCacheLocations(const ModelAssets& model_assets) {
+void SetDefaultNvidiaCacheLocations(const Environment& env,
+                                    const ModelAssets& model_assets) {
+  const absl::StatusOr<std::optional<std::string>> dispatch_lib_dir =
+      DispatchLibraryDir(env);
+  if (!dispatch_lib_dir.ok() || !dispatch_lib_dir->has_value() ||
+      !HasNvidiaDispatchLibrary(**dispatch_lib_dir)) {
+    return;
+  }
   absl::MutexLock lock(&default_cache_values_mutex);
-  // The locations of the model that loaded before are not this model's.
-  ClearDefaultCacheValues();
-  if (EnvironmentNamesCacheLocations()) {
-    return;
+  std::map<std::string, std::string> values;
+  if (!EnvironmentNamesCacheLocations()) {
+    values = CacheValuesNextToModel(model_assets);
   }
-  const absl::StatusOr<absl::string_view> model_path = model_assets.GetPath();
-  if (!model_path.ok()) {
-    return;
+  // Only a variable whose value changes is written, so a load of the model
+  // file that loaded last leaves the environment alone.
+  std::map<std::string, std::string>& default_values = DefaultCacheValues();
+  for (const auto& [name, value] : default_values) {
+    // The locations of the model that loaded before are not this model's. A
+    // variable that got another value since keeps it.
+    if (values.find(name) == values.end() &&
+        EnvironmentValue(name.c_str()) == value) {
+      SetEnvironmentValue(name.c_str(), "");
+    }
   }
-#if defined(_WIN32)
-  // NVIDIA's libraries open the paths in the code page of the process, and the
-  // model path is UTF-8: the two agree on ASCII characters only.
-  if (!absl::c_all_of(*model_path, absl::ascii_isascii)) {
-    ABSL_LOG(INFO) << "NVIDIA's backend keeps no engine cache: on Windows it "
-                      "needs a model path of ASCII characters only, which "
-                   << *model_path << " is not.";
-    return;
+  for (const auto& [name, value] : values) {
+    if (EnvironmentValue(name.c_str()) != value) {
+      SetEnvironmentValue(name.c_str(), value);
+    }
   }
-#endif
-  const std::filesystem::path model_dir =
-      std::filesystem::path(std::string(*model_path)).parent_path();
-  const std::filesystem::path aot_cache_dir = model_dir / kAotCacheDirName;
-  const std::filesystem::path runtime_cache_dir =
-      model_dir / kRuntimeCacheDirName;
-  if (!CreateWritableDirectory(aot_cache_dir) ||
-      !CreateWritableDirectory(runtime_cache_dir)) {
-    ABSL_LOG(INFO) << "NVIDIA's backend keeps no engine cache: the folder of "
-                   << *model_path << " cannot be written to.";
-    return;
-  }
-  ABSL_LOG(INFO) << "NVIDIA's backend keeps its engine caches in "
-                 << aot_cache_dir.string() << " and "
-                 << runtime_cache_dir.string() << ".";
-  SetDefaultCacheValue(kAotModelPathVariable, std::string(*model_path));
-  SetDefaultCacheValue(kAotCacheDirVariable, aot_cache_dir.string());
-  SetDefaultCacheValue(kRuntimeCacheDirVariable, runtime_cache_dir.string());
+  default_values = std::move(values);
 }
 
 absl::Status SelectDefaultNvidiaSignatures(
     const Environment& env, const Model& model,
     absl::string_view input_positions_name,
     LlmExecutorSettings& executor_settings) {
-  if (executor_settings.GetBackend() != Backend::NPU) {
+  if (executor_settings.GetBackend() != Backend::NPU ||
+      !executor_settings.GetSelectedSignatures().empty()) {
     return absl::OkStatus();
   }
   ABSL_ASSIGN_OR_RETURN(const std::optional<std::string> dispatch_lib_dir,
                         DispatchLibraryDir(env));
   if (!dispatch_lib_dir.has_value() ||
       !HasNvidiaDispatchLibrary(*dispatch_lib_dir)) {
-    return absl::OkStatus();
-  }
-  SetDefaultNvidiaCacheLocations(executor_settings.GetModelAssets());
-  if (!executor_settings.GetSelectedSignatures().empty()) {
     return absl::OkStatus();
   }
   // A model whose prefill lengths cannot be read here compiles all its

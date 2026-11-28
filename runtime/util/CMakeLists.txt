@@ -113,6 +113,26 @@ target_link_libraries(runtime_util_file_util
 )
 
 # ==============================================================================
+# NVIDIA Dispatch Library
+# ==============================================================================
+add_litertlm_library(runtime_util_nvidia_dispatch_library STATIC
+  nvidia_dispatch_library.cc
+)
+add_library(LiteRTLM::Runtime::Util::NvidiaDispatchLibrary ALIAS runtime_util_nvidia_dispatch_library)
+
+target_include_directories(runtime_util_nvidia_dispatch_library
+  PRIVATE
+    ${LITERTLM_GENERATED_SRC_DIR}
+    ${LITERTLM_INCLUDE_PATHS}
+)
+
+target_link_libraries(runtime_util_nvidia_dispatch_library
+  PUBLIC
+    LiteRTLM::Runtime::Util::FileUtil
+    LITERTLM_DEPS
+)
+
+# ==============================================================================
 # File Data Stream
 # ==============================================================================
 add_litertlm_library(runtime_util_file_data_stream STATIC
@@ -283,7 +303,7 @@ target_include_directories(runtime_util_litert_util
 
 target_link_libraries(runtime_util_litert_util
   PUBLIC
-    LiteRTLM::Runtime::Util::FileUtil
+    LiteRTLM::Runtime::Util::NvidiaDispatchLibrary
     LiteRTLM::Runtime::Util::LitertLmLoader
     LiteRTLM::Runtime::Util::ScopedFile
     LiteRTLM::Schema::Core

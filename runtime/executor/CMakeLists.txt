@@ -696,7 +696,7 @@ target_link_libraries(runtime_executor_nvidia_mtp_drafter_support
     LiteRTLM::Runtime::Components::SamplerParamsUtil
     LiteRTLM::Runtime::Components::SamplingCpuUtil
     LiteRTLM::Runtime::Components::SamplingUniforms
-    LiteRTLM::Runtime::Util::FileUtil
+    LiteRTLM::Runtime::Util::NvidiaDispatchLibrary
     LiteRTLM::Generated::Protobuf
     LITERTLM_DEPS
 )
