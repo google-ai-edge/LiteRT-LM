@@ -287,6 +287,20 @@ class ExecutionManager {
       const SessionInfo& session_info,
       std::unique_ptr<ProcessedContext> processed_context) = 0;
 
+  // Saves a snapshot of the session's live streaming audio context, or returns
+  // nullptr if the session does not have a streaming audio context.
+  virtual absl::StatusOr<std::unique_ptr<AudioContext>> SaveAudioContext(
+      const SessionInfo& session_info) {
+    return nullptr;
+  }
+
+  // Restores the session's streaming audio context from `audio_context` without
+  // consuming `audio_context` (so multi-use checkpoints remain reusable).
+  virtual absl::Status RestoreAudioContext(const SessionInfo& session_info,
+                                           const AudioContext& audio_context) {
+    return absl::OkStatus();
+  }
+
   // Returns the audio executor properties.
   virtual absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
       const = 0;

@@ -52,6 +52,7 @@
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
 #include "runtime/engine/io_types.h"
+#include "runtime/executor/audio/audio_executor.h"
 #include "runtime/executor/audio/audio_executor_settings.h"
 #include "runtime/executor/executor_settings_base.h"
 #include "runtime/executor/executor_stats.h"
@@ -1369,6 +1370,160 @@ TEST_F(SessionAdvancedTest, SaveAndRestoreContext) {
 
   EXPECT_THAT(session->RestoreContext("non-existent"),
               StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST_F(SessionAdvancedTest,
+       SaveCheckpointAndContextPreserveStreamingAudioContextAcrossAudioEnd) {
+  class TestAudioContext : public AudioContext {
+   public:
+    explicit TestAudioContext(int encoded_chunks)
+        : encoded_chunks_(encoded_chunks) {}
+    absl::StatusOr<std::unique_ptr<AudioContext>> Clone() const override {
+      return std::make_unique<TestAudioContext>(encoded_chunks_);
+    }
+    int encoded_chunks() const { return encoded_chunks_; }
+
+   private:
+    int encoded_chunks_;
+  };
+
+  class TestStreamingAudioExecutor : public AudioExecutor {
+   public:
+    absl::StatusOr<ExecutorAudioData> Encode(
+        const TensorBuffer& spectrogram_tensor) override {
+      ++encoded_chunks_;
+      encoded_chunks_history_.push_back(encoded_chunks_);
+      auto buffer = CopyToTensorBuffer<float>({1.0f, 2.0f}, {1, 1, 2});
+      if (!buffer.HasValue()) {
+        return absl::InternalError("Failed to create audio tensor buffer.");
+      }
+      return ExecutorAudioData(std::move(*buffer), std::nullopt,
+                               /*valid_tokens=*/1);
+    }
+
+    absl::StatusOr<ExecutorAudioData> Flush() override {
+      ExecutorAudioData data;
+      data.SetValidTokens(0);
+      return data;
+    }
+
+    absl::Status Reset() override {
+      ++reset_calls_;
+      encoded_chunks_ = 0;
+      return absl::OkStatus();
+    }
+
+    absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
+        const override {
+      AudioExecutorProperties properties;
+      properties.is_streaming_model = true;
+      return properties;
+    }
+
+    absl::StatusOr<std::unique_ptr<AudioContext>> CreateNewContext() override {
+      return std::make_unique<TestAudioContext>(0);
+    }
+
+    absl::StatusOr<std::unique_ptr<AudioContext>> CloneContext() override {
+      return std::make_unique<TestAudioContext>(encoded_chunks_);
+    }
+
+    absl::StatusOr<std::unique_ptr<AudioContext>> CloneContext(
+        const AudioContext& audio_context) override {
+      return audio_context.Clone();
+    }
+
+    absl::Status RestoreContext(
+        std::unique_ptr<AudioContext> audio_context) override {
+      encoded_chunks_ =
+          static_cast<const TestAudioContext&>(*audio_context).encoded_chunks();
+      return absl::OkStatus();
+    }
+
+    int encoded_chunks_ = 0;
+    int reset_calls_ = 0;
+    std::vector<int> encoded_chunks_history_;
+  };
+
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.SetAudioModalityEnabled(true);
+  session_config.SetApplyPromptTemplateInSession(false);
+  session_config.SetStartTokenId(2);
+  session_config.SetSamplerBackend(Backend::CPU);
+  session_config.GetMutableSamplerParams() = sampler_params_;
+  session_config.GetMutableStopTokenIds() = {{2294}};
+
+  // Sequence of prefills:
+  // 1. Chunk 1 -> [kSpecialToken]
+  // 2. Interim InputAudioEnd -> [kEndToken] (triggers Reset, then rewound)
+  // 3. Chunk 2 -> [kSpecialToken] (must see encoded_chunks_ == 2, not 1)
+  // 4. Speculative InputAudioEnd -> [kEndToken] (triggers Reset, then restored)
+  // 5. Chunk 3 -> [kSpecialToken] (must see encoded_chunks_ == 3, not 1)
+  auto llm_executor = CreateFakeLlmExecutor(
+      /*prefill_tokens=*/{{2, ExecutorAudioData::kSpecialToken},
+                          {ExecutorAudioData::kEndToken},
+                          {ExecutorAudioData::kSpecialToken},
+                          {ExecutorAudioData::kEndToken},
+                          {ExecutorAudioData::kSpecialToken}},
+      /*decode_tokens=*/{{224}, {2294}},
+      /*audio_embedding=*/std::vector<float>{1.0f, 2.0f});
+
+  ASSERT_OK_AND_ASSIGN(ModelAssets model_assets,
+                       ModelAssets::Create("test_model_path"));
+  ASSERT_OK_AND_ASSIGN(AudioExecutorSettings audio_settings,
+                       AudioExecutorSettings::CreateDefault(
+                           model_assets, 128, Backend::CPU, Backend::CPU));
+  auto audio_executor = std::make_unique<TestStreamingAudioExecutor>();
+  auto* audio_executor_ptr = audio_executor.get();
+
+  ASSERT_OK_AND_ASSIGN(
+      std::shared_ptr<ExecutionManager> execution_manager,
+      ThreadedExecutionManager::Create(
+          tokenizer_.get(), model_resources_.get(), std::move(llm_executor),
+          /*vision_executor_settings=*/nullptr,
+          std::make_unique<AudioExecutorSettings>(std::move(audio_settings)),
+          /*litert_env=*/nullptr, std::move(audio_executor)));
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<SessionAdvanced> session,
+      SessionAdvanced::Create(execution_manager, tokenizer_.get(),
+                              session_config, /*benchmark_info=*/std::nullopt));
+
+  auto make_chunk_inputs = []() {
+    std::vector<InputData> inputs;
+    auto spectrogram = CopyToTensorBuffer<float>({1.0f, 2.0f}, {1, 2});
+    inputs.emplace_back(InputAudio(std::move(*spectrogram)));
+    return inputs;
+  };
+  auto make_audio_end_inputs = []() {
+    std::vector<InputData> inputs;
+    inputs.emplace_back(InputAudioEnd());
+    return inputs;
+  };
+
+  // Chunk 1 -> SaveCheckpoint -> InputAudioEnd (Reset) -> RewindToCheckpoint.
+  EXPECT_OK(session->RunPrefill(make_chunk_inputs()));
+  EXPECT_EQ(audio_executor_ptr->encoded_chunks_, 1);
+  EXPECT_OK(session->SaveCheckpoint("interim"));
+  EXPECT_OK(session->RunPrefill(make_audio_end_inputs()));
+  EXPECT_EQ(audio_executor_ptr->reset_calls_, 1);
+  EXPECT_EQ(audio_executor_ptr->encoded_chunks_, 0);
+  EXPECT_OK(session->RewindToCheckpoint("interim"));
+  EXPECT_EQ(audio_executor_ptr->encoded_chunks_, 1);
+
+  // Chunk 2 -> SaveContext -> InputAudioEnd (Reset) -> RestoreContext.
+  EXPECT_OK(session->RunPrefill(make_chunk_inputs()));
+  EXPECT_EQ(audio_executor_ptr->encoded_chunks_, 2);
+  EXPECT_OK(session->SaveContext("saved-context"));
+  EXPECT_OK(session->RunPrefill(make_audio_end_inputs()));
+  EXPECT_EQ(audio_executor_ptr->reset_calls_, 2);
+  EXPECT_EQ(audio_executor_ptr->encoded_chunks_, 0);
+  EXPECT_OK(session->RestoreContext("saved-context"));
+  EXPECT_EQ(audio_executor_ptr->encoded_chunks_, 2);
+
+  // Chunk 3 continues from encoded_chunks_ == 2 -> 3.
+  EXPECT_OK(session->RunPrefill(make_chunk_inputs()));
+  EXPECT_THAT(audio_executor_ptr->encoded_chunks_history_,
+              testing::ElementsAre(1, 2, 3));
 }
 
 TEST_F(SessionAdvancedTest, GetCurrentStep) {

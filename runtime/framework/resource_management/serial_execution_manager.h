@@ -237,6 +237,15 @@ class SerialExecutionManager : public ExecutionManager {
       const SessionInfo& session_info,
       std::unique_ptr<ProcessedContext> processed_context) override;
 
+  // Saves a snapshot of the session's live streaming audio context, or returns
+  // nullptr if the session does not have a streaming audio context.
+  absl::StatusOr<std::unique_ptr<AudioContext>> SaveAudioContext(
+      const SessionInfo& session_info) override;
+
+  // Restores the session's streaming audio context from `audio_context`.
+  absl::Status RestoreAudioContext(const SessionInfo& session_info,
+                                   const AudioContext& audio_context) override;
+
   // Returns the audio executor properties.
   absl::StatusOr<AudioExecutorProperties> GetAudioExecutorProperties()
       const override;
