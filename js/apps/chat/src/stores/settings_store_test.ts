@@ -604,4 +604,52 @@ describe('SettingsStore', () => {
        expect(getMediaUiCopy(false, false).heroCapabilitiesSentence)
            .not.toContain('Attach');
      });
+
+  it('salvages valid customModels and scalar settings when another field fails validation',
+     () => {
+       spyOn(console, 'warn');
+       const uploaded = {
+         name: 'my-uploaded',
+         filename: 'my-uploaded.litertlm',
+         path: 'https://local-model/my-uploaded.litertlm',
+         size: '6.91 GB',
+       };
+       window.localStorage.setItem(
+           'litertlm-chat-settings', JSON.stringify({
+             selectedModelPath: uploaded.path,
+             temperature: 0.4,
+             topK: -5,
+             visionBackend: 'unsupported-future-mode',
+             customModels: [uploaded, {invalidEntry: true}],
+           }));
+
+       const store = new SettingsStore(mockUpdateCallback);
+
+       expect(store.customModels).toEqual([uploaded]);
+       expect(store.selectedModelPath).toBe(uploaded.path);
+       expect(store.temperature).toBe(0.4);
+       expect(store.topK).toBe(64);
+       expect(store.visionBackend).toBe('gpu');
+     });
+
+  it('matches and deduplicates URL-encoded and unencoded local-model paths',
+     () => {
+       const store = new SettingsStore(mockUpdateCallback);
+       const rawModel = {
+         name: 'my model',
+         filename: 'my model.litertlm',
+         path: 'https://local-model/my model.litertlm',
+         size: '1.20 GB',
+       };
+       const encodedModel = {
+         ...rawModel,
+         path: 'https://local-model/my%20model.litertlm',
+       };
+
+       selectCustomModel(store, rawModel);
+       selectCustomModel(store, encodedModel);
+
+       expect(store.customModels).toEqual([rawModel]);
+       expect(findModel(store, encodedModel.path)).toEqual(rawModel);
+     });
 });

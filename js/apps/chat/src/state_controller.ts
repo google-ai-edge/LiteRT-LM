@@ -18,11 +18,36 @@ import {ReactiveController, ReactiveControllerHost} from 'lit';
 
 import {ChatSessionStore, ConversationMeta, getIdleStatus, StoredMessage} from './stores/chat_session_store.js';
 import {LocalDirectoryService} from './stores/local_directory_service.js';
-import {ConfirmDialogOptions, ModelLoaderService} from './stores/model_loader_service.js';
+import {ConfirmDialogOptions, inferCustomModelFromCacheKey, ModelLoaderService} from './stores/model_loader_service.js';
 import {loadModelFromUrl} from './stores/model_url_parameter.js';
-import {SettingsStore} from './stores/settings_store.js';
+import {CustomModel, getModelKey, SettingsStore} from './stores/settings_store.js';
 
 export type {ConfirmDialogOptions, ConversationMeta, StoredMessage};
+
+/**
+ * Restores any uploaded `https://local-model/...` entries present in
+ * `cachedModels` that are missing from `settings.customModels`.
+ */
+export function syncUploadedModelsFromCache(
+    settings: Pick<SettingsStore, 'customModels'|'saveSettings'>,
+    cachedModels: ReadonlyMap<string, number>|undefined): void {
+  if (!cachedModels || cachedModels.size === 0) return;
+  const existingKeys =
+      new Set(settings.customModels.map(m => getModelKey(m.path)));
+  const restored: CustomModel[] = [];
+  for (const [cacheKey, sizeBytes] of cachedModels) {
+    if (!cacheKey.startsWith('https://local-model/') ||
+        existingKeys.has(cacheKey)) {
+      continue;
+    }
+    existingKeys.add(cacheKey);
+    restored.push(inferCustomModelFromCacheKey(cacheKey, sizeBytes));
+  }
+  if (restored.length > 0) {
+    settings.customModels = [...settings.customModels, ...restored];
+    settings.saveSettings();
+  }
+}
 
 function isErrorStatusMessage(msg: string): boolean {
   return /^(Failed|Could not|Error|Generation failed|⚠|Only images and audio|The "model" URL parameter)/i
@@ -81,9 +106,21 @@ export class LlmChatStateController implements ReactiveController {
         devHooks.createModelLoader ??
         ((...args) => new ModelLoaderService(...args));
     this.modelLoader = createModelLoader(
-        () => this.requestUpdate(), this.handleStatus, this.localDirService);
+        () => {
+          if (this.modelLoader) {
+            syncUploadedModelsFromCache(
+                this.settings, this.modelLoader.cachedModels);
+          }
+          this.requestUpdate();
+        },
+        this.handleStatus, this.localDirService);
     this.modelLoader.confirmAction = (options: ConfirmDialogOptions) =>
         this.requestConfirm(options);
+    this.modelLoader.isPinnedCustomUrl = (url: string) => {
+      const targetKey = getModelKey(url);
+      return this.settings.customModels.some(
+          m => getModelKey(m.path) === targetKey);
+    };
     this.chatSession = new ChatSessionStore(
         () => this.requestUpdate(),
         this.settings,

@@ -22,9 +22,10 @@ import {LlmChatStateController} from '../state_controller.js';
 import {ChatSessionStore, PromptMedia, PromptPart} from '../stores/chat_session_store.js';
 import {LocalDirectoryService} from '../stores/local_directory_service.js';
 import {getModelKey, ModelLoaderService} from '../stores/model_loader_service.js';
-import {MODELS, SettingsStore} from '../stores/settings_store.js';
+import {MODELS, parseModelSizeBytes, SettingsStore} from '../stores/settings_store.js';
 import {LitertChatWindow} from './chat_window.js';
 import {CustomDropdown} from './custom_dropdown.js';
+import {getAllAvailableModels, getTotalCachedWeightsBytes} from './model_selector_shared.js';
 
 describe('litert-chat-window', () => {
   let element: LitertChatWindow;
@@ -1015,7 +1016,13 @@ describe('litert-chat-window', () => {
          });
     });
 
-    describe('modality disabling', () => {
+    describe('Modality disabling and composer cleanliness', () => {
+      it('does not render Get code controls inside the chat composer', () => {
+        expect(element.shadowRoot!.querySelector('#btn-get-code')).toBeNull();
+        expect(element.shadowRoot!.querySelector('#composer-code-popover'))
+            .toBeNull();
+      });
+
       it('disables camera, mic, and media attach buttons with explanations when Vision and/or Audio are off',
          async () => {
            const addMediaBtn =
@@ -1136,6 +1143,123 @@ describe('litert-chat-window', () => {
            expect(mockChatSession.sendMessage).not.toHaveBeenCalled();
            expect(mockState.statusText)
                .toContain('Vision is turned off in Experimental settings');
+         });
+
+      it('surfaces missing uploaded and orphaned cached models so per-row sizes sum to the footer total and supports removing them',
+         async () => {
+           const uploadedPath =
+               'https://local-model/gemma-4-12B-custom.litertlm';
+           const orphanUrl =
+               'https://huggingface.co/org/orphan-model/resolve/abc123/orphan-model.litertlm';
+           const remoteUncached = {
+             name: 'Uncached Remote',
+             filename: 'remote.litertlm',
+             path: 'https://example.com/remote.litertlm',
+             size: '1.10 GB',
+           };
+           mockSettings.customModels = [remoteUncached];
+           mockSettings.selectedModelPath = uploadedPath;
+           cachedModelsMap.set(MODELS[0]!.path, 2_300_000_000);
+           cachedModelsMap.set(MODELS[2]!.path, 6_200_000_000);
+           cachedModelsMap.set(uploadedPath, 6_910_000_000);
+           cachedModelsMap.set(orphanUrl, 500_000_000);
+
+           element.requestUpdate();
+           await element.updateComplete;
+
+           const dropdown = element.shadowRoot!.querySelector(
+               '#composer-model-dropdown') as CustomDropdown;
+           const uploadedItem = dropdown.querySelector(
+               `[data-value="${uploadedPath}"]`) as HTMLElement;
+           const orphanItem = dropdown.querySelector(
+               `[data-value="${orphanUrl}"]`) as HTMLElement;
+           expect(uploadedItem).toBeTruthy();
+           expect(
+               uploadedItem.querySelector('.model-name')!.textContent!.trim())
+               .toBe('gemma-4-12B-custom');
+           expect(
+               uploadedItem.querySelector('.size-badge')!.textContent!.trim())
+               .toBe('6.91 GB');
+           expect(orphanItem).toBeTruthy();
+           expect(orphanItem.querySelector('.model-name')!.textContent!.trim())
+               .toBe('orphan-model');
+           expect(orphanItem.querySelector('.size-badge')!.textContent!.trim())
+               .toBe('0.50 GB');
+
+           // Sum-of-rows == footer total invariant (both exact bytes and
+           // displayed labels).
+           const available = getAllAvailableModels(mockState);
+           const summedRowBytes = available.reduce(
+               (acc, m) => acc +
+                   (m.path.startsWith('local-dir://') ?
+                        0 :
+                        (cachedModelsMap.get(m.path) ?? 0)),
+               0);
+           expect(summedRowBytes).toBe(getTotalCachedWeightsBytes(mockState));
+           expect(summedRowBytes).toBe(15_910_000_000);
+
+           const badgeBytesSum =
+               Array.from(dropdown.querySelectorAll('.size-badge'))
+                   .reduce(
+                       (acc, el) => acc +
+                           (parseModelSizeBytes(el.textContent ?? '') ?? 0),
+                       0);
+           const footerValue = dropdown.querySelector(
+               '.cache-footer-row .cache-bar-value') as HTMLElement;
+           expect(footerValue.textContent!.trim()).toBe('15.91 GB');
+           expect(badgeBytesSum)
+               .toBe(parseModelSizeBytes(footerValue.textContent ?? '')!);
+
+           // Removing the orphaned cache entry via its ✕ button deletes it.
+           mockModelLoader.deleteModelFromCache.and.resolveTo(true);
+           const orphanRow = orphanItem.closest('.dropdown-row')!;
+           const orphanDeleteBtn =
+               orphanRow.querySelector('.delete-cache-btn') as HTMLButtonElement;
+           expect(orphanDeleteBtn).toBeTruthy();
+           orphanDeleteBtn.click();
+           await new Promise(resolve => setTimeout(resolve));
+           expect(mockModelLoader.deleteModelFromCache)
+               .toHaveBeenCalledWith(orphanUrl);
+
+           // Sub-10 MB uploaded fixtures display MB instead of 0.0 GB / 0.00 GB.
+           cachedModelsMap.clear();
+           cachedModelsMap.set(
+               'https://local-model/test_lm_tflite_weights.litertlm', 966_144);
+           element.requestUpdate();
+           await element.updateComplete;
+           const smallBadge =
+               dropdown.querySelector('.size-badge') as HTMLElement;
+           expect(smallBadge.textContent!.trim()).toBe('0.97 MB');
+           expect(footerValue.textContent!.trim()).toBe('0.97 MB');
+
+           // Clear All removes cache-only uploaded entries from customModels
+           // and resets selectedModelPath if an uploaded model was active,
+           // while keeping re-downloadable remote custom models.
+           mockSettings.customModels = [
+             remoteUncached,
+             {
+               name: 'gemma-4-12B-custom',
+               filename: 'gemma-4-12B-custom.litertlm',
+               path: uploadedPath,
+               size: '6.91 GB',
+             },
+           ];
+           mockSettings.selectedModelPath = uploadedPath;
+           mockModelLoader.clearAllCache.and.callFake(
+               async (onDeleted?: () => void) => {
+                 cachedModelsMap.clear();
+                 onDeleted?.();
+               });
+           mockSettings.saveSettings.calls.reset();
+
+           const clearBtn = dropdown.querySelector(
+               '#composer-model-clear-cache') as HTMLButtonElement;
+           clearBtn.click();
+           await new Promise(resolve => setTimeout(resolve));
+
+           expect(mockSettings.customModels).toEqual([remoteUncached]);
+           expect(mockSettings.selectedModelPath).toBe(MODELS[0]!.path);
+           expect(mockSettings.saveSettings).toHaveBeenCalled();
          });
     });
   });

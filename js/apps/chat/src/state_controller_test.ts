@@ -90,4 +90,31 @@ describe('LlmChatStateController', () => {
 
     expect(controller.chatSession.activeSavedConvId).toBe('saved');
   });
+
+  it('restores uploaded local-model entries from cachedModels when missing from settings',
+     () => {
+       let triggerLoaderUpdate = () => {};
+       devHooks.createModelLoader = (onUpdate, updateStatus, localDirService) => {
+         triggerLoaderUpdate = onUpdate;
+         return new ModelLoaderService(onUpdate, updateStatus, localDirService);
+       };
+       controller = createController();
+       expect(controller.settings.customModels).toEqual([]);
+
+       controller.modelLoader.cachedModels.set(
+           'https://local-model/uploaded%20gemma.litertlm', 6_910_000_000);
+       triggerLoaderUpdate();
+
+       expect(controller.settings.customModels).toEqual([{
+         name: 'uploaded gemma',
+         filename: 'uploaded gemma.litertlm',
+         path: 'https://local-model/uploaded%20gemma.litertlm',
+         size: '6.91 GB',
+       }]);
+       const persisted = JSON.parse(
+                             window.localStorage.getItem(
+                                 'litertlm-chat-settings') ??
+                             '{}') as {customModels?: unknown};
+       expect(persisted.customModels).toEqual(controller.settings.customModels);
+     });
 });

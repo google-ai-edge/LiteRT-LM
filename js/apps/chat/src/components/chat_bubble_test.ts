@@ -19,7 +19,75 @@ import './chat_bubble';
 import {ChatSessionStore, PromptMedia, PromptPart} from '../stores/chat_session_store.js';
 import {LlmChatStateController} from '../state_controller.js';
 import {LitertChatBubble, trimAmbiguousTail} from './chat_bubble.js';
+import {LitertCodeBlock} from './code_block.js';
 
+
+function srgbChannelToLinear(channel: number): number {
+  const normalized = channel / 255;
+  return normalized <= 0.04045 ? normalized / 12.92 :
+                                 Math.pow((normalized + 0.055) / 1.055, 2.4);
+}
+
+function relativeLuminance(cssRgb: string): number {
+  const match = cssRgb.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (!match) {
+    throw new Error(`Unexpected CSS color: ${cssRgb}`);
+  }
+  const r = Number(match[1]);
+  const g = Number(match[2]);
+  const b = Number(match[3]);
+  return 0.2126 * srgbChannelToLinear(r) + 0.7152 * srgbChannelToLinear(g) +
+      0.0722 * srgbChannelToLinear(b);
+}
+
+function wcagContrastRatio(fgRgb: string, bgRgb: string): number {
+  const l1 = relativeLuminance(fgRgb);
+  const l2 = relativeLuminance(bgRgb);
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+}
+
+const ALL_HLJS_TOKEN_CLASSES = [
+  'hljs-keyword',
+  'hljs-doctag',
+  'hljs-meta-keyword',
+  'hljs-template-tag',
+  'hljs-type',
+  'hljs-built_in',
+  'hljs-builtin-name',
+  'hljs-literal',
+  'hljs-selector-tag',
+  'hljs-selector-pseudo',
+  'hljs-tag',
+  'hljs-name',
+  'hljs-attr',
+  'hljs-attribute',
+  'hljs-variable',
+  'hljs-params',
+  'hljs-selector-id',
+  'hljs-selector-class',
+  'hljs-selector-attr',
+  'hljs-string',
+  'hljs-regexp',
+  'hljs-meta-string',
+  'hljs-template-variable',
+  'hljs-link',
+  'hljs-number',
+  'hljs-symbol',
+  'hljs-bullet',
+  'hljs-title',
+  'hljs-section',
+  'hljs-comment',
+  'hljs-quote',
+  'hljs-code',
+  'hljs-formula',
+  'hljs-meta',
+  'hljs-subst',
+  'hljs-operator',
+  'hljs-punctuation',
+  'hljs-property',
+  'hljs-addition',
+  'hljs-deletion',
+] as const;
 
 describe('litert-chat-bubble', () => {
   let element: LitertChatBubble;
@@ -607,6 +675,114 @@ describe('litert-chat-bubble', () => {
            element.shadowRoot!.querySelector('litert-code-block')!;
        expect(updatedBlock).toBe(initialBlock);
        expect(scrollRegion.scrollTop).toBe(42);
+     });
+
+  it('switches syntax-highlighting tokens between light and dark palettes with WCAG AA >= 4.5:1 contrast',
+     async () => {
+       const prevTheme = document.documentElement.getAttribute('data-theme');
+       try {
+         element.message = {
+           role: 'assistant',
+           senderName: 'Model',
+           text: [
+             '```html',
+             '<!DOCTYPE html>',
+             '<html lang="en">',
+             '<head>',
+             '  <meta charset="UTF-8">',
+             '  <style>',
+             '    body {',
+             '      background: linear-gradient(135deg, #0a0a0a, #e94560);',
+             '      margin: 0;',
+             '    }',
+             '  </style>',
+             '</head>',
+             '<body>',
+             '  <script>',
+             '    // Animate particles',
+             '    const count = 120;',
+             '    function step() { return true; }',
+             '  </script>',
+             '</body>',
+             '</html>',
+             '```',
+           ].join('\n'),
+         };
+         await element.updateComplete;
+
+         const codeBlock =
+             element.shadowRoot!.querySelector<LitertCodeBlock>(
+                 'litert-code-block')!;
+         await codeBlock.updateComplete;
+         const codeContainer =
+             codeBlock.shadowRoot!.querySelector<HTMLElement>(
+                 '.code-container')!;
+         const codeEl =
+             element.shadowRoot!.querySelector<HTMLElement>('code.hljs')!;
+
+         // Append synthetic spans for every supported hljs token class so
+         // token classes not emitted by this HTML sample are also verified.
+         const probeHost = document.createElement('span');
+         for (const cls of ALL_HLJS_TOKEN_CLASSES) {
+           const span = document.createElement('span');
+           span.className = cls;
+           span.textContent = cls;
+           probeHost.appendChild(span);
+         }
+         codeEl.appendChild(probeHost);
+
+         document.documentElement.setAttribute('data-theme', 'light');
+         const lightBg = getComputedStyle(codeContainer).backgroundColor;
+         expect(lightBg).toBe('rgb(241, 245, 249)');
+
+         const lightColors = new Map<string, string>();
+         const tokenSpans = Array.from(
+             codeEl.querySelectorAll<HTMLElement>('[class*="hljs-"]'));
+         expect(tokenSpans.length)
+             .toBeGreaterThan(ALL_HLJS_TOKEN_CLASSES.length);
+         for (const span of tokenSpans) {
+           const fg = getComputedStyle(span).color;
+           const ratio = wcagContrastRatio(fg, lightBg);
+           expect(ratio)
+               .withContext(`light ${span.className} (${fg} on ${lightBg})`)
+               .toBeGreaterThanOrEqual(4.5);
+           lightColors.set(span.className, fg);
+         }
+
+         document.documentElement.setAttribute('data-theme', 'dark');
+         const darkBg = getComputedStyle(codeContainer).backgroundColor;
+         expect(darkBg).toBe('rgb(8, 11, 16)');
+
+         for (const span of tokenSpans) {
+           const fg = getComputedStyle(span).color;
+           const ratio = wcagContrastRatio(fg, darkBg);
+           expect(ratio)
+               .withContext(`dark ${span.className} (${fg} on ${darkBg})`)
+               .toBeGreaterThanOrEqual(4.5);
+         }
+
+         expect(lightColors.get('hljs-keyword'))
+             .not.toBe(
+                 getComputedStyle(
+                     codeEl.querySelector<HTMLElement>('.hljs-keyword')!)
+                     .color);
+         expect(lightColors.get('hljs-string'))
+             .not.toBe(
+                 getComputedStyle(
+                     codeEl.querySelector<HTMLElement>('.hljs-string')!)
+                     .color);
+         expect(lightColors.get('hljs-tag'))
+             .not.toBe(
+                 getComputedStyle(
+                     codeEl.querySelector<HTMLElement>('.hljs-tag')!)
+                     .color);
+       } finally {
+         if (prevTheme === null) {
+           document.documentElement.removeAttribute('data-theme');
+         } else {
+           document.documentElement.setAttribute('data-theme', prevTheme);
+         }
+       }
      });
 });
 
