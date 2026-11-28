@@ -62,6 +62,7 @@
     "typescript": "^5.5.4"
   },
   "dependencies": {
-    "@litertjs/wasm-utils": "^2.0.0"
+    "@litertjs/wasm-utils": "^2.0.0",
+    "@litertjs/webgpu-utils": "^2.5.3"
   }
 }
