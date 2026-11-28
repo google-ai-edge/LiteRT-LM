@@ -17,3 +17,13 @@ filegroup(
         "bin/x64/dxil.dll",
     ],
 )
+
+filegroup(
+    name = "dxcompiler_arm64",
+    srcs = ["bin/arm64/dxcompiler.dll"],
+)
+
+filegroup(
+    name = "dxil_arm64",
+    srcs = ["bin/arm64/dxil.dll"],
+)
