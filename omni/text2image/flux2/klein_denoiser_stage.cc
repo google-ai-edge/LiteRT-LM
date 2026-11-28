@@ -33,6 +33,7 @@
 #include "absl/strings/str_format.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "third_party/gloop/util/gtl/c_memcpy.h"
 #include "litert/cc/litert_macros.h"  // from @litert
 #include "litert/cc/litert_ranked_tensor_type.h"  // from @litert
 #include "litert/cc/litert_tensor_buffer.h"  // from @litert
@@ -471,7 +472,7 @@ absl::Status KleinDenoiserStage::ScheduleInternal() {
     }
 
     // 3. Concatenate [text; image] along token dimension into `joint`.
-    std::memcpy(joint.data(), text.data(), txt_hidden_elements * sizeof(float));
+    gtl::c_memcpy(joint, text, txt_hidden_elements * sizeof(float));
     std::memcpy(joint.data() + txt_hidden_elements, image.data(),
                 img_hidden_elements * sizeof(float));
 
