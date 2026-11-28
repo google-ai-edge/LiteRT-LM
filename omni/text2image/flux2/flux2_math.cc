@@ -27,6 +27,7 @@
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
+#include "third_party/gloop/util/gtl/c_memcpy.h"
 
 namespace litert::omni::text2image {
 namespace {
@@ -238,8 +239,8 @@ absl::StatusOr<std::vector<float>> BuildCausalPaddingAttentionMask(
     }
   }
   for (int h = 1; h < num_heads; ++h) {
-    std::memcpy(mask.data() + static_cast<size_t>(h) * plane, mask.data(),
-                plane * sizeof(float));
+    gtl::c_memcpy(absl::MakeSpan(mask).subspan(static_cast<size_t>(h) * plane),
+                  mask, plane * sizeof(float));
   }
   return mask;
 }
