@@ -31,6 +31,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/str_cat.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
+#include "third_party/gloop/util/gtl/c_memcpy.h"
 #include "litert/cc/litert_model.h"  // from @litert
 #include "omni/text2speech/kokoro/kokoro_io_types.h"
 #include "runtime/components/model_resources.h"
@@ -110,7 +111,7 @@ class FakeModelResources : public lm::ModelResources {
 std::string MakeVoicePackBytes(float value) {
   const std::vector<float> floats(kokoro::kVoicePackSize, value);
   std::string bytes(floats.size() * sizeof(float), '\0');
-  std::memcpy(bytes.data(), floats.data(), bytes.size());
+  gtl::c_memcpy(bytes, floats, bytes.size());
   return bytes;
 }
 
