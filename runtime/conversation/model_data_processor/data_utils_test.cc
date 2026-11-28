@@ -174,6 +174,18 @@ TEST(DataUtilsTest, LoadMediaBytes_RejectsNonStringPathOrBlob) {
   }
 }
 
+TEST(DataUtilsTest, LoadItemData_RejectsNonStringText) {
+  for (const ordered_json& item :
+       {ordered_json{{"type", "text"}, {"text", nullptr}},
+        ordered_json{{"type", "text"}, {"text", 3}},
+        ordered_json{{"type", "text"}, {"text", {{"x", 1}}}},
+        ordered_json{{"type", "text"}}}) {
+    EXPECT_THAT(LoadItemData(item),
+                testing::status::StatusIs(absl::StatusCode::kInvalidArgument))
+        << item.dump();
+  }
+}
+
 TEST(DataUtilsTest, LoadItemData_ToolResponseItem) {
   ASSERT_OK_AND_ASSIGN(std::unique_ptr<MemoryMappedFile> memory_mapped_file,
                        LoadItemData({{"type", "tool_response"},
